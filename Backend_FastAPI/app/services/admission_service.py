@@ -1183,7 +1183,15 @@ async def create_profile(
         "upload_config": DEFAULT_UPLOAD_CONFIG,
 
         # =========================================================================
-        # GROUP 6: Metadata
+        # GROUP 6: Application Fee Configuration
+        # =========================================================================
+        "application_fee": float(admission_path.application_fee) if admission_path.application_fee else 0,
+        "requires_application_fee": admission_path.requires_application_fee,
+        "fee_status": "exempt" if not admission_path.requires_application_fee else "pending",
+        # fee_status values: "exempt" (miễn phí), "pending" (chờ thanh toán), "paid" (đã thanh toán)
+
+        # =========================================================================
+        # GROUP 7: Metadata
         # =========================================================================
         "snapshot_source": "relational",
         "admission_path_id": admission_path.id,
@@ -2877,6 +2885,24 @@ async def approve_profile(
             "Please refresh and try again."
         )
 
+    # ✅ APPLICATION FEE CHECK
+    # Per PHASE_WORKFLOW.md: Profile can only be approved if fee is paid or exempt
+    applied_rules = profile.applied_rules or {}
+    requires_fee = applied_rules.get("requires_application_fee", False)
+    fee_status = applied_rules.get("fee_status", "exempt")
+
+    if requires_fee and fee_status == "pending":
+        log.warning(
+            "Attempt to approve profile with unpaid application fee",
+            profile_id=profile.id,
+            fee_status=fee_status,
+            approver_id=approver.id,
+        )
+        raise BadRequest(
+            "Không thể duyệt hồ sơ: Lệ phí xét tuyển chưa được thanh toán. "
+            "Vui lòng xác nhận thanh toán lệ phí trước khi duyệt hồ sơ."
+        )
+
     # STATE CHANGE
     profile.status = "approved"
     profile.approved_at = datetime.now(timezone.utc)
@@ -3052,6 +3078,143 @@ async def reject_profile(
         )
 
     return profile, post_commit
+
+
+# ==============================================================================
+# APPLICATION FEE MANAGEMENT
+# ==============================================================================
+
+async def record_application_fee_payment(
+    db: AsyncSession,
+    profile_id: int,
+    payment_data: Dict[str, Any],
+    recorded_by: Optional[models.User] = None,
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Record application fee payment for an admission profile.
+
+    This function is called when:
+    1. Payment gateway callback confirms payment
+    2. Manual payment confirmation by admin
+
+    Flow:
+    - Profile must be in "draft" or "submitted" status
+    - Updates applied_rules.fee_status to "paid"
+    - Syncs lead to sts13 (Đã hoàn lệ phí xét tuyển)
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        payment_data: Payment information (transaction_id, amount, paid_at, etc.)
+        recorded_by: User who recorded the payment (optional for system callbacks)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        ResourceNotFoundError: Profile not found
+        BadRequest: Profile doesn't require fee or already paid
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # Check fee requirement
+    applied_rules = profile.applied_rules or {}
+    requires_fee = applied_rules.get("requires_application_fee", False)
+    current_fee_status = applied_rules.get("fee_status", "exempt")
+
+    if not requires_fee:
+        raise BadRequest(
+            "This admission profile does not require application fee payment"
+        )
+
+    if current_fee_status == "paid":
+        log.info(
+            "Application fee already paid (idempotent)",
+            profile_id=profile_id,
+        )
+        # Return without error for idempotency
+        async def noop():
+            pass
+        return profile, noop
+
+    # Update fee_status in applied_rules
+    applied_rules["fee_status"] = "paid"
+    applied_rules["fee_paid_at"] = datetime.now(timezone.utc).isoformat()
+    applied_rules["fee_payment_data"] = payment_data
+    profile.applied_rules = applied_rules  # Trigger JSONB update
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ SYNC: Update lead to sts13 (Đã hoàn lệ phí xét tuyển)
+    from .lead_admission_sync import sync_lead_fee_paid
+    await sync_lead_fee_paid(
+        db=db,
+        profile=profile,
+        changed_by_user_id=recorded_by.id if recorded_by else None,
+        reason="Application fee payment confirmed",
+    )
+
+    await db.flush()
+
+    log.info(
+        "Application fee payment recorded",
+        profile_id=profile_id,
+        lead_id=profile.lead_id,
+        amount=payment_data.get("amount"),
+        transaction_id=payment_data.get("transaction_id"),
+        recorded_by=recorded_by.id if recorded_by else "system",
+    )
+
+    async def post_commit():
+        log.info(
+            "Post-commit: Fee payment notification",
+            profile_id=profile_id,
+        )
+
+    return profile, post_commit
+
+
+async def check_application_fee_status(
+    db: AsyncSession,
+    profile_id: int,
+) -> Dict[str, Any]:
+    """
+    Check application fee status for a profile.
+
+    Returns:
+        Dict with fee status information
+    """
+    from app.repositories import AdmissionRepository
+    repo = AdmissionRepository(db)
+
+    profile = await repo.get_profile_by_id(profile_id)
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    applied_rules = profile.applied_rules or {}
+
+    return {
+        "profile_id": profile_id,
+        "requires_fee": applied_rules.get("requires_application_fee", False),
+        "fee_amount": applied_rules.get("application_fee", 0),
+        "fee_status": applied_rules.get("fee_status", "exempt"),
+        "fee_paid_at": applied_rules.get("fee_paid_at"),
+        "can_approve": (
+            applied_rules.get("fee_status") in ("paid", "exempt")
+        ),
+    }
 
 
 async def resubmit_profile(

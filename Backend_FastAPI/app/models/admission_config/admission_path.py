@@ -11,7 +11,7 @@ This is the CENTRAL ENTITY for:
 - Activation control
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, UniqueConstraint, Numeric
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -101,7 +101,20 @@ class AdmissionPath(Base):
         default="internal",
         comment="Visibility: internal | public (for future portal)"
     )
-    
+
+    # Application Fee Configuration
+    application_fee = Column(
+        Numeric(precision=12, scale=2),
+        nullable=True,
+        default=0,
+        comment="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
+    )
+
+    @property
+    def requires_application_fee(self) -> bool:
+        """Check if this admission path requires application fee payment."""
+        return self.application_fee is not None and float(self.application_fee) > 0
+
     # Activation Audit
     activated_at = Column(
         DateTime(timezone=True),

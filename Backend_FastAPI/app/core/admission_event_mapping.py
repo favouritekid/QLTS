@@ -133,6 +133,20 @@ ADMISSION_EVENT_PROJECTIONS = {
     ),
 
     # -------------------------------------------------------------------------
+    # ✅ APPLICATION FEE PAID (lệ phí xét tuyển - before approval)
+    # -------------------------------------------------------------------------
+    "application_fee_paid": AdmissionEventProjection(
+        event="application_fee_paid",
+        admission_status="submitted",  # Still submitted, waiting for approval
+        consultation_status_id="sts13",
+        consultation_name="Đã hoàn tất lệ phí xét tuyển",
+        pipeline_stage_id="stg03",  # Stay in "Đã nộp hồ sơ" (fee is part of submission)
+        stage_name="Đã nộp hồ sơ",
+        system_note_template="[HỆ THỐNG] Đã xác nhận thanh toán lệ phí xét tuyển - Profile #{profile_id}, Mã GD: {transaction_id}",
+        skip_if_converted=True,
+    ),
+
+    # -------------------------------------------------------------------------
     # ✅ Admission Profile APPROVED
     # -------------------------------------------------------------------------
     "profile_approved": AdmissionEventProjection(

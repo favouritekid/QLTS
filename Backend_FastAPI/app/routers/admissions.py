@@ -41,6 +41,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ConflictError,
 )
+from ..core.constants import UserRole
 
 log = structlog.get_logger(__name__)
 
@@ -869,6 +870,105 @@ async def claim_admission_review(
     # Commit transaction
     await db.commit()
     return profile
+
+
+# ==============================================================================
+# APPLICATION FEE ENDPOINTS
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get(
+    "/{profile_id}/fee-status",
+    summary="Get application fee status",
+)
+async def get_fee_status(
+    request: Request,
+    profile_id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Get application fee status for an admission profile.
+
+    Returns:
+    - requires_fee: Whether this profile requires application fee
+    - fee_amount: Fee amount in VND
+    - fee_status: "exempt" | "pending" | "paid"
+    - can_approve: Whether profile can be approved (fee paid or exempt)
+    """
+    try:
+        result = await admission_service.check_application_fee_status(
+            db=db,
+            profile_id=profile_id,
+        )
+        return result
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/record-fee-payment",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Record application fee payment (Admin/System)",
+)
+async def record_fee_payment(
+    request: Request,
+    profile_id: int,
+    transaction_id: str = Query(..., description="Payment transaction ID"),
+    amount: float = Query(..., ge=0, description="Payment amount in VND"),
+    current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Record application fee payment for an admission profile.
+
+    **Authorization:** Admin only or System callback
+
+    **Use cases:**
+    1. Manual payment confirmation by admin
+    2. Payment gateway callback (via internal API)
+
+    **Request Parameters:**
+    - transaction_id: Payment transaction ID from gateway
+    - amount: Payment amount in VND
+
+    **Effects:**
+    - Updates profile.applied_rules.fee_status to "paid"
+    - Syncs lead to sts13 (Đã hoàn lệ phí xét tuyển)
+
+    **Returns:**
+    - Updated AdmissionProfile
+    """
+    # Only Admin can manually record payment
+    if current_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError("Only Admins can manually record fee payment")
+
+    try:
+        payment_data = {
+            "transaction_id": transaction_id,
+            "amount": amount,
+            "paid_at": datetime.now().isoformat(),
+            "recorded_by": current_user.id,
+        }
+
+        result, callback = await admission_service.record_application_fee_payment(
+            db=db,
+            profile_id=profile_id,
+            payment_data=payment_data,
+            recorded_by=current_user,
+        )
+
+        await db.commit()
+        await db.refresh(result)
+        await callback()
+
+        return result
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

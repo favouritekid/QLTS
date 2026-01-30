@@ -10,6 +10,7 @@ FRONTEND_ARCHITECTURE_V3.md Compliance:
 """
 
 from datetime import datetime, date
+from decimal import Decimal
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -112,6 +113,11 @@ class AdmissionPathCreate(BaseModel):
     display_name: Optional[str] = None
     display_order: int = 0
     visibility: VisibilityStatus = "internal"
+    application_fee: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        description="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
+    )
 
 
 class AdmissionPathUpdate(BaseModel):
@@ -119,6 +125,11 @@ class AdmissionPathUpdate(BaseModel):
     display_name: Optional[str] = None
     display_order: Optional[int] = None
     visibility: Optional[VisibilityStatus] = None
+    application_fee: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        description="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
+    )
 
 
 class AdmissionCriteriaCreate(BaseModel):
@@ -172,7 +183,17 @@ class AdmissionPathResponse(BaseModel):
     display_name: Optional[str] = None
     display_order: int
     visibility: VisibilityStatus
-    
+
+    # Application Fee
+    application_fee: Optional[Decimal] = Field(
+        default=None,
+        description="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
+    )
+    requires_application_fee: bool = Field(
+        default=False,
+        description="True nếu lệ phí > 0, FE dùng để hiển thị flow thanh toán"
+    )
+
     # Relationships
     academic_info: Optional[OfferingAcademicInfoNested] = None
     admission_method: Optional[AdmissionMethodNested] = None
