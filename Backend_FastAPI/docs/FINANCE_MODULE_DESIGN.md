@@ -2466,6 +2466,9 @@ Backend_FastAPI/
 | Feature flags | N/A | N/A | **Added** |
 | **Overpayment** | N/A | N/A | **Liability approach** |
 | **FSM Config** | N/A | N/A | **Transitions added** |
+| **Installment rounding** | N/A | N/A | **Remainder-to-last** |
+| **Maker-Checker** | N/A | N/A | **Manual payments** |
+| **Invoice numbering** | N/A | N/A | **DB sequence** |
 
 ### v1.2 Key Changes
 
@@ -2501,6 +2504,23 @@ Backend_FastAPI/
    - Migration script for allowed_transitions
    - Checklist for prerequisites before coding
 
+7. **Installment Rounding (NEW)**
+   - Remainder-to-last-installment algorithm
+   - Database trigger for sum verification
+   - Prevents rounding drift issues in multi-installment payments
+
+8. **Maker-Checker Workflow (NEW)**
+   - Dual-approval for manual payments (cash/transfer)
+   - Self-approval prevention (creator ≠ verifier)
+   - Casbin policy: `payment:verify` permission
+   - State machine: pending → verified/rejected
+
+9. **Invoice Numbering (NEW)**
+   - PostgreSQL function for atomic sequence generation
+   - Year-based format: `INV-2025-000001`
+   - ACID-compliant, no gaps under normal operation
+   - Alternative UUID option documented
+
 ---
 
 ## 10. V2 Roadmap (Future)
@@ -2519,4 +2539,4 @@ For enterprise-ready deployment:
 *Document Version: 1.2*
 *Last Updated: 2026-01-30*
 *Reviewed by: User (Tech Lead)*
-*Changes: Integrated with implemented application_fee, fixed status mapping, added migration strategy*
+*Changes: Integrated with implemented application_fee, fixed status mapping, added migration strategy, overpayment policy, FSM config, installment rounding, maker-checker, invoice numbering*
