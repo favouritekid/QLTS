@@ -344,7 +344,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => toggleProgramExpand(program.id)}
-                                  className="h-7 w-7 p-0"
+                                  className="h-9 w-9 md:h-7 md:w-7 p-0"
                                   disabled={!hasOfferings}
                                 >
                                   {hasOfferings ? (
@@ -521,7 +521,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => toggleProgramExpand(program.id)}
-                                  className="h-7 w-7 p-0"
+                                  className="h-9 w-9 md:h-7 md:w-7 p-0"
                                   disabled={!hasOfferings}
                                 >
                                   {hasOfferings ? (

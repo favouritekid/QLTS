@@ -133,7 +133,7 @@ export function MobileLeadCard({
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8"
+          className="h-10 w-10"
           onClick={() => setActionSheetOpen(true)}
         >
           <MoreVertical className="h-4 w-4" />

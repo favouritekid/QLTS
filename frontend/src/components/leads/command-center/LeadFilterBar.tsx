@@ -109,7 +109,7 @@ function FilterDropdown({ label, count, children }: FilterDropdownProps) {
           variant="outline"
           size="sm"
           className={cn(
-            "h-8 gap-1 transition-all duration-200",
+            "h-9 md:h-8 gap-1 transition-all duration-200",
             count > 0 && "border-primary bg-primary/5"
           )}
         >
@@ -672,13 +672,13 @@ export function LeadFilterBar({
                 variant="ghost"
                 size="sm"
                 onClick={onReset}
-                className="h-8 text-xs"
+                className="h-9 text-xs"
               >
                 <RotateCcw className="mr-1 h-3.5 w-3.5" />
                 Đặt lại
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={onExport} className="h-8">
+            <Button variant="outline" size="sm" onClick={onExport} className="h-9">
               <Download className="mr-1.5 h-3.5 w-3.5" />
               Xuất
             </Button>

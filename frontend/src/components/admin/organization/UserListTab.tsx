@@ -180,124 +180,207 @@ export function UserListTab({ unit }: UserListTabProps) {
           </div>
         )}
 
-        {/* Data Table */}
+        {/* Data Display */}
         {!isLoading && !error && users.length > 0 && (
-          <div className="px-6">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[250px]">Người dùng</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead className="w-[150px]">Số điện thoại</TableHead>
-                  <TableHead className="w-[120px]">Vai trò</TableHead>
-                  <TableHead className="w-[150px]">Trạng thái</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-8 w-8">
-                          <AvatarImage src={user.avatar_url || undefined} />
-                          <AvatarFallback className="text-xs">
-                            {getUserInitials(user.full_name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <div className="font-medium">{user.full_name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            @{user.username}
+          <>
+            {/* Mobile: Card View */}
+            <div className="md:hidden px-4 py-2 space-y-3">
+              {users.map((user) => (
+                <div
+                  key={user.id}
+                  className="rounded-lg border bg-card p-4 space-y-3"
+                >
+                  {/* Header: Avatar + Name */}
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={user.avatar_url || undefined} />
+                      <AvatarFallback className="text-sm">
+                        {getUserInitials(user.full_name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{user.full_name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        @{user.username}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Contact Info */}
+                  <div className="space-y-2 text-sm">
+                    {user.email && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Mail className="h-4 w-4 flex-shrink-0" />
+                        <span className="truncate">{user.email}</span>
+                      </div>
+                    )}
+                    {user.phone_number && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Phone className="h-4 w-4 flex-shrink-0" />
+                        <span>{user.phone_number}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Badges */}
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant={getRoleBadgeVariant(user.role)}>
+                      {user.role}
+                    </Badge>
+                    <Badge
+                      variant={user.status === "active" ? "default" : "secondary"}
+                    >
+                      {user.status === "active" ? "Hoạt động" : user.status === "banned" ? "Đã cấm" : "Chờ xử lý"}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop: Table View */}
+            <div className="hidden md:block px-6">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[250px]">Người dùng</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead className="w-[150px]">Số điện thoại</TableHead>
+                    <TableHead className="w-[120px]">Vai trò</TableHead>
+                    <TableHead className="w-[150px]">Trạng thái</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {users.map((user) => (
+                    <TableRow key={user.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-8 w-8">
+                            <AvatarImage src={user.avatar_url || undefined} />
+                            <AvatarFallback className="text-xs">
+                              {getUserInitials(user.full_name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <div className="font-medium">{user.full_name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              @{user.username}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2 text-sm">
-                        {user.email ? (
-                          <>
-                            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>{user.email}</span>
-                          </>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2 text-sm">
-                        {user.phone_number ? (
-                          <>
-                            <Phone className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>{user.phone_number}</span>
-                          </>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={getRoleBadgeVariant(user.role)}> {/* architecture-allow presentation */}
-                        {user.role} {/* architecture-allow presentation */}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={user.status === "active" ? "default" : "secondary"}
-                        className="text-xs w-fit"
-                      >
-                        {user.status === "active" ? "Hoạt động" : user.status === "banned" ? "Đã cấm" : "Chờ xử lý"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2 text-sm">
+                          {user.email ? (
+                            <>
+                              <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span>{user.email}</span>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2 text-sm">
+                          {user.phone_number ? (
+                            <>
+                              <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span>{user.phone_number}</span>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={getRoleBadgeVariant(user.role)}> {/* architecture-allow presentation */}
+                          {user.role} {/* architecture-allow presentation */}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={user.status === "active" ? "default" : "secondary"}
+                          className="text-xs w-fit"
+                        >
+                          {user.status === "active" ? "Hoạt động" : user.status === "banned" ? "Đã cấm" : "Chờ xử lý"}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
         )}
 
-        {/* Loading State (inside table for consistency) */}
+        {/* Loading State */}
         {isLoading && (
-          <div className="px-6">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[250px]">Người dùng</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead className="w-[150px]">Số điện thoại</TableHead>
-                  <TableHead className="w-[120px]">Vai trò</TableHead>
-                  <TableHead className="w-[150px]">Trạng thái</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {[1, 2, 3, 4].map((i) => (
-                  <TableRow key={i}>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <Skeleton className="h-8 w-8 rounded-full" />
-                        <div className="space-y-2">
-                          <Skeleton className="h-4 w-32" />
-                          <Skeleton className="h-3 w-24" />
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Skeleton className="h-4 w-40" />
-                    </TableCell>
-                    <TableCell>
-                      <Skeleton className="h-4 w-28" />
-                    </TableCell>
-                    <TableCell>
-                      <Skeleton className="h-5 w-16" />
-                    </TableCell>
-                    <TableCell>
-                      <Skeleton className="h-5 w-20" />
-                    </TableCell>
+          <>
+            {/* Mobile: Card Skeleton */}
+            <div className="md:hidden px-4 py-2 space-y-3">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="rounded-lg border bg-card p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-10 w-10 rounded-full" />
+                    <div className="space-y-2 flex-1">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="h-4 w-32" />
+                  </div>
+                  <div className="flex gap-2">
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                    <Skeleton className="h-5 w-20 rounded-full" />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop: Table Skeleton */}
+            <div className="hidden md:block px-6">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[250px]">Người dùng</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead className="w-[150px]">Số điện thoại</TableHead>
+                    <TableHead className="w-[120px]">Vai trò</TableHead>
+                    <TableHead className="w-[150px]">Trạng thái</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {[1, 2, 3, 4].map((i) => (
+                    <TableRow key={i}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Skeleton className="h-8 w-8 rounded-full" />
+                          <div className="space-y-2">
+                            <Skeleton className="h-4 w-32" />
+                            <Skeleton className="h-3 w-24" />
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-40" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-28" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-5 w-16" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-5 w-20" />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
         )}
       </ScrollArea>
 
