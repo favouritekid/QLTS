@@ -1977,6 +1977,1006 @@ WHERE NOT blocked_locks.granted;
 
 ---
 
+## 3.9 Security & Validation Checklist (v1.2 NEW)
+
+> **Source**: Security Audit dated 2026-01-30
+> **Total Findings**: 18 items (3 Critical, 6 High, 9 Medium)
+
+### 3.9.1 🔴 CRITICAL: Security Holes
+
+#### C1. Gateway Signature Verification
+**Risk**: Attacker can forge payment callbacks without proper signature validation.
+
+```python
+# gateways/vnpay.py
+
+import hmac
+import hashlib
+from typing import Optional
+
+class VNPayGateway:
+    def __init__(self, secret_key: str, tmn_code: str):
+        self.secret_key = secret_key
+        self.tmn_code = tmn_code
+
+    def verify_callback(self, params: dict) -> tuple[bool, Optional[str]]:
+        """
+        Verify VNPay callback signature.
+
+        Returns:
+            (is_valid, error_message)
+        """
+        # Extract signature
+        received_signature = params.pop('vnp_SecureHash', None)
+        if not received_signature:
+            return False, "Missing vnp_SecureHash"
+
+        # Sort params and build hash string
+        sorted_params = sorted(params.items())
+        hash_data = '&'.join(f"{k}={v}" for k, v in sorted_params if v)
+
+        # Calculate expected signature
+        expected_signature = hmac.new(
+            self.secret_key.encode('utf-8'),
+            hash_data.encode('utf-8'),
+            hashlib.sha512
+        ).hexdigest().upper()
+
+        if not hmac.compare_digest(received_signature.upper(), expected_signature):
+            log.warning(
+                "VNPay signature mismatch",
+                received=received_signature[:20] + "...",
+                expected=expected_signature[:20] + "..."
+            )
+            return False, "Invalid signature"
+
+        return True, None
+
+    def verify_callback_data(
+        self,
+        params: dict,
+        payment_intent: PaymentIntent
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Verify callback data matches our records.
+
+        CRITICAL: Prevent amount tampering attacks.
+        """
+        # 1. Verify signature first
+        is_valid, error = self.verify_callback(params.copy())
+        if not is_valid:
+            return False, error
+
+        # 2. Verify TxnRef matches our intent
+        vnp_txn_ref = params.get('vnp_TxnRef')
+        if vnp_txn_ref != payment_intent.gateway_ref:
+            log.error(
+                "TxnRef mismatch",
+                received=vnp_txn_ref,
+                expected=payment_intent.gateway_ref
+            )
+            return False, "Transaction reference mismatch"
+
+        # 3. Verify amount matches EXACTLY
+        vnp_amount = int(params.get('vnp_Amount', 0)) // 100  # VNPay uses xu
+        expected_amount = int(payment_intent.amount)
+
+        if vnp_amount != expected_amount:
+            log.error(
+                "Amount mismatch - potential tampering!",
+                received=vnp_amount,
+                expected=expected_amount,
+                intent_id=payment_intent.id
+            )
+            return False, f"Amount mismatch: {vnp_amount} vs {expected_amount}"
+
+        # 4. Verify merchant code
+        if params.get('vnp_TmnCode') != self.tmn_code:
+            return False, "Invalid merchant code"
+
+        return True, None
+```
+
+**Checklist**:
+- [ ] Use HMAC-SHA256/SHA512 (not MD5)
+- [ ] Use `hmac.compare_digest()` (timing-safe comparison)
+- [ ] Validate `vnp_TxnRef` matches internal `payment_intent.gateway_ref`
+- [ ] Validate amount matches `intent.amount` EXACTLY
+- [ ] Log all invalid callbacks for alerting
+- [ ] Rate limit callback endpoint
+
+---
+
+#### C2. IDOR Protection on Finance Endpoints
+**Risk**: APIs expose data if caller doesn't own the resource.
+
+```python
+# core/deps.py - Add finance IDOR dependencies
+
+from fastapi import Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+async def get_fee_for_user(
+    fee_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_active_user)
+) -> Fee:
+    """
+    Get fee with IDOR protection.
+
+    Officers can access fees for leads in their unit.
+    Admins can access all fees.
+
+    Returns 404 (not 403) to prevent information leakage.
+    """
+    stmt = (
+        select(Fee)
+        .join(Fee.admission_profile)
+        .join(AdmissionProfile.lead)
+        .where(Fee.id == fee_id)
+        .options(
+            selectinload(Fee.admission_profile)
+            .selectinload(AdmissionProfile.lead)
+        )
+    )
+
+    # Role-based filtering
+    if user.role not in ('admin', 'manager'):
+        # Officers only see their unit's data
+        stmt = stmt.where(Lead.unit_id == user.unit_id)
+
+    result = await db.execute(stmt)
+    fee = result.scalar_one_or_none()
+
+    if not fee:
+        # Always 404, never 403 (prevents enumeration)
+        raise ResourceNotFoundError("Fee not found")
+
+    return fee
+
+
+async def get_invoice_for_user(
+    invoice_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_active_user)
+) -> Invoice:
+    """Get invoice with IDOR protection."""
+    stmt = (
+        select(Invoice)
+        .join(Invoice.fee)
+        .join(Fee.admission_profile)
+        .join(AdmissionProfile.lead)
+        .where(Invoice.id == invoice_id)
+    )
+
+    if user.role not in ('admin', 'manager'):
+        stmt = stmt.where(Lead.unit_id == user.unit_id)
+
+    result = await db.execute(stmt)
+    invoice = result.scalar_one_or_none()
+
+    if not invoice:
+        raise ResourceNotFoundError("Invoice not found")
+
+    return invoice
+
+
+async def get_payment_for_user(
+    payment_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_active_user)
+) -> Payment:
+    """Get payment with IDOR protection."""
+    stmt = (
+        select(Payment)
+        .join(Payment.fee)
+        .join(Fee.admission_profile)
+        .join(AdmissionProfile.lead)
+        .where(Payment.id == payment_id)
+    )
+
+    if user.role not in ('admin', 'manager'):
+        stmt = stmt.where(Lead.unit_id == user.unit_id)
+
+    result = await db.execute(stmt)
+    payment = result.scalar_one_or_none()
+
+    if not payment:
+        raise ResourceNotFoundError("Payment not found")
+
+    return payment
+
+
+# Router usage
+@router.get("/fees/{fee_id}")
+async def get_fee(
+    fee: Fee = Depends(get_fee_for_user)  # IDOR protected
+):
+    return FeeResponse.model_validate(fee)
+```
+
+**Checklist**:
+- [ ] Implement `get_fee_for_user` dependency
+- [ ] Implement `get_invoice_for_user` dependency
+- [ ] Implement `get_payment_for_user` dependency
+- [ ] Always return 404 (not 403) for unauthorized
+- [ ] Add test cases for IDOR attempts
+
+---
+
+#### C3. Self-Approval Prevention in Maker-Checker
+**Risk**: `created_by_id` could be null or bypassed.
+
+```python
+# models/finance.py - Add constraint
+
+class Payment(Base):
+    __tablename__ = 'payment'
+
+    id = Column(Integer, primary_key=True)
+    fee_id = Column(Integer, ForeignKey('fee.id'), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    payment_method = Column(String(20), nullable=False)
+    status = Column(String(20), default='pending')
+
+    # CRITICAL: Must be NOT NULL for maker-checker
+    created_by_id = Column(Integer, ForeignKey('user.id'), nullable=False)
+    verified_by_id = Column(Integer, ForeignKey('user.id'), nullable=True)
+
+    __table_args__ = (
+        # Prevent self-approval at DB level
+        CheckConstraint(
+            'verified_by_id IS NULL OR verified_by_id != created_by_id',
+            name='ck_payment_no_self_approval'
+        ),
+        # Amount must be positive
+        CheckConstraint('amount > 0', name='ck_payment_positive_amount'),
+    )
+
+
+# services/payment_service.py - Enforce in service
+
+async def create_manual_payment(
+    db: AsyncSession,
+    fee_id: int,
+    amount: Decimal,
+    payment_method: str,
+    user: User  # MUST be passed from dependency
+) -> Payment:
+    """Create manual payment with maker-checker workflow."""
+
+    if not user or not user.id:
+        raise BusinessRuleViolation("User context required for payment creation")
+
+    payment = Payment(
+        fee_id=fee_id,
+        amount=amount,
+        payment_method=payment_method,
+        status='pending',  # Must be verified by another user
+        created_by_id=user.id  # ALWAYS set from authenticated user
+    )
+    db.add(payment)
+    await db.flush()
+
+    return payment
+
+
+async def verify_payment(
+    db: AsyncSession,
+    payment_id: int,
+    action: str,  # 'approve' or 'reject'
+    user: User,
+    rejection_reason: Optional[str] = None
+) -> Payment:
+    """Verify payment with self-approval prevention."""
+
+    payment = await db.get(Payment, payment_id)
+    if not payment:
+        raise ResourceNotFoundError("Payment not found")
+
+    # CRITICAL: Self-approval check
+    if payment.created_by_id == user.id:
+        raise BusinessRuleViolation(
+            "Cannot verify your own payment (maker-checker violation)"
+        )
+
+    if payment.status != 'pending':
+        raise BusinessRuleViolation(
+            f"Payment is {payment.status}, only pending payments can be verified"
+        )
+
+    if action == 'approve':
+        payment.status = 'verified'
+        payment.verified_by_id = user.id
+        payment.verified_at = datetime.utcnow()
+
+        # Update fee paid amount (with lock - see Section 3.8)
+        await _apply_payment_to_fee(db, payment)
+
+    elif action == 'reject':
+        if not rejection_reason:
+            raise BusinessRuleViolation("Rejection reason required")
+
+        payment.status = 'rejected'
+        payment.verified_by_id = user.id
+        payment.verified_at = datetime.utcnow()
+        payment.rejection_reason = rejection_reason
+
+    await db.flush()
+    return payment
+```
+
+**Checklist**:
+- [ ] Add `NOT NULL` constraint on `created_by_id`
+- [ ] Add DB check constraint preventing `verified_by_id = created_by_id`
+- [ ] Always set `created_by_id` from `Depends(get_current_active_user)`
+- [ ] Test case: verify self-approval is blocked
+- [ ] Test case: verify null `created_by_id` is prevented
+
+---
+
+### 3.9.2 🟠 HIGH: Business Logic Validations
+
+#### H4. Discount Stacking Policy
+**Decision**: Use **additive** stacking (10% + 5% = 15% off original).
+
+```python
+# services/discount_service.py
+
+from enum import Enum
+
+class DiscountStackPolicy(str, Enum):
+    ADDITIVE = "additive"      # 10% + 5% = 15% of original
+    SEQUENTIAL = "sequential"  # 10% then 5% of remainder = 14.5%
+    HIGHEST = "highest"        # Only apply highest discount
+
+
+def calculate_discounts(
+    base_amount: Decimal,
+    discounts: list[Discount],
+    policy: DiscountStackPolicy = DiscountStackPolicy.ADDITIVE
+) -> tuple[Decimal, list[dict]]:
+    """
+    Calculate total discount based on stacking policy.
+
+    Returns:
+        (final_amount, discount_breakdown)
+    """
+    if not discounts:
+        return base_amount, []
+
+    breakdown = []
+
+    if policy == DiscountStackPolicy.ADDITIVE:
+        # Sum all percentages, apply once to base
+        total_percent = sum(d.discount_percent for d in discounts)
+        total_percent = min(total_percent, Decimal('100'))  # Cap at 100%
+
+        discount_amount = base_amount * total_percent / 100
+        final_amount = base_amount - discount_amount
+
+        for d in discounts:
+            breakdown.append({
+                "discount_id": d.id,
+                "name": d.name,
+                "percent": float(d.discount_percent),
+                "amount": float(base_amount * d.discount_percent / 100)
+            })
+
+    elif policy == DiscountStackPolicy.SEQUENTIAL:
+        # Apply each discount to remaining amount
+        remaining = base_amount
+        for d in discounts:
+            discount_amount = remaining * d.discount_percent / 100
+            remaining -= discount_amount
+            breakdown.append({
+                "discount_id": d.id,
+                "name": d.name,
+                "percent": float(d.discount_percent),
+                "amount": float(discount_amount)
+            })
+        final_amount = remaining
+
+    elif policy == DiscountStackPolicy.HIGHEST:
+        # Only apply the highest discount
+        best = max(discounts, key=lambda d: d.discount_percent)
+        discount_amount = base_amount * best.discount_percent / 100
+        final_amount = base_amount - discount_amount
+        breakdown.append({
+            "discount_id": best.id,
+            "name": best.name,
+            "percent": float(best.discount_percent),
+            "amount": float(discount_amount)
+        })
+
+    return final_amount, breakdown
+```
+
+---
+
+#### H5. Waive Amount Limit
+
+```python
+# services/fee_service.py
+
+async def waive_fee(
+    db: AsyncSession,
+    fee: Fee,
+    waive_amount: Decimal,
+    reason: str,
+    user: User
+) -> Fee:
+    """Waive part or all of a fee with validation."""
+
+    # VALIDATION: Cannot waive more than remaining
+    remaining = fee.final_amount - fee.paid_amount
+    if waive_amount > remaining:
+        raise BusinessRuleViolation(
+            f"Cannot waive {waive_amount}. Maximum waivable: {remaining}"
+        )
+
+    # VALIDATION: Cannot waive negative amount
+    if waive_amount <= 0:
+        raise BusinessRuleViolation("Waive amount must be positive")
+
+    fee.waived_amount = (fee.waived_amount or Decimal('0')) + waive_amount
+    fee.balance = fee.final_amount - fee.paid_amount - fee.waived_amount
+
+    if fee.balance <= 0:
+        fee.status = 'waived'
+
+    # Audit trail
+    fee_history = FeeHistory(
+        fee_id=fee.id,
+        action='waive',
+        amount=waive_amount,
+        reason=reason,
+        performed_by_id=user.id
+    )
+    db.add(fee_history)
+
+    await db.flush()
+    return fee
+```
+
+---
+
+#### H6. Refund Amount Limit
+
+```python
+# services/refund_service.py
+
+async def create_refund_request(
+    db: AsyncSession,
+    payment: Payment,
+    amount: Decimal,
+    reason: str,
+    user: User
+) -> RefundRequest:
+    """Create refund request with validation."""
+
+    # VALIDATION: Cannot refund more than payment amount
+    if amount > payment.amount:
+        raise BusinessRuleViolation(
+            f"Cannot refund {amount}. Payment amount: {payment.amount}"
+        )
+
+    # VALIDATION: Total refunds cannot exceed payment
+    existing_refunds = await db.execute(
+        select(func.sum(RefundRequest.amount))
+        .where(RefundRequest.payment_id == payment.id)
+        .where(RefundRequest.status.in_(['pending', 'approved', 'completed']))
+    )
+    total_refunded = existing_refunds.scalar() or Decimal('0')
+
+    if total_refunded + amount > payment.amount:
+        raise BusinessRuleViolation(
+            f"Total refunds would exceed payment. "
+            f"Already refunded: {total_refunded}, Requested: {amount}, "
+            f"Payment: {payment.amount}"
+        )
+
+    refund = RefundRequest(
+        payment_id=payment.id,
+        amount=amount,
+        reason=reason,
+        requested_by_id=user.id,
+        status='pending'
+    )
+    db.add(refund)
+    await db.flush()
+
+    return refund
+```
+
+---
+
+#### H7. Accounting Period Gap Prevention
+
+```python
+# services/accounting_service.py
+
+async def open_accounting_period(
+    db: AsyncSession,
+    year: int,
+    month: int,
+    user: User
+) -> AccountingPeriod:
+    """Open new accounting period with gap prevention."""
+
+    # VALIDATION: Check previous period is closed
+    prev_year, prev_month = (year, month - 1) if month > 1 else (year - 1, 12)
+
+    prev_period = await db.execute(
+        select(AccountingPeriod)
+        .where(AccountingPeriod.year == prev_year)
+        .where(AccountingPeriod.month == prev_month)
+    )
+    prev = prev_period.scalar_one_or_none()
+
+    # Allow first period ever, or require previous to be closed
+    if prev and prev.status != 'closed':
+        raise BusinessRuleViolation(
+            f"Cannot open {year}-{month:02d}. "
+            f"Previous period {prev_year}-{prev_month:02d} is still {prev.status}"
+        )
+
+    # Check for existing period
+    existing = await db.execute(
+        select(AccountingPeriod)
+        .where(AccountingPeriod.year == year)
+        .where(AccountingPeriod.month == month)
+    )
+    if existing.scalar_one_or_none():
+        raise DuplicateResourceError(f"Period {year}-{month:02d} already exists")
+
+    period = AccountingPeriod(
+        year=year,
+        month=month,
+        status='open',
+        opened_by_id=user.id,
+        opened_at=datetime.utcnow()
+    )
+    db.add(period)
+    await db.flush()
+
+    return period
+```
+
+---
+
+#### H8. Invoice Before Fee Calculated Prevention
+
+```python
+# services/invoice_service.py
+
+INVOICEABLE_FEE_STATUSES = ('calculated', 'invoiced', 'partial')
+
+async def create_invoice(
+    db: AsyncSession,
+    fee: Fee,
+    amount: Decimal,
+    due_date: date,
+    installment_no: int = 1
+) -> Invoice:
+    """Create invoice with fee status validation."""
+
+    # VALIDATION: Fee must be calculated
+    if fee.status not in INVOICEABLE_FEE_STATUSES:
+        raise BusinessRuleViolation(
+            f"Cannot invoice fee in '{fee.status}' status. "
+            f"Fee must be in: {INVOICEABLE_FEE_STATUSES}"
+        )
+
+    # VALIDATION: Invoice amount cannot exceed remaining balance
+    if amount > fee.balance:
+        raise BusinessRuleViolation(
+            f"Invoice amount {amount} exceeds fee balance {fee.balance}"
+        )
+
+    invoice = Invoice(
+        fee_id=fee.id,
+        invoice_number=await generate_invoice_number(db),
+        amount=amount,
+        due_date=due_date,
+        installment_no=installment_no,
+        status='draft'
+    )
+    db.add(invoice)
+
+    # Update fee status
+    if fee.status == 'calculated':
+        fee.status = 'invoiced'
+
+    await db.flush()
+    return invoice
+```
+
+---
+
+#### H9. Payment Amount Validation
+
+```python
+# schemas/finance.py
+
+from pydantic import BaseModel, Field, field_validator
+from decimal import Decimal
+
+class PaymentCreate(BaseModel):
+    fee_id: int
+    amount: Decimal = Field(..., gt=0, description="Must be positive")
+    payment_method: str
+    reference: Optional[str] = None
+
+    @field_validator('amount')
+    @classmethod
+    def validate_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Payment amount must be positive")
+        if v > Decimal('999999999999'):  # ~1 trillion
+            raise ValueError("Payment amount exceeds maximum")
+        return v
+
+
+# DB constraint (already in C3)
+CheckConstraint('amount > 0', name='ck_payment_positive_amount')
+```
+
+---
+
+### 3.9.3 🟡 MEDIUM: Edge Case Handling
+
+#### M10. Fee Recalculation After Partial Payment
+
+```python
+# services/fee_service.py
+
+async def recalculate_fee(
+    db: AsyncSession,
+    fee: Fee,
+    new_base_amount: Decimal,
+    reason: str,
+    user: User
+) -> Fee:
+    """Recalculate fee with partial payment protection."""
+
+    # VALIDATION: Block if already paid
+    if fee.paid_amount > 0:
+        raise BusinessRuleViolation(
+            f"Cannot recalculate fee with existing payments ({fee.paid_amount}). "
+            "Options: (1) Refund payments first, or (2) Create adjustment invoice."
+        )
+
+    # Store old amount for audit
+    old_amount = fee.final_amount
+
+    # Recalculate
+    fee.base_amount = new_base_amount
+    fee.final_amount = await _apply_discounts(fee)
+    fee.balance = fee.final_amount - fee.paid_amount
+
+    # Audit trail
+    history = FeeHistory(
+        fee_id=fee.id,
+        action='recalculate',
+        old_amount=old_amount,
+        new_amount=fee.final_amount,
+        reason=reason,
+        performed_by_id=user.id
+    )
+    db.add(history)
+
+    await db.flush()
+    return fee
+```
+
+---
+
+#### M11. Timezone Consistency
+
+```python
+# core/timezone.py
+
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
+
+# System timezone (Vietnam)
+SYSTEM_TZ = ZoneInfo('Asia/Ho_Chi_Minh')
+
+def get_today_local() -> date:
+    """Get today's date in system timezone."""
+    return datetime.now(SYSTEM_TZ).date()
+
+
+def is_overdue(due_date: date) -> bool:
+    """Check if due date has passed (end of day in system timezone)."""
+    today = get_today_local()
+    return due_date < today  # Overdue if due_date is before today
+
+
+# Usage in invoice service
+async def check_overdue_invoices(db: AsyncSession):
+    """Mark overdue invoices."""
+    today = get_today_local()
+
+    stmt = (
+        update(Invoice)
+        .where(Invoice.due_date < today)
+        .where(Invoice.status.in_(['draft', 'issued']))
+        .values(status='overdue')
+    )
+    await db.execute(stmt)
+```
+
+---
+
+#### M12. Currency Normalization
+
+```python
+# gateways/base.py
+
+def normalize_amount(gateway_amount: int | float | str, currency: str) -> Decimal:
+    """
+    Normalize gateway amount to internal format.
+
+    VND: No decimals, stored as integer.
+    USD: 2 decimals.
+    """
+    amount = Decimal(str(gateway_amount))
+
+    if currency == 'VND':
+        # VNPay sends amount in xu (1 VND = 100 xu)
+        # Normalize to VND (integer)
+        return (amount / 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+    elif currency == 'USD':
+        return amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    else:
+        return amount
+```
+
+---
+
+#### M13. Lock Timeout Handling
+
+```python
+# services/payment_service.py
+
+from sqlalchemy.exc import OperationalError
+
+async def record_payment_with_timeout(
+    db: AsyncSession,
+    fee_id: int,
+    amount: Decimal,
+    **kwargs
+) -> Payment:
+    """Record payment with lock timeout handling."""
+
+    try:
+        # Set lock timeout for this transaction
+        await db.execute(text("SET LOCAL lock_timeout = '5s'"))
+
+        # Attempt to lock and process
+        return await record_payment(db, fee_id, amount, **kwargs)
+
+    except OperationalError as e:
+        if 'lock timeout' in str(e).lower():
+            raise ConflictError(
+                "Payment processing is busy. Please try again in a moment.",
+                details={"fee_id": fee_id, "retry_after": 5}
+            )
+        raise
+```
+
+---
+
+#### M14. Idempotency Key Scoping
+
+```sql
+-- Migration: Update unique constraint
+
+ALTER TABLE payment_intent
+DROP CONSTRAINT IF EXISTS uq_payment_intent_idempotency_key;
+
+ALTER TABLE payment_intent
+ADD CONSTRAINT uq_payment_intent_idempotency_invoice
+UNIQUE (idempotency_key, invoice_id);
+
+-- Now same idempotency_key can be used for different invoices
+-- But not reused for same invoice
+```
+
+---
+
+#### M15. Orphan Payment Intent Cleanup
+
+```python
+# tasks/finance_cleanup.py
+
+from celery import shared_task
+from datetime import datetime, timedelta
+
+@shared_task
+def cleanup_expired_payment_intents():
+    """
+    Clean up abandoned payment intents.
+
+    Run via Celery beat every hour.
+    """
+    with get_db_sync() as db:
+        # Find intents expired more than 24 hours ago
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+
+        stmt = (
+            update(PaymentIntent)
+            .where(PaymentIntent.status == 'created')
+            .where(PaymentIntent.expires_at < cutoff)
+            .values(
+                status='expired',
+                expired_at=datetime.utcnow()
+            )
+        )
+        result = db.execute(stmt)
+        db.commit()
+
+        log.info(
+            "Cleaned up expired payment intents",
+            count=result.rowcount
+        )
+
+        return result.rowcount
+
+
+# Celery beat schedule
+CELERY_BEAT_SCHEDULE = {
+    'cleanup-payment-intents': {
+        'task': 'tasks.finance_cleanup.cleanup_expired_payment_intents',
+        'schedule': crontab(minute=0),  # Every hour
+    },
+}
+```
+
+---
+
+#### M16. Invoice Number Year Boundary
+
+```python
+# Already in Section 3.7, but add validation:
+
+async def generate_invoice_number(db: AsyncSession) -> str:
+    """Generate invoice number with year boundary check."""
+    current_year = date.today().year
+
+    # Check if sequence exists for current year
+    result = await db.execute(text(f"""
+        SELECT last_value FROM pg_sequences
+        WHERE sequencename = 'invoice_number_seq_{current_year}'
+    """))
+    row = result.fetchone()
+
+    if row is None:
+        log.warning(
+            "Creating new invoice sequence mid-year",
+            year=current_year,
+            timestamp=datetime.utcnow()
+        )
+
+    # Generate number
+    result = await db.execute(
+        text("SELECT generate_invoice_number(:year)"),
+        {"year": current_year}
+    )
+    return result.scalar()
+```
+
+---
+
+#### M17. Partial Invoice Overpayment
+
+```python
+# services/payment_service.py
+
+async def apply_payment_to_invoice(
+    db: AsyncSession,
+    invoice: Invoice,
+    payment_amount: Decimal
+) -> tuple[Decimal, Decimal]:
+    """
+    Apply payment to invoice, handling overpayment.
+
+    Returns:
+        (amount_applied, overpayment)
+    """
+    remaining_on_invoice = invoice.amount - invoice.paid_amount
+
+    if payment_amount <= remaining_on_invoice:
+        # Full payment goes to invoice
+        amount_applied = payment_amount
+        overpayment = Decimal('0')
+    else:
+        # Partial to invoice, rest to overpayment
+        amount_applied = remaining_on_invoice
+        overpayment = payment_amount - remaining_on_invoice
+
+    # Update invoice
+    invoice.paid_amount += amount_applied
+    if invoice.paid_amount >= invoice.amount:
+        invoice.status = 'paid'
+        invoice.paid_at = datetime.utcnow()
+
+    return amount_applied, overpayment
+```
+
+---
+
+#### M18. Deleted Profile Protection
+
+```python
+# services/admission_service.py
+
+async def soft_delete_profile(
+    db: AsyncSession,
+    profile: AdmissionProfile,
+    user: User
+) -> None:
+    """Soft delete profile with fee protection."""
+
+    # Check for active fees
+    fees = await db.execute(
+        select(Fee)
+        .where(Fee.admission_profile_id == profile.id)
+        .where(Fee.status.in_(['invoiced', 'partial']))
+    )
+    active_fees = fees.scalars().all()
+
+    if active_fees:
+        raise BusinessRuleViolation(
+            f"Cannot delete profile with {len(active_fees)} active fee(s). "
+            "Please cancel or waive fees first."
+        )
+
+    # Safe to soft delete
+    profile.deleted_at = datetime.utcnow()
+    profile.deleted_by_id = user.id
+
+    # Cancel any draft fees
+    await db.execute(
+        update(Fee)
+        .where(Fee.admission_profile_id == profile.id)
+        .where(Fee.status == 'draft')
+        .values(status='cancelled')
+    )
+
+    await db.flush()
+```
+
+---
+
+### 3.9.4 Security Validation Summary
+
+| ID | Category | Validation | Location | DB Constraint |
+|----|----------|-----------|----------|---------------|
+| C1 | Gateway | HMAC signature + amount match | `gateways/*.py` | - |
+| C2 | IDOR | `get_*_for_user` dependencies | `core/deps.py` | - |
+| C3 | Self-Approval | `created_by_id != verified_by_id` | `payment_service.py` | `ck_payment_no_self_approval` |
+| H4 | Discount | Additive stacking policy | `discount_service.py` | - |
+| H5 | Waive | `waive_amount <= remaining` | `fee_service.py` | - |
+| H6 | Refund | `total_refunds <= payment.amount` | `refund_service.py` | - |
+| H7 | Period | Previous period must be closed | `accounting_service.py` | - |
+| H8 | Invoice | Fee must be calculated | `invoice_service.py` | - |
+| H9 | Amount | `amount > 0` | Schema + DB | `ck_payment_positive_amount` |
+| M10 | Recalc | Block if `paid_amount > 0` | `fee_service.py` | - |
+| M11 | Timezone | Use `SYSTEM_TZ` consistently | `core/timezone.py` | - |
+| M12 | Currency | Normalize to integer VND | `gateways/base.py` | - |
+| M13 | Timeout | Handle lock timeout gracefully | `payment_service.py` | - |
+| M14 | Idempotency | Unique (key, invoice_id) | Migration | `uq_*_idempotency_invoice` |
+| M15 | Cleanup | Celery task for expired intents | `tasks/cleanup.py` | - |
+| M16 | Year | Log warning on mid-year creation | `invoice_service.py` | - |
+| M17 | Overpay | Split to invoice + overpayment | `payment_service.py` | - |
+| M18 | Delete | Block if active fees exist | `admission_service.py` | - |
+
+---
+
 ## 4. Business Logic & Workflow
 
 ### 4.1 Fee Lifecycle State Machine
@@ -2934,6 +3934,7 @@ Backend_FastAPI/
 | **Maker-Checker** | N/A | N/A | **Manual payments** |
 | **Invoice numbering** | N/A | N/A | **DB sequence** |
 | **Concurrency control** | N/A | N/A | **SELECT FOR UPDATE** |
+| **Security checklist** | N/A | N/A | **18 validations** |
 
 ### v1.2 Key Changes
 
@@ -2994,6 +3995,13 @@ Backend_FastAPI/
     - Includes test cases for concurrent payment scenarios
     - PostgreSQL lock monitoring queries
 
+11. **Security & Validation Checklist (NEW)**
+    - 3 CRITICAL: Gateway signature, IDOR protection, Self-approval prevention
+    - 6 HIGH: Discount stacking, Waive limit, Refund limit, Period gaps, Invoice validation, Amount validation
+    - 9 MEDIUM: Recalculation, Timezone, Currency, Timeout, Idempotency, Cleanup, Year boundary, Overpayment split, Delete protection
+    - Complete code samples for each validation
+    - Database constraints where applicable
+
 ---
 
 ## 10. V2 Roadmap (Future)
@@ -3012,4 +4020,4 @@ For enterprise-ready deployment:
 *Document Version: 1.2*
 *Last Updated: 2026-01-30*
 *Reviewed by: User (Tech Lead)*
-*Changes: Integrated with implemented application_fee, fixed status mapping, added migration strategy, overpayment policy, FSM config, installment rounding, maker-checker, invoice numbering, concurrency control*
+*Changes: Integrated with implemented application_fee, fixed status mapping, added migration strategy, overpayment policy, FSM config, installment rounding, maker-checker, invoice numbering, concurrency control, security checklist (18 validations)*
