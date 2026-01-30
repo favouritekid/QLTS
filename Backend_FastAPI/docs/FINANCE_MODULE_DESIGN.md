@@ -1085,6 +1085,434 @@ ADMISSION_EVENT_PROJECTIONS.update({
 
 ---
 
+## 3.5 Installment Rounding Strategy (v1.2 NEW)
+
+### 3.5.1 Problem Statement
+
+Khi chia học phí thành nhiều đợt, số lẻ có thể gây sai lệch tổng.
+
+```
+Ví dụ: 10,000,000 VND ÷ 3 đợt
+- Naive rounding: 3,333,333 × 3 = 9,999,999 VND (THIẾU 1 đồng)
+- Hoặc:           3,333,334 × 3 = 10,000,002 VND (DƯ 2 đồng)
+```
+
+### 3.5.2 Solution: Remainder to Last Installment
+
+```python
+def calculate_installment_amounts(
+    total_amount: Decimal,
+    installment_count: int,
+    rounding_precision: int = 0  # 0 = round to VND, 2 = to xu
+) -> List[Decimal]:
+    """
+    Calculate installment amounts with remainder in last installment.
+
+    Example:
+        total = 10,000,000, count = 3
+        Returns: [3,333,000, 3,333,000, 3,334,000]
+        Sum = 10,000,000 ✓
+
+    Algorithm:
+    1. Calculate base amount (floor division)
+    2. Calculate remainder
+    3. Add remainder to last installment
+    """
+    if installment_count <= 0:
+        raise ValueError("installment_count must be positive")
+
+    if installment_count == 1:
+        return [total_amount]
+
+    # Round down to avoid exceeding total
+    rounding_factor = Decimal(10 ** rounding_precision)
+    base_amount = (total_amount / installment_count).quantize(
+        Decimal('1') / rounding_factor,
+        rounding=ROUND_DOWN
+    )
+
+    # Calculate what we'd have with all base amounts
+    subtotal = base_amount * (installment_count - 1)
+
+    # Last installment gets the remainder
+    last_amount = total_amount - subtotal
+
+    # Build result list
+    amounts = [base_amount] * (installment_count - 1)
+    amounts.append(last_amount)
+
+    # Sanity check
+    assert sum(amounts) == total_amount, "Installment sum mismatch!"
+
+    return amounts
+
+
+# Example usage in Invoice generation
+async def generate_invoices_for_fee(fee: Fee, plan: InstallmentPlan):
+    """Generate invoices with correct rounding."""
+    amounts = calculate_installment_amounts(
+        total_amount=fee.final_amount,
+        installment_count=plan.installment_count
+    )
+
+    base_date = date.today()
+    invoices = []
+
+    for i, schedule_item in enumerate(plan.schedule):
+        due_offset = schedule_item['due_days_offset']
+
+        invoice = Invoice(
+            fee_id=fee.id,
+            invoice_number=await generate_invoice_number(),
+            installment_no=i + 1,
+            amount=amounts[i],  # Use pre-calculated amount
+            due_date=base_date + timedelta(days=due_offset),
+            status='draft'
+        )
+        invoices.append(invoice)
+
+    return invoices
+```
+
+### 3.5.3 Verification in Database
+
+```sql
+-- Constraint to ensure invoice amounts sum to fee.final_amount
+-- (Run as a scheduled job or trigger)
+
+SELECT
+    f.id AS fee_id,
+    f.final_amount,
+    SUM(i.amount) AS invoice_sum,
+    f.final_amount - SUM(i.amount) AS discrepancy
+FROM fee f
+JOIN invoice i ON i.fee_id = f.id
+WHERE i.status != 'cancelled'
+GROUP BY f.id
+HAVING f.final_amount != SUM(i.amount);
+
+-- Should return 0 rows if rounding is correct
+```
+
+---
+
+## 3.6 Maker-Checker for Manual Payments (v1.2 NEW)
+
+### 3.6.1 Problem Statement
+
+Với thanh toán thủ công (tiền mặt, chuyển khoản), có rủi ro:
+- Nhập nhầm (human error)
+- Gian lận (nhập "đã đóng" dù chưa nhận tiền)
+
+### 3.6.2 Solution: Two-Person Verification
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MAKER-CHECKER WORKFLOW                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  MAKER (Nhân viên tư vấn / Thu ngân)                                        │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ 1. Thu tiền mặt từ sinh viên                                          │ │
+│  │ 2. Tạo Payment record (status = 'pending')                            │ │
+│  │ 3. Ghi nhận: amount, reference_code, payer_name                       │ │
+│  │ 4. KHÔNG THỂ tự verify/approve                                        │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                              │                                               │
+│                              ▼                                               │
+│  CHECKER (Kế toán trưởng / Manager)                                         │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ 1. Xem danh sách Payment pending                                      │ │
+│  │ 2. Đối chiếu với két tiền / sao kê ngân hàng                          │ │
+│  │ 3. Verify (status = 'verified') HOẶC Reject (status = 'rejected')     │ │
+│  │ 4. KHÔNG THỂ verify payment do chính mình tạo                         │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.6.3 Permission Rules
+
+```python
+# app/services/payment_service.py
+
+async def verify_payment(
+    payment_id: int,
+    user: User,
+    action: str,  # 'verify' | 'reject'
+    rejection_reason: str = None
+) -> Payment:
+    """
+    Verify or reject a pending payment.
+
+    SECURITY RULES:
+    1. Only manager/admin/accountant can verify
+    2. Cannot verify your own payment (maker != checker)
+    3. Payment must be in 'pending' status
+    """
+    payment = await get_payment(payment_id)
+
+    # Rule 1: Check permission
+    if not user.has_permission('payment:verify'):
+        raise PermissionDenied("No permission to verify payments")
+
+    # Rule 2: Maker-Checker separation
+    if payment.created_by_id == user.id:
+        raise BusinessRuleViolation(
+            "Cannot verify your own payment. "
+            "Another authorized user must verify this payment."
+        )
+
+    # Rule 3: Status check
+    if payment.status != 'pending':
+        raise BusinessRuleViolation(
+            f"Payment is {payment.status}, only pending payments can be verified"
+        )
+
+    if action == 'verify':
+        payment.status = 'verified'
+        payment.verified_at = datetime.now(UTC)
+        payment.verified_by_id = user.id
+
+        # Update invoice
+        await apply_payment_to_invoice(payment)
+
+    elif action == 'reject':
+        if not rejection_reason:
+            raise ValidationError("Rejection reason is required")
+
+        payment.status = 'rejected'
+        payment.rejected_at = datetime.now(UTC)
+        payment.rejected_by_id = user.id
+        payment.rejection_reason = rejection_reason
+
+    await db.flush()
+
+    # Audit log
+    await create_audit_log(
+        entity='payment',
+        entity_id=payment.id,
+        action=f'payment_{action}',
+        user_id=user.id,
+        details={
+            'maker_id': payment.created_by_id,
+            'checker_id': user.id,
+            'amount': float(payment.amount)
+        }
+    )
+
+    return payment
+```
+
+### 3.6.4 Casbin Policy
+
+```csv
+# Maker can create payment but not verify
+p, role:officer, payment, create, allow
+p, role:officer, payment, read, allow
+p, role:officer, payment, verify, deny
+
+# Checker (accountant/manager) can verify but with maker-checker check in code
+p, role:accountant, payment, read, allow
+p, role:accountant, payment, verify, allow
+p, role:manager, payment, *, allow
+p, role:admin, payment, *, allow
+```
+
+### 3.6.5 Online Payment Exception
+
+```python
+async def process_online_payment_callback(
+    intent_id: int,
+    gateway_response: dict
+) -> Payment:
+    """
+    Process payment callback from online gateway (VNPay, MoMo).
+
+    EXCEPTION: Online payments are auto-verified because:
+    1. Gateway signature validates authenticity
+    2. No human intervention needed
+    3. Idempotency key prevents duplicates
+    """
+    intent = await get_payment_intent(intent_id)
+
+    # Verify gateway signature
+    if not verify_gateway_signature(intent.method.gateway_code, gateway_response):
+        raise SecurityError("Invalid gateway signature")
+
+    # Create payment with auto-verified status
+    payment = Payment(
+        invoice_id=intent.invoice_id,
+        method_id=intent.method_id,
+        intent_id=intent.id,
+        amount=intent.amount,
+        reference_code=gateway_response.get('transaction_id'),
+        status='verified',  # Auto-verified for online
+        payment_date=datetime.now(UTC),
+        verified_at=datetime.now(UTC),
+        verified_by_id=None,  # System-verified
+        notes='Auto-verified from online payment gateway'
+    )
+
+    db.add(payment)
+    await db.flush()
+
+    return payment
+```
+
+---
+
+## 3.7 Invoice Numbering with Database Sequence (v1.2 NEW)
+
+### 3.7.1 Problem Statement
+
+Nếu dùng `COUNT(*) + 1` để sinh mã hoá đơn, race condition sẽ gây trùng mã:
+
+```
+Thread A: SELECT COUNT(*) FROM invoice WHERE year=2026  → 999
+Thread B: SELECT COUNT(*) FROM invoice WHERE year=2026  → 999
+Thread A: INSERT invoice_number = 'INV-2026-001000'     → OK
+Thread B: INSERT invoice_number = 'INV-2026-001000'     → DUPLICATE KEY ERROR!
+```
+
+### 3.7.2 Solution: Dedicated Database Sequence
+
+```sql
+-- Create sequence for invoice numbers (per year for reset)
+CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_2026
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    CACHE 10;  -- Pre-allocate 10 values for performance
+
+-- Function to generate invoice number atomically
+CREATE OR REPLACE FUNCTION generate_invoice_number(p_year INTEGER DEFAULT NULL)
+RETURNS VARCHAR(20) AS $$
+DECLARE
+    v_year INTEGER;
+    v_seq_name TEXT;
+    v_next_val BIGINT;
+BEGIN
+    -- Default to current year
+    v_year := COALESCE(p_year, EXTRACT(YEAR FROM CURRENT_DATE)::INTEGER);
+
+    -- Build sequence name
+    v_seq_name := 'invoice_number_seq_' || v_year::TEXT;
+
+    -- Create sequence if not exists (for new year)
+    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %I START WITH 1', v_seq_name);
+
+    -- Get next value atomically (no race condition)
+    EXECUTE format('SELECT nextval(%L)', v_seq_name) INTO v_next_val;
+
+    -- Format: INV-YYYY-NNNNNN (6 digits, zero-padded)
+    RETURN 'INV-' || v_year::TEXT || '-' || LPAD(v_next_val::TEXT, 6, '0');
+END;
+$$ LANGUAGE plpgsql;
+
+-- Usage example
+SELECT generate_invoice_number();      -- INV-2026-000001
+SELECT generate_invoice_number();      -- INV-2026-000002
+SELECT generate_invoice_number(2025);  -- INV-2025-000001 (different sequence)
+```
+
+### 3.7.3 Python Implementation
+
+```python
+# app/repositories/invoice_repository.py
+
+from sqlalchemy import text
+
+async def generate_invoice_number(db: AsyncSession, year: int = None) -> str:
+    """
+    Generate unique invoice number using database sequence.
+
+    Thread-safe and race-condition-free.
+    """
+    if year is None:
+        year = date.today().year
+
+    # Call PostgreSQL function
+    result = await db.execute(
+        text("SELECT generate_invoice_number(:year)"),
+        {"year": year}
+    )
+    invoice_number = result.scalar_one()
+
+    return invoice_number
+
+
+async def create_invoice(
+    db: AsyncSession,
+    fee_id: int,
+    installment_no: int,
+    amount: Decimal,
+    due_date: date
+) -> Invoice:
+    """Create invoice with guaranteed unique number."""
+
+    # Generate number FIRST (atomic operation)
+    invoice_number = await generate_invoice_number(db)
+
+    invoice = Invoice(
+        fee_id=fee_id,
+        invoice_number=invoice_number,  # Already unique
+        installment_no=installment_no,
+        amount=amount,
+        due_date=due_date,
+        status='draft'
+    )
+
+    db.add(invoice)
+    await db.flush()
+
+    return invoice
+```
+
+### 3.7.4 Alternative: UUID-based (Simpler but less readable)
+
+```python
+# If sequence is too complex, use UUID
+import uuid
+from datetime import date
+
+def generate_invoice_number_uuid() -> str:
+    """
+    UUID-based invoice number.
+
+    Pros: No sequence needed, globally unique
+    Cons: Less human-readable, longer
+    """
+    today = date.today()
+    short_uuid = uuid.uuid4().hex[:8].upper()
+    return f"INV-{today.year}-{short_uuid}"
+    # Example: INV-2026-A1B2C3D4
+```
+
+### 3.7.5 Sequence Management
+
+```sql
+-- View current sequence values
+SELECT
+    sequencename,
+    last_value,
+    start_value,
+    increment_by
+FROM pg_sequences
+WHERE sequencename LIKE 'invoice_number_seq_%';
+
+-- Reset sequence for new year (run on Jan 1)
+-- Note: Normally auto-created by generate_invoice_number()
+
+-- Get current value without incrementing (for debugging)
+SELECT currval('invoice_number_seq_2026');
+
+-- Manual reset (DANGER - only for testing)
+-- ALTER SEQUENCE invoice_number_seq_2026 RESTART WITH 1;
+```
+
+---
+
 ## 4. Business Logic & Workflow
 
 ### 4.1 Fee Lifecycle State Machine
