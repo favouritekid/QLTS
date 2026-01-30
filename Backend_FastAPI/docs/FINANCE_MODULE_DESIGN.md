@@ -1513,6 +1513,470 @@ SELECT currval('invoice_number_seq_2026');
 
 ---
 
+## 3.8 Concurrency Control - Payment Race Conditions (v1.2 NEW)
+
+### 3.8.1 Problem: Lost Update
+
+```
+Timeline của Race Condition:
+
+Sinh viên A nợ học phí: 10,000,000 VND
+Fee record: { id: 1, total: 10M, paid: 0, balance: 10M }
+
+T0 (10:00:00.000):
+   ├─ [VNPay Thread]  BEGIN TRANSACTION
+   └─ [Counter Thread] BEGIN TRANSACTION
+
+T1 (10:00:00.001):
+   ├─ [VNPay]   SELECT * FROM fee WHERE id=1  → paid=0, balance=10M
+   └─ [Counter] SELECT * FROM fee WHERE id=1  → paid=0, balance=10M  ❌ Stale read!
+
+T2 (10:00:00.050):
+   └─ [VNPay]   INSERT payment(5M), UPDATE fee SET paid=5M, balance=5M
+
+T3 (10:00:00.051):
+   └─ [VNPay]   COMMIT  ✅ DB now: paid=5M
+
+T4 (10:00:00.100):
+   └─ [Counter] INSERT payment(5M), UPDATE fee SET paid=5M, balance=5M  ❌ Overwrites!
+
+T5 (10:00:00.101):
+   └─ [Counter] COMMIT  ❌ DB now: paid=5M (WRONG! Should be 10M)
+
+Kết quả: Thu 10 triệu, ghi nhận 5 triệu. THIẾU 5 TRIỆU!
+```
+
+### 3.8.2 Solution 1: Pessimistic Locking (SELECT FOR UPDATE)
+
+**Recommended for payment processing** - đảm bảo tuyệt đối không mất dữ liệu.
+
+```python
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+async def record_payment(
+    db: AsyncSession,
+    fee_id: int,
+    amount: Decimal,
+    payment_method: str,
+    reference: str,
+    user_id: int
+) -> Payment:
+    """
+    Record payment with pessimistic locking to prevent race conditions.
+
+    Uses SELECT FOR UPDATE to lock the fee row during transaction.
+    Other transactions attempting to pay the same fee will WAIT.
+    """
+
+    # ═══════════════════════════════════════════════════════════════
+    # STEP 1: Lock the fee row (other transactions will WAIT here)
+    # ═══════════════════════════════════════════════════════════════
+    stmt = (
+        select(Fee)
+        .where(Fee.id == fee_id)
+        .with_for_update()  # 🔒 CRITICAL: Locks the row
+    )
+    result = await db.execute(stmt)
+    fee = result.scalar_one_or_none()
+
+    if not fee:
+        raise ResourceNotFoundError(f"Fee {fee_id} not found")
+
+    # ═══════════════════════════════════════════════════════════════
+    # STEP 2: Validate payment (now safe - we have exclusive lock)
+    # ═══════════════════════════════════════════════════════════════
+    if fee.status == 'paid':
+        raise BusinessRuleViolation("Fee already fully paid")
+
+    if amount > fee.balance:
+        # Handle overpayment per Section 3.3
+        overpayment = amount - fee.balance
+        actual_payment = fee.balance
+        # ... create overpayment_record
+    else:
+        actual_payment = amount
+        overpayment = Decimal('0')
+
+    # ═══════════════════════════════════════════════════════════════
+    # STEP 3: Create payment record
+    # ═══════════════════════════════════════════════════════════════
+    payment = Payment(
+        fee_id=fee_id,
+        amount=actual_payment,
+        payment_method=payment_method,
+        reference=reference,
+        status='completed' if payment_method == 'online' else 'pending',
+        created_by_id=user_id
+    )
+    db.add(payment)
+
+    # ═══════════════════════════════════════════════════════════════
+    # STEP 4: Update fee totals (atomic within same transaction)
+    # ═══════════════════════════════════════════════════════════════
+    fee.paid_amount += actual_payment
+    fee.balance = fee.total_amount - fee.paid_amount
+
+    if fee.balance <= 0:
+        fee.status = 'paid'
+        fee.paid_at = datetime.utcnow()
+    elif fee.paid_amount > 0:
+        fee.status = 'partial'
+
+    await db.flush()
+
+    return payment, overpayment
+
+
+# Timeline với SELECT FOR UPDATE:
+#
+# T0: [VNPay]   BEGIN; SELECT FOR UPDATE fee WHERE id=1  → LOCKED ✅
+# T1: [Counter] BEGIN; SELECT FOR UPDATE fee WHERE id=1  → WAITING... ⏳
+# T2: [VNPay]   UPDATE fee SET paid=5M; COMMIT           → RELEASED 🔓
+# T3: [Counter] (lock acquired) SELECT → paid=5M ✅ (fresh data!)
+# T4: [Counter] UPDATE fee SET paid=10M; COMMIT          → CORRECT ✅
+```
+
+### 3.8.3 Solution 2: Optimistic Locking (Version Column)
+
+**Alternative for high-read, low-write scenarios** - tốt khi conflict hiếm xảy ra.
+
+```python
+# Model với version column
+class Fee(Base):
+    __tablename__ = 'fee'
+
+    id = Column(Integer, primary_key=True)
+    total_amount = Column(Numeric(15, 2))
+    paid_amount = Column(Numeric(15, 2), default=0)
+    balance = Column(Numeric(15, 2))
+    status = Column(String(20))
+    version = Column(Integer, default=1, nullable=False)  # 🔑 Version column
+
+    __mapper_args__ = {
+        "version_id_col": version  # SQLAlchemy auto-increment on update
+    }
+
+
+async def record_payment_optimistic(
+    db: AsyncSession,
+    fee_id: int,
+    amount: Decimal,
+    max_retries: int = 3
+) -> Payment:
+    """
+    Record payment with optimistic locking.
+
+    Retries on conflict (StaleDataError).
+    """
+    from sqlalchemy.orm.exc import StaleDataError
+
+    for attempt in range(max_retries):
+        try:
+            # Read current state
+            fee = await db.get(Fee, fee_id)
+            if not fee:
+                raise ResourceNotFoundError(f"Fee {fee_id} not found")
+
+            original_version = fee.version
+
+            # Business logic
+            fee.paid_amount += amount
+            fee.balance = fee.total_amount - fee.paid_amount
+
+            # Create payment
+            payment = Payment(fee_id=fee_id, amount=amount)
+            db.add(payment)
+
+            # Commit - will fail if version changed
+            await db.flush()
+
+            return payment
+
+        except StaleDataError:
+            # Another transaction modified the fee
+            await db.rollback()
+
+            if attempt == max_retries - 1:
+                raise ConflictError(
+                    "Payment conflict detected. Please retry.",
+                    details={"fee_id": fee_id, "attempts": max_retries}
+                )
+
+            # Exponential backoff
+            await asyncio.sleep(0.1 * (2 ** attempt))
+            continue
+
+
+# SQL generated by SQLAlchemy with version column:
+# UPDATE fee
+# SET paid_amount = 5000000, version = 2
+# WHERE id = 1 AND version = 1
+#                  ^^^^^^^^^^^^ If version changed, 0 rows affected → StaleDataError
+```
+
+### 3.8.4 Solution 3: Database-Level Atomic Update
+
+**Simplest solution** - không cần lock, dùng atomic SQL.
+
+```python
+async def record_payment_atomic(
+    db: AsyncSession,
+    fee_id: int,
+    amount: Decimal
+) -> Payment:
+    """
+    Record payment using atomic SQL update.
+
+    Database handles concurrency via row-level locking in UPDATE.
+    """
+    from sqlalchemy import update, case
+
+    # ═══════════════════════════════════════════════════════════════
+    # STEP 1: Atomic update với điều kiện
+    # ═══════════════════════════════════════════════════════════════
+    stmt = (
+        update(Fee)
+        .where(Fee.id == fee_id)
+        .where(Fee.balance >= amount)  # Prevent overpayment in SQL
+        .values(
+            paid_amount=Fee.paid_amount + amount,  # Atomic increment
+            balance=Fee.balance - amount,          # Atomic decrement
+            status=case(
+                (Fee.balance - amount <= 0, 'paid'),
+                (Fee.paid_amount + amount > 0, 'partial'),
+                else_=Fee.status
+            ),
+            updated_at=func.now()
+        )
+        .returning(Fee.id, Fee.paid_amount, Fee.balance, Fee.status)
+    )
+
+    result = await db.execute(stmt)
+    updated = result.fetchone()
+
+    if not updated:
+        # Either fee not found OR insufficient balance
+        fee = await db.get(Fee, fee_id)
+        if not fee:
+            raise ResourceNotFoundError(f"Fee {fee_id} not found")
+        if fee.balance < amount:
+            raise BusinessRuleViolation(
+                f"Insufficient balance. Available: {fee.balance}, Requested: {amount}"
+            )
+
+    # ═══════════════════════════════════════════════════════════════
+    # STEP 2: Create payment record
+    # ═══════════════════════════════════════════════════════════════
+    payment = Payment(
+        fee_id=fee_id,
+        amount=amount,
+        status='completed'
+    )
+    db.add(payment)
+    await db.flush()
+
+    return payment
+
+
+# SQL thực thi (single atomic statement):
+# UPDATE fee
+# SET paid_amount = paid_amount + 5000000,
+#     balance = balance - 5000000,
+#     status = CASE WHEN balance - 5000000 <= 0 THEN 'paid' ... END
+# WHERE id = 1 AND balance >= 5000000
+# RETURNING id, paid_amount, balance, status
+```
+
+### 3.8.5 Comparison & Recommendation
+
+| Approach | Pros | Cons | Use When |
+|----------|------|------|----------|
+| **Pessimistic (FOR UPDATE)** | ✅ Guaranteed consistency | ❌ Blocks other transactions | High-value transactions, payments |
+| **Optimistic (Version)** | ✅ No blocking, good read perf | ❌ Retries on conflict | Low conflict rate, read-heavy |
+| **Atomic SQL** | ✅ Simple, no app-level locking | ❌ Limited business logic | Simple increment/decrement |
+
+**🔒 RECOMMENDATION for Finance Module:**
+
+```python
+# payment_service.py
+
+class PaymentService:
+    """
+    Payment service with proper concurrency control.
+
+    Strategy:
+    - Online payments (VNPay, MoMo): Pessimistic locking
+    - Manual payments (cash, transfer): Pessimistic locking + Maker-Checker
+    - Batch operations: Optimistic locking with retry
+    """
+
+    async def process_online_payment(
+        self,
+        db: AsyncSession,
+        payment_intent_id: int,
+        gateway_response: dict
+    ) -> Payment:
+        """
+        Process online payment callback.
+
+        Uses pessimistic locking because:
+        1. Payment gateway may retry callbacks
+        2. User may pay via multiple channels simultaneously
+        3. Financial accuracy is critical
+        """
+        # Check idempotency first (fast path, no lock needed)
+        if await self._is_processed(db, gateway_response['transaction_id']):
+            return await self._get_existing_payment(db, gateway_response['transaction_id'])
+
+        # Lock and process
+        async with db.begin_nested():  # Savepoint for rollback
+            # Lock fee row
+            fee = await self._lock_fee(db, payment_intent.fee_id)
+
+            # Validate and record
+            payment = await self._record_payment_locked(
+                db, fee, payment_intent, gateway_response
+            )
+
+            # Mark as processed (idempotency)
+            await self._mark_processed(db, gateway_response['transaction_id'])
+
+            return payment
+
+    async def _lock_fee(self, db: AsyncSession, fee_id: int) -> Fee:
+        """Acquire exclusive lock on fee row."""
+        stmt = select(Fee).where(Fee.id == fee_id).with_for_update()
+        result = await db.execute(stmt)
+        fee = result.scalar_one_or_none()
+
+        if not fee:
+            raise ResourceNotFoundError(f"Fee {fee_id} not found")
+
+        return fee
+```
+
+### 3.8.6 Testing Concurrency
+
+```python
+# tests/services/test_payment_concurrency.py
+
+import asyncio
+import pytest
+from decimal import Decimal
+
+@pytest.mark.asyncio
+async def test_concurrent_payments_no_lost_update(db_session, fee_factory):
+    """
+    Test that concurrent payments don't cause lost updates.
+
+    Scenario: 10 concurrent payments of 1M each to a 10M fee.
+    Expected: All 10 payments recorded, total paid = 10M.
+    """
+    # Setup: Create fee with 10M balance
+    fee = await fee_factory(total_amount=Decimal('10000000'))
+
+    # Simulate 10 concurrent payments
+    async def make_payment(amount: Decimal):
+        async with get_db_session() as session:
+            return await payment_service.record_payment(
+                session,
+                fee_id=fee.id,
+                amount=amount,
+                payment_method='test'
+            )
+
+    # Launch all payments concurrently
+    tasks = [make_payment(Decimal('1000000')) for _ in range(10)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Verify: Exactly 10M paid, no lost updates
+    async with get_db_session() as session:
+        updated_fee = await session.get(Fee, fee.id)
+
+        assert updated_fee.paid_amount == Decimal('10000000')
+        assert updated_fee.balance == Decimal('0')
+        assert updated_fee.status == 'paid'
+
+    # Verify: All 10 payments recorded
+    successful_payments = [r for r in results if not isinstance(r, Exception)]
+    assert len(successful_payments) == 10
+
+
+@pytest.mark.asyncio
+async def test_duplicate_vnpay_callback_idempotent(db_session, payment_intent_factory):
+    """
+    Test that duplicate VNPay callbacks don't create duplicate payments.
+    """
+    intent = await payment_intent_factory(amount=Decimal('5000000'))
+
+    gateway_response = {
+        'transaction_id': 'VNP123456',
+        'amount': 5000000,
+        'status': 'success'
+    }
+
+    # First callback
+    payment1 = await payment_service.process_online_payment(
+        db_session, intent.id, gateway_response
+    )
+
+    # Duplicate callback (same transaction_id)
+    payment2 = await payment_service.process_online_payment(
+        db_session, intent.id, gateway_response
+    )
+
+    # Should return same payment, not create new one
+    assert payment1.id == payment2.id
+
+    # Fee should only be charged once
+    fee = await db_session.get(Fee, intent.fee_id)
+    assert fee.paid_amount == Decimal('5000000')  # Not 10M
+```
+
+### 3.8.7 Database Configuration for Locking
+
+```sql
+-- PostgreSQL: Recommended isolation level for payments
+-- Set at connection level for payment transactions
+
+-- Option 1: SERIALIZABLE (strongest, but may have more retries)
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+-- Option 2: REPEATABLE READ (good balance)
+SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+-- Option 3: READ COMMITTED + FOR UPDATE (recommended)
+-- Default isolation + explicit row locks
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+-- Then use SELECT ... FOR UPDATE in code
+
+
+-- Lock timeout to prevent indefinite waits
+SET lock_timeout = '5s';  -- Fail after 5 seconds if can't acquire lock
+
+
+-- Monitor locks in production
+SELECT
+    blocked_locks.pid AS blocked_pid,
+    blocked_activity.usename AS blocked_user,
+    blocking_locks.pid AS blocking_pid,
+    blocking_activity.usename AS blocking_user,
+    blocked_activity.query AS blocked_query
+FROM pg_catalog.pg_locks blocked_locks
+JOIN pg_catalog.pg_stat_activity blocked_activity
+    ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_catalog.pg_locks blocking_locks
+    ON blocking_locks.locktype = blocked_locks.locktype
+    AND blocking_locks.relation = blocked_locks.relation
+    AND blocking_locks.pid != blocked_locks.pid
+JOIN pg_catalog.pg_stat_activity blocking_activity
+    ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.granted;
+```
+
+---
+
 ## 4. Business Logic & Workflow
 
 ### 4.1 Fee Lifecycle State Machine
@@ -2469,6 +2933,7 @@ Backend_FastAPI/
 | **Installment rounding** | N/A | N/A | **Remainder-to-last** |
 | **Maker-Checker** | N/A | N/A | **Manual payments** |
 | **Invoice numbering** | N/A | N/A | **DB sequence** |
+| **Concurrency control** | N/A | N/A | **SELECT FOR UPDATE** |
 
 ### v1.2 Key Changes
 
@@ -2521,6 +2986,14 @@ Backend_FastAPI/
    - ACID-compliant, no gaps under normal operation
    - Alternative UUID option documented
 
+10. **Concurrency Control (NEW)**
+    - Addresses Lost Update race condition in concurrent payments
+    - Recommended: Pessimistic locking with `SELECT FOR UPDATE`
+    - Alternative: Optimistic locking with version column
+    - Alternative: Atomic SQL updates
+    - Includes test cases for concurrent payment scenarios
+    - PostgreSQL lock monitoring queries
+
 ---
 
 ## 10. V2 Roadmap (Future)
@@ -2539,4 +3012,4 @@ For enterprise-ready deployment:
 *Document Version: 1.2*
 *Last Updated: 2026-01-30*
 *Reviewed by: User (Tech Lead)*
-*Changes: Integrated with implemented application_fee, fixed status mapping, added migration strategy, overpayment policy, FSM config, installment rounding, maker-checker, invoice numbering*
+*Changes: Integrated with implemented application_fee, fixed status mapping, added migration strategy, overpayment policy, FSM config, installment rounding, maker-checker, invoice numbering, concurrency control*
