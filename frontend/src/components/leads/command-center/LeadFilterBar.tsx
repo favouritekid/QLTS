@@ -11,7 +11,7 @@
 
 "use client";
 
-import React, { useState, useCallback, useTransition } from "react";
+import React, { useState, useCallback, useTransition, useEffect, useRef } from "react";
 import {
   Search,
   X,
@@ -198,6 +198,40 @@ export function LeadFilterBar({
   const [isMounted, setIsMounted] = React.useState(false);
   React.useEffect(() => { setIsMounted(true); }, []);
 
+  // ✅ FIX Critical: Debounced search to prevent excessive API calls
+  const [localSearch, setLocalSearch] = useState(search);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const DEBOUNCE_DELAY = 300; // 300ms debounce
+
+  // Sync local search with external search prop (e.g., when reset is clicked)
+  useEffect(() => {
+    setLocalSearch(search);
+  }, [search]);
+
+  // Debounce the search callback
+  const handleSearchInputChange = useCallback((value: string) => {
+    setLocalSearch(value);
+
+    // Clear previous timeout
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    // Set new timeout
+    debounceRef.current = setTimeout(() => {
+      onSearchChange(value);
+    }, DEBOUNCE_DELAY);
+  }, [onSearchChange]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
+
   // ✅ SECURITY: Use centralized permission utility (UX only - backend enforces)
   const isAdminFlag = isMounted && checkIsAdmin(user);
   const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user);
@@ -304,18 +338,22 @@ export function LeadFilterBar({
     <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 border-b backdrop-blur">
       {/* Main Filter Row */}
       <div className="flex items-center gap-2 px-3 py-2 md:gap-3 md:px-4 md:py-3">
-        {/* Search - Responsive width */}
+        {/* Search - Responsive width with debounce */}
         <div className="relative min-w-0 flex-1 md:w-64 md:flex-none">
           <Search className="text-muted-foreground absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
           <Input
             placeholder="Tìm kiếm..."
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
+            value={localSearch}
+            onChange={(e) => handleSearchInputChange(e.target.value)}
             className="h-9 pl-9 pr-8 text-sm md:h-8"
           />
-          {search && (
+          {localSearch && (
             <button
-              onClick={() => onSearchChange("")}
+              onClick={() => {
+                setLocalSearch("");
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                onSearchChange("");
+              }}
               className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2"
             >
               <X className="h-4 w-4" />

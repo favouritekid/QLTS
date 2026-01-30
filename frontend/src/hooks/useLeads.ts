@@ -147,7 +147,9 @@ export function useLead(
     },
     enabled: enabled && !!id,
     initialData: options?.initialData,
-    staleTime: 0, // Always refetch when invalidated to ensure sync between panels
+    // ✅ FIX: Increased staleTime to reduce unnecessary re-fetches
+    // Invalidation will still trigger refetch when needed (e.g., after mutations)
+    staleTime: 1000 * 30, // 30 seconds - allows caching while mutations still trigger updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });
 }

@@ -1,7 +1,7 @@
 // src/components/leads/command-center/LeadDetailPanel.tsx
 "use client";
 
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -124,20 +124,18 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
-  const [daysSinceContact, setDaysSinceContact] = useState<number | null>(null);
   const isMobile = useIsMobile();
 
-  // Calculate days since last contact on client side only to avoid hydration mismatch
-  useEffect(() => {
-    if (lead?.last_consultation_at) {
-      const days = Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setDaysSinceContact(days);
-    } else {
-       
-      setDaysSinceContact(null);
-    }
-  }, [lead?.last_consultation_at]);
+  // ✅ FIX Minor: Track mounted state to avoid hydration mismatch
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => { setIsMounted(true); }, []);
+
+  // ✅ FIX Minor: Use useMemo instead of useEffect + useState to avoid double render
+  // Only calculate on client side (isMounted) to avoid hydration mismatch
+  const daysSinceContact = useMemo(() => {
+    if (!isMounted || !lead?.last_consultation_at) return null;
+    return Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24));
+  }, [isMounted, lead?.last_consultation_at]);
 
   // Auto-scroll to top when leadId changes
   useEffect(() => {
