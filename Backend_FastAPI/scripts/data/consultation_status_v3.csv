@@ -4,8 +4,8 @@ sts01,NO_ANSWER,Không nghe máy,universal,NULL,activity,user,neutral,false,true
 sts02,CONTACTED,Đã kết nối liên hệ,consultation,stg01,transition,user,neutral,false,false,true,true,10,"Đã liên hệ được",#0000FF
 sts03,INTERESTED,Có nhu cầu tìm hiểu,consultation,stg02,transition,user,neutral,false,false,true,true,20,"Lead có quan tâm",#008000
 sts04,CONSULT_REJECTED,Từ chối tư vấn,consultation,stg02,transition,user,negative,true,false,true,true,30,"Từ chối hoàn toàn",#FF0000
-sts05,CALLBACK_LATER,Hẹn liên hệ lại,consultation,stg02,transition,user,neutral,false,false,false,false,40,"Hẹn gọi lại",#FFA500
-sts06,CONSULT_ACCEPTED,Đồng ý tư vấn,consultation,stg02,transition,user,positive,false,false,false,true,50,"Đồng ý bước tư vấn",#008000
+sts05,CALLBACK_LATER,Hẹn liên hệ lại,consultation,stg02,transition,user,neutral,false,false,true,true,40,"Hẹn gọi lại",#FFA500
+sts06,CONSULT_ACCEPTED,Đồng ý tư vấn,consultation,stg02,transition,user,positive,false,false,true,true,50,"Đồng ý bước tư vấn",#008000
 sts07,APPLICATION_RECEIVED,Đã tiếp nhận hồ sơ,admission,stg03,transition,user,neutral,false,false,true,true,300,"Đã tạo hồ sơ xét tuyển",#0000FF
 sts17,APPLICATION_REVISION,Yêu cầu bổ sung hồ sơ,admission,stg03,transition,user,neutral,false,false,false,false,310,"Yêu cầu nộp thêm giấy tờ",#FFA500
 sts16,APPLICATION_REJECTED,Hồ sơ không đạt yêu cầu,admission,stg04,transition,role,negative,true,false,true,true,320,"Hồ sơ bị từ chối",#FF0000
