@@ -571,7 +571,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {/* ================================================== */}
           {/* SECTION 2: Ghi nhận tư vấn (Keep as-is) */}
           {/* ================================================== */}
-          <Card className="border-border bg-muted/50">
+          <Card>
             <CardHeader className="px-3 py-2.5 sm:px-4 sm:py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
                 <Zap className="h-4 w-4 text-amber-500 shrink-0" />
