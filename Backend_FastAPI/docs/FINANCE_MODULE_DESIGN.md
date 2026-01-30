@@ -1,10 +1,12 @@
 # Finance Module Design - QLTS
 
 > **Author**: Senior Software Architect
-> **Version**: 1.1
-> **Date**: 2026-01-26
-> **Status**: Design Proposal (Reviewed)
-> **Changelog**: v1.1 - Added multi-fee, accounting period, idempotent events, payment intent
+> **Version**: 1.2
+> **Date**: 2026-01-30
+> **Status**: Design Proposal (Updated)
+> **Changelog**:
+> - v1.2 - Integrated with implemented application_fee, updated status mapping, added migration strategy
+> - v1.1 - Added multi-fee, accounting period, idempotent events, payment intent
 
 ---
 
@@ -12,20 +14,38 @@
 
 ### 1.1 Current State Analysis
 
-Hệ thống QLTS hiện tại có workflow: **Lead → Admission → Enrolled** với gap lớn ở giai đoạn **Fee** (học phí).
+Hệ thống QLTS hiện tại có workflow: **Lead → Admission → Enrolled** với gap ở giai đoạn **Fee** (học phí).
 
 **Đã có sẵn:**
 - `TuitionDiscountPolicy` - Quản lý chính sách ưu đãi học phí
 - `OfferingAcademicInfo.tuition_fee_per_year` - Học phí theo năm học
 - `OfferingAcademicInfo.applied_discount_policy_ids` - Liên kết ưu đãi với offering
-- `LeadPhase.FEE` - Phase đã định nghĩa trong workflow (statuses: sts10, sts14, sts18)
+- `LeadPhase.FEE` - Phase đã định nghĩa trong workflow (statuses: sts10, sts13, sts14, sts18)
 - `ConsultationStatus.phase = "fee"` - Cột phase trong bảng status
 
-**Chưa có:**
-- Không có bảng `Fee`, `Payment`, `Invoice`, `Transaction`
-- Không có logic tính phí, đối soát
-- Không có verification thanh toán trước khi enrolled
-- Enrollment hiện tại: `approved → enrolled` (bypass fee phase)
+**Đã implement (v1.2 - Application Fee):**
+- `AdmissionPath.application_fee` - Lệ phí xét tuyển per admission method (Decimal)
+- `AdmissionProfile.applied_rules` - JSONB chứa fee snapshot:
+  ```json
+  {
+    "application_fee": 100000,
+    "requires_application_fee": true,
+    "fee_status": "pending|paid|exempt",
+    "fee_paid_at": "2026-01-30T10:00:00Z",
+    "fee_payment_data": {"transaction_id": "...", "amount": 100000}
+  }
+  ```
+- `record_application_fee_payment()` - Service function ghi nhận thanh toán
+- `sync_lead_fee_paid()` - Sync lead status to sts13
+- `check_application_fee_status()` - Check fee status API
+- `approve_profile()` - Blocks nếu application fee chưa paid
+- Consultation status `sts13` = "Đã hoàn tất lệ phí xét tuyển"
+
+**Chưa có (cần implement):**
+- Không có bảng `Fee`, `Payment`, `Invoice`, `Transaction` riêng biệt
+- Không có logic tính/thu học phí (tuition), chỉ có application fee
+- Không có verification học phí trước khi enrolled (chỉ có application fee gate)
+- Enrollment hiện tại: `approved → enrolled` (bypass tuition fee phase)
 
 ### 1.2 Proposed Solution
 
@@ -76,16 +96,56 @@ Thiết kế **Finance Module** như một **Bounded Context** riêng biệt, t�
 ### 2.2 Integration Points
 
 ```
-Admission Module                    Finance Module
-      │                                   │
-      │  ──── PROFILE_APPROVED ────▶      │  (Event)
-      │                                   │
-      │  ◀─── FEE_CALCULATED ───────      │  (Event)
-      │                                   │
-      │  ──── REQUEST_ENROLLMENT ──▶      │  (API)
-      │                                   │
-      │  ◀─── ENROLLMENT_ALLOWED ───      │  (Response)
-      │                                   │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FULL FEE INTEGRATION FLOW (v1.2)                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Admission Module                              Finance Module                │
+│        │                                             │                       │
+│        │  ══════════ APPLICATION FEE (Implemented) ══════════                │
+│        │                                             │                       │
+│        │  1. create_profile()                        │                       │
+│        │     └── Snapshot application_fee to applied_rules                   │
+│        │                                             │                       │
+│        │  2. submit_profile() ──────────────────────▶│                       │
+│        │     └── Lead moves to sts07 (Đã tiếp nhận)  │                       │
+│        │                                             │                       │
+│        │  3. record_application_fee_payment() ◀──────│  (Admin/Gateway)      │
+│        │     └── Lead moves to sts13 (Đã hoàn lệ phí)│                       │
+│        │                                             │                       │
+│        │  4. approve_profile()                       │                       │
+│        │     └── GATE: Check fee_status != pending   │                       │
+│        │     └── Lead moves to sts09 (Đủ điều kiện)  │                       │
+│        │                                             │                       │
+│        │  ══════════ TUITION FEE (To Implement) ═════════                    │
+│        │                                             │                       │
+│        │  5. PROFILE_APPROVED ──────────────────────▶│  (Event)              │
+│        │                                             │                       │
+│        │  6. ◀────────────── TUITION_CALCULATED ─────│  (Event)              │
+│        │     └── Create Fee record (fee_type=tuition)│                       │
+│        │     └── Generate Invoice(s) per plan        │                       │
+│        │     └── Lead moves to sts14 (Chờ học phí)   │                       │
+│        │                                             │                       │
+│        │  7. Payment recorded ◀──────────────────────│  (Manual/Online)      │
+│        │     └── Lead moves to sts10 (Đã nộp học phí)│                       │
+│        │                                             │                       │
+│        │  8. REQUEST_ENROLLMENT ────────────────────▶│  (API)                │
+│        │                                             │                       │
+│        │  9. ◀────────────── ENROLLMENT_ALLOWED ─────│  (Response)           │
+│        │     └── GATE: Check tuition fee paid/waived │                       │
+│        │                                             │                       │
+│        │  10. enroll_student()                       │                       │
+│        │      └── Lead moves to sts11 (Đã nhập học)  │                       │
+│        │                                             │                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+LEAD STATUS PROGRESSION:
+┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐
+│ sts07  │──▶│ sts13  │──▶│ sts09  │──▶│ sts14  │──▶│ sts10  │──▶│ sts11  │
+│Tiếp nhận│   │Lệ phí OK│   │Đủ ĐK   │   │Chờ HP  │   │HP OK   │   │Nhập học│
+└────────┘   └────────┘   └────────┘   └────────┘   └────────┘   └────────┘
+     │            │            │            │            │            │
+     └── Application Fee ──────┘            └── Tuition Fee ──────────┘
 ```
 
 ### 2.3 Data Ownership Rules
@@ -201,9 +261,11 @@ CREATE TABLE fee (
     admission_profile_id INTEGER NOT NULL REFERENCES admission_profile(id),
     installment_plan_id INTEGER REFERENCES installment_plan(id),
 
-    -- v1.1: Multi-fee type support
+    -- v1.2: Multi-fee type support (includes application fee)
     fee_type VARCHAR(30) NOT NULL DEFAULT 'tuition',
-    -- fee_type: tuition | enrollment | insurance | dormitory | other
+    -- fee_type: application | tuition | enrollment | insurance | dormitory | other
+    -- NOTE: 'application' fee currently stored in AdmissionProfile.applied_rules
+    --       Will be migrated to this table for unified tracking
     academic_year INTEGER NOT NULL,
 
     -- Amount Calculation
@@ -237,7 +299,7 @@ CREATE TABLE fee (
         total_discount <= base_amount
     ),
     CONSTRAINT chk_fee_type CHECK (
-        fee_type IN ('tuition', 'enrollment', 'insurance', 'dormitory', 'other')
+        fee_type IN ('application', 'tuition', 'enrollment', 'insurance', 'dormitory', 'other')
     ),
     CONSTRAINT chk_fee_status CHECK (
         status IN ('pending', 'calculated', 'invoiced', 'partial', 'paid', 'overdue', 'waived', 'cancelled')
@@ -788,7 +850,103 @@ async def close_accounting_period(period_id: int, user: User):
     await emit_event(PeriodClosed(period_id=period.id))
 ```
 
-### 4.5 Fee Calculation with Installments (v1.1)
+### 4.5 Enrollment Gate Logic (v1.2 NEW)
+
+```python
+async def check_enrollment_eligibility(profile_id: int) -> dict:
+    """
+    Two-gate enrollment check.
+
+    Gate 1: Application Fee (IMPLEMENTED)
+        - Checked in approve_profile()
+        - Source: AdmissionProfile.applied_rules.fee_status
+        - Required status: "paid" or "exempt"
+
+    Gate 2: Tuition Fee (TO IMPLEMENT)
+        - Checked in enroll_student()
+        - Source: Fee table (fee_type='tuition')
+        - Required status: "paid" or "waived"
+    """
+    profile = await get_profile(profile_id)
+    result = {
+        "profile_id": profile_id,
+        "gates": [],
+        "can_enroll": True,
+        "blocking_reasons": []
+    }
+
+    # Gate 1: Application Fee
+    app_fee_status = profile.applied_rules.get("fee_status", "exempt")
+    app_fee_ok = app_fee_status in ("paid", "exempt")
+    result["gates"].append({
+        "gate": "application_fee",
+        "status": app_fee_status,
+        "passed": app_fee_ok,
+        "source": "applied_rules"
+    })
+    if not app_fee_ok:
+        result["can_enroll"] = False
+        result["blocking_reasons"].append("Application fee not paid")
+
+    # Gate 2: Tuition Fee (NEW - from Finance Module)
+    tuition_fee = await fee_repo.get_fee(profile_id, fee_type="tuition")
+    if tuition_fee:
+        tuition_ok = tuition_fee.status in ("paid", "waived")
+        result["gates"].append({
+            "gate": "tuition_fee",
+            "status": tuition_fee.status,
+            "passed": tuition_ok,
+            "remaining": float(tuition_fee.remaining_amount),
+            "source": "fee_table"
+        })
+        if not tuition_ok:
+            result["can_enroll"] = False
+            result["blocking_reasons"].append(
+                f"Tuition fee not paid. Remaining: {tuition_fee.remaining_amount:,.0f} VND"
+            )
+    else:
+        # No tuition fee record - skip gate (optional fee)
+        result["gates"].append({
+            "gate": "tuition_fee",
+            "status": "not_required",
+            "passed": True,
+            "source": "fee_table"
+        })
+
+    return result
+
+
+async def enroll_student(profile_id: int, user: User) -> Student:
+    """
+    Enroll student with fee verification gates.
+
+    v1.2 Changes:
+    - Gate 1 (application fee) already enforced in approve_profile()
+    - Gate 2 (tuition fee) enforced here before enrollment
+    """
+    profile = await get_profile(profile_id)
+
+    # Validate profile status
+    if profile.status != "approved":
+        raise BusinessRuleViolation("Profile must be approved before enrollment")
+
+    # Check enrollment eligibility (both gates)
+    eligibility = await check_enrollment_eligibility(profile_id)
+    if not eligibility["can_enroll"]:
+        raise BusinessRuleViolation(
+            f"Cannot enroll: {', '.join(eligibility['blocking_reasons'])}"
+        )
+
+    # Proceed with enrollment...
+    student = await create_student_record(profile)
+
+    # Update lead status to sts11 (Đã nhập học)
+    await sync_lead_from_admission(profile, reason="Student enrolled")
+
+    return student
+```
+
+### 4.6 Fee Calculation with Installments (v1.1)
 
 ```python
 async def calculate_fee(
@@ -1027,18 +1185,25 @@ async def _process_fee_fully_paid(event: FeeFullyPaid):
     """Actual business logic."""
     profile = await get_profile_by_fee(event.fee_id)
 
-    # Only process tuition fee for enrollment gate
-    if event.fee_type != "tuition":
-        return {"action": "skipped", "reason": "not_tuition_fee"}
+    # Determine target status based on fee type
+    # v1.2: Correct status mapping
+    STATUS_MAP = {
+        "application": "sts13",  # Đã hoàn tất lệ phí xét tuyển
+        "tuition": "sts10",      # Đã hoàn tất học phí
+    }
+
+    target_status = STATUS_MAP.get(event.fee_type)
+    if not target_status:
+        return {"action": "skipped", "reason": f"no_status_for_{event.fee_type}"}
 
     # Update lead status
     await update_lead_status(
         lead_id=profile.lead_id,
-        status_id="sts18",  # Fee paid
-        reason="Tuition fee fully paid"
+        status_id=target_status,
+        reason=f"{event.fee_type.title()} fee fully paid"
     )
 
-    return {"action": "lead_status_updated"}
+    return {"action": "lead_status_updated", "new_status": target_status}
 ```
 
 ---
@@ -1187,6 +1352,134 @@ GET /api/v1/accounting/periods/{period_id}/summary
 
 ## 7. Migration Plan (Updated)
 
+### Phase 0: Application Fee Migration (Pre-requisite) - v1.2 NEW
+
+**Goal:** Migrate existing application fee data from `AdmissionProfile.applied_rules` JSON to new `fee` table.
+
+```sql
+-- Migration fin20260130001_migrate_application_fees.sql
+
+-- Step 1: Create fee table first (from Phase 1)
+-- Step 2: Backfill existing application fees
+
+INSERT INTO fee (
+    admission_profile_id,
+    fee_type,
+    academic_year,
+    base_amount,
+    total_discount,
+    final_amount,
+    paid_amount,
+    status,
+    calculated_at,
+    last_payment_at,
+    created_at,
+    updated_at
+)
+SELECT
+    ap.id AS admission_profile_id,
+    'application' AS fee_type,
+    ap.academic_year,
+    COALESCE((ap.applied_rules->>'application_fee')::numeric, 0) AS base_amount,
+    0 AS total_discount,  -- Application fee typically has no discount
+    COALESCE((ap.applied_rules->>'application_fee')::numeric, 0) AS final_amount,
+    CASE
+        WHEN ap.applied_rules->>'fee_status' = 'paid'
+        THEN COALESCE((ap.applied_rules->>'application_fee')::numeric, 0)
+        ELSE 0
+    END AS paid_amount,
+    CASE
+        WHEN ap.applied_rules->>'fee_status' = 'paid' THEN 'paid'
+        WHEN ap.applied_rules->>'fee_status' = 'exempt' THEN 'waived'
+        WHEN ap.applied_rules->>'fee_status' = 'pending' THEN 'invoiced'
+        ELSE 'pending'
+    END AS status,
+    ap.created_at AS calculated_at,
+    CASE
+        WHEN ap.applied_rules->>'fee_paid_at' IS NOT NULL
+        THEN (ap.applied_rules->>'fee_paid_at')::timestamp
+        ELSE NULL
+    END AS last_payment_at,
+    ap.created_at,
+    ap.updated_at
+FROM admission_profile ap
+WHERE (ap.applied_rules->>'requires_application_fee')::boolean = true
+  AND NOT EXISTS (
+      SELECT 1 FROM fee f
+      WHERE f.admission_profile_id = ap.id
+        AND f.fee_type = 'application'
+  );
+
+-- Step 3: Create payment records for paid fees
+INSERT INTO payment (
+    invoice_id,
+    method_id,
+    amount,
+    reference_code,
+    status,
+    payment_date,
+    verified_at,
+    created_at
+)
+SELECT
+    inv.id AS invoice_id,
+    (SELECT id FROM payment_method WHERE code = 'bank_transfer') AS method_id,
+    (ap.applied_rules->'fee_payment_data'->>'amount')::numeric AS amount,
+    ap.applied_rules->'fee_payment_data'->>'transaction_id' AS reference_code,
+    'verified' AS status,
+    (ap.applied_rules->>'fee_paid_at')::timestamp AS payment_date,
+    (ap.applied_rules->>'fee_paid_at')::timestamp AS verified_at,
+    (ap.applied_rules->>'fee_paid_at')::timestamp AS created_at
+FROM admission_profile ap
+JOIN fee f ON f.admission_profile_id = ap.id AND f.fee_type = 'application'
+JOIN invoice inv ON inv.fee_id = f.id
+WHERE ap.applied_rules->>'fee_status' = 'paid'
+  AND ap.applied_rules->'fee_payment_data' IS NOT NULL;
+```
+
+**Compatibility Layer (Service):**
+```python
+# app/services/fee_compatibility.py
+async def get_application_fee_status(profile_id: int) -> dict:
+    """
+    Get application fee status from either:
+    1. New fee table (preferred)
+    2. Legacy applied_rules JSON (fallback)
+    """
+    # Try new table first
+    fee = await fee_repo.get_fee(profile_id, fee_type='application')
+    if fee:
+        return {
+            "fee_id": fee.id,
+            "requires_fee": fee.final_amount > 0,
+            "fee_amount": fee.final_amount,
+            "fee_status": fee.status,
+            "fee_paid_at": fee.last_payment_at,
+            "source": "fee_table"
+        }
+
+    # Fallback to legacy JSON
+    profile = await profile_repo.get(profile_id)
+    applied_rules = profile.applied_rules or {}
+    return {
+        "fee_id": None,
+        "requires_fee": applied_rules.get("requires_application_fee", False),
+        "fee_amount": applied_rules.get("application_fee", 0),
+        "fee_status": applied_rules.get("fee_status", "exempt"),
+        "fee_paid_at": applied_rules.get("fee_paid_at"),
+        "source": "legacy_json"
+    }
+```
+
+**Feature Flag:**
+```python
+# app/core/feature_flags.py
+FINANCE_MODULE_ENABLED = os.getenv("FINANCE_MODULE_ENABLED", "false").lower() == "true"
+USE_NEW_FEE_TABLE = os.getenv("USE_NEW_FEE_TABLE", "false").lower() == "true"
+```
+
+---
+
 ### Phase 1: Foundation (Week 1-2)
 
 ```sql
@@ -1218,6 +1511,8 @@ INSERT INTO installment_plan (...);
 - [ ] Pydantic schemas
 - [ ] Repository layer
 - [ ] Unit tests
+- [ ] v1.2: Application fee migration script
+- [ ] v1.2: Compatibility layer service
 
 ### Phase 2: Core Services (Week 3-4)
 
@@ -1328,17 +1623,43 @@ Backend_FastAPI/
 
 ---
 
-## 9. Summary of v1.1 Changes
+## 9. Summary of Changes
 
-| Feature | v1.0 | v1.1 |
-|---------|------|------|
-| Fee per profile | 1:1 (single) | N:1 (multi-type) |
-| Fee types | tuition only | tuition, enrollment, insurance, dormitory |
-| Installments | Not supported | Full support with plans |
-| Payment online | Direct to Payment | Intent → Payment (2-phase) |
-| Idempotency | Not handled | ProcessedEvent tracking |
-| Accounting period | Not supported | Full ledger lock support |
-| Penalty | Not supported | Auto-calculate on overdue |
+| Feature | v1.0 | v1.1 | v1.2 |
+|---------|------|------|------|
+| Fee per profile | 1:1 (single) | N:1 (multi-type) | N:1 (multi-type) |
+| Fee types | tuition only | tuition, enrollment, insurance, dormitory | **+ application** |
+| Application fee | Not tracked | Not tracked | **Implemented & migrated** |
+| Installments | Not supported | Full support with plans | Full support |
+| Payment online | Direct to Payment | Intent → Payment (2-phase) | Intent pattern |
+| Idempotency | Not handled | ProcessedEvent tracking | ProcessedEvent |
+| Accounting period | Not supported | Full ledger lock support | Full support |
+| Penalty | Not supported | Auto-calculate on overdue | Auto-calculate |
+| Status mapping | N/A | sts18 (incorrect) | **sts10/sts13 (fixed)** |
+| Migration strategy | N/A | N/A | **Backfill from JSON** |
+| Feature flags | N/A | N/A | **Added** |
+
+### v1.2 Key Changes
+
+1. **Application Fee Integration**
+   - Added `application` to `fee_type` enum
+   - Document existing implementation in `AdmissionProfile.applied_rules`
+   - Migration script to backfill existing data to `fee` table
+
+2. **Correct Status Mapping**
+   - `sts13` = Đã hoàn tất lệ phí xét tuyển (Application fee paid)
+   - `sts10` = Đã hoàn tất học phí (Tuition paid)
+   - `sts14` = Chưa hoàn tất học phí (Tuition pending)
+   - `sts18` = Đã hoàn học phí (Refunded - FINAL)
+
+3. **Integration Flow**
+   - Updated diagram showing application fee → tuition fee flow
+   - Two-gate enrollment: Application fee gate (implemented) + Tuition fee gate (to implement)
+
+4. **Migration Strategy**
+   - Phase 0 added for application fee migration
+   - Compatibility layer for dual-source reads
+   - Feature flags for gradual rollout
 
 ---
 
@@ -1355,6 +1676,7 @@ For enterprise-ready deployment:
 
 ---
 
-*Document Version: 1.1*
-*Last Updated: 2026-01-26*
+*Document Version: 1.2*
+*Last Updated: 2026-01-30*
 *Reviewed by: User (Tech Lead)*
+*Changes: Integrated with implemented application_fee, fixed status mapping, added migration strategy*
