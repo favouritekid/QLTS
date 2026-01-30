@@ -688,6 +688,401 @@ CREATE INDEX idx_refund_request_payment ON refund_request(payment_id);
 CREATE INDEX idx_refund_request_status ON refund_request(status);
 ```
 
+#### 3.2.12 `overpayment_record` - Ghi nhận thanh toán dư (v1.2 NEW)
+
+```sql
+-- v1.2: Overpayment Liability approach
+-- When student pays more than invoice amount, record the excess as a liability
+-- Accountant can later: Refund OR Apply to next invoice
+
+CREATE TABLE overpayment_record (
+    id SERIAL PRIMARY KEY,
+
+    -- Link to original payment
+    payment_id INTEGER NOT NULL REFERENCES payment(id),
+    invoice_id INTEGER NOT NULL REFERENCES invoice(id),
+    admission_profile_id INTEGER NOT NULL REFERENCES admission_profile(id),
+
+    -- Overpayment details
+    overpayment_amount NUMERIC(15,2) NOT NULL,
+    currency VARCHAR(3) NOT NULL DEFAULT 'VND',
+
+    -- Status tracking
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    -- pending | applied | refunded | cancelled
+
+    -- Resolution
+    resolution_type VARCHAR(20),  -- apply_to_next | refund | write_off
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    resolved_by_id INTEGER REFERENCES "user"(id),
+    resolution_notes TEXT,
+
+    -- If applied to another invoice
+    applied_to_invoice_id INTEGER REFERENCES invoice(id),
+    applied_amount NUMERIC(15,2),
+
+    -- If refunded
+    refund_request_id INTEGER REFERENCES refund_request(id),
+
+    -- Audit
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_overpayment_amount CHECK (overpayment_amount > 0),
+    CONSTRAINT chk_overpayment_status CHECK (
+        status IN ('pending', 'applied', 'refunded', 'cancelled')
+    ),
+    CONSTRAINT chk_resolution_type CHECK (
+        resolution_type IS NULL OR
+        resolution_type IN ('apply_to_next', 'refund', 'write_off')
+    )
+);
+
+CREATE INDEX idx_overpayment_payment ON overpayment_record(payment_id);
+CREATE INDEX idx_overpayment_profile ON overpayment_record(admission_profile_id);
+CREATE INDEX idx_overpayment_status ON overpayment_record(status);
+```
+
+---
+
+## 3.3 Overpayment Policy (v1.2 NEW)
+
+### 3.3.1 Problem Statement
+
+Tình huống thực tế: Sinh viên chuyển khoản **dư** so với hoá đơn.
+
+```
+Ví dụ:
+- Hoá đơn: 5,000,000 VND
+- Sinh viên chuyển: 5,100,000 VND (nhầm lẫn)
+- Số dư: 100,000 VND → Xử lý như thế nào?
+```
+
+### 3.3.2 Approaches Comparison
+
+| Approach | Pros | Cons | Complexity |
+|----------|------|------|------------|
+| **1. Strict Refuse** | Đơn giản, không có số dư treo | UX kém, sinh viên phải chuyển lại | ⭐ Low |
+| **2. Credit Wallet** | UX tốt nhất, tự động offset | Cần module Wallet/Ledger phức tạp | ⭐⭐⭐ High |
+| **3. Overpayment Liability** | Cân bằng UX và complexity, an toàn tài chính | Cần manual resolution | ⭐⭐ Medium |
+
+### 3.3.3 Recommended: Overpayment Liability (Phase 1)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    OVERPAYMENT HANDLING FLOW                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. Payment Received                                                         │
+│     └── Invoice: 5,000,000 VND                                              │
+│     └── Payment: 5,100,000 VND                                              │
+│                                                                              │
+│  2. System Processing                                                        │
+│     ├── Mark invoice as PAID (5,000,000 applied)                            │
+│     ├── Create overpayment_record (100,000 VND, status=pending)             │
+│     └── Notify accountant: "Overpayment detected for student X"             │
+│                                                                              │
+│  3. Accountant Resolution (Manual)                                           │
+│     ├── Option A: Apply to next invoice (offset against future fees)        │
+│     ├── Option B: Refund to student (create refund_request)                 │
+│     └── Option C: Write-off (e.g., donation, rounding)                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.3.4 Implementation Logic
+
+```python
+async def process_payment_with_overpayment(
+    payment: Payment,
+    invoice: Invoice,
+    user: User
+) -> tuple[Payment, Optional[OverpaymentRecord]]:
+    """
+    Process payment and handle overpayment if any.
+
+    v1.2: Overpayment Liability approach
+    - Accept payment even if > invoice amount
+    - Create overpayment record for manual resolution
+    """
+    overpayment_record = None
+    overpayment_amount = payment.amount - invoice.amount
+
+    if overpayment_amount < 0:
+        # Underpayment - partial payment
+        invoice.paid_amount += payment.amount
+        invoice.status = 'partial'
+    elif overpayment_amount == 0:
+        # Exact payment
+        invoice.paid_amount = invoice.amount
+        invoice.status = 'paid'
+    else:
+        # Overpayment - accept and record liability
+        invoice.paid_amount = invoice.amount
+        invoice.status = 'paid'
+
+        overpayment_record = OverpaymentRecord(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            admission_profile_id=invoice.fee.admission_profile_id,
+            overpayment_amount=overpayment_amount,
+            status='pending'
+        )
+        db.add(overpayment_record)
+
+        # Notify accountant
+        await notify_accountant(
+            event='overpayment_detected',
+            profile_id=invoice.fee.admission_profile_id,
+            amount=overpayment_amount,
+            payment_ref=payment.reference_code
+        )
+
+    payment.status = 'verified'
+    await db.flush()
+
+    return payment, overpayment_record
+
+
+async def resolve_overpayment(
+    overpayment_id: int,
+    resolution_type: str,  # apply_to_next | refund | write_off
+    user: User,
+    target_invoice_id: int = None,  # For apply_to_next
+    notes: str = None
+) -> OverpaymentRecord:
+    """
+    Resolve overpayment record.
+
+    Options:
+    - apply_to_next: Offset against another invoice
+    - refund: Create refund request
+    - write_off: Close without action (e.g., small amount)
+    """
+    record = await get_overpayment(overpayment_id)
+
+    if record.status != 'pending':
+        raise BusinessRuleViolation("Overpayment already resolved")
+
+    if resolution_type == 'apply_to_next':
+        if not target_invoice_id:
+            raise ValidationError("target_invoice_id required for apply_to_next")
+
+        target_invoice = await get_invoice(target_invoice_id)
+        # Apply overpayment as partial payment
+        await apply_overpayment_to_invoice(record, target_invoice, user)
+        record.applied_to_invoice_id = target_invoice_id
+        record.applied_amount = record.overpayment_amount
+        record.status = 'applied'
+
+    elif resolution_type == 'refund':
+        # Create refund request
+        refund_req = await create_refund_request(
+            payment_id=record.payment_id,
+            amount=record.overpayment_amount,
+            reason="Overpayment refund",
+            user=user
+        )
+        record.refund_request_id = refund_req.id
+        record.status = 'refunded'
+
+    elif resolution_type == 'write_off':
+        # Simply close it (for small amounts, donations, etc.)
+        record.status = 'cancelled'
+
+    record.resolution_type = resolution_type
+    record.resolved_at = datetime.now(UTC)
+    record.resolved_by_id = user.id
+    record.resolution_notes = notes
+
+    await db.flush()
+    return record
+```
+
+### 3.3.5 API Endpoints for Overpayment
+
+```yaml
+GET /api/v1/overpayments
+  description: List pending overpayments (for accountant dashboard)
+  query_params:
+    status: string (pending | applied | refunded | cancelled)
+    profile_id: integer (optional)
+  permissions: [accountant, manager, admin]
+
+GET /api/v1/overpayments/{id}
+  description: Get overpayment details
+
+POST /api/v1/overpayments/{id}/resolve
+  description: Resolve overpayment
+  request:
+    resolution_type: string (apply_to_next | refund | write_off)
+    target_invoice_id: integer (required if apply_to_next)
+    notes: string (optional)
+  permissions: [accountant, manager, admin]
+```
+
+---
+
+## 3.4 FSM Configuration Requirements (v1.2 NEW)
+
+### 3.4.1 Problem Statement
+
+Hệ thống QLTS dùng **Finite State Machine (FSM)** để quản lý luồng trạng thái Lead.
+Nếu không khai báo transition trong `allowed_transitions`, code sẽ **block** việc chuyển trạng thái.
+
+```
+⚠️ ERROR khi chưa config:
+TransitionNotAllowed: Cannot move from sts09 to sts14
+```
+
+### 3.4.2 Current vs New Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LEAD STATUS FLOW COMPARISON                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  OLD FLOW (Direct Enrollment):                                               │
+│  ┌────────┐                                              ┌────────┐         │
+│  │ sts09  │────────────── [enroll] ─────────────────────▶│ sts11  │         │
+│  │Đủ ĐK   │                                              │Nhập học│         │
+│  └────────┘                                              └────────┘         │
+│                                                                              │
+│  NEW FLOW (With Tuition Fee Phase):                                          │
+│  ┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐            │
+│  │ sts09  │──▶│ sts14  │──▶│ sts10  │──▶│ sts11  │   │ sts18  │            │
+│  │Đủ ĐK   │   │Chờ HP  │   │HP OK   │   │Nhập học│   │Hoàn HP │            │
+│  └────────┘   └────────┘   └────────┘   └────────┘   └────────┘            │
+│       │            │            │                          ▲                │
+│       │            │            └──────────────────────────┘                │
+│       │            │                    (refund)                            │
+│       │            │                                                        │
+│       │            └── [student withdraws before payment]                   │
+│       │                                 │                                   │
+│       │                                 ▼                                   │
+│       │                          ┌────────┐                                 │
+│       └─────────────────────────▶│ sts04  │ (Từ chối - can re-engage)      │
+│              (reject)            └────────┘                                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.4.3 Required Transitions to Add
+
+```sql
+-- Migration fin20260201_add_fee_transitions.sql
+-- Add new transitions for tuition fee workflow
+
+INSERT INTO allowed_transitions (from_status_id, to_status_id, trigger_type, description)
+VALUES
+    -- From sts09 (Đủ điều kiện) to Fee phase
+    ('sts09', 'sts14', 'system', 'Chuyển sang chờ đóng học phí sau khi tính phí'),
+
+    -- From sts14 (Chờ HP) to various states
+    ('sts14', 'sts10', 'system', 'Đã thanh toán đủ học phí'),
+    ('sts14', 'sts04', 'user', 'Từ chối/Rút hồ sơ trước khi đóng học phí'),
+
+    -- From sts10 (HP OK) to Enrollment
+    ('sts10', 'sts11', 'system', 'Hoàn tất nhập học sau khi đóng học phí'),
+
+    -- Refund flow
+    ('sts10', 'sts18', 'system', 'Hoàn học phí (withdraw after payment)'),
+    ('sts11', 'sts18', 'system', 'Hoàn học phí (dropout after enrollment)')
+ON CONFLICT (from_status_id, to_status_id) DO NOTHING;
+
+-- Verify transitions added
+SELECT
+    at.from_status_id,
+    cs1.name AS from_name,
+    at.to_status_id,
+    cs2.name AS to_name,
+    at.trigger_type,
+    at.description
+FROM allowed_transitions at
+JOIN consultation_status cs1 ON cs1.id = at.from_status_id
+JOIN consultation_status cs2 ON cs2.id = at.to_status_id
+WHERE at.from_status_id IN ('sts09', 'sts10', 'sts14')
+   OR at.to_status_id IN ('sts10', 'sts14', 'sts18')
+ORDER BY at.from_status_id, at.to_status_id;
+```
+
+### 3.4.4 Transition Matrix (Fee Phase)
+
+| From | To | Trigger | Event |
+|------|-----|---------|-------|
+| sts09 (Đủ ĐK) | sts14 (Chờ HP) | system | FEE_CALCULATED |
+| sts14 (Chờ HP) | sts10 (HP OK) | system | TUITION_PAID |
+| sts14 (Chờ HP) | sts04 (Từ chối) | user | WITHDRAWN |
+| sts10 (HP OK) | sts11 (Nhập học) | system | ENROLLED |
+| sts10 (HP OK) | sts18 (Hoàn HP) | system | TUITION_REFUNDED |
+| sts11 (Nhập học) | sts18 (Hoàn HP) | system | TUITION_REFUNDED |
+
+### 3.4.5 Event Mapping Update
+
+```python
+# app/core/admission_event_mapping.py - v1.2 additions
+
+ADMISSION_EVENT_PROJECTIONS.update({
+    # Fee phase transitions
+    "tuition_fee_calculated": AdmissionEventProjection(
+        event="tuition_fee_calculated",
+        admission_status="approved",
+        consultation_status_id="sts14",
+        consultation_name="Chưa hoàn tất học phí",
+        pipeline_stage_id="stg05",
+        stage_name="Chờ đóng học phí",
+        system_note_template="[HỆ THỐNG] Đã tính học phí - Fee #{fee_id}, Tổng: {final_amount:,.0f} VND",
+        skip_if_converted=True,
+    ),
+
+    "tuition_fee_paid": AdmissionEventProjection(
+        event="tuition_fee_paid",
+        admission_status="approved",
+        consultation_status_id="sts10",
+        consultation_name="Đã hoàn tất học phí",
+        pipeline_stage_id="stg05",
+        stage_name="Đã nộp học phí",
+        system_note_template="[HỆ THỐNG] Đã thanh toán học phí - Payment #{payment_id}",
+        skip_if_converted=True,
+    ),
+
+    "tuition_refunded": AdmissionEventProjection(
+        event="tuition_refunded",
+        admission_status="enrolled",  # Can happen after enrollment
+        consultation_status_id="sts18",
+        consultation_name="Đã hoàn học phí",
+        pipeline_stage_id="stg07",
+        stage_name="Đã hoàn phí",
+        system_note_template="[HỆ THỐNG] Đã hoàn học phí - Refund #{refund_id}",
+        skip_if_converted=False,  # Allow from enrolled state
+    ),
+})
+```
+
+### 3.4.6 Implementation Checklist
+
+```
+□ Phase 1 Prerequisites (MUST DO BEFORE CODING):
+
+  □ 1. Add transitions to allowed_transitions table
+       File: alembic/versions/fin20260201_add_fee_transitions.py
+
+  □ 2. Update admission_event_mapping.py
+       Add: tuition_fee_calculated, tuition_fee_paid, tuition_refunded
+
+  □ 3. Update phase_manager.py (if needed)
+       Ensure sts14, sts10 are in correct phase set
+
+  □ 4. Verify with SQL query:
+       SELECT * FROM allowed_transitions
+       WHERE from_status_id = 'sts09' AND to_status_id = 'sts14';
+       -- Should return 1 row
+
+  □ 5. Test transition manually:
+       await transition_lead_status(lead_id, 'sts09', 'sts14', 'system')
+       -- Should NOT raise TransitionNotAllowed
+```
+
 ---
 
 ## 4. Business Logic & Workflow
@@ -1506,13 +1901,16 @@ INSERT INTO installment_plan (...);
 ```
 
 **Deliverables:**
-- [ ] Database migrations
-- [ ] SQLAlchemy models (all 11 tables)
+- [ ] Database migrations (all tables)
+- [ ] SQLAlchemy models (12 tables including overpayment_record)
 - [ ] Pydantic schemas
 - [ ] Repository layer
 - [ ] Unit tests
 - [ ] v1.2: Application fee migration script
 - [ ] v1.2: Compatibility layer service
+- [ ] v1.2: FSM transitions migration (allowed_transitions)
+- [ ] v1.2: Update admission_event_mapping.py
+- [ ] v1.2: Overpayment handling logic
 
 ### Phase 2: Core Services (Week 3-4)
 
@@ -1638,6 +2036,8 @@ Backend_FastAPI/
 | Status mapping | N/A | sts18 (incorrect) | **sts10/sts13 (fixed)** |
 | Migration strategy | N/A | N/A | **Backfill from JSON** |
 | Feature flags | N/A | N/A | **Added** |
+| **Overpayment** | N/A | N/A | **Liability approach** |
+| **FSM Config** | N/A | N/A | **Transitions added** |
 
 ### v1.2 Key Changes
 
@@ -1660,6 +2060,18 @@ Backend_FastAPI/
    - Phase 0 added for application fee migration
    - Compatibility layer for dual-source reads
    - Feature flags for gradual rollout
+
+5. **Overpayment Policy (NEW)**
+   - Recommended: Overpayment Liability approach
+   - New table: `overpayment_record`
+   - Accountant resolution workflow (apply_to_next / refund / write_off)
+   - API endpoints for overpayment management
+
+6. **FSM Configuration (NEW)**
+   - Required transitions: sts09→sts14→sts10→sts11
+   - New events: tuition_fee_calculated, tuition_fee_paid, tuition_refunded
+   - Migration script for allowed_transitions
+   - Checklist for prerequisites before coding
 
 ---
 
