@@ -471,7 +471,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       {/* Bulk Actions Bar - Responsive: wrap on mobile */}
       {selectedCount > 0 && (
         <Card className="border-primary">
-          <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2">
               <CheckSquare className="text-primary h-5 w-5" />
               <span className="font-medium text-sm sm:text-base">{selectedCount} người dùng được chọn</span>

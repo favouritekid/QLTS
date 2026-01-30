@@ -186,10 +186,10 @@ export function SessionList({
                     {/* ✅ DEFENSE IN DEPTH: Disable revoke button for current session */}
                     <Button
                       variant={session.is_current ? "outline" : "destructive"}
-                      size="sm"
                       onClick={() => setSessionToRevoke(session)}
                       disabled={isLoading || session.is_current}
                       title={session.is_current ? "Đây là phiên hiện tại" : "Thu hồi phiên này"}
+                      className="min-h-[44px]"
                     >
                       {session.is_current ? "Hiện tại" : "Thu hồi"}
                     </Button>

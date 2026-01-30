@@ -139,7 +139,7 @@ function LoginHistoryCard({
 
   return (
     <Card className={item.is_suspicious ? "border-warning-400 bg-warning-50/50" : ""}>
-      <CardContent className="p-3 md:p-4">
+      <CardContent className="p-4">
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 md:gap-4">
           {/* Left: Device info and status badges */}
           <div className="flex-1 space-y-2">
@@ -225,26 +225,24 @@ function LoginHistoryCard({
                 )}
                 <div className="flex gap-2 w-full md:w-auto">
                   <Button
-                    size="sm"
                     variant="outline"
                     onClick={() => onConfirm(item.id)}
                     disabled={isStale}
-                    className={`flex-1 md:flex-none ${isStale
+                    className={`flex-1 md:flex-none min-h-[44px] ${isStale
                       ? "text-muted-foreground cursor-not-allowed"
                       : "text-success-600 hover:text-success-700 hover:bg-success-50"
                     }`}
                     title={isStale ? "Không thể xác nhận đăng nhập cũ hơn 7 ngày" : "Xác nhận đây là bạn"}
                   >
-                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    <CheckCircle2 className="mr-1.5 h-4 w-4" />
                     Là tôi
                   </Button>
                   <Button
-                    size="sm"
                     variant="outline"
                     onClick={() => onSecure(item.id)}
-                    className="flex-1 md:flex-none text-error-600 hover:text-error-700 hover:bg-error-50"
+                    className="flex-1 md:flex-none min-h-[44px] text-error-600 hover:text-error-700 hover:bg-error-50"
                   >
-                    <ShieldAlert className="mr-1 h-3 w-3" />
+                    <ShieldAlert className="mr-1.5 h-4 w-4" />
                     Không phải tôi
                   </Button>
                 </div>
