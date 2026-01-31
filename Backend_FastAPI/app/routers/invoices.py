@@ -1,0 +1,359 @@
+# app/routers/invoices.py
+"""
+Router for Invoice Management (Finance Module Phase 4).
+
+Architecture Compliance:
+- Router Layer: Orchestration only (no business logic)
+- Transaction Management: Router calls db.commit() after service returns
+- RBAC: All endpoints protected by CasbinAuth dependency
+- Error Handling: Convert custom exceptions to HTTPException
+- IDOR Protection: Unit-based access control via service layer
+
+Endpoints:
+- GET /api/invoices/{invoice_id} - Get invoice details with payments
+- GET /api/invoices/by-fee/{fee_id} - Get all invoices for a fee
+- PUT /api/invoices/{invoice_id}/issue - Issue invoice
+- PUT /api/invoices/{invoice_id}/cancel - Cancel invoice
+- POST /api/invoices/{invoice_id}/apply-penalty - Apply late payment penalty
+"""
+
+from decimal import Decimal
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
+
+from app import database, models, schemas
+from app.core import deps
+from app.core.deps import CasbinAuth
+from app.core.rate_limits import limiter, RateLimits
+from app.schemas import finance as finance_schemas
+from app.services.invoice_service import InvoiceService
+from app.repositories.fee_repository import InvoiceRepository
+from app.utils.exceptions import (
+    ResourceNotFoundError,
+    BadRequest,
+    BusinessRuleViolation,
+    ConflictError,
+)
+
+log = structlog.get_logger(__name__)
+
+router = APIRouter(prefix="/invoices", tags=["Finance - Invoices"])
+
+
+def get_client_ip(request: Request) -> str:
+    """Helper for rate limiting key generation."""
+    return request.client.host if request.client else "unknown"
+
+
+# ==============================================================================
+# INVOICE RETRIEVAL
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/{invoice_id}",
+    response_model=finance_schemas.InvoiceDetailResponse,
+    summary="Get invoice details",
+)
+async def get_invoice(
+    request: Request,
+    invoice_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Get invoice details including payments.
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'invoices:read' permission
+    """
+    invoice_service = InvoiceService(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    try:
+        invoice = await invoice_service.get_invoice(invoice_id, unit_id)
+
+        return _build_invoice_detail_response(invoice)
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/by-fee/{fee_id}",
+    response_model=List[finance_schemas.InvoiceSummaryResponse],
+    summary="Get all invoices for a fee",
+)
+async def get_invoices_by_fee(
+    request: Request,
+    fee_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Get all invoices for a specific fee.
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'invoices:read' permission
+    """
+    invoice_repo = InvoiceRepository(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    invoices = await invoice_repo.get_by_fee_id(fee_id, unit_id)
+
+    return [
+        finance_schemas.InvoiceSummaryResponse(
+            id=inv.id,
+            invoice_number=inv.invoice_number,
+            installment_no=inv.installment_no,
+            amount=inv.amount,
+            paid_amount=inv.paid_amount,
+            remaining_amount=inv.amount - inv.paid_amount,
+            due_date=inv.due_date,
+            status=inv.status,
+        )
+        for inv in invoices
+    ]
+
+
+# ==============================================================================
+# INVOICE LIFECYCLE
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.put(
+    "/{invoice_id}/issue",
+    response_model=finance_schemas.InvoiceResponse,
+    summary="Issue invoice",
+)
+async def issue_invoice(
+    request: Request,
+    invoice_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Issue a draft invoice, making it payable.
+
+    **Business Rules:**
+    - Only draft invoices can be issued
+    - Sets issued_at timestamp
+    - Changes status from 'draft' to 'issued'
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'invoices:issue' permission
+    """
+    invoice_service = InvoiceService(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    try:
+        invoice, _ = await invoice_service.issue_invoice(
+            invoice_id=invoice_id,
+            user_id=current_user.id,
+            unit_id=unit_id,
+        )
+
+        await db.commit()
+
+        log.info(
+            "invoice_issued_via_api",
+            invoice_id=invoice_id,
+            invoice_number=invoice.invoice_number,
+            user_id=current_user.id,
+        )
+
+        await db.refresh(invoice)
+        return _build_invoice_response(invoice)
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.put(
+    "/{invoice_id}/cancel",
+    response_model=finance_schemas.InvoiceResponse,
+    summary="Cancel invoice",
+)
+async def cancel_invoice(
+    request: Request,
+    invoice_id: int,
+    reason: str = Query(..., min_length=1, max_length=500, description="Cancellation reason"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Cancel an invoice.
+
+    **Business Rules:**
+    - Cannot cancel if any payments exist
+    - Requires manager or admin role
+    - Reason is required for audit
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'invoices:cancel' permission
+    """
+    # Check permission - only admin/manager can cancel
+    if current_user.role not in ["admin", "manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only managers and admins can cancel invoices"
+        )
+
+    invoice_service = InvoiceService(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    try:
+        invoice, _ = await invoice_service.cancel_invoice(
+            invoice_id=invoice_id,
+            reason=reason,
+            user_id=current_user.id,
+            unit_id=unit_id,
+        )
+
+        await db.commit()
+
+        log.info(
+            "invoice_cancelled_via_api",
+            invoice_id=invoice_id,
+            reason=reason,
+            user_id=current_user.id,
+        )
+
+        await db.refresh(invoice)
+        return _build_invoice_response(invoice)
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{invoice_id}/apply-penalty",
+    response_model=finance_schemas.InvoiceResponse,
+    summary="Apply late payment penalty",
+)
+async def apply_penalty(
+    request: Request,
+    invoice_id: int,
+    penalty_amount: Optional[Decimal] = Query(None, gt=0, description="Penalty amount (auto-calculated if not provided)"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Apply late payment penalty to an overdue invoice.
+
+    **Business Rules:**
+    - Only applies to overdue invoices
+    - If penalty_amount not provided, calculated based on installment plan penalty_rate
+    - Requires manager or admin role
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'invoices:penalty' permission
+    """
+    # Check permission - only admin/manager can apply penalty
+    if current_user.role not in ["admin", "manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only managers and admins can apply penalties"
+        )
+
+    invoice_service = InvoiceService(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    try:
+        invoice, _ = await invoice_service.apply_penalty(
+            invoice_id=invoice_id,
+            penalty_amount=penalty_amount,
+            user_id=current_user.id,
+            unit_id=unit_id,
+        )
+
+        await db.commit()
+
+        log.info(
+            "penalty_applied_via_api",
+            invoice_id=invoice_id,
+            penalty_amount=str(invoice.penalty_amount),
+            user_id=current_user.id,
+        )
+
+        await db.refresh(invoice)
+        return _build_invoice_response(invoice)
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
+
+def _build_invoice_response(invoice) -> finance_schemas.InvoiceResponse:
+    """Build InvoiceResponse from Invoice model."""
+    return finance_schemas.InvoiceResponse(
+        id=invoice.id,
+        fee_id=invoice.fee_id,
+        invoice_number=invoice.invoice_number,
+        installment_no=invoice.installment_no,
+        amount=invoice.amount,
+        due_date=invoice.due_date,
+        status=invoice.status,
+        paid_amount=invoice.paid_amount,
+        remaining_amount=invoice.amount - invoice.paid_amount,
+        issued_at=invoice.issued_at,
+        paid_at=invoice.paid_at,
+        cancelled_at=invoice.cancelled_at,
+        created_at=invoice.created_at,
+        updated_at=invoice.updated_at,
+    )
+
+
+def _build_invoice_detail_response(invoice) -> finance_schemas.InvoiceDetailResponse:
+    """Build InvoiceDetailResponse from Invoice model with payments."""
+    base_response = _build_invoice_response(invoice)
+
+    payment_summaries = [
+        finance_schemas.PaymentSummaryResponse(
+            id=p.id,
+            invoice_id=p.invoice_id,
+            amount=p.amount,
+            status=p.status,
+            payment_date=p.payment_date,
+            created_at=p.created_at,
+        )
+        for p in invoice.payments
+    ]
+
+    fee_summary = None
+    if invoice.fee:
+        fee = invoice.fee
+        fee_summary = finance_schemas.FeeSummaryResponse(
+            id=fee.id,
+            fee_type=fee.fee_type,
+            academic_year=fee.academic_year,
+            final_amount=fee.final_amount,
+            paid_amount=fee.paid_amount,
+            remaining_amount=fee.remaining_amount,
+            status=fee.status,
+        )
+
+    return finance_schemas.InvoiceDetailResponse(
+        **base_response.model_dump(),
+        payments=payment_summaries,
+        fee=fee_summary,
+    )

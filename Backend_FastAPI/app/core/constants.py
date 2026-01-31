@@ -26,9 +26,14 @@ class UserRole(StrEnum):
         and is compatible with existing string-based role column.
 
     Role hierarchy (highest to lowest):
-        ADMIN > MANAGER > OFFICER > USER
+        ADMIN > MANAGER > ACCOUNTANT > OFFICER > USER
+
+    Separation of Duties:
+        - OFFICER: Admission consultants (tư vấn viên tuyển sinh)
+        - ACCOUNTANT: Finance staff (kế toán viên) - handles payments, invoices
     """
     ADMIN = "admin"
     MANAGER = "manager"
-    OFFICER = "officer"
+    ACCOUNTANT = "accountant"  # Finance staff - record/verify payments, issue invoices
+    OFFICER = "officer"  # Admission consultant - manage leads, create payment intents
     USER = "user"  # Basic user role with minimal permissions

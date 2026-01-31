@@ -36,6 +36,7 @@ from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate 
 from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
 from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
+    accounting,  # ✅ FINANCE MODULE: Accounting Period Management
     administrative,  # ✅ PHASE 4: Administrative Nodes (Province/District/Ward)
     admission_config,  # ✅ PHASE 3: Admission Config + Scoring API
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
@@ -44,6 +45,8 @@ from .routers import (
     auth,
     config_data, # ✅ NEW: Dynamic Config Data (Categories, Import)
     document_groups,  # ✅ PHASE A.3: DocumentGroup CRUD
+    fees,  # ✅ FINANCE MODULE: Fee Calculation & Management
+    invoices,  # ✅ FINANCE MODULE: Invoice Lifecycle
     kpi_config,  # ✅ PHASE 5: KPI Configuration Admin
     leads,
     monitoring,
@@ -53,6 +56,7 @@ from .routers import (
     notifications,
     officer,
     organization,
+    payments,  # ✅ FINANCE MODULE: Payment Processing
     pipeline,
     profile,
     security,  # ✅ LOGIN SECURITY: Phase 5 - User response flow
@@ -236,13 +240,42 @@ async def lifespan(app: FastAPI):
                     )
 
                     # =========================================================================
-                    # FIX: SEED ROLE INHERITANCE (g-policies) - Missing in previous versions
+                    # FIX: SEED ROLE INHERITANCE (g-policies) - Diamond Inheritance Pattern
                     # =========================================================================
-                    # Standard hierarchy: User <- Officer <- Manager <- Admin
+                    # Diamond Hierarchy (Separation of Duties):
+                    #
+                    #                    ┌─────────┐
+                    #                    │  Admin  │
+                    #                    └────┬────┘
+                    #                      ▲   ▲
+                    #          ┌───────────┘   └───────────┐
+                    #          │                           │
+                    #     ┌────┴─────┐               ┌─────┴────┐
+                    #     │ Manager  │               │Accountant│
+                    #     └────┬─────┘               └─────┬────┘
+                    #          │                           │
+                    #          └───────────┐   ┌───────────┘
+                    #                      ▼   ▼
+                    #                    ┌─────────┐
+                    #                    │ Officer │
+                    #                    └────┬────┘
+                    #                         │
+                    #                    ┌────┴────┐
+                    #                    │  User   │
+                    #                    └─────────┘
+                    #
+                    # Benefits:
+                    # - Manager: User/Lead management (admission workflow)
+                    # - Accountant: Finance operations (payments, invoices)
+                    # - Manager does NOT inherit Accountant (separation of duties)
+                    # - Admin inherits BOTH branches (full access)
+                    #
                     role_inheritance = [
-                        ("g", "role:officer", "role:user"),    # Officer inherits from User
-                        ("g", "role:manager", "role:officer"), # Manager inherits from Officer
-                        ("g", "role:admin", "role:manager"),   # Admin inherits from Manager
+                        ("g", "role:officer", "role:user"),       # Officer inherits from User
+                        ("g", "role:accountant", "role:officer"), # Accountant inherits from Officer
+                        ("g", "role:manager", "role:officer"),    # Manager inherits from Officer (NOT from Accountant!)
+                        ("g", "role:admin", "role:manager"),      # Admin inherits from Manager
+                        ("g", "role:admin", "role:accountant"),   # Admin ALSO inherits from Accountant (Diamond!)
                     ]
                     
                     from sqlalchemy import text
@@ -605,6 +638,11 @@ fastapi_app.include_router(officer.router, prefix="/api")
 fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration Admin
 fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api")
+# ✅ FINANCE MODULE: Phase 4 - API Layer
+fastapi_app.include_router(fees.router, prefix="/api")
+fastapi_app.include_router(invoices.router, prefix="/api")
+fastapi_app.include_router(payments.router, prefix="/api")
+fastapi_app.include_router(accounting.router, prefix="/api")
 
 # ===============================================================
 # === ADMIN ROUTERS (PHASE 2 COMPLETE) =========================

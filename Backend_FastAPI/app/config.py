@@ -250,6 +250,41 @@ class Settings(BaseSettings):
         default=True, validation_alias="FINANCE_MAKER_CHECKER_ENABLED"
     )  # Require two-person verification for manual payments
 
+    # -- VNPay Payment Gateway Settings --
+    # Get credentials from VNPay merchant portal
+    # Sandbox docs: https://sandbox.vnpayment.vn/apis/
+    VNPAY_TMN_CODE: str = Field(
+        default="", validation_alias="VNPAY_TMN_CODE"
+    )  # Merchant terminal code
+    VNPAY_HASH_SECRET: str = Field(
+        default="", validation_alias="VNPAY_HASH_SECRET"
+    )  # Secret key for HMAC-SHA512
+    VNPAY_PAYMENT_URL: str = Field(
+        default="https://sandbox.vnpayment.vn/paymentv2/vpcpay.html",
+        validation_alias="VNPAY_PAYMENT_URL"
+    )  # Sandbox or production URL
+    VNPAY_API_URL: str = Field(
+        default="https://sandbox.vnpayment.vn/merchant_webapi/api/transaction",
+        validation_alias="VNPAY_API_URL"
+    )  # Query API URL
+
+    # -- MoMo Payment Gateway Settings --
+    # Get credentials from MoMo merchant portal
+    # Docs: https://developers.momo.vn/v3/docs/payment/api/collection-link/
+    MOMO_PARTNER_CODE: str = Field(
+        default="", validation_alias="MOMO_PARTNER_CODE"
+    )  # Partner code from MoMo
+    MOMO_ACCESS_KEY: str = Field(
+        default="", validation_alias="MOMO_ACCESS_KEY"
+    )  # API access key
+    MOMO_SECRET_KEY: str = Field(
+        default="", validation_alias="MOMO_SECRET_KEY"
+    )  # Secret for HMAC-SHA256
+    MOMO_ENDPOINT: str = Field(
+        default="https://test-payment.momo.vn/v2/gateway/api/create",
+        validation_alias="MOMO_ENDPOINT"
+    )  # Sandbox or production endpoint
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)

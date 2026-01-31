@@ -25,11 +25,39 @@ from app.utils.exceptions import ResourceNotFoundError
 log = logging.getLogger(__name__)
 
 # Role priority for determining DB field value (highest to lowest)
+#
+# Diamond Inheritance Structure:
+#                    ┌─────────┐
+#                    │  Admin  │  (Level 5)
+#                    └────┬────┘
+#                      ▲   ▲
+#          ┌───────────┘   └───────────┐
+#          │                           │
+#     ┌────┴─────┐               ┌─────┴────┐
+#     │ Manager  │ (Level 4)     │Accountant│ (Level 3.5 for DB display)
+#     └────┬─────┘               └─────┬────┘
+#          │                           │
+#          └───────────┐   ┌───────────┘
+#                      ▼   ▼
+#                    ┌─────────┐
+#                    │ Officer │  (Level 2)
+#                    └────┬────┘
+#                         │
+#                    ┌────┴────┐
+#                    │  User   │  (Level 1)
+#                    └─────────┘
+#
+# NOTE: Manager and Accountant are PARALLEL branches (same hierarchy level).
+# They have slightly different priorities ONLY for determining which role
+# to display in the user.role database field when a user has multiple roles.
+# The actual permissions are handled by Casbin's diamond inheritance.
+#
 ROLE_PRIORITY = {
-    "role:admin": 4,
-    "role:manager": 3,
-    "role:officer": 2,
-    "role:user": 1,
+    "role:admin": 5,
+    "role:manager": 4,        # User/Lead management branch
+    "role:accountant": 3,     # Finance operations branch (parallel to manager)
+    "role:officer": 2,        # Admission consultant (base for both branches)
+    "role:user": 1,           # Basic user (base for all roles)
 }
 
 
@@ -199,7 +227,7 @@ async def delete_role_atomic(
     from app.utils.exceptions import BadRequest, ResourceNotFoundError
     
     # STEP 1: Validate - System roles cannot be deleted
-    SYSTEM_ROLES = {"role:admin", "role:manager", "role:officer", "role:user"}
+    SYSTEM_ROLES = {"role:admin", "role:manager", "role:accountant", "role:officer", "role:user"}
     if role_name in SYSTEM_ROLES:
         raise BadRequest(f"Cannot delete system role: {role_name}")
 

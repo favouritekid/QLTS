@@ -26,9 +26,7 @@ Security (Section 3.9 C1):
 
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple, Callable, Protocol
-import hashlib
-import hmac
+from typing import Any, Dict, List, Optional, Tuple, Callable
 import structlog
 
 from sqlalchemy import select
@@ -38,8 +36,9 @@ from app import models
 from app.models.finance import (
     Fee, Invoice, Payment, PaymentIntent, PaymentTransaction, PaymentMethod,
     PaymentIntentStatusEnum, PaymentStatusEnum, InvoiceStatusEnum,
-    FeeStatusEnum, TransactionTypeEnum, GatewayStatusEnum,
+    FeeStatusEnum, TransactionTypeEnum,
 )
+from app.gateways.base import BaseGatewayAdapter, GatewayStatusEnum, GatewayResponse
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
     PaymentRepository,
@@ -58,59 +57,6 @@ log = structlog.get_logger(__name__)
 
 # Default intent expiration (15 minutes)
 DEFAULT_INTENT_EXPIRATION_MINUTES = 15
-
-
-class GatewayAdapter(Protocol):
-    """Protocol for payment gateway adapters."""
-
-    async def create_payment_url(
-        self,
-        intent: PaymentIntent,
-        return_url: str,
-    ) -> Tuple[str, str]:
-        """
-        Create payment URL for gateway.
-
-        Args:
-            intent: PaymentIntent to process
-            return_url: URL to redirect after payment
-
-        Returns:
-            Tuple of (pay_url, gateway_ref)
-        """
-        ...
-
-    def verify_signature(
-        self,
-        callback_data: Dict[str, Any],
-        secret_key: str,
-    ) -> bool:
-        """
-        Verify gateway callback signature.
-
-        Args:
-            callback_data: Callback data from gateway
-            secret_key: Gateway secret key
-
-        Returns:
-            True if signature is valid
-        """
-        ...
-
-    def parse_callback(
-        self,
-        callback_data: Dict[str, Any],
-    ) -> Tuple[str, GatewayStatusEnum, Decimal]:
-        """
-        Parse gateway callback data.
-
-        Args:
-            callback_data: Raw callback data
-
-        Returns:
-            Tuple of (gateway_ref, status, amount)
-        """
-        ...
 
 
 class PaymentIntentService:
@@ -135,9 +81,9 @@ class PaymentIntentService:
         self.transaction_repo = PaymentTransactionRepository(db)
 
         # Gateway adapters (registered dynamically)
-        self._gateway_adapters: Dict[str, GatewayAdapter] = {}
+        self._gateway_adapters: Dict[str, BaseGatewayAdapter] = {}
 
-    def register_gateway(self, code: str, adapter: GatewayAdapter) -> None:
+    def register_gateway(self, code: str, adapter: BaseGatewayAdapter) -> None:
         """Register a payment gateway adapter."""
         self._gateway_adapters[code] = adapter
 
@@ -288,6 +234,50 @@ class PaymentIntentService:
 
         return intent, None
 
+    async def create_or_get_intent(
+        self,
+        invoice_id: int,
+        method_id: int,
+        amount: Decimal,
+        idempotency_key: str,
+        return_url: Optional[str] = None,
+        unit_id: Optional[int] = None,
+    ) -> Tuple[PaymentIntent, bool]:
+        """
+        Create a new payment intent or return existing one.
+
+        This is a wrapper for router use that returns (intent, is_existing).
+
+        Args:
+            invoice_id: Invoice to pay
+            method_id: Payment method (must be online gateway)
+            amount: Payment amount
+            idempotency_key: Client-provided UUID for idempotency
+            return_url: URL to redirect after payment
+            unit_id: Unit ID for IDOR protection
+
+        Returns:
+            Tuple of (PaymentIntent, is_existing)
+        """
+        # Check for existing intent with same idempotency key
+        existing = await self.intent_repo.get_by_idempotency_key(
+            idempotency_key, invoice_id
+        )
+        if existing and not existing.is_terminal:
+            return existing, True
+
+        # Create new intent
+        intent, _ = await self.create_intent(
+            invoice_id=invoice_id,
+            method_id=method_id,
+            amount=amount,
+            idempotency_key=idempotency_key,
+            return_url=return_url or "",
+            unit_id=unit_id,
+        )
+
+        return intent, False
+
     # ==========================================================================
     # PROCESS CALLBACK
     # ==========================================================================
@@ -325,12 +315,20 @@ class PaymentIntentService:
 
         # Parse callback data
         if adapter:
-            gateway_ref, gateway_status, callback_amount = adapter.parse_callback(
-                callback_data
-            )
+            # Parse using adapter
+            gateway_response = adapter.parse_callback(callback_data)
+            gateway_ref = gateway_response.gateway_ref
+            gateway_status = gateway_response.status
+            callback_amount = gateway_response.amount
 
-            # Verify signature
-            secret_key = getattr(settings, f"GATEWAY_{gateway_code.upper()}_SECRET", "")
+            # Verify signature using appropriate secret key
+            if gateway_code == "vnpay":
+                secret_key = settings.VNPAY_HASH_SECRET
+            elif gateway_code == "momo":
+                secret_key = settings.MOMO_SECRET_KEY
+            else:
+                secret_key = getattr(settings, f"GATEWAY_{gateway_code.upper()}_SECRET", "")
+
             if secret_key and not adapter.verify_signature(callback_data, secret_key):
                 log.warning(
                     "callback_signature_invalid",
@@ -418,6 +416,51 @@ class PaymentIntentService:
             pass
 
         return intent, payment, post_commit
+
+    async def process_gateway_callback(
+        self,
+        gateway_code: str,
+        callback_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Process gateway callback and return result dict.
+
+        This is a simplified wrapper around process_callback for router use.
+        Returns a dict suitable for JSON response.
+
+        Args:
+            gateway_code: Gateway identifier (e.g., 'vnpay', 'momo')
+            callback_data: Raw callback data from gateway
+
+        Returns:
+            Dict with success status, message, and relevant IDs
+        """
+        try:
+            intent, payment, _ = await self.process_callback(
+                gateway_code=gateway_code,
+                callback_data=callback_data,
+            )
+
+            return {
+                "success": payment is not None,
+                "message": "Payment processed successfully" if payment else "Payment failed",
+                "intent_id": intent.id,
+                "payment_id": payment.id if payment else None,
+                "status": intent.status,
+            }
+
+        except ResourceNotFoundError as e:
+            return {
+                "success": False,
+                "message": str(e),
+                "intent_id": None,
+            }
+        except BusinessRuleViolation as e:
+            return {
+                "success": False,
+                "message": str(e),
+                "intent_id": None,
+            }
 
     async def _create_payment_from_intent(
         self,
@@ -648,99 +691,44 @@ class PaymentIntentService:
 
 
 # ==========================================================================
-# GATEWAY ADAPTERS (Example Implementation)
+# GATEWAY REGISTRATION HELPER
 # ==========================================================================
 
-class VNPayAdapter:
+def register_default_gateways(service: PaymentIntentService) -> None:
     """
-    VNPay payment gateway adapter.
+    Register default payment gateways from settings.
 
-    Implements the GatewayAdapter protocol for VNPay integration.
+    Call this during application startup to configure gateways.
+
+    Usage:
+        from app.services.payment_intent_service import (
+            PaymentIntentService,
+            register_default_gateways
+        )
+
+        service = PaymentIntentService(db)
+        register_default_gateways(service)
     """
+    from app.gateways import VNPayAdapter, MoMoAdapter
 
-    def __init__(self, tmn_code: str, hash_secret: str, payment_url: str):
-        """Initialize VNPay adapter."""
-        self.tmn_code = tmn_code
-        self.hash_secret = hash_secret
-        self.payment_url = payment_url
+    # Register VNPay if configured
+    if settings.VNPAY_TMN_CODE and settings.VNPAY_HASH_SECRET:
+        vnpay = VNPayAdapter(
+            tmn_code=settings.VNPAY_TMN_CODE,
+            hash_secret=settings.VNPAY_HASH_SECRET,
+            payment_url=settings.VNPAY_PAYMENT_URL,
+            api_url=settings.VNPAY_API_URL,
+        )
+        service.register_gateway("vnpay", vnpay)
+        log.info("vnpay_gateway_registered")
 
-    async def create_payment_url(
-        self,
-        intent: PaymentIntent,
-        return_url: str,
-    ) -> Tuple[str, str]:
-        """Create VNPay payment URL."""
-        import urllib.parse
-        from datetime import datetime
-
-        # Generate transaction reference
-        txn_ref = f"QLTS{intent.id}{int(datetime.now().timestamp())}"
-
-        # Build VNPay params
-        params = {
-            "vnp_Version": "2.1.0",
-            "vnp_Command": "pay",
-            "vnp_TmnCode": self.tmn_code,
-            "vnp_Amount": int(intent.amount * 100),  # VNPay uses cents
-            "vnp_CurrCode": "VND",
-            "vnp_TxnRef": txn_ref,
-            "vnp_OrderInfo": f"Payment for invoice {intent.invoice_id}",
-            "vnp_OrderType": "other",
-            "vnp_Locale": "vn",
-            "vnp_ReturnUrl": return_url,
-            "vnp_IpAddr": "127.0.0.1",
-            "vnp_CreateDate": datetime.now().strftime("%Y%m%d%H%M%S"),
-        }
-
-        # Sort params and create signature
-        sorted_params = sorted(params.items())
-        query_string = "&".join(f"{k}={urllib.parse.quote_plus(str(v))}" for k, v in sorted_params)
-        signature = hmac.new(
-            self.hash_secret.encode(),
-            query_string.encode(),
-            hashlib.sha512
-        ).hexdigest()
-
-        # Build final URL
-        pay_url = f"{self.payment_url}?{query_string}&vnp_SecureHash={signature}"
-
-        return pay_url, txn_ref
-
-    def verify_signature(
-        self,
-        callback_data: Dict[str, Any],
-        secret_key: str,
-    ) -> bool:
-        """Verify VNPay callback signature."""
-        import urllib.parse
-
-        received_hash = callback_data.pop("vnp_SecureHash", "")
-        callback_data.pop("vnp_SecureHashType", None)
-
-        sorted_params = sorted(callback_data.items())
-        query_string = "&".join(f"{k}={urllib.parse.quote_plus(str(v))}" for k, v in sorted_params)
-        expected_hash = hmac.new(
-            secret_key.encode(),
-            query_string.encode(),
-            hashlib.sha512
-        ).hexdigest()
-
-        return hmac.compare_digest(received_hash.lower(), expected_hash.lower())
-
-    def parse_callback(
-        self,
-        callback_data: Dict[str, Any],
-    ) -> Tuple[str, GatewayStatusEnum, Decimal]:
-        """Parse VNPay callback data."""
-        gateway_ref = callback_data.get("vnp_TxnRef", "")
-        response_code = callback_data.get("vnp_ResponseCode", "")
-        amount = Decimal(callback_data.get("vnp_Amount", 0)) / 100  # Convert from cents
-
-        if response_code == "00":
-            status = GatewayStatusEnum.success
-        elif response_code in ["24", "99"]:
-            status = GatewayStatusEnum.expired
-        else:
-            status = GatewayStatusEnum.failed
-
-        return gateway_ref, status, amount
+    # Register MoMo if configured
+    if settings.MOMO_PARTNER_CODE and settings.MOMO_SECRET_KEY:
+        momo = MoMoAdapter(
+            partner_code=settings.MOMO_PARTNER_CODE,
+            access_key=settings.MOMO_ACCESS_KEY,
+            secret_key=settings.MOMO_SECRET_KEY,
+            endpoint=settings.MOMO_ENDPOINT,
+        )
+        service.register_gateway("momo", momo)
+        log.info("momo_gateway_registered")

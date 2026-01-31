@@ -10,6 +10,54 @@ Each template contains:
 - description: What permissions this template grants
 - category: Group similar templates together
 - policies: List of policy rules (subject placeholder will be replaced)
+
+=============================================================================
+DIAMOND INHERITANCE PATTERN
+=============================================================================
+
+Role hierarchy uses diamond inheritance for separation of duties:
+
+                       ┌─────────────┐
+                       │    Admin    │  Full system access
+                       └──────┬──────┘
+                         ▲         ▲
+              ┌──────────┘         └──────────┐
+              │                               │
+        ┌─────┴──────┐                 ┌──────┴─────┐
+        │  Manager   │                 │ Accountant │
+        │ (Users/    │                 │  (Finance  │
+        │  Leads)    │                 │   Ops)     │
+        └─────┬──────┘                 └──────┬─────┘
+              │                               │
+              └──────────┐     ┌──────────────┘
+                         ▼     ▼
+                      ┌───────────┐
+                      │  Officer  │  Admission consultant
+                      └─────┬─────┘
+                            │
+                      ┌─────┴─────┐
+                      │   User    │  Basic permissions
+                      └───────────┘
+
+Casbin Grouping Policies (g-type rules):
+  g, role:officer, role:user
+  g, role:accountant, role:officer
+  g, role:manager, role:officer        # Manager does NOT inherit Accountant!
+  g, role:admin, role:manager
+  g, role:admin, role:accountant       # Admin inherits BOTH branches
+
+Benefits:
+  - Separation of Duties: Manager cannot do finance ops, Accountant cannot manage users
+  - Least Privilege: Each role only has required permissions
+  - Admin Override: Admin inherits all permissions from both branches
+
+Template Design:
+  - Each template defines ONLY the permissions UNIQUE to that role
+  - Inherited permissions come automatically via Casbin g-rules
+  - Example: Accountant template has finance-specific policies only,
+    officer permissions come via inheritance
+
+=============================================================================
 """
 
 from typing import Dict, List, TypedDict
@@ -91,16 +139,111 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/notifications/mark-as-read", "action": "POST"},
         {"subject": "{role}", "object": "/api/notifications/mark-all-as-read", "action": "POST"},
         {"subject": "{role}", "object": "/api/notifications/{notification_id}", "action": "DELETE"},
+        # Finance Module - Officer (Tư vấn viên) can only VIEW fees/invoices/payments
+        # and CREATE payment intents (to send payment links to parents)
+        # Officer CANNOT record cash payments or verify payments (accounting staff only)
+        {"subject": "{role}", "object": "/api/fees", "action": "GET"},
+        {"subject": "{role}", "object": "/api/fees/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/fees/by-profile/{profile_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/fees/summary/{profile_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/by-invoice/{invoice_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/intents", "action": "POST"},  # Create payment intent (online)
+        {"subject": "{role}", "object": "/api/payments/intents/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/methods", "action": "GET"},
+    ]
+}
+
+ACCOUNTANT_TEMPLATE: PolicyTemplate = {
+    "display_name": "Accountant (Kế toán viên)",
+    "description": "Finance staff: record payments, issue invoices, verify payments, waive fees. Inherits from Officer via g-rules.",
+    "category": "core",
+    "policies": [
+        # =========================================================================
+        # DIAMOND INHERITANCE: Accountant inherits Officer permissions via:
+        #   g, role:accountant, role:officer
+        # These are ADDITIONAL accountant-only permissions (Finance operations)
+        # Accountant does NOT inherit Manager (separation of duties)
+        # =========================================================================
+        # Profile access (SELF only)
+        {"subject": "{role}", "object": "/api/profile", "action": "GET"},
+        {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
+        # Notification access
+        {"subject": "{role}", "object": "/api/notifications", "action": "GET"},
+        {"subject": "{role}", "object": "/api/notifications/mark-as-read", "action": "POST"},
+        {"subject": "{role}", "object": "/api/notifications/mark-all-as-read", "action": "POST"},
+        {"subject": "{role}", "object": "/api/notifications/{notification_id}", "action": "DELETE"},
+        # Sessions & Security (SELF only)
+        {"subject": "{role}", "object": "/api/sessions", "action": "GET"},
+        {"subject": "{role}", "object": "/api/sessions/{id}", "action": "DELETE"},
+        {"subject": "{role}", "object": "/api/sessions/revoke-all", "action": "POST"},
+        {"subject": "{role}", "object": "/api/security/login-history", "action": "GET"},
+        {"subject": "{role}", "object": "/api/security/active-sessions", "action": "GET"},
+        {"subject": "{role}", "object": "/api/security/not-me", "action": "POST"},
+
+        # =====================================================================
+        # FINANCE MODULE - Full accounting operations
+        # =====================================================================
+
+        # FEES - Read + Calculate + Waive + Recalculate (not Cancel - admin only)
+        {"subject": "{role}", "object": "/api/fees", "action": "GET"},
+        {"subject": "{role}", "object": "/api/fees/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/fees/by-profile/{profile_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/fees/summary/{profile_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
+        {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},
+        {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},
+
+        # INVOICES - Full CRUD (except delete)
+        {"subject": "{role}", "object": "/api/invoices", "action": "GET"},
+        {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/invoices/{id}/issue", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/invoices/{id}/apply-penalty", "action": "POST"},
+
+        # PAYMENTS - Record + Verify + Reject (giai đoạn đầu accountant tự verify)
+        {"subject": "{role}", "object": "/api/payments", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments", "action": "POST"},  # Record payment
+        {"subject": "{role}", "object": "/api/payments/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/by-invoice/{invoice_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/{id}/verify", "action": "PUT"},  # Verify payment
+        {"subject": "{role}", "object": "/api/payments/{id}/reject", "action": "PUT"},  # Reject payment
+        {"subject": "{role}", "object": "/api/payments/intents", "action": "POST"},
+        {"subject": "{role}", "object": "/api/payments/intents/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/methods", "action": "GET"},
+
+        # ACCOUNTING PERIODS - View only (create/close is admin only)
+        {"subject": "{role}", "object": "/api/accounting/periods", "action": "GET"},
+        {"subject": "{role}", "object": "/api/accounting/periods/current", "action": "GET"},
+        {"subject": "{role}", "object": "/api/accounting/periods/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/accounting/periods/{id}/summary", "action": "GET"},
+
+        # REFUNDS - Request + Process (approve is manager only)
+        {"subject": "{role}", "object": "/api/refunds", "action": "GET"},
+        {"subject": "{role}", "object": "/api/refunds/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/refunds/request", "action": "POST"},
+        {"subject": "{role}", "object": "/api/refunds/{id}/process", "action": "PUT"},
+
+        # Admission config (read-only lookup data)
+        {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
     ]
 }
 
 MANAGER_TEMPLATE: PolicyTemplate = {
     "display_name": "Manager (User & Lead Manager)",
-    "description": "Manager permissions: lead CRUD (except DELETE) + user administration",
+    "description": "Manager permissions: lead CRUD (except DELETE) + user administration. Inherits from Officer via g-rules.",
     "category": "core",
     "policies": [
-        # NOTE: With role inheritance, manager inherits officer policies
-        # These are ADDITIONAL manager-only permissions
+        # =========================================================================
+        # DIAMOND INHERITANCE: Manager inherits Officer permissions via:
+        #   g, role:manager, role:officer
+        # These are ADDITIONAL manager-only permissions (not in Officer template)
+        # Manager does NOT inherit Accountant (separation of duties)
+        # =========================================================================
         # User management
         {"subject": "{role}", "object": "/api/admin/users", "action": ".*"},
         # Lead management - explicit policies (no wildcard)
@@ -135,6 +278,15 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # REMOVED: activate/deactivate - Admin only (Manager creates, Admin approves)
         {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/documents", "action": "GET"},  # Resolved docs
         {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/validate-activation", "action": "GET"},  # Validate
+        # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
+        {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
+        {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},  # Recalculate fee
+        {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},  # Cancel invoice
+        {"subject": "{role}", "object": "/api/invoices/{id}/apply-penalty", "action": "POST"},  # Apply penalty
+        {"subject": "{role}", "object": "/api/payments/{id}/verify", "action": "PUT"},  # Verify payment (maker-checker)
+        {"subject": "{role}", "object": "/api/payments/{id}/reject", "action": "PUT"},  # Reject payment
+        {"subject": "{role}", "object": "/api/accounting/periods/{id}", "action": "GET"},  # View period details
+        {"subject": "{role}", "object": "/api/accounting/periods/{id}/summary", "action": "GET"},  # View period summary
     ]
 }
 
@@ -245,6 +397,7 @@ POLICY_TEMPLATES: Dict[str, PolicyTemplate] = {
     # Core templates (system roles)
     "admin": ADMIN_TEMPLATE,
     "manager": MANAGER_TEMPLATE,
+    "accountant": ACCOUNTANT_TEMPLATE,  # Finance staff
     "officer": OFFICER_TEMPLATE,
     "user": BASIC_USER_TEMPLATE,
 
@@ -274,9 +427,16 @@ SYSTEM_ROLES = [
         "template_id": "manager",
     },
     {
+        "name": "role:accountant",
+        "display_name": "Accountant",
+        "description": "Finance staff: record payments, issue invoices, verify payments",
+        "is_system_role": True,
+        "template_id": "accountant",
+    },
+    {
         "name": "role:officer",
         "display_name": "Officer",
-        "description": "Sales officer with lead management capabilities",
+        "description": "Admission consultant with lead management capabilities",
         "is_system_role": True,
         "template_id": "officer",
     },

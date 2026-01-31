@@ -575,11 +575,12 @@ class AccountingPeriodCreate(AccountingPeriodBase):
 class AccountingPeriodResponse(AccountingPeriodBase):
     """Response schema for accounting period."""
     id: int
-    status: str
-    opened_at: datetime
+    is_closed: bool
     closed_at: Optional[datetime]
-    opened_by_id: int
     closed_by_id: Optional[int]
+    total_payments: Decimal
+    total_refunds: Decimal
+    net_revenue: Decimal
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

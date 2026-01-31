@@ -462,26 +462,52 @@ async def require_admin_or_manager(
     return current_user
 
 
+async def require_finance_staff(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """
+    Dependency that requires the user to have finance-related role (admin, manager, or accountant).
+
+    Use this on finance endpoints like recording payments, issuing invoices, etc.
+
+    Example:
+        @router.post("/payments")
+        async def record_payment(
+            current_user: models.User = Depends(require_finance_staff)
+        ):
+            # Guaranteed to be admin, manager, or accountant
+            ...
+
+    Raises:
+        PermissionDeniedError: If user is not finance staff
+    """
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT]:
+        raise PermissionDeniedError(
+            detail="Finance staff access required for this operation."
+        )
+    return current_user
+
+
 async def require_any_staff(
     current_user: models.User = Depends(get_current_active_user),
 ) -> models.User:
     """
-    Dependency that requires the user to be any staff role (admin, manager, or officer).
-    
+    Dependency that requires the user to be any staff role (admin, manager, accountant, or officer).
+
     Use this on endpoints accessible by all authenticated staff members.
-    
+
     Example:
         @router.get("/team-data")
         async def get_team_data(
             current_user: models.User = Depends(require_any_staff)
         ):
-            # Guaranteed to be admin, manager, or officer
+            # Guaranteed to be admin, manager, accountant, or officer
             ...
-    
+
     Raises:
         PermissionDeniedError: If user is not a staff member
     """
-    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.OFFICER]:
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.OFFICER]:
         raise PermissionDeniedError(
             detail="Staff access required for this operation."
         )
