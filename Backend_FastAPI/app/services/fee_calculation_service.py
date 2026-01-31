@@ -171,6 +171,18 @@ class FeeCalculationService:
             user_id=user_id,
         )
 
+        # ✅ SYNC LEAD STATUS: For tuition fee, move lead to sts14 (Chờ học phí)
+        # This keeps Lead consultation status in sync with Finance phase
+        if fee_type == FeeTypeEnum.tuition:
+            from app.services.lead_admission_sync import sync_lead_tuition_calculated
+            await sync_lead_tuition_calculated(
+                db=self.db,
+                profile=profile,
+                fee_amount=str(final_amount),
+                changed_by_user_id=user_id,
+                reason=f"Tuition fee calculated: {final_amount:,.0f} VND",
+            )
+
         # Post-commit callback for event emission
         async def post_commit():
             # TODO: Emit FeeCalculated domain event
@@ -301,13 +313,29 @@ class FeeCalculationService:
 
         # Update status if fully waived
         new_remaining = fee.final_amount - fee.paid_amount - fee.waived_amount
+        fee_became_paid = False
         if new_remaining <= 0:
             fee.status = FeeStatusEnum.paid.value  # Treat as paid
+            fee_became_paid = True
 
         fee.notes = f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] " \
                     f"Waived {waive_amount} VND by user {user_id}. Reason: {reason}"
 
         await self.db.flush()
+
+        # ✅ SYNC LEAD STATUS: If tuition fee is now fully waived, move lead to sts10
+        if fee_became_paid and fee.fee_type == FeeTypeEnum.tuition.value:
+            # Need to load profile with lead for sync
+            profile = await self._get_profile(fee.admission_profile_id, unit_id)
+            if profile:
+                from app.services.lead_admission_sync import sync_lead_tuition_paid
+                await sync_lead_tuition_paid(
+                    db=self.db,
+                    profile=profile,
+                    transaction_id=f"WAIVER-{fee_id}",
+                    changed_by_user_id=user_id,
+                    reason=f"Tuition fee waived: {waive_amount:,.0f} VND. Reason: {reason}",
+                )
 
         log.info(
             "fee_waived",
@@ -432,10 +460,11 @@ class FeeCalculationService:
         profile_id: int,
         unit_id: Optional[int] = None,
     ) -> Optional[models.AdmissionProfile]:
-        """Get admission profile with IDOR check."""
+        """Get admission profile with IDOR check and Lead relationship loaded."""
         query = (
             select(models.AdmissionProfile)
             .join(models.Lead)
+            .options(selectinload(models.AdmissionProfile.lead))  # Load lead for sync
             .where(models.AdmissionProfile.id == profile_id)
         )
 

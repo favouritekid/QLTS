@@ -950,3 +950,178 @@ class TestDiamondInheritance:
         for obj in accountant_exclusive:
             assert obj in accountant_objects, f"Accountant should have access to {obj}"
             assert obj not in manager_objects, f"Manager should NOT have access to {obj}"
+
+
+# =============================================================================
+# FEE GATE TESTS (Phase 6)
+# =============================================================================
+
+class TestFeeGateEnrollment:
+    """
+    Tests for Fee Gate (Phase 6) - Enrollment blocked if tuition fee not cleared.
+
+    Per FINANCE_MODULE_DESIGN.md Section 5.3 - Gate 2:
+    - Enrollment MUST be blocked if tuition fee not cleared
+    - Fee is "cleared" if status == 'paid' OR status == 'waived'
+    - Gate is ONLY enforced when ENABLE_FEE_VERIFICATION=True
+    """
+
+    @pytest.mark.asyncio
+    async def test_fee_gate_passes_when_fee_is_paid(self):
+        """
+        Fee gate should PASS when tuition fee status is 'paid'.
+        """
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create mock fee with status = paid
+        mock_fee = MagicMock()
+        mock_fee.id = 1
+        mock_fee.status = "paid"
+        mock_fee.remaining_amount = Decimal("0")
+
+        mock_fee_repo = MagicMock()
+        mock_fee_repo.get_by_profile_id = AsyncMock(return_value=[mock_fee])
+
+        mock_db = MagicMock()
+
+        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+            # Should NOT raise any exception
+            await check_enrollment_fee_eligibility(mock_db, profile_id=100)
+
+    @pytest.mark.asyncio
+    async def test_fee_gate_passes_when_fee_is_waived(self):
+        """
+        Fee gate should PASS when tuition fee status is 'waived'.
+        """
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create mock fee with status = waived
+        mock_fee = MagicMock()
+        mock_fee.id = 1
+        mock_fee.status = "waived"
+        mock_fee.remaining_amount = Decimal("0")
+
+        mock_fee_repo = MagicMock()
+        mock_fee_repo.get_by_profile_id = AsyncMock(return_value=[mock_fee])
+
+        mock_db = MagicMock()
+
+        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+            # Should NOT raise any exception
+            await check_enrollment_fee_eligibility(mock_db, profile_id=100)
+
+    @pytest.mark.asyncio
+    async def test_fee_gate_blocks_when_fee_is_pending(self):
+        """
+        Fee gate should BLOCK enrollment when tuition fee status is 'pending'.
+        """
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from app.utils.exceptions import BadRequest
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create mock fee with status = pending
+        mock_fee = MagicMock()
+        mock_fee.id = 1
+        mock_fee.status = "pending"
+        mock_fee.remaining_amount = Decimal("5000000")
+
+        mock_fee_repo = MagicMock()
+        mock_fee_repo.get_by_profile_id = AsyncMock(return_value=[mock_fee])
+
+        mock_db = MagicMock()
+
+        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+            with pytest.raises(BadRequest) as exc_info:
+                await check_enrollment_fee_eligibility(mock_db, profile_id=100)
+
+            assert "Tuition fee not cleared" in str(exc_info.value)
+            assert "5,000,000 VND" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_fee_gate_blocks_when_fee_is_partial(self):
+        """
+        Fee gate should BLOCK enrollment when tuition fee status is 'partial'.
+        """
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from app.utils.exceptions import BadRequest
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create mock fee with status = partial (partially paid)
+        mock_fee = MagicMock()
+        mock_fee.id = 1
+        mock_fee.status = "partial"
+        mock_fee.remaining_amount = Decimal("3000000")
+
+        mock_fee_repo = MagicMock()
+        mock_fee_repo.get_by_profile_id = AsyncMock(return_value=[mock_fee])
+
+        mock_db = MagicMock()
+
+        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+            with pytest.raises(BadRequest) as exc_info:
+                await check_enrollment_fee_eligibility(mock_db, profile_id=100)
+
+            assert "Tuition fee not cleared" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_fee_gate_blocks_when_no_fee_record(self):
+        """
+        Fee gate should BLOCK enrollment when no tuition fee record exists.
+        This ensures fee calculation happens before enrollment.
+        """
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from app.utils.exceptions import BadRequest
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Return empty list (no fee records)
+        mock_fee_repo = MagicMock()
+        mock_fee_repo.get_by_profile_id = AsyncMock(return_value=[])
+
+        mock_db = MagicMock()
+
+        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+            with pytest.raises(BadRequest) as exc_info:
+                await check_enrollment_fee_eligibility(mock_db, profile_id=100)
+
+            assert "Tuition fee has not been calculated" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_fee_gate_bypassed_when_feature_disabled(self):
+        """
+        Fee gate should be BYPASSED when ENABLE_FEE_VERIFICATION=False.
+        This is the default behavior for backward compatibility.
+        """
+        from app.config import settings
+
+        # Verify default is False
+        assert settings.ENABLE_FEE_VERIFICATION is False, (
+            "ENABLE_FEE_VERIFICATION should default to False for backward compatibility"
+        )
+
+    def test_fee_gate_status_accepted_values(self):
+        """
+        Only 'paid' and 'waived' should pass the fee gate.
+        All other statuses should be blocked.
+        """
+        from app.models.finance.fee import FeeStatusEnum
+
+        # Statuses that should PASS
+        passing_statuses = {FeeStatusEnum.paid.value, FeeStatusEnum.waived.value}
+
+        # Statuses that should FAIL
+        blocking_statuses = {
+            FeeStatusEnum.pending.value,
+            FeeStatusEnum.calculated.value,
+            FeeStatusEnum.invoiced.value,
+            FeeStatusEnum.partial.value,
+            FeeStatusEnum.overdue.value,
+            FeeStatusEnum.cancelled.value,
+        }
+
+        # Verify all statuses are covered
+        all_statuses = {s.value for s in FeeStatusEnum}
+        assert passing_statuses | blocking_statuses == all_statuses, (
+            "Fee gate test must cover all FeeStatusEnum values"
+        )

@@ -82,6 +82,83 @@ def _check_admin_or_unit_access(
         )
 
 
+async def check_enrollment_fee_eligibility(
+    db: AsyncSession,
+    profile_id: int,
+) -> None:
+    """
+    Fee Gate: Verify tuition fee is paid/waived before enrollment.
+
+    Per FINANCE_MODULE_DESIGN.md Section 5.3 (Gate 2):
+    - Enrollment MUST be blocked if tuition fee not cleared
+    - Fee is "cleared" if status == 'paid' OR status == 'waived'
+    - This check is ONLY enforced when ENABLE_FEE_VERIFICATION=True
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+
+    Raises:
+        BadRequest: If tuition fee not paid/waived
+
+    Note:
+        - Feature flag check should be done by caller
+        - This function ONLY checks tuition fee, not application fee
+          (application fee is Gate 1, enforced in approve_profile)
+    """
+    from app.config import settings
+    from app.repositories.fee_repository import FeeRepository
+    from app.models.finance.fee import FeeTypeEnum, FeeStatusEnum
+
+    fee_repo = FeeRepository(db)
+
+    # Get tuition fee for this profile
+    fees = await fee_repo.get_by_profile_id(
+        profile_id=profile_id,
+        fee_type=FeeTypeEnum.tuition.value
+    )
+
+    if not fees:
+        # No tuition fee record found - this could mean:
+        # 1. Fee hasn't been calculated yet
+        # 2. Fee module is not enabled for this profile
+        # For now, we block enrollment if no fee record exists
+        log.warning(
+            "Fee gate check failed: No tuition fee record found",
+            profile_id=profile_id,
+        )
+        raise BadRequest(
+            "Cannot enroll: Tuition fee has not been calculated. "
+            "Please calculate the fee before proceeding with enrollment."
+        )
+
+    # Check the most recent tuition fee (should only be one per year)
+    fee = fees[0]
+
+    # Fee must be paid or waived to proceed
+    if fee.status not in (FeeStatusEnum.paid.value, FeeStatusEnum.waived.value):
+        remaining = fee.remaining_amount
+        log.warning(
+            "Fee gate check failed: Tuition fee not cleared",
+            profile_id=profile_id,
+            fee_id=fee.id,
+            fee_status=fee.status,
+            remaining_amount=str(remaining),
+        )
+        raise BadRequest(
+            f"Cannot enroll: Tuition fee not cleared. "
+            f"Current status: {fee.status}, Remaining: {remaining:,.0f} VND. "
+            "Please complete payment or apply for fee waiver before enrollment."
+        )
+
+    log.info(
+        "Fee gate check passed: Tuition fee cleared",
+        profile_id=profile_id,
+        fee_id=fee.id,
+        fee_status=fee.status,
+    )
+
+
 def _validate_scores(
     profile: models.AdmissionProfile,
     applied_rules: dict,
@@ -2523,14 +2600,15 @@ async def enroll_student(
     Enroll student (create Student + StudentDocument records).
 
     ACID Transaction Flow:
-    1. Get and validate profile (status must be 'approved')
-    2. BEGIN SAVEPOINT (via begin_nested)
-    3. Generate unique student_code (SV + YYYY + 4-digit random, retry on conflict)
-    4. Create Student record
-    5. Create StudentDocument records (from ProfileDocument table)
-    6. Update AdmissionProfile.status = 'enrolled'
-    7. Update Lead.status = 'converted'
-    8. COMMIT SAVEPOINT (auto if no errors)
+    1. Get and validate profile (status must be 'confirmed' or 'overridden')
+    2. Fee Gate: Verify tuition fee is paid/waived (if ENABLE_FEE_VERIFICATION=True)
+    3. BEGIN SAVEPOINT (via begin_nested)
+    4. Generate unique student_code (SV + YYYY + 4-digit random, retry on conflict)
+    5. Create Student record
+    6. Create StudentDocument records (from ProfileDocument table)
+    7. Update AdmissionProfile.status = 'enrolled'
+    8. Update Lead.status = 'converted'
+    9. COMMIT SAVEPOINT (auto if no errors)
 
     On IntegrityError:
     - Savepoint auto-rollback
@@ -2538,7 +2616,14 @@ async def enroll_student(
 
     Security:
     - IDOR: Check lead.unit_id == user.unit_id
-    - State Check: Only approved profiles can be enrolled
+    - State Check: Only confirmed/overridden profiles can be enrolled
+    - Fee Gate: Tuition fee must be paid/waived (when ENABLE_FEE_VERIFICATION=True)
+
+    Fee Gate (Phase 6):
+    Per FINANCE_MODULE_DESIGN.md Section 5.3 - Gate 2:
+    - When ENABLE_FEE_VERIFICATION=True, enrollment is blocked if tuition fee not cleared
+    - Fee is "cleared" if status == 'paid' OR status == 'waived'
+    - Default: ENABLE_FEE_VERIFICATION=False (backward compatible)
 
     Args:
         db: Database session
@@ -2551,7 +2636,7 @@ async def enroll_student(
     Raises:
         ResourceNotFoundError: Profile not found
         PermissionDeniedError: User doesn't have access
-        BadRequest: Status is not 'approved'
+        BadRequest: Status is not 'confirmed', or tuition fee not cleared
         ConflictError: Unique constraint violation (student_code, citizen_id)
     """
     # Initialize repository
@@ -2636,6 +2721,18 @@ async def enroll_student(
          # Actually validate_transition handles this, but we keep this block if we want custom message
          # However, for strict compliance, let's rely on validate_transition or re-raise cleaner error
          pass # validate_transition already checked this
+
+    # ✅ FEE GATE (Phase 6): Verify tuition fee is paid/waived before enrollment
+    # Per FINANCE_MODULE_DESIGN.md Section 5.3 - Gate 2 (Tuition Fee Gate)
+    # Only enforced when ENABLE_FEE_VERIFICATION feature flag is True
+    from app.config import settings
+    if settings.ENABLE_FEE_VERIFICATION:
+        await check_enrollment_fee_eligibility(db, profile_id)
+        log.info(
+            "Fee gate passed for enrollment",
+            profile_id=profile_id,
+            user_id=current_user.id,
+        )
 
     # ✅ CRITICAL FIX #3: Final citizen_id duplicate check INSIDE transaction
     # Prevents race condition where 2 enrolls pass validation check but both create Student

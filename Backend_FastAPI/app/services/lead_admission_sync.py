@@ -263,3 +263,308 @@ async def sync_lead_fee_paid(
     )
 
     return True
+
+
+# =============================================================================
+# SYNC FUNCTIONS FOR TUITION FEE EVENTS (Finance Phase)
+# =============================================================================
+
+# Get projections from event mapping (Single Source of Truth)
+_TUITION_CALC_PROJECTION = get_projection("tuition_fee_calculated")
+_TUITION_PAID_PROJECTION = get_projection("tuition_fee_paid")
+_TUITION_REFUND_PROJECTION = get_projection("tuition_fee_refunded")
+
+TUITION_CALCULATED_STATUS = _TUITION_CALC_PROJECTION.consultation_status_id if _TUITION_CALC_PROJECTION else "sts14"
+TUITION_PAID_STATUS = _TUITION_PAID_PROJECTION.consultation_status_id if _TUITION_PAID_PROJECTION else "sts10"
+TUITION_REFUNDED_STATUS = _TUITION_REFUND_PROJECTION.consultation_status_id if _TUITION_REFUND_PROJECTION else "sts18"
+
+
+async def sync_lead_tuition_calculated(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    fee_amount: str = "",
+    changed_by_user_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> bool:
+    """
+    Sync lead consultation status when tuition fee is calculated.
+
+    Moves lead to sts14 (Chưa hoàn tất học phí / Chờ đóng học phí).
+
+    This indicates the profile is approved and waiting for tuition payment.
+
+    Args:
+        db: Database session (same transaction as caller)
+        profile: AdmissionProfile with lead relationship loaded
+        fee_amount: Fee amount for note template
+        changed_by_user_id: User who triggered the change (for audit)
+        reason: Reason for the status change (for audit log)
+
+    Returns:
+        bool: True if sync was performed, False if skipped
+    """
+    lead = profile.lead
+    if not lead:
+        log.warning(
+            "sync_lead_tuition_calculated: Lead not loaded on profile",
+            profile_id=profile.id,
+        )
+        return False
+
+    target_status_id = TUITION_CALCULATED_STATUS  # sts14
+
+    # Skip if already at target status (idempotent)
+    if lead.consultation_status_id == target_status_id:
+        log.debug(
+            "sync_lead_tuition_calculated: Already at target status, skipping",
+            lead_id=lead.id,
+            current_status=lead.consultation_status_id,
+        )
+        return False
+
+    # Store old values for history
+    old_consultation_status_id = lead.consultation_status_id
+    old_pipeline_stage_id = lead.pipeline_stage_id
+    old_status = lead.status
+
+    # Get new consultation status with stage relationship
+    new_status = await db.get(
+        models.ConsultationStatus,
+        target_status_id,
+        options=[selectinload(models.ConsultationStatus.stage)]
+    )
+
+    if not new_status:
+        log.error(
+            "sync_lead_tuition_calculated: Target ConsultationStatus not found",
+            target_status_id=target_status_id,
+        )
+        return False
+
+    # Update lead fields
+    lead.consultation_status_id = target_status_id
+    lead.pipeline_stage_id = new_status.stage_id
+
+    # Sync legacy lead.status using existing mapping function
+    sync_lead_status_from_consultation(lead, new_status)
+
+    # Create history record for audit trail
+    history = models.LeadStatusHistory(
+        lead_id=lead.id,
+        old_status=old_status,
+        new_status=lead.status,
+        old_consultation_status_id=old_consultation_status_id,
+        new_consultation_status_id=target_status_id,
+        old_pipeline_stage_id=old_pipeline_stage_id,
+        new_pipeline_stage_id=new_status.stage_id,
+        changed_by_user_id=changed_by_user_id,
+        reason=reason or f"Tuition fee calculated: {fee_amount} VND",
+    )
+    db.add(history)
+
+    await db.flush()
+
+    log.info(
+        "sync_lead_tuition_calculated: Lead status synced to tuition pending",
+        lead_id=lead.id,
+        profile_id=profile.id,
+        old_consultation_status=old_consultation_status_id,
+        new_consultation_status=target_status_id,
+        fee_amount=fee_amount,
+    )
+
+    return True
+
+
+async def sync_lead_tuition_paid(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    transaction_id: str = "",
+    changed_by_user_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> bool:
+    """
+    Sync lead consultation status when tuition fee is fully paid or waived.
+
+    Moves lead to sts10 (Đã hoàn tất học phí).
+
+    This indicates the profile is ready for enrollment (fee gate passed).
+
+    Args:
+        db: Database session (same transaction as caller)
+        profile: AdmissionProfile with lead relationship loaded
+        transaction_id: Payment transaction ID for note template
+        changed_by_user_id: User who triggered the change (for audit)
+        reason: Reason for the status change (for audit log)
+
+    Returns:
+        bool: True if sync was performed, False if skipped
+    """
+    lead = profile.lead
+    if not lead:
+        log.warning(
+            "sync_lead_tuition_paid: Lead not loaded on profile",
+            profile_id=profile.id,
+        )
+        return False
+
+    target_status_id = TUITION_PAID_STATUS  # sts10
+
+    # Skip if already at target status (idempotent)
+    if lead.consultation_status_id == target_status_id:
+        log.debug(
+            "sync_lead_tuition_paid: Already at tuition paid status, skipping",
+            lead_id=lead.id,
+            current_status=lead.consultation_status_id,
+        )
+        return False
+
+    # Store old values for history
+    old_consultation_status_id = lead.consultation_status_id
+    old_pipeline_stage_id = lead.pipeline_stage_id
+    old_status = lead.status
+
+    # Get new consultation status with stage relationship
+    new_status = await db.get(
+        models.ConsultationStatus,
+        target_status_id,
+        options=[selectinload(models.ConsultationStatus.stage)]
+    )
+
+    if not new_status:
+        log.error(
+            "sync_lead_tuition_paid: TUITION_PAID_STATUS not found",
+            target_status_id=target_status_id,
+        )
+        return False
+
+    # Update lead fields
+    lead.consultation_status_id = target_status_id
+    lead.pipeline_stage_id = new_status.stage_id
+
+    # Sync legacy lead.status using existing mapping function
+    sync_lead_status_from_consultation(lead, new_status)
+
+    # Create history record for audit trail
+    history = models.LeadStatusHistory(
+        lead_id=lead.id,
+        old_status=old_status,
+        new_status=lead.status,
+        old_consultation_status_id=old_consultation_status_id,
+        new_consultation_status_id=target_status_id,
+        old_pipeline_stage_id=old_pipeline_stage_id,
+        new_pipeline_stage_id=new_status.stage_id,
+        changed_by_user_id=changed_by_user_id,
+        reason=reason or f"Tuition fee paid/waived. Transaction: {transaction_id}",
+    )
+    db.add(history)
+
+    await db.flush()
+
+    log.info(
+        "sync_lead_tuition_paid: Lead status synced to tuition paid",
+        lead_id=lead.id,
+        profile_id=profile.id,
+        old_consultation_status=old_consultation_status_id,
+        new_consultation_status=target_status_id,
+        transaction_id=transaction_id,
+    )
+
+    return True
+
+
+async def sync_lead_tuition_refunded(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    refund_amount: str = "",
+    changed_by_user_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> bool:
+    """
+    Sync lead consultation status when tuition fee is refunded.
+
+    Moves lead to sts18 (Đã hoàn học phí).
+
+    This is a terminal state indicating the student has withdrawn after payment.
+
+    Args:
+        db: Database session (same transaction as caller)
+        profile: AdmissionProfile with lead relationship loaded
+        refund_amount: Refund amount for note template
+        changed_by_user_id: User who triggered the change (for audit)
+        reason: Reason for the status change (for audit log)
+
+    Returns:
+        bool: True if sync was performed, False if skipped
+    """
+    lead = profile.lead
+    if not lead:
+        log.warning(
+            "sync_lead_tuition_refunded: Lead not loaded on profile",
+            profile_id=profile.id,
+        )
+        return False
+
+    target_status_id = TUITION_REFUNDED_STATUS  # sts18
+
+    # Skip if already at target status (idempotent)
+    if lead.consultation_status_id == target_status_id:
+        log.debug(
+            "sync_lead_tuition_refunded: Already at refunded status, skipping",
+            lead_id=lead.id,
+            current_status=lead.consultation_status_id,
+        )
+        return False
+
+    # Store old values for history
+    old_consultation_status_id = lead.consultation_status_id
+    old_pipeline_stage_id = lead.pipeline_stage_id
+    old_status = lead.status
+
+    # Get new consultation status with stage relationship
+    new_status = await db.get(
+        models.ConsultationStatus,
+        target_status_id,
+        options=[selectinload(models.ConsultationStatus.stage)]
+    )
+
+    if not new_status:
+        log.error(
+            "sync_lead_tuition_refunded: TUITION_REFUNDED_STATUS not found",
+            target_status_id=target_status_id,
+        )
+        return False
+
+    # Update lead fields
+    lead.consultation_status_id = target_status_id
+    lead.pipeline_stage_id = new_status.stage_id
+
+    # Sync legacy lead.status using existing mapping function
+    sync_lead_status_from_consultation(lead, new_status)
+
+    # Create history record for audit trail
+    history = models.LeadStatusHistory(
+        lead_id=lead.id,
+        old_status=old_status,
+        new_status=lead.status,
+        old_consultation_status_id=old_consultation_status_id,
+        new_consultation_status_id=target_status_id,
+        old_pipeline_stage_id=old_pipeline_stage_id,
+        new_pipeline_stage_id=new_status.stage_id,
+        changed_by_user_id=changed_by_user_id,
+        reason=reason or f"Tuition fee refunded: {refund_amount} VND",
+    )
+    db.add(history)
+
+    await db.flush()
+
+    log.info(
+        "sync_lead_tuition_refunded: Lead status synced to refunded",
+        lead_id=lead.id,
+        profile_id=profile.id,
+        old_consultation_status=old_consultation_status_id,
+        new_consultation_status=target_status_id,
+        refund_amount=refund_amount,
+    )
+
+    return True

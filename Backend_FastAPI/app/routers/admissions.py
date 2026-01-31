@@ -688,16 +688,25 @@ async def enroll_student(
     Enroll student (create Student + StudentDocument records).
 
     **ACID Transaction Flow:**
-    1. Generate unique student_code (SV + YYYY + 4-digit random)
-    2. Create Student record
-    3. Create StudentDocument records (from documents_checklist)
-    4. Update AdmissionProfile.status = 'enrolled'
-    5. Update Lead.status = 'converted'
+    1. Validate profile status (must be 'confirmed' or 'overridden')
+    2. Fee Gate: Verify tuition fee is paid/waived (if ENABLE_FEE_VERIFICATION=True)
+    3. Generate unique student_code (SV + YYYY + 4-digit random)
+    4. Create Student record
+    5. Create StudentDocument records (from documents_checklist)
+    6. Update AdmissionProfile.status = 'enrolled'
+    7. Update Lead.status = 'converted'
 
     **Security:**
     - IDOR: Only accessible to users in same unit
-    - State Check: Only approved profiles can be enrolled
+    - State Check: Only confirmed/overridden profiles can be enrolled
+    - Fee Gate: Tuition fee must be paid/waived (when ENABLE_FEE_VERIFICATION=True)
     - Rate Limiting: 10 requests/minute (prevent brute-force student_code)
+
+    **Fee Gate (Phase 6):**
+    When ENABLE_FEE_VERIFICATION=True (config):
+    - Checks tuition fee status in Fee table
+    - Blocks if status not in ('paid', 'waived')
+    - Returns 400 with remaining amount if blocked
 
     **Returns:**
     - { student_id, student_code, enrollment_date }
@@ -705,7 +714,7 @@ async def enroll_student(
     **Errors:**
     - 404: Profile not found
     - 403: User doesn't have access
-    - 400: Profile is not approved
+    - 400: Profile is not confirmed, or tuition fee not cleared
     - 409: Unique constraint violation (student_code or citizen_id)
     - 429: Rate limit exceeded
     """

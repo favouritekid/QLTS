@@ -249,6 +249,9 @@ class Settings(BaseSettings):
     FINANCE_MAKER_CHECKER_ENABLED: bool = Field(
         default=True, validation_alias="FINANCE_MAKER_CHECKER_ENABLED"
     )  # Require two-person verification for manual payments
+    ENABLE_FEE_VERIFICATION: bool = Field(
+        default=False, validation_alias="ENABLE_FEE_VERIFICATION"
+    )  # Block enrollment if tuition fee not paid/waived (Phase 6)
 
     # -- VNPay Payment Gateway Settings --
     # Get credentials from VNPay merchant portal

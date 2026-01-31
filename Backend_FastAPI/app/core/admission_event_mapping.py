@@ -177,9 +177,56 @@ ADMISSION_EVENT_PROJECTIONS = {
     ),
 
     # -------------------------------------------------------------------------
-    # Fee Recorded (manual by officer)
+    # TUITION FEE CALCULATED (Finance Phase - Gate 1)
     # -------------------------------------------------------------------------
-    # ⚠️ NOTE: Manual financial confirmation event. Emitted by Officer only.
+    # Triggers when tuition fee is calculated for approved profile
+    # Lead moves to "Chờ học phí" - waiting for payment
+    "tuition_fee_calculated": AdmissionEventProjection(
+        event="tuition_fee_calculated",
+        admission_status="approved",  # Profile is approved, waiting for fee payment
+        consultation_status_id="sts14",
+        consultation_name="Chưa hoàn tất học phí",
+        pipeline_stage_id="stg05",  # Move to "Đã nộp học phí" stage (fee phase)
+        stage_name="Đã nộp học phí",
+        system_note_template="[HỆ THỐNG] Học phí đã được tính toán - Profile #{profile_id}, Số tiền: {amount} VND",
+        skip_if_converted=True,
+    ),
+
+    # -------------------------------------------------------------------------
+    # TUITION FEE PAID (Finance Phase - Gate 2 Passed)
+    # -------------------------------------------------------------------------
+    # Triggers when tuition fee is fully paid or waived
+    # Lead moves to "Đã hoàn tất học phí" - ready for enrollment
+    "tuition_fee_paid": AdmissionEventProjection(
+        event="tuition_fee_paid",
+        admission_status="confirmed",  # Profile is confirmed, fee cleared
+        consultation_status_id="sts10",
+        consultation_name="Đã hoàn tất học phí",
+        pipeline_stage_id="stg05",  # Stay in "Đã nộp học phí" stage
+        stage_name="Đã nộp học phí",
+        system_note_template="[HỆ THỐNG] Học phí đã được thanh toán đầy đủ - Profile #{profile_id}, Mã GD: {transaction_id}",
+        skip_if_converted=True,
+    ),
+
+    # -------------------------------------------------------------------------
+    # TUITION FEE REFUNDED (Finance Phase - Withdrawal)
+    # -------------------------------------------------------------------------
+    # Triggers when tuition fee is refunded (full or partial leading to withdrawal)
+    "tuition_fee_refunded": AdmissionEventProjection(
+        event="tuition_fee_refunded",
+        admission_status="confirmed",  # Was confirmed but withdrew
+        consultation_status_id="sts18",
+        consultation_name="Đã hoàn học phí",
+        pipeline_stage_id="stg05",  # Stay in Fee stage
+        stage_name="Đã nộp học phí",
+        system_note_template="[HỆ THỐNG] Học phí đã được hoàn trả - Profile #{profile_id}, Số tiền hoàn: {amount} VND",
+        skip_if_converted=False,  # Allow transition even if converted (dropout)
+    ),
+
+    # -------------------------------------------------------------------------
+    # Fee Recorded (manual by officer) - LEGACY
+    # -------------------------------------------------------------------------
+    # ⚠️ NOTE: Manual financial confirmation event. Use tuition_fee_paid instead.
     "fee_recorded": AdmissionEventProjection(
         event="fee_recorded",
         admission_status="confirmed",  # Still confirmed, not yet enrolled

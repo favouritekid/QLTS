@@ -26,14 +26,16 @@ NEW_TRANSITIONS = [
     # Additional forward transitions
     (24, 'sts02', 'sts06', 'user', 'consultation', True, 'Đồng ý tư vấn'),
 
-    # Reverse transitions for flexibility
-    (25, 'sts05', 'sts02', 'user', 'consultation', True, 'Đã kết nối lại'),
-    (26, 'sts05', 'sts06', 'user', 'consultation', True, 'Đồng ý sau khi gọi lại'),
-    (27, 'sts03', 'sts02', 'user', 'consultation', True, 'Quay lại liên hệ'),
-    (28, 'sts03', 'sts05', 'user', 'consultation', True, 'Hẹn gọi lại'),
-    (29, 'sts06', 'sts03', 'user', 'consultation', True, 'Quay lại quan tâm'),
-    (30, 'sts06', 'sts05', 'user', 'consultation', True, 'Hẹn lại'),
-    (31, 'sts06', 'sts04', 'user', 'consultation', True, 'Từ chối sau tư vấn'),
+    # Forward transitions within same stage (stg02)
+    (25, 'sts05', 'sts06', 'user', 'consultation', True, 'Đồng ý sau khi gọi lại'),
+    (26, 'sts03', 'sts05', 'user', 'consultation', True, 'Hẹn gọi lại'),
+    (27, 'sts06', 'sts03', 'user', 'consultation', True, 'Quay lại quan tâm'),
+    (28, 'sts06', 'sts05', 'user', 'consultation', True, 'Hẹn lại'),
+    (29, 'sts06', 'sts04', 'user', 'consultation', True, 'Từ chối sau tư vấn'),
+
+    # Finance Phase transitions (Phase 6)
+    (30, 'sts10', 'sts18', 'system', 'fee', True, 'Hoàn tiền sau khi đã thanh toán'),
+    (31, 'sts09', 'sts10', 'system', 'fee', True, 'Miễn học phí (100% scholarship)'),
 ]
 
 

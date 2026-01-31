@@ -10,6 +10,11 @@ Mapping tested:
 - rejected  → sts16 (Không đạt)
 - enrolled  → sts11 (Đã xác nhận nhập học)
 
+Finance Phase mappings (tuition fee):
+- tuition_fee_calculated → sts14 (Chưa hoàn tất học phí)
+- tuition_fee_paid       → sts10 (Đã hoàn tất học phí)
+- tuition_fee_refunded   → sts18 (Đã hoàn học phí)
+
 Each test verifies:
 1. Lead.consultation_status_id is updated correctly
 2. Lead.pipeline_stage_id is updated correctly
@@ -27,7 +32,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.services.lead_admission_sync import (
     sync_lead_from_admission,
+    sync_lead_tuition_calculated,
+    sync_lead_tuition_paid,
+    sync_lead_tuition_refunded,
     ADMISSION_TO_LEAD_STATUS_MAP,
+    TUITION_CALCULATED_STATUS,
+    TUITION_PAID_STATUS,
+    TUITION_REFUNDED_STATUS,
 )
 
 
@@ -51,6 +62,10 @@ async def sync_statuses(db: AsyncSession) -> dict:
         "sts16": {"name": "Không đạt", "phase": "admission", "order": 216},
         "sts11": {"name": "Đã xác nhận nhập học", "phase": "enrolled", "order": 211},
         "sts06": {"name": "Đủ tiêu chí", "phase": "consultation", "order": 206},
+        # Finance Phase statuses
+        "sts14": {"name": "Chưa hoàn tất học phí", "phase": "finance", "order": 214},
+        "sts10": {"name": "Đã hoàn tất học phí", "phase": "finance", "order": 210},
+        "sts18": {"name": "Đã hoàn học phí", "phase": "finance", "order": 218},
     }
 
     created_status_ids = []
@@ -584,3 +599,536 @@ class TestFullWorkflowSync:
         actual_sequence = [s for s in status_changes if s in expected_sequence]
         assert actual_sequence == expected_sequence, \
             f"Expected workflow {expected_sequence}, got {actual_sequence}"
+
+
+# ==============================================================================
+# TEST: SYNC FUNCTION - TUITION FEE CALCULATED (Finance Phase)
+# ==============================================================================
+
+
+class TestSyncTuitionCalculated:
+    """Test sync when tuition fee is calculated for approved profile."""
+
+    async def test_sync_updates_lead_to_sts14_on_tuition_calculated(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """When tuition fee is calculated, lead should sync to sts14."""
+        profile = await create_profile(db, sync_lead, "approved")
+
+        result = await sync_lead_tuition_calculated(
+            db=db,
+            profile=profile,
+            fee_amount="15000000",
+            changed_by_user_id=sync_user.id,
+            reason="Tuition fee calculated for 2025 academic year",
+        )
+
+        assert result is True, "Sync should have been performed"
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_CALCULATED_STATUS, \
+            f"Expected {TUITION_CALCULATED_STATUS}, got {sync_lead.consultation_status_id}"
+
+    async def test_sync_creates_history_with_fee_amount(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Sync should create history record with fee amount in reason."""
+        profile = await create_profile(db, sync_lead, "approved")
+        fee_amount = "15000000"
+
+        await sync_lead_tuition_calculated(
+            db=db,
+            profile=profile,
+            fee_amount=fee_amount,
+            changed_by_user_id=sync_user.id,
+            reason=f"Tuition fee calculated: {fee_amount} VND",
+        )
+
+        result = await db.execute(
+            select(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == sync_lead.id)
+            .order_by(models.LeadStatusHistory.changed_at.desc())
+        )
+        latest = result.scalars().first()
+
+        assert latest.new_consultation_status_id == TUITION_CALCULATED_STATUS
+        assert fee_amount in latest.reason
+
+    async def test_sync_idempotent_for_tuition_calculated(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Second sync should be skipped if already at sts14."""
+        profile = await create_profile(db, sync_lead, "approved")
+
+        # First sync
+        result1 = await sync_lead_tuition_calculated(
+            db=db, profile=profile, fee_amount="15000000",
+            changed_by_user_id=sync_user.id, reason="First calc",
+        )
+        assert result1 is True
+
+        count_after_first = await get_history_count(db, sync_lead.id)
+
+        # Second sync - should skip
+        result2 = await sync_lead_tuition_calculated(
+            db=db, profile=profile, fee_amount="15000000",
+            changed_by_user_id=sync_user.id, reason="Second calc",
+        )
+        assert result2 is False, "Second sync should be skipped"
+
+        count_after_second = await get_history_count(db, sync_lead.id)
+        assert count_after_second == count_after_first
+
+
+# ==============================================================================
+# TEST: SYNC FUNCTION - TUITION FEE PAID (Finance Phase)
+# ==============================================================================
+
+
+class TestSyncTuitionPaid:
+    """Test sync when tuition fee is fully paid or waived."""
+
+    async def test_sync_updates_lead_to_sts10_on_tuition_paid(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """When tuition fee is paid, lead should sync to sts10."""
+        profile = await create_profile(db, sync_lead, "approved")
+
+        result = await sync_lead_tuition_paid(
+            db=db,
+            profile=profile,
+            transaction_id="TXN-2025-001",
+            changed_by_user_id=sync_user.id,
+            reason="Tuition fee paid in full",
+        )
+
+        assert result is True, "Sync should have been performed"
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_PAID_STATUS, \
+            f"Expected {TUITION_PAID_STATUS}, got {sync_lead.consultation_status_id}"
+
+    async def test_sync_creates_history_with_transaction_id(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Sync should create history record with transaction ID."""
+        profile = await create_profile(db, sync_lead, "approved")
+        transaction_id = "TXN-2025-002"
+
+        await sync_lead_tuition_paid(
+            db=db,
+            profile=profile,
+            transaction_id=transaction_id,
+            changed_by_user_id=sync_user.id,
+            reason=f"Payment confirmed: {transaction_id}",
+        )
+
+        result = await db.execute(
+            select(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == sync_lead.id)
+            .order_by(models.LeadStatusHistory.changed_at.desc())
+        )
+        latest = result.scalars().first()
+
+        assert latest.new_consultation_status_id == TUITION_PAID_STATUS
+        assert transaction_id in latest.reason
+
+    async def test_sync_for_waived_fee(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """When tuition fee is waived, lead should also sync to sts10."""
+        profile = await create_profile(db, sync_lead, "approved")
+
+        result = await sync_lead_tuition_paid(
+            db=db,
+            profile=profile,
+            transaction_id="",
+            changed_by_user_id=sync_user.id,
+            reason="Tuition fee waived (100% scholarship)",
+        )
+
+        assert result is True
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_PAID_STATUS
+
+    async def test_sync_idempotent_for_tuition_paid(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Second sync should be skipped if already at sts10."""
+        profile = await create_profile(db, sync_lead, "approved")
+
+        # First sync
+        result1 = await sync_lead_tuition_paid(
+            db=db, profile=profile, transaction_id="TXN-001",
+            changed_by_user_id=sync_user.id, reason="First payment",
+        )
+        assert result1 is True
+
+        # Second sync - should skip
+        result2 = await sync_lead_tuition_paid(
+            db=db, profile=profile, transaction_id="TXN-002",
+            changed_by_user_id=sync_user.id, reason="Duplicate payment",
+        )
+        assert result2 is False
+
+
+# ==============================================================================
+# TEST: SYNC FUNCTION - TUITION FEE REFUNDED (Finance Phase)
+# ==============================================================================
+
+
+class TestSyncTuitionRefunded:
+    """Test sync when tuition fee is refunded (student withdrawal)."""
+
+    async def test_sync_updates_lead_to_sts18_on_refund(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """When tuition fee is refunded, lead should sync to sts18."""
+        profile = await create_profile(db, sync_lead, "approved")
+
+        result = await sync_lead_tuition_refunded(
+            db=db,
+            profile=profile,
+            refund_amount="12000000",
+            changed_by_user_id=sync_user.id,
+            reason="Student withdrawal - full refund",
+        )
+
+        assert result is True, "Sync should have been performed"
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_REFUNDED_STATUS, \
+            f"Expected {TUITION_REFUNDED_STATUS}, got {sync_lead.consultation_status_id}"
+
+    async def test_sync_creates_history_with_refund_amount(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Sync should create history record with refund amount."""
+        profile = await create_profile(db, sync_lead, "approved")
+        refund_amount = "8000000"
+
+        await sync_lead_tuition_refunded(
+            db=db,
+            profile=profile,
+            refund_amount=refund_amount,
+            changed_by_user_id=sync_user.id,
+            reason=f"Partial refund: {refund_amount} VND",
+        )
+
+        result = await db.execute(
+            select(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == sync_lead.id)
+            .order_by(models.LeadStatusHistory.changed_at.desc())
+        )
+        latest = result.scalars().first()
+
+        assert latest.new_consultation_status_id == TUITION_REFUNDED_STATUS
+        assert refund_amount in latest.reason
+
+    async def test_sync_idempotent_for_refund(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Second sync should be skipped if already at sts18."""
+        profile = await create_profile(db, sync_lead, "approved")
+
+        # First sync
+        result1 = await sync_lead_tuition_refunded(
+            db=db, profile=profile, refund_amount="15000000",
+            changed_by_user_id=sync_user.id, reason="First refund",
+        )
+        assert result1 is True
+
+        # Second sync - should skip
+        result2 = await sync_lead_tuition_refunded(
+            db=db, profile=profile, refund_amount="0",
+            changed_by_user_id=sync_user.id, reason="Second refund",
+        )
+        assert result2 is False
+
+
+# ==============================================================================
+# TEST: EDGE CASES FOR FINANCE SYNC
+# ==============================================================================
+
+
+class TestFinanceSyncEdgeCases:
+    """Test edge cases for finance phase sync functions."""
+
+    async def test_tuition_calculated_handles_missing_lead(
+        self,
+        db: AsyncSession,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Sync should return False if lead not loaded on profile."""
+        profile = models.AdmissionProfile(
+            lead_id=99999,
+            status="approved",
+            citizen_id="123456789012",
+            version=1,
+            applied_rules={},
+            academic_year=2025,
+        )
+        profile.lead = None
+
+        result = await sync_lead_tuition_calculated(
+            db=db, profile=profile, fee_amount="15000000",
+            changed_by_user_id=sync_user.id, reason="Test missing lead",
+        )
+
+        assert result is False
+
+    async def test_tuition_paid_handles_missing_lead(
+        self,
+        db: AsyncSession,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Sync should return False if lead not loaded on profile."""
+        profile = models.AdmissionProfile(
+            lead_id=99999,
+            status="approved",
+            citizen_id="123456789012",
+            version=1,
+            applied_rules={},
+            academic_year=2025,
+        )
+        profile.lead = None
+
+        result = await sync_lead_tuition_paid(
+            db=db, profile=profile, transaction_id="TXN-001",
+            changed_by_user_id=sync_user.id, reason="Test missing lead",
+        )
+
+        assert result is False
+
+    async def test_tuition_refunded_handles_missing_lead(
+        self,
+        db: AsyncSession,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Sync should return False if lead not loaded on profile."""
+        profile = models.AdmissionProfile(
+            lead_id=99999,
+            status="approved",
+            citizen_id="123456789012",
+            version=1,
+            applied_rules={},
+            academic_year=2025,
+        )
+        profile.lead = None
+
+        result = await sync_lead_tuition_refunded(
+            db=db, profile=profile, refund_amount="15000000",
+            changed_by_user_id=sync_user.id, reason="Test missing lead",
+        )
+
+        assert result is False
+
+
+# ==============================================================================
+# TEST: FULL FINANCE WORKFLOW INTEGRATION
+# ==============================================================================
+
+
+class TestFullFinanceWorkflowSync:
+    """Test complete finance workflow: approved → tuition calculated → paid → enrolled."""
+
+    async def test_happy_path_finance_workflow(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Test complete finance workflow with all status transitions."""
+        # Step 1: Profile approved → sts09
+        profile = await create_profile(db, sync_lead, "approved")
+
+        await sync_lead_from_admission(
+            db=db, profile=profile,
+            changed_by_user_id=sync_user.id, reason="Profile approved",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts09", "Step 1: Should be sts09"
+
+        # Step 2: Tuition fee calculated → sts14
+        await sync_lead_tuition_calculated(
+            db=db, profile=profile, fee_amount="15000000",
+            changed_by_user_id=sync_user.id, reason="Tuition calculated",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_CALCULATED_STATUS, \
+            f"Step 2: Should be {TUITION_CALCULATED_STATUS}"
+
+        # Step 3: Tuition fee paid → sts10
+        await sync_lead_tuition_paid(
+            db=db, profile=profile, transaction_id="TXN-2025-001",
+            changed_by_user_id=sync_user.id, reason="Tuition paid",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_PAID_STATUS, \
+            f"Step 3: Should be {TUITION_PAID_STATUS}"
+
+        # Step 4: Student enrolled → sts11
+        profile.status = "enrolled"
+        await sync_lead_from_admission(
+            db=db, profile=profile,
+            changed_by_user_id=sync_user.id, reason="Student enrolled",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts11", "Step 4: Should be sts11"
+
+        # Verify complete history trail
+        result = await db.execute(
+            select(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == sync_lead.id)
+            .order_by(models.LeadStatusHistory.changed_at.asc())
+        )
+        history = result.scalars().all()
+
+        # Expected sequence: sts09 → sts14 → sts10 → sts11
+        expected_sequence = ["sts09", TUITION_CALCULATED_STATUS, TUITION_PAID_STATUS, "sts11"]
+        status_changes = [h.new_consultation_status_id for h in history]
+        actual_sequence = [s for s in status_changes if s in expected_sequence]
+
+        assert actual_sequence == expected_sequence, \
+            f"Expected workflow {expected_sequence}, got {actual_sequence}"
+
+    async def test_refund_path_workflow(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Test workflow when student requests refund after payment."""
+        # Step 1: Profile approved → sts09
+        profile = await create_profile(db, sync_lead, "approved")
+
+        await sync_lead_from_admission(
+            db=db, profile=profile,
+            changed_by_user_id=sync_user.id, reason="Profile approved",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts09"
+
+        # Step 2: Tuition fee calculated → sts14
+        await sync_lead_tuition_calculated(
+            db=db, profile=profile, fee_amount="15000000",
+            changed_by_user_id=sync_user.id, reason="Tuition calculated",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_CALCULATED_STATUS
+
+        # Step 3: Tuition fee paid → sts10
+        await sync_lead_tuition_paid(
+            db=db, profile=profile, transaction_id="TXN-2025-001",
+            changed_by_user_id=sync_user.id, reason="Tuition paid",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_PAID_STATUS
+
+        # Step 4: Student requests refund (withdrawal) → sts18
+        await sync_lead_tuition_refunded(
+            db=db, profile=profile, refund_amount="12000000",
+            changed_by_user_id=sync_user.id, reason="Student withdrawal",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_REFUNDED_STATUS, \
+            f"Step 4: Should be {TUITION_REFUNDED_STATUS}"
+
+        # Verify refund workflow history
+        result = await db.execute(
+            select(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == sync_lead.id)
+            .order_by(models.LeadStatusHistory.changed_at.asc())
+        )
+        history = result.scalars().all()
+
+        # Expected sequence: sts09 → sts14 → sts10 → sts18
+        expected_sequence = [
+            "sts09", TUITION_CALCULATED_STATUS, TUITION_PAID_STATUS, TUITION_REFUNDED_STATUS
+        ]
+        status_changes = [h.new_consultation_status_id for h in history]
+        actual_sequence = [s for s in status_changes if s in expected_sequence]
+
+        assert actual_sequence == expected_sequence, \
+            f"Expected refund workflow {expected_sequence}, got {actual_sequence}"
+
+    async def test_waived_fee_workflow(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Test workflow when tuition fee is waived (scholarship)."""
+        # Step 1: Profile approved → sts09
+        profile = await create_profile(db, sync_lead, "approved")
+
+        await sync_lead_from_admission(
+            db=db, profile=profile,
+            changed_by_user_id=sync_user.id, reason="Profile approved",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts09"
+
+        # Step 2: Fee waived → skip sts14, go directly to sts10
+        await sync_lead_tuition_paid(
+            db=db, profile=profile, transaction_id="",
+            changed_by_user_id=sync_user.id, reason="100% scholarship - fee waived",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == TUITION_PAID_STATUS
+
+        # Step 3: Student enrolled → sts11
+        profile.status = "enrolled"
+        await sync_lead_from_admission(
+            db=db, profile=profile,
+            changed_by_user_id=sync_user.id, reason="Student enrolled (scholarship)",
+        )
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts11"

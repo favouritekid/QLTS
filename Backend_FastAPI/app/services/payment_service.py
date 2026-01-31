@@ -287,6 +287,20 @@ class PaymentService:
 
         await self.db.flush()
 
+        # ✅ SYNC LEAD STATUS: If tuition fee is now fully paid, move lead to sts10
+        if fee_remaining <= 0 and fee.fee_type == "tuition":
+            # Load profile with lead for sync
+            profile = await self._get_profile_for_fee(fee)
+            if profile:
+                from app.services.lead_admission_sync import sync_lead_tuition_paid
+                await sync_lead_tuition_paid(
+                    db=self.db,
+                    profile=profile,
+                    transaction_id=payment.reference_code or f"PAY-{payment.id}",
+                    changed_by_user_id=verifier_id,
+                    reason=f"Tuition fee fully paid. Amount: {payment.amount:,.0f} VND",
+                )
+
         log.info(
             "payment_verified",
             payment_id=payment_id,
@@ -450,6 +464,19 @@ class PaymentService:
     ) -> Optional[PaymentMethod]:
         """Get payment method by ID."""
         query = select(PaymentMethod).where(PaymentMethod.id == method_id)
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def _get_profile_for_fee(
+        self,
+        fee: Fee,
+    ) -> Optional[models.AdmissionProfile]:
+        """Get admission profile for fee with Lead relationship loaded."""
+        query = (
+            select(models.AdmissionProfile)
+            .options(selectinload(models.AdmissionProfile.lead))
+            .where(models.AdmissionProfile.id == fee.admission_profile_id)
+        )
         result = await self.db.execute(query)
         return result.scalars().first()
 
@@ -753,6 +780,21 @@ class RefundService:
 
         await self.db.flush()
 
+        # ✅ SYNC LEAD STATUS: If tuition fee refund, move lead to sts18 (Đã hoàn học phí)
+        # Only sync if this is a tuition fee refund
+        if fee.fee_type == "tuition":
+            # Load profile with lead for sync
+            profile = await self._get_profile_for_fee(fee)
+            if profile:
+                from app.services.lead_admission_sync import sync_lead_tuition_refunded
+                await sync_lead_tuition_refunded(
+                    db=self.db,
+                    profile=profile,
+                    refund_amount=str(refund.amount),
+                    changed_by_user_id=processor_id,
+                    reason=f"Tuition fee refunded: {refund.amount:,.0f} VND. Reason: {refund.reason}",
+                )
+
         log.info(
             "refund_processed",
             refund_id=refund_id,
@@ -762,3 +804,16 @@ class RefundService:
         )
 
         return refund, None
+
+    async def _get_profile_for_fee(
+        self,
+        fee: Fee,
+    ) -> Optional[models.AdmissionProfile]:
+        """Get admission profile for fee with Lead relationship loaded."""
+        query = (
+            select(models.AdmissionProfile)
+            .options(selectinload(models.AdmissionProfile.lead))
+            .where(models.AdmissionProfile.id == fee.admission_profile_id)
+        )
+        result = await self.db.execute(query)
+        return result.scalars().first()
