@@ -126,11 +126,17 @@ class FeeCalculationService:
         if installment_plan_id:
             installment_plan = await self._get_installment_plan(installment_plan_id)
 
+        # Convert academic_year to int (model stores as Integer)
+        if isinstance(academic_year, str):
+            academic_year_int = int(academic_year.split("-")[0])
+        else:
+            academic_year_int = academic_year
+
         # Create fee record
         fee = Fee(
             admission_profile_id=admission_profile_id,
             fee_type=fee_type.value,
-            academic_year=academic_year,
+            academic_year=academic_year_int,
             installment_plan_id=installment_plan_id,
             base_amount=base_amount,
             total_discount=total_discount,

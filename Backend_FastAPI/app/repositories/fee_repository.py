@@ -15,7 +15,7 @@ Architecture:
 
 from datetime import datetime, date, timezone
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from sqlalchemy import select, and_, or_, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -287,7 +287,7 @@ class FeeRepository(BaseRepository[Fee]):
         self,
         profile_id: int,
         fee_type: str,
-        academic_year: str,
+        academic_year: Union[str, int],
         exclude_id: Optional[int] = None
     ) -> bool:
         """
@@ -296,19 +296,26 @@ class FeeRepository(BaseRepository[Fee]):
         Args:
             profile_id: Admission profile ID
             fee_type: Fee type
-            academic_year: Academic year (e.g., "2024-2025")
+            academic_year: Academic year (e.g., "2025" or 2025)
             exclude_id: Exclude this fee ID from check (for updates)
 
         Returns:
             True if duplicate exists
         """
+        # Convert string academic_year to int (model stores as Integer)
+        if isinstance(academic_year, str):
+            # Handle formats like "2024-2025" by taking the first year
+            academic_year_int = int(academic_year.split("-")[0])
+        else:
+            academic_year_int = academic_year
+
         query = (
             select(func.count(Fee.id))
             .where(
                 and_(
                     Fee.admission_profile_id == profile_id,
                     Fee.fee_type == fee_type,
-                    Fee.academic_year == academic_year,
+                    Fee.academic_year == academic_year_int,
                 )
             )
         )
