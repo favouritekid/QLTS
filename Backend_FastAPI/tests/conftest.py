@@ -221,21 +221,9 @@ def app_instance():
     return app
 
 
-@pytest.fixture(scope="session")
-def event_loop_policy():
-    try:
-        import uvloop
-
-        return uvloop.EventLoopPolicy()
-    except ImportError:
-        return asyncio.DefaultEventLoopPolicy()
-
-
-@pytest_asyncio.fixture(scope="session")
-async def event_loop(event_loop_policy):
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# Note: event_loop fixture is handled by pytest-asyncio with asyncio_mode=auto
+# The asyncio_default_fixture_loop_scope=function setting in pytest.ini ensures
+# function-scoped fixtures work correctly with async tests.
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
@@ -364,17 +352,64 @@ async def setup_test_database(manage_engine):
         async with engine.begin() as conn:
             await conn.execute(text("DROP INDEX IF EXISTS public.ix_notification_action_rule_id"))
             await conn.execute(text("DROP INDEX IF EXISTS public.ix_notification_action_step"))
+            await conn.execute(text("DROP INDEX IF EXISTS public.ix_payment_method_id"))
             await conn.execute(text("DROP TABLE IF EXISTS notification_action CASCADE"))
             await conn.execute(text("DROP TABLE IF EXISTS notification_rule CASCADE"))
             await conn.execute(text("DROP TABLE IF EXISTS notification_template CASCADE"))
+            # Drop all finance tables explicitly
+            await conn.execute(text("DROP TABLE IF EXISTS payment_transaction CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS payment CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS payment_intent CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS invoice CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS fee_applied_discount CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS fee CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS overpayment_record CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS refund_request CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS processed_event CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS accounting_period CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS payment_method CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS installment_plan CASCADE"))
     except Exception as e:
         log.debug(f"Pre-create cleanup (expected to fail on fresh db): {e}")
 
-    # Step 2: Create all tables in a NEW transaction (after drop committed)
+    # ✅ FIX v4: Dispose and recreate engine to clear connection pool cache
+    await engine.dispose()
+    log.info("Engine disposed to clear connection pool cache")
+
+    # Step 2: Verify schema is empty and create all tables
     async with engine.begin() as conn:
-        await conn.run_sync(AppBase.metadata.create_all)
+        # ✅ FIX v5: Double-check schema is empty
+        result = await conn.execute(text(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
+        ))
+        table_count = result.scalar()
+        log.info(f"Tables in schema after DROP: {table_count}")
+        if table_count > 0:
+            log.warning(f"Schema has {table_count} tables after DROP - forcing drop_all")
+            await conn.run_sync(AppBase.metadata.drop_all)
+            if CasbinBase:
+                await conn.run_sync(CasbinBase.metadata.drop_all)
+
+        # ✅ FIX v7: Drop all indexes explicitly before create_all
+        # This handles SQLAlchemy's checkfirst not working correctly for indexes with asyncpg
+        await conn.execute(text("""
+            DO $$
+            DECLARE
+                idx RECORD;
+            BEGIN
+                FOR idx IN
+                    SELECT indexname FROM pg_indexes WHERE schemaname = 'public'
+                LOOP
+                    EXECUTE 'DROP INDEX IF EXISTS public.' || quote_ident(idx.indexname);
+                END LOOP;
+            END $$;
+        """))
+        log.info("Dropped all existing indexes in public schema")
+
+        # ✅ FIX v6: Use checkfirst=True explicitly for indexes (default but explicit)
+        await conn.run_sync(lambda sync_conn: AppBase.metadata.create_all(sync_conn, checkfirst=True))
         if CasbinBase:
-            await conn.run_sync(CasbinBase.metadata.create_all)
+            await conn.run_sync(lambda sync_conn: CasbinBase.metadata.create_all(sync_conn, checkfirst=True))
 
             # Add tracking columns to casbin_rule (Phase 6 migration columns)
             # This allows testing tracking functionality without running full migrations

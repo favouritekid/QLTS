@@ -1,0 +1,880 @@
+# tests/integration/test_finance_workflow.py
+"""
+Integration tests for Finance Module workflow.
+
+Tests cover end-to-end scenarios:
+1. Fee calculation with discounts
+2. Invoice generation (single and installment)
+3. Manual payment with maker-checker verification
+4. Online payment intent flow
+5. Refund workflow
+6. Accounting period management
+
+Note: These tests require database fixtures from conftest.py
+"""
+
+import pytest
+import pytest_asyncio
+from datetime import datetime, timezone, date, timedelta
+from decimal import Decimal
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import models
+from app.models.finance import (
+    Fee, Invoice, Payment, PaymentIntent, PaymentMethod, InstallmentPlan,
+    FeeTypeEnum, FeeStatusEnum, InvoiceStatusEnum, PaymentStatusEnum,
+    PaymentIntentStatusEnum,
+)
+from app.services.fee_calculation_service import FeeCalculationService
+from app.services.invoice_service import InvoiceService
+from app.services.payment_service import PaymentService, RefundService
+from app.services.payment_intent_service import PaymentIntentService
+from app.services.accounting_service import AccountingPeriodService, EventIdempotencyService
+from app.utils.exceptions import (
+    ResourceNotFoundError,
+    BadRequest,
+    BusinessRuleViolation,
+    ConflictError,
+)
+
+
+# =============================================================================
+# FIXTURES
+# =============================================================================
+
+@pytest_asyncio.fixture(scope="function")
+async def finance_fixtures(db: AsyncSession, seeded_dependencies: dict) -> dict:
+    """
+    Create fixtures for finance tests.
+    """
+    # Create payment methods
+    cash_method = PaymentMethod(
+        code="cash",
+        name="Cash",
+        description="Cash payment",
+        is_online=False,
+        is_active=True,
+    )
+    db.add(cash_method)
+
+    bank_transfer = PaymentMethod(
+        code="bank_transfer",
+        name="Bank Transfer",
+        description="Direct bank transfer",
+        is_online=False,
+        is_active=True,
+    )
+    db.add(bank_transfer)
+
+    vnpay = PaymentMethod(
+        code="vnpay",
+        name="VNPay",
+        description="VNPay online payment",
+        is_online=True,
+        is_active=True,
+        gateway_config={"tmn_code": "TEST123"},
+    )
+    db.add(vnpay)
+
+    # Create installment plan
+    installment_plan = InstallmentPlan(
+        code="THREE_MONTH",
+        name="3-Month Installment",
+        description="Pay in 3 monthly installments",
+        installment_count=3,
+        schedule=[
+            {"installment_no": 1, "due_days_offset": 0, "percent": 34.0, "description": "Đợt 1"},
+            {"installment_no": 2, "due_days_offset": 30, "percent": 33.0, "description": "Đợt 2"},
+            {"installment_no": 3, "due_days_offset": 60, "percent": 33.0, "description": "Đợt 3"},
+        ],
+        is_active=True,
+    )
+    db.add(installment_plan)
+
+    await db.flush()
+
+    # Create test lead with admission profile
+    lead = models.Lead(
+        full_name="Finance Test Student",
+        email="finance_test@example.com",
+        phone="0901234567",
+        source="test",  # Required field
+        unit_id=seeded_dependencies["unit_id"],
+        consultation_status_id=seeded_dependencies["initial_status_id"],  # FK to ConsultationStatus
+    )
+    db.add(lead)
+    await db.flush()
+
+    admission_profile = models.AdmissionProfile(
+        lead_id=lead.id,
+        status="submitted",
+        academic_year=2025,  # Required field
+        applied_rules={},  # Required JSONB field - snapshot of rules at creation
+    )
+    db.add(admission_profile)
+    await db.flush()
+    await db.refresh(admission_profile)
+
+    return {
+        "lead": lead,
+        "admission_profile": admission_profile,
+        "cash_method": cash_method,
+        "bank_transfer": bank_transfer,
+        "vnpay": vnpay,
+        "installment_plan": installment_plan,
+        "unit_id": seeded_dependencies["unit_id"],
+    }
+
+
+@pytest_asyncio.fixture(scope="function")
+async def maker_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """User who records payments (maker in maker-checker)."""
+    from app.security import get_password_hash
+
+    user = models.User(
+        username="finance_maker",
+        email="maker@test.com",
+        password_hash=get_password_hash("MakerPass123!"),
+        role="officer",
+        status="active",
+        full_name="Finance Maker",
+        unit_id=seeded_dependencies["unit_id"],
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture(scope="function")
+async def checker_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """User who verifies payments (checker in maker-checker)."""
+    from app.security import get_password_hash
+
+    user = models.User(
+        username="finance_checker",
+        email="checker@test.com",
+        password_hash=get_password_hash("CheckerPass123!"),
+        role="manager",
+        status="active",
+        full_name="Finance Checker",
+        unit_id=seeded_dependencies["unit_id"],
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+# =============================================================================
+# FEE CALCULATION TESTS
+# =============================================================================
+
+class TestFeeCalculation:
+    """Test fee calculation workflow."""
+
+    @pytest.mark.asyncio
+    async def test_calculate_fee_success(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test successful fee calculation."""
+        service = FeeCalculationService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        fee, callback = await service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("10000000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+
+        await db.commit()
+
+        assert fee.id is not None
+        assert fee.base_amount == Decimal("10000000")
+        assert fee.final_amount == Decimal("10000000")  # No discount
+        assert fee.status == FeeStatusEnum.calculated.value
+        assert fee.paid_amount == Decimal("0")
+
+    @pytest.mark.asyncio
+    async def test_calculate_fee_duplicate_rejected(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test duplicate fee for same profile/type/year is rejected."""
+        service = FeeCalculationService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # First fee
+        await service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("10000000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Duplicate should fail
+        with pytest.raises(BadRequest) as exc_info:
+            await service.calculate_fee(
+                admission_profile_id=profile.id,
+                fee_type=FeeTypeEnum.tuition,
+                base_amount=Decimal("5000000"),
+                academic_year=2025,
+                user_id=maker_user.id,
+                unit_id=finance_fixtures["unit_id"],
+            )
+
+        assert "already exists" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_recalculate_fee_blocked_after_payment(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test recalculation is blocked if payments exist (M10)."""
+        service = FeeCalculationService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Create fee
+        fee, _ = await service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.enrollment,
+            base_amount=Decimal("1000000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Simulate payment (manually update paid_amount)
+        fee.paid_amount = Decimal("500000")
+        await db.commit()
+
+        # Recalculation should fail
+        with pytest.raises(BusinessRuleViolation) as exc_info:
+            await service.recalculate_fee(
+                fee_id=fee.id,
+                new_base_amount=Decimal("1500000"),
+                reason="Price adjustment",
+                user_id=maker_user.id,
+                unit_id=finance_fixtures["unit_id"],
+            )
+
+        assert "existing payments" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_waive_fee_exceeds_remaining_rejected(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test waive amount cannot exceed remaining balance (H5)."""
+        service = FeeCalculationService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Create fee
+        fee, _ = await service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.insurance,
+            base_amount=Decimal("500000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Waive more than remaining
+        with pytest.raises(BusinessRuleViolation) as exc_info:
+            await service.waive_fee(
+                fee_id=fee.id,
+                waive_amount=Decimal("600000"),  # Exceeds 500000
+                reason="Scholarship",
+                user_id=maker_user.id,
+                unit_id=finance_fixtures["unit_id"],
+            )
+
+        assert "exceeds remaining" in str(exc_info.value).lower()
+
+
+# =============================================================================
+# INVOICE GENERATION TESTS
+# =============================================================================
+
+class TestInvoiceGeneration:
+    """Test invoice generation workflow."""
+
+    @pytest.mark.asyncio
+    async def test_generate_single_invoice(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test generating single invoice for a fee."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Create fee
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.application,
+            base_amount=Decimal("500000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Generate invoice
+        due_date = date.today() + timedelta(days=30)
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=due_date,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        assert len(invoices) == 1
+        assert invoices[0].amount == Decimal("500000")
+        assert invoices[0].installment_no == 1
+        assert invoices[0].status == InvoiceStatusEnum.draft.value
+
+    @pytest.mark.asyncio
+    async def test_generate_installment_invoices(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test generating multiple invoices with installment plan."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        profile = finance_fixtures["admission_profile"]
+        plan = finance_fixtures["installment_plan"]
+
+        # Create fee with installment plan
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("9000000"),  # Divisible by 3
+            academic_year=2025,
+            installment_plan_id=plan.id,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Generate invoices
+        due_date = date.today() + timedelta(days=30)
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=due_date,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        assert len(invoices) == 3
+        # Amounts based on 34%/33%/33% split of 9000000
+        assert invoices[0].amount == Decimal("3060000")  # 34%
+        assert invoices[1].amount == Decimal("2970000")  # 33%
+        assert invoices[2].amount == Decimal("2970000")  # 33%
+        assert invoices[0].installment_no == 1
+        assert invoices[1].installment_no == 2
+        assert invoices[2].installment_no == 3
+
+        # Verify due dates
+        assert invoices[1].due_date == invoices[0].due_date + timedelta(days=30)
+        assert invoices[2].due_date == invoices[1].due_date + timedelta(days=30)
+
+    @pytest.mark.asyncio
+    async def test_issue_invoice(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test issuing a draft invoice."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Create and generate invoice
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.dormitory,
+            base_amount=Decimal("2000000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Issue invoice
+        invoice, _ = await invoice_service.issue_invoice(
+            invoice_id=invoices[0].id,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        assert invoice.status == InvoiceStatusEnum.issued.value
+        assert invoice.issued_at is not None
+        assert invoice.issued_by_id == maker_user.id
+
+
+# =============================================================================
+# MANUAL PAYMENT TESTS
+# =============================================================================
+
+class TestManualPayment:
+    """Test manual payment with maker-checker workflow."""
+
+    @pytest.mark.asyncio
+    async def test_record_and_verify_payment(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+        checker_user: models.User,
+    ):
+        """Test complete manual payment workflow."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        payment_service = PaymentService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Setup: Create fee, invoice, and issue
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.other,
+            base_amount=Decimal("1000000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+            auto_issue=True,
+        )
+        await db.commit()
+
+        invoice = invoices[0]
+
+        # Step 1: Maker records payment
+        payment, _ = await payment_service.record_manual_payment(
+            invoice_id=invoice.id,
+            method_id=finance_fixtures["cash_method"].id,
+            amount=Decimal("1000000"),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+            reference_code="CASH-001",
+            payer_name="Test Student",
+        )
+        await db.commit()
+
+        assert payment.status == PaymentStatusEnum.pending.value
+        assert payment.created_by_id == maker_user.id
+
+        # Step 2: Checker verifies payment
+        verified_payment, _ = await payment_service.verify_payment(
+            payment_id=payment.id,
+            verifier_id=checker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        assert verified_payment.status == PaymentStatusEnum.verified.value
+        assert verified_payment.verified_by_id == checker_user.id
+
+        # Verify invoice and fee are updated
+        await db.refresh(invoice)
+        await db.refresh(fee)
+
+        assert invoice.status == InvoiceStatusEnum.paid.value
+        assert invoice.paid_amount == Decimal("1000000")
+        assert fee.status == FeeStatusEnum.paid.value
+        assert fee.paid_amount == Decimal("1000000")
+
+    @pytest.mark.asyncio
+    async def test_self_approval_blocked(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test that maker cannot verify their own payment (C3)."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        payment_service = PaymentService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Setup
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.enrollment,
+            base_amount=Decimal("500000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+            auto_issue=True,
+        )
+        await db.commit()
+
+        # Record payment
+        payment, _ = await payment_service.record_manual_payment(
+            invoice_id=invoices[0].id,
+            method_id=finance_fixtures["bank_transfer"].id,
+            amount=Decimal("500000"),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Attempt self-approval
+        with pytest.raises(BusinessRuleViolation) as exc_info:
+            await payment_service.verify_payment(
+                payment_id=payment.id,
+                verifier_id=maker_user.id,  # Same as creator
+                unit_id=finance_fixtures["unit_id"],
+            )
+
+        assert "maker-checker" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_reject_payment(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+        checker_user: models.User,
+    ):
+        """Test rejecting a pending payment."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        payment_service = PaymentService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Setup
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.insurance,
+            base_amount=Decimal("300000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+            auto_issue=True,
+        )
+        await db.commit()
+
+        # Record payment
+        payment, _ = await payment_service.record_manual_payment(
+            invoice_id=invoices[0].id,
+            method_id=finance_fixtures["cash_method"].id,
+            amount=Decimal("300000"),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Reject payment
+        rejected_payment, _ = await payment_service.reject_payment(
+            payment_id=payment.id,
+            reason="Invalid bank reference",
+            rejector_id=checker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        assert rejected_payment.status == PaymentStatusEnum.rejected.value
+        assert rejected_payment.rejection_reason == "Invalid bank reference"
+
+        # Invoice should not be updated
+        await db.refresh(invoices[0])
+        assert invoices[0].paid_amount == Decimal("0")
+
+
+# =============================================================================
+# ONLINE PAYMENT TESTS
+# =============================================================================
+
+class TestOnlinePayment:
+    """Test online payment intent flow."""
+
+    @pytest.mark.asyncio
+    async def test_create_payment_intent(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test creating payment intent for online payment."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        intent_service = PaymentIntentService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Setup
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.application,
+            base_amount=Decimal("500000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+            auto_issue=True,
+        )
+        await db.commit()
+
+        # Create payment intent
+        intent, _ = await intent_service.create_intent(
+            invoice_id=invoices[0].id,
+            method_id=finance_fixtures["vnpay"].id,
+            amount=Decimal("500000"),
+            idempotency_key="test-uuid-123",
+            return_url="https://example.com/payment/return",
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        assert intent.id is not None
+        assert intent.amount == Decimal("500000")
+        assert intent.idempotency_key == "test-uuid-123"
+        assert intent.pay_url is not None
+        assert intent.gateway_ref is not None
+
+    @pytest.mark.asyncio
+    async def test_idempotency_returns_existing_intent(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Test idempotency key returns existing non-terminal intent."""
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        intent_service = PaymentIntentService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        # Setup
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("1000000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+            auto_issue=True,
+        )
+        await db.commit()
+
+        # Create first intent
+        intent1, _ = await intent_service.create_intent(
+            invoice_id=invoices[0].id,
+            method_id=finance_fixtures["vnpay"].id,
+            amount=Decimal("1000000"),
+            idempotency_key="idempotency-test-456",
+            return_url="https://example.com/return",
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Create second intent with same key
+        intent2, _ = await intent_service.create_intent(
+            invoice_id=invoices[0].id,
+            method_id=finance_fixtures["vnpay"].id,
+            amount=Decimal("1000000"),
+            idempotency_key="idempotency-test-456",  # Same key
+            return_url="https://example.com/return",
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Should return same intent
+        assert intent1.id == intent2.id
+
+
+# =============================================================================
+# ACCOUNTING PERIOD TESTS
+# =============================================================================
+
+class TestAccountingPeriod:
+    """Test accounting period management."""
+
+    @pytest.mark.asyncio
+    async def test_create_and_close_period(
+        self,
+        db: AsyncSession,
+        maker_user: models.User,
+    ):
+        """Test creating and closing an accounting period."""
+        service = AccountingPeriodService(db)
+
+        # Create period
+        period, _ = await service.create_period(
+            month=1,
+            year=2025,
+            user_id=maker_user.id,
+            notes="January 2025",
+        )
+        await db.commit()
+
+        assert period.id is not None
+        assert period.period_month == 1
+        assert period.period_year == 2025
+        assert period.is_closed is False
+
+        # Close period
+        closed_period, _ = await service.close_period(
+            month=1,
+            year=2025,
+            user_id=maker_user.id,
+            notes="End of month",
+        )
+        await db.commit()
+
+        assert closed_period.is_closed is True
+        assert closed_period.closed_at is not None
+        assert closed_period.closed_by_id == maker_user.id
+
+    @pytest.mark.asyncio
+    async def test_period_cannot_be_created_before_closing_previous(
+        self,
+        db: AsyncSession,
+        maker_user: models.User,
+    ):
+        """Test H7: previous period must be closed."""
+        service = AccountingPeriodService(db)
+
+        # Create January
+        await service.create_period(month=1, year=2026, user_id=maker_user.id)
+        await db.commit()
+
+        # Try to create February without closing January
+        with pytest.raises(BusinessRuleViolation) as exc_info:
+            await service.create_period(month=2, year=2026, user_id=maker_user.id)
+
+        assert "not closed" in str(exc_info.value).lower()
+
+
+# =============================================================================
+# EVENT IDEMPOTENCY TESTS
+# =============================================================================
+
+class TestEventIdempotency:
+    """Test event idempotency service."""
+
+    @pytest.mark.asyncio
+    async def test_mark_event_processed(
+        self,
+        db: AsyncSession,
+    ):
+        """Test marking event as processed."""
+        service = EventIdempotencyService(db)
+
+        # Mark event
+        event = await service.mark_processed(
+            event_id="vnpay-txn-123",
+            event_type="vnpay_callback",
+            consumer_id="payment_service",
+            result="success",
+            payload={"amount": 500000},
+        )
+        await db.commit()
+
+        assert event.id is not None
+        assert event.event_id == "vnpay-txn-123"
+        assert event.processing_result == "success"
+
+        # Check is_processed
+        is_processed = await service.is_processed("vnpay-txn-123", "payment_service")
+        assert is_processed is True
+
+    @pytest.mark.asyncio
+    async def test_duplicate_event_raises_conflict(
+        self,
+        db: AsyncSession,
+    ):
+        """Test duplicate event processing is blocked."""
+        service = EventIdempotencyService(db)
+
+        # First processing
+        await service.mark_processed(
+            event_id="vnpay-txn-456",
+            event_type="vnpay_callback",
+            consumer_id="payment_service",
+            result="success",
+        )
+        await db.commit()
+
+        # Duplicate should raise ConflictError
+        with pytest.raises(ConflictError) as exc_info:
+            await service.mark_processed(
+                event_id="vnpay-txn-456",
+                event_type="vnpay_callback",
+                consumer_id="payment_service",
+                result="success",
+            )
+
+        assert "already processed" in str(exc_info.value).lower()

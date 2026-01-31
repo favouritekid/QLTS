@@ -78,6 +78,34 @@ from .entity_audit_log import EntityAuditLog  # Generic audit trail for any enti
 # Administrative Geography (Temporal Versioning)
 from .administrative_node import AdministrativeNode, AdministrativeLevel
 
+# Finance Module (Phase 0+1: Foundation)
+from .finance import (
+    # Enums
+    FeeTypeEnum,
+    FeeStatusEnum,
+    InvoiceStatusEnum,
+    PaymentIntentStatusEnum,
+    GatewayStatusEnum,
+    PaymentStatusEnum,
+    TransactionTypeEnum,
+    RefundStatusEnum,
+    OverpaymentStatusEnum,
+    ResolutionTypeEnum,
+    # Models
+    InstallmentPlan,
+    PaymentMethod,
+    AccountingPeriod,
+    ProcessedEvent,
+    Fee,
+    FeeAppliedDiscount,
+    Invoice,
+    PaymentIntent,
+    Payment,
+    PaymentTransaction,
+    RefundRequest,
+    OverpaymentRecord,
+)
+
 # Import tất cả các model để chúng được đăng ký với Base
 # và để chúng có thể được truy cập qua package 'models' (vd: models.User)
 
@@ -144,4 +172,29 @@ __all__ = [
     # Administrative Geography
     "AdministrativeNode",
     "AdministrativeLevel",
+    # Finance Module (Phase 0+1: Foundation)
+    # Enums
+    "FeeTypeEnum",
+    "FeeStatusEnum",
+    "InvoiceStatusEnum",
+    "PaymentIntentStatusEnum",
+    "GatewayStatusEnum",
+    "PaymentStatusEnum",
+    "TransactionTypeEnum",
+    "RefundStatusEnum",
+    "OverpaymentStatusEnum",
+    "ResolutionTypeEnum",
+    # Models
+    "InstallmentPlan",
+    "PaymentMethod",
+    "AccountingPeriod",
+    "ProcessedEvent",
+    "Fee",
+    "FeeAppliedDiscount",
+    "Invoice",
+    "PaymentIntent",
+    "Payment",
+    "PaymentTransaction",
+    "RefundRequest",
+    "OverpaymentRecord",
 ]

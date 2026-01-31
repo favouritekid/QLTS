@@ -322,6 +322,14 @@ class AdmissionProfile(Base):
         cascade="all, delete-orphan"
     )
 
+    # Finance Module: Fee relationship (Phase 0+1)
+    fees: Mapped[List["Fee"]] = relationship(
+        "Fee",
+        back_populates="admission_profile",
+        cascade="all, delete-orphan",
+        lazy="selectin"  # Eager load for fee summary calculations
+    )
+
     def __repr__(self):
         return f"<AdmissionProfile {self.id}: Lead {self.lead_id}, Status: {self.status}>"
 

@@ -235,6 +235,21 @@ class Settings(BaseSettings):
         default=4, validation_alias="ADMISSION_CONFIRM_CCCD_DIGITS"
     )  # Last N digits to verify
 
+    # -- Finance Module Feature Flags (Phase 0+1) --
+    # Controls gradual rollout of Finance Module functionality
+    FINANCE_MODULE_ENABLED: bool = Field(
+        default=False, validation_alias="FINANCE_MODULE_ENABLED"
+    )  # Master switch for finance module
+    USE_NEW_FEE_TABLE: bool = Field(
+        default=False, validation_alias="USE_NEW_FEE_TABLE"
+    )  # Read fees from new table vs JSONB fallback
+    FINANCE_PAYMENT_GATEWAY_ENABLED: bool = Field(
+        default=False, validation_alias="FINANCE_PAYMENT_GATEWAY_ENABLED"
+    )  # Enable online payment gateways (VNPay, etc.)
+    FINANCE_MAKER_CHECKER_ENABLED: bool = Field(
+        default=True, validation_alias="FINANCE_MAKER_CHECKER_ENABLED"
+    )  # Require two-person verification for manual payments
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)

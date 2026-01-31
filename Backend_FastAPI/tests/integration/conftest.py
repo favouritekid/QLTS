@@ -23,20 +23,30 @@ log = logging.getLogger(__name__)
 # DATABASE SESSION FIXTURE
 # =============================================================================
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function")
 async def db(setup_test_database) -> AsyncSession:
     """
     Provide a database session for integration tests.
+    Depends on setup_test_database from main conftest.py
     """
+    log.info("--- [INTEGRATION] Creating database session ---")
     async with AsyncSessionLocal() as session:
-        yield session
+        try:
+            yield session
+            # Rollback any uncommitted changes at end of test
+            await session.rollback()
+        except Exception as e:
+            log.error(f"DB session error: {e}")
+            await session.rollback()
+            raise
+    log.info("--- [INTEGRATION] Database session closed ---")
 
 
 # =============================================================================
 # USER FIXTURES
 # =============================================================================
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function")
 async def admin_user(db: AsyncSession) -> models.User:
     """Create an admin user directly in database."""
     user = models.User(
@@ -53,7 +63,7 @@ async def admin_user(db: AsyncSession) -> models.User:
     return user
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function")
 async def officer_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
     """Create an officer user assigned to a unit."""
     user = models.User(
@@ -71,7 +81,7 @@ async def officer_user(db: AsyncSession, seeded_dependencies: dict) -> models.Us
     return user
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function")
 async def manager_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
     """Create a manager user assigned to a unit."""
     user = models.User(
@@ -93,7 +103,7 @@ async def manager_user(db: AsyncSession, seeded_dependencies: dict) -> models.Us
 # DEPENDENCIES FIXTURE
 # =============================================================================
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function")
 async def seeded_dependencies(db: AsyncSession) -> dict:
     """
     Seed required dependencies for integration tests.
