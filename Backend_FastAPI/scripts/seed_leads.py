@@ -224,19 +224,31 @@ class SeedConfig:
         """Get random (officer_id, unit_id)."""
         return random.choice(self.officers)
 
-    def get_random_stage(self) -> Dict:
-        """Get random pipeline stage with weighted distribution."""
+    def get_random_stage(self, consultation_only: bool = False) -> Dict:
+        """Get random pipeline stage with weighted distribution.
+
+        Args:
+            consultation_only: If True, only return non-final stages (consultation phase)
+        """
+        # Filter stages if consultation_only
+        if consultation_only:
+            available_stages = [s for s in self.pipeline_stages if not s["is_final"]]
+            if not available_stages:
+                available_stages = self.pipeline_stages  # Fallback
+        else:
+            available_stages = self.pipeline_stages
+
         # Weight towards middle stages
         weights = []
-        for i, stage in enumerate(self.pipeline_stages):
+        for i, stage in enumerate(available_stages):
             if stage["is_final"]:
                 weights.append(10)  # Lower weight for final stages
-            elif i == 0:
-                weights.append(15)  # First stage
+            elif stage["order"] == 1:
+                weights.append(10)  # Lower weight for first stage (not yet contacted)
             else:
-                weights.append(20)  # Middle stages
+                weights.append(25)  # Higher weight for consultation stages
 
-        return random.choices(self.pipeline_stages, weights=weights)[0]
+        return random.choices(available_stages, weights=weights)[0]
 
     def get_status_for_stage(self, stage_id: str) -> Optional[str]:
         """Get random consultation status for a stage."""
@@ -269,9 +281,16 @@ class SeedConfig:
 # SEEDING FUNCTIONS
 # ============================================================
 
-async def seed_leads(count: int = 200):
-    """Seed the database with comprehensive test data."""
-    print(f"\n🌱 Starting comprehensive seeding of {count} leads...")
+async def seed_leads(count: int = 200, consultation_only: bool = False):
+    """Seed the database with comprehensive test data.
+
+    Args:
+        count: Number of leads to create
+        consultation_only: If True, only create leads in consultation phase (non-final stages)
+                          and ensure each lead has 1-5 consultations
+    """
+    mode = "CONSULTATION PHASE ONLY" if consultation_only else "ALL STAGES"
+    print(f"\n🌱 Starting seeding of {count} leads ({mode})...")
 
     async with AsyncSessionLocal() as session:
         # Load configuration from database
@@ -296,8 +315,16 @@ async def seed_leads(count: int = 200):
         all_history = []
         all_assignments = []
 
-        print(f"\n   Officers: {[o[0] for o in config.officers]}")
-        print(f"   Stages: {[s['id'] for s in config.pipeline_stages]}")
+        # Show available stages based on mode
+        if consultation_only:
+            available_stages = [s for s in config.pipeline_stages if not s["is_final"]]
+            print(f"\n   Mode: CONSULTATION ONLY (non-final stages)")
+            print(f"   Available stages: {[s['id'] for s in available_stages]}")
+        else:
+            print(f"\n   Mode: ALL STAGES")
+            print(f"   Available stages: {[s['id'] for s in config.pipeline_stages]}")
+
+        print(f"   Officers: {[o[0] for o in config.officers]}")
         print(f"   Time range: 90 days\n")
 
         for i in range(count):
@@ -313,8 +340,8 @@ async def seed_leads(count: int = 200):
                 minutes=random.randint(0, 59)
             )
 
-            # Select pipeline stage
-            stage = config.get_random_stage()
+            # Select pipeline stage (consultation_only excludes final stages)
+            stage = config.get_random_stage(consultation_only=consultation_only)
             pipeline_stage_id = stage["id"]
             status = config.get_lead_status_for_stage(stage)
             consultation_status_id = config.get_status_for_stage(pipeline_stage_id)
@@ -400,8 +427,14 @@ async def seed_leads(count: int = 200):
             # Get the path this lead took through stages
             stage_path = config.stage_paths.get(lead.pipeline_stage_id, [lead.pipeline_stage_id])
 
-            # Generate 2-5 consultations based on stage path
-            num_consultations = min(len(stage_path), random.randint(2, 5))
+            # Generate consultations based on mode
+            if consultation_only:
+                # In consultation mode, ensure at least 1-5 consultations per lead
+                num_consultations = random.randint(1, 5)
+            else:
+                # Normal mode: 2-5 consultations based on stage path
+                num_consultations = min(len(stage_path), random.randint(2, 5))
+
             consultation_dates = []
 
             # Create timeline of consultations
@@ -412,8 +445,15 @@ async def seed_leads(count: int = 200):
                     hours=random.randint(8, 18)
                 )
                 if base_date > datetime.now(timezone.utc):
+                    # In consultation_only mode, still create at least 1 consultation
+                    if consultation_only and len(consultation_dates) == 0:
+                        consultation_dates.append(lead.created_at + timedelta(hours=random.randint(1, 48)))
                     break
                 consultation_dates.append(base_date)
+
+            # Ensure at least 1 consultation in consultation_only mode
+            if consultation_only and len(consultation_dates) == 0:
+                consultation_dates.append(lead.created_at + timedelta(hours=random.randint(1, 48)))
 
             # Create consultations and history entries
             prev_stage_id = None
@@ -576,8 +616,10 @@ async def check_existing_data() -> Dict[str, int]:
         return counts
 
 
-async def interactive_seed(count: int = 200):
+async def interactive_seed(count: int = 200, consultation_only: bool = False):
     """Interactive 2-step seeding process."""
+
+    mode = "CONSULTATION PHASE ONLY" if consultation_only else "ALL STAGES"
 
     # Step 1: Check existing data
     counts = await check_existing_data()
@@ -604,7 +646,12 @@ async def interactive_seed(count: int = 200):
 
     print(f"\n📋 Configuration:")
     print(f"   - Lead count: {count}")
+    print(f"   - Mode: {mode}")
     print(f"   - Time range: 90 days")
+
+    if consultation_only:
+        print(f"   - Each lead will have 1-5 consultations")
+        print(f"   - Only non-final pipeline stages")
 
     confirm = input("\n👉 Start seeding? (Y/n): ").strip().lower()
 
@@ -612,7 +659,7 @@ async def interactive_seed(count: int = 200):
         print("\n❌ Cancelled.")
         return
 
-    await seed_leads(count)
+    await seed_leads(count, consultation_only=consultation_only)
 
     print("\n" + "=" * 50)
     print("✅ COMPLETE!")
@@ -627,13 +674,16 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scripts/seed_leads.py                    # Interactive mode (recommended)
-  python scripts/seed_leads.py --count 100        # Seed 100 leads (interactive)
-  python scripts/seed_leads.py --check            # Check only, no changes
-  python scripts/seed_leads.py --clear --force    # Clear and seed without confirmation
+  python scripts/seed_leads.py                        # Interactive mode (recommended)
+  python scripts/seed_leads.py --count 100            # Seed 100 leads (interactive)
+  python scripts/seed_leads.py --consultation-only    # Only consultation phase leads
+  python scripts/seed_leads.py --count 2000 --consultation-only --clear --force
+  python scripts/seed_leads.py --check                # Check only, no changes
         """
     )
     parser.add_argument("--count", type=int, default=200, help="Number of leads to create (default: 200)")
+    parser.add_argument("--consultation-only", action="store_true",
+                        help="Only create leads in consultation phase (non-final stages) with 1-5 consultations each")
     parser.add_argument("--clear", action="store_true", help="Clear data before seeding")
     parser.add_argument("--check", action="store_true", help="Check data only, no changes")
     parser.add_argument("--force", action="store_true", help="Skip confirmation (use with --clear)")
@@ -645,8 +695,8 @@ Examples:
             print("\n💡 Use without --check to seed data.")
         elif args.force and args.clear:
             await clear_leads()
-            await seed_leads(args.count)
+            await seed_leads(args.count, consultation_only=args.consultation_only)
         else:
-            await interactive_seed(args.count)
+            await interactive_seed(args.count, consultation_only=args.consultation_only)
 
     asyncio.run(main())
