@@ -170,10 +170,22 @@ export function PaymentRecordDialog({
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Chọn phương thức..." />
+                        {methodsLoading ? (
+                          <span className="flex items-center gap-2 text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Đang tải...
+                          </span>
+                        ) : (
+                          <SelectValue placeholder="Chọn phương thức..." />
+                        )}
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
+                      {offlineMethods.length === 0 && !methodsLoading && (
+                        <div className="py-2 px-3 text-sm text-muted-foreground">
+                          Không có phương thức nào khả dụng
+                        </div>
+                      )}
                       {offlineMethods.map((method) => (
                         <SelectItem key={method.id} value={method.id.toString()}>
                           {method.name}

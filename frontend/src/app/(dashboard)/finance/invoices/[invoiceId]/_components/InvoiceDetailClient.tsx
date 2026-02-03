@@ -32,7 +32,7 @@ import {
 } from "lucide-react"
 import { useInvoiceViewModel } from "@/hooks/finance/useInvoiceViewModel"
 import { AmountDisplay, InvoiceStatusBadge, PaymentStatusBadge } from "@/components/finance"
-import type { PaymentStatus } from "@/types/finance.types"
+import { FEE_TYPE_LABELS, type PaymentStatus, type FeeType } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
 import { PaymentRecordDialog } from "./PaymentRecordDialog"
 import { InvoiceIssueDialog } from "./InvoiceIssueDialog"
@@ -130,7 +130,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
             {invoice.fee && (
               <>
                 {" "}• <Link href={`/finance/fees/${invoice.fee.id}`} className="hover:underline">
-                  {invoice.fee.fee_type === "tuition" ? "Học phí" : invoice.fee.fee_type}
+                  {FEE_TYPE_LABELS[invoice.fee.fee_type as FeeType] ?? invoice.fee.fee_type}
                 </Link>
               </>
             )}
@@ -314,7 +314,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Loại phí:</span>
                   <span>
-                    {invoice.fee.fee_type === "tuition" ? "Học phí" : invoice.fee.fee_type}
+                    {FEE_TYPE_LABELS[invoice.fee.fee_type as FeeType] ?? invoice.fee.fee_type}
                   </span>
                 </div>
                 <div className="flex justify-between">
