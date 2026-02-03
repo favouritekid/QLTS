@@ -2,6 +2,9 @@
 "use client"
 
 import * as React from "react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,9 +15,28 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form"
+import { Textarea } from "@/components/ui/textarea"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import { useCancelFee } from "@/hooks/finance/useFees"
 import { toast } from "sonner"
+
+// =============================================================================
+// FORM SCHEMA
+// =============================================================================
+
+const cancelFormSchema = z.object({
+  reason: z.string().min(1, "Vui lòng nhập lý do hủy").max(500, "Lý do không được quá 500 ký tự"),
+})
+
+type CancelFormValues = z.infer<typeof cancelFormSchema>
 
 // =============================================================================
 // TYPES
@@ -34,6 +56,8 @@ interface FeeCancelDialogProps {
 /**
  * FeeCancelDialog - Confirmation dialog to cancel a fee
  *
+ * Requires a reason for cancellation.
+ *
  * @example
  * ```tsx
  * <FeeCancelDialog
@@ -52,15 +76,30 @@ export function FeeCancelDialog({
 }: FeeCancelDialogProps) {
   const cancelMutation = useCancelFee()
 
-  const handleCancel = async () => {
+  const form = useForm<CancelFormValues>({
+    resolver: zodResolver(cancelFormSchema),
+    defaultValues: {
+      reason: "",
+    },
+  })
+
+  const onSubmit = async (values: CancelFormValues) => {
     try {
-      await cancelMutation.mutateAsync({ feeId, reason: "Hủy theo yêu cầu" })
+      await cancelMutation.mutateAsync({ feeId, reason: values.reason })
       toast.success("Đã hủy học phí thành công")
+      form.reset()
       onOpenChange(false)
     } catch (error) {
       // Error toast is handled by the mutation hook
     }
   }
+
+  // Reset form when dialog closes
+  React.useEffect(() => {
+    if (!open) {
+      form.reset()
+    }
+  }, [open, form])
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -79,21 +118,55 @@ export function FeeCancelDialog({
             </p>
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={cancelMutation.isPending}>
-            Không, giữ lại
-          </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleCancel}
-            disabled={cancelMutation.isPending}
-            className="bg-destructive hover:bg-destructive/90"
-          >
-            {cancelMutation.isPending && (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            )}
-            Xác nhận hủy
-          </AlertDialogAction>
-        </AlertDialogFooter>
+
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <FormField
+              control={form.control}
+              name="reason"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Lý do hủy <span className="text-destructive">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      placeholder="Nhập lý do hủy học phí..."
+                      rows={3}
+                      className="resize-none"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <AlertDialogFooter>
+              <AlertDialogCancel
+                type="button"
+                disabled={cancelMutation.isPending}
+                onClick={() => onOpenChange(false)}
+              >
+                Không, giữ lại
+              </AlertDialogCancel>
+              <AlertDialogAction
+                type="submit"
+                disabled={cancelMutation.isPending}
+                className="bg-destructive hover:bg-destructive/90"
+                onClick={(e) => {
+                  e.preventDefault()
+                  form.handleSubmit(onSubmit)()
+                }}
+              >
+                {cancelMutation.isPending && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                Xác nhận hủy
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </form>
+        </Form>
       </AlertDialogContent>
     </AlertDialog>
   )

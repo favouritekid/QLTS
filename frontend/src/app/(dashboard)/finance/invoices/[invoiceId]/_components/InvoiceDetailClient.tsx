@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils"
 import { PaymentRecordDialog } from "./PaymentRecordDialog"
 import { InvoiceIssueDialog } from "./InvoiceIssueDialog"
 import { InvoiceCancelDialog } from "./InvoiceCancelDialog"
+import { InvoicePenaltyDialog } from "./InvoicePenaltyDialog"
 
 // =============================================================================
 // TYPES
@@ -72,6 +73,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(
     searchParams.get("action") === "cancel"
   )
+  const [penaltyDialogOpen, setPenaltyDialogOpen] = React.useState(
+    searchParams.get("action") === "penalty"
+  )
 
   // Fetch invoice detail
   const { data: invoice, isLoading, error } = useInvoiceViewModel(invoiceId)
@@ -81,6 +85,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
     setRecordPaymentOpen(false)
     setIssueDialogOpen(false)
     setCancelDialogOpen(false)
+    setPenaltyDialogOpen(false)
     router.replace(`/finance/invoices/${invoiceId}`)
   }, [invoiceId, router])
 
@@ -149,6 +154,16 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
             <Button onClick={() => setRecordPaymentOpen(true)}>
               <CreditCard className="h-4 w-4 mr-2" />
               Ghi nhận thanh toán
+            </Button>
+          )}
+          {invoice.show_penalty_button && (
+            <Button
+              variant="outline"
+              className="text-warning-600 hover:text-warning-700"
+              onClick={() => setPenaltyDialogOpen(true)}
+            >
+              <AlertTriangle className="h-4 w-4 mr-2" />
+              Áp dụng phí trễ hạn
             </Button>
           )}
           {invoice.show_cancel_button && (
@@ -388,6 +403,20 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
         invoiceId={invoiceId}
         invoiceNumber={invoice.invoice_number}
         feeId={invoice.fee_id}
+      />
+
+      <InvoicePenaltyDialog
+        open={penaltyDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) handleDialogClose()
+          else setPenaltyDialogOpen(open)
+        }}
+        invoiceId={invoiceId}
+        invoiceNumber={invoice.invoice_number}
+        feeId={invoice.fee_id}
+        daysOverdue={invoice.days_until_due !== null && invoice.days_until_due < 0
+          ? Math.abs(invoice.days_until_due)
+          : undefined}
       />
     </div>
   )
