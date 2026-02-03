@@ -43,3 +43,19 @@ export {
 
 // Cross-reference components
 export { FeeStatusLink, type FeeStatusLinkProps } from "./FeeStatusLink"
+
+// Invoice components
+export { InvoiceTable, type InvoiceTableProps } from "./InvoiceTable"
+
+// Payment components
+export { PaymentTimeline, type PaymentTimelineProps } from "./PaymentTimeline"
+
+// Form selects
+export {
+  PaymentMethodSelect,
+  type PaymentMethodSelectProps,
+} from "./PaymentMethodSelect"
+export {
+  InstallmentPlanSelect,
+  type InstallmentPlanSelectProps,
+} from "./InstallmentPlanSelect"
