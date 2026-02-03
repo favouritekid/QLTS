@@ -6,8 +6,15 @@
  */
 
 import { Suspense } from "react"
+import { notFound } from "next/navigation"
 import { Skeleton } from "@/components/ui/skeleton"
 import { InvoiceDetailClient } from "./_components/InvoiceDetailClient"
+
+// Placeholder param for Next.js 16 cacheComponents build validation
+// Real params are handled at runtime
+export function generateStaticParams() {
+  return [{ invoiceId: "__placeholder__" }]
+}
 
 interface PageProps {
   params: Promise<{ invoiceId: string }>
@@ -42,6 +49,11 @@ function InvoiceDetailLoading() {
  */
 export default async function InvoiceDetailPage({ params }: PageProps) {
   const { invoiceId } = await params
+
+  // Handle placeholder used for build validation
+  if (invoiceId === "__placeholder__") {
+    notFound()
+  }
 
   return (
     <Suspense fallback={<InvoiceDetailLoading />}>

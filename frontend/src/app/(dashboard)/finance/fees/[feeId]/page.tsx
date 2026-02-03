@@ -6,8 +6,15 @@
  */
 
 import { Suspense } from "react"
+import { notFound } from "next/navigation"
 import { Skeleton } from "@/components/ui/skeleton"
 import { FeeDetailClient } from "./_components/FeeDetailClient"
+
+// Placeholder param for Next.js 16 cacheComponents build validation
+// Real params are handled at runtime
+export function generateStaticParams() {
+  return [{ feeId: "__placeholder__" }]
+}
 
 interface PageProps {
   params: Promise<{ feeId: string }>
@@ -49,6 +56,11 @@ function FeeDetailLoading() {
  */
 export default async function FeeDetailPage({ params }: PageProps) {
   const { feeId } = await params
+
+  // Handle placeholder used for build validation
+  if (feeId === "__placeholder__") {
+    notFound()
+  }
 
   return (
     <Suspense fallback={<FeeDetailLoading />}>
