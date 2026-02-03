@@ -121,11 +121,12 @@ class SeedConfig:
         print("\n📋 Loading configuration from database...")
 
         # 1. Load officers (users with role 'officer' who are active)
+        # Note: User model uses `status` column, not `is_active`
         result = await session.execute(
             select(models.User)
             .where(
                 models.User.role == "officer",
-                models.User.is_active == True,
+                models.User.status == "active",
                 models.User.unit_id.isnot(None)
             )
             .limit(10)
@@ -137,7 +138,7 @@ class SeedConfig:
             result = await session.execute(
                 select(models.User)
                 .where(
-                    models.User.is_active == True,
+                    models.User.status == "active",
                     models.User.unit_id.isnot(None)
                 )
                 .limit(10)
@@ -165,22 +166,22 @@ class SeedConfig:
             print(f"   ✅ Found {len(self.offering_ids)} active offerings")
 
         # 3. Load pipeline stages
+        # Note: PipelineStage uses is_final_stage, not is_final or is_active
         result = await session.execute(
             select(PipelineStage)
-            .where(PipelineStage.is_active == True)
             .order_by(PipelineStage.order)
         )
         stages = result.scalars().all()
 
         if not stages:
-            print("   ❌ No active pipeline stages found!")
+            print("   ❌ No pipeline stages found!")
             return False
 
         self.pipeline_stages = [
             {
                 "id": s.id,
                 "name": s.name,
-                "is_final": s.is_final,
+                "is_final": s.is_final_stage,  # Use is_final_stage column
                 "order": s.order,
             }
             for s in stages
@@ -188,9 +189,9 @@ class SeedConfig:
         print(f"   ✅ Found {len(self.pipeline_stages)} pipeline stages")
 
         # 4. Load consultation statuses grouped by stage
+        # Note: ConsultationStatus doesn't have is_active, load all
         result = await session.execute(
             select(ConsultationStatus)
-            .where(ConsultationStatus.is_active == True)
         )
         statuses = result.scalars().all()
 
@@ -198,9 +199,9 @@ class SeedConfig:
             print("   ❌ No active consultation statuses found!")
             return False
 
-        # Group statuses by pipeline_stage_id
+        # Group statuses by stage_id (ConsultationStatus uses stage_id, not pipeline_stage_id)
         for status in statuses:
-            stage_id = status.pipeline_stage_id
+            stage_id = status.stage_id  # stage_id column
             if stage_id not in self.consultation_statuses:
                 self.consultation_statuses[stage_id] = []
             self.consultation_statuses[stage_id].append({
