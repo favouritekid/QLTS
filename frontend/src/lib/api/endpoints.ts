@@ -185,4 +185,77 @@ export const API_ENDPOINTS = {
     TRUSTED_DEVICES: "/api/security/trusted-devices",
     REMOVE_TRUSTED_DEVICE: (id: number) => `/api/security/trusted-devices/${id}`,
   },
+  // ============================================================================
+  // FINANCE MODULE (Bounded Context - Standalone)
+  // ============================================================================
+  FINANCE: {
+    DASHBOARD: "/api/finance/dashboard",
+
+    FEES: {
+      LIST: "/api/fees",
+      CALCULATE: "/api/fees/calculate",
+      DETAIL: (feeId: number) => `/api/fees/${feeId}`,
+      BY_PROFILE: (profileId: number) => `/api/fees/by-profile/${profileId}`,
+      PROFILE_SUMMARY: (profileId: number) => `/api/fees/by-profile/${profileId}/summary`,
+      WAIVE: (feeId: number) => `/api/fees/${feeId}/waive`,
+      CANCEL: (feeId: number) => `/api/fees/${feeId}/cancel`,
+      RECALCULATE: (feeId: number) => `/api/fees/${feeId}/recalculate`,
+    },
+
+    INVOICES: {
+      LIST: "/api/invoices",
+      BY_FEE: (feeId: number) => `/api/invoices/by-fee/${feeId}`,
+      DETAIL: (invoiceId: number) => `/api/invoices/${invoiceId}`,
+      ISSUE: (invoiceId: number) => `/api/invoices/${invoiceId}/issue`,
+      CANCEL: (invoiceId: number) => `/api/invoices/${invoiceId}/cancel`,
+      PENALTY: (invoiceId: number) => `/api/invoices/${invoiceId}/penalty`,
+    },
+
+    PAYMENTS: {
+      LIST: "/api/payments",
+      CREATE: "/api/payments",
+      BY_INVOICE: (invoiceId: number) => `/api/payments/by-invoice/${invoiceId}`,
+      DETAIL: (paymentId: number) => `/api/payments/${paymentId}`,
+      VERIFY: (paymentId: number) => `/api/payments/${paymentId}/verify`,
+      REJECT: (paymentId: number) => `/api/payments/${paymentId}/reject`,
+      METHODS: "/api/payments/methods",
+      // Payment Intent (Online Payments)
+      INTENTS: {
+        CREATE: "/api/payments/intents",
+        DETAIL: (intentId: number) => `/api/payments/intents/${intentId}`,
+      },
+    },
+
+    // Lookup data
+    INSTALLMENT_PLANS: {
+      LIST: "/api/installment-plans",
+      DETAIL: (id: number) => `/api/installment-plans/${id}`,
+    },
+
+    // P3 - Wait for backend router implementation
+    OVERPAYMENTS: {
+      LIST: "/api/overpayments",
+      DETAIL: (id: number) => `/api/overpayments/${id}`,
+      APPLY: (id: number) => `/api/overpayments/${id}/apply`,
+      REFUND: (id: number) => `/api/overpayments/${id}/refund`,
+      WRITE_OFF: (id: number) => `/api/overpayments/${id}/write-off`,
+    },
+
+    // P3 - Wait for backend router implementation
+    REFUNDS: {
+      LIST: "/api/refunds",
+      CREATE: "/api/refunds",
+      DETAIL: (id: number) => `/api/refunds/${id}`,
+      APPROVE: (id: number) => `/api/refunds/${id}/approve`,
+      REJECT: (id: number) => `/api/refunds/${id}/reject`,
+      PROCESS: (id: number) => `/api/refunds/${id}/process`,
+    },
+
+    // P3
+    ACCOUNTING: {
+      PERIODS: "/api/accounting/periods",
+      PERIOD_DETAIL: (id: number) => `/api/accounting/periods/${id}`,
+      CLOSE_PERIOD: (id: number) => `/api/accounting/periods/${id}/close`,
+    },
+  },
 } as const;
