@@ -304,7 +304,24 @@ async def apply_penalty(
 # ==============================================================================
 
 def _build_invoice_response(invoice) -> finance_schemas.InvoiceResponse:
-    """Build InvoiceResponse from Invoice model."""
+    """
+    Build InvoiceResponse from Invoice model.
+
+    Permission Flags Logic:
+        - can_issue: status == 'draft'
+        - can_cancel: status not in ['paid', 'cancelled'] AND paid_amount == 0
+        - can_record_payment: status == 'issued' AND remaining_amount > 0
+        - can_apply_penalty: status == 'overdue'
+    """
+    # P1: Compute permission flags based on status and amounts
+    status_value = invoice.status.value if hasattr(invoice.status, "value") else invoice.status
+    remaining_amount = invoice.amount - invoice.paid_amount
+
+    can_issue = status_value == "draft"
+    can_cancel = status_value not in ["paid", "cancelled"] and invoice.paid_amount == 0
+    can_record_payment = status_value == "issued" and remaining_amount > 0
+    can_apply_penalty = status_value == "overdue"
+
     return finance_schemas.InvoiceResponse(
         id=invoice.id,
         fee_id=invoice.fee_id,
@@ -314,12 +331,17 @@ def _build_invoice_response(invoice) -> finance_schemas.InvoiceResponse:
         due_date=invoice.due_date,
         status=invoice.status,
         paid_amount=invoice.paid_amount,
-        remaining_amount=invoice.amount - invoice.paid_amount,
+        remaining_amount=remaining_amount,
         issued_at=invoice.issued_at,
         paid_at=invoice.paid_at,
         cancelled_at=invoice.cancelled_at,
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
+        # P1: Permission flags
+        can_issue=can_issue,
+        can_cancel=can_cancel,
+        can_record_payment=can_record_payment,
+        can_apply_penalty=can_apply_penalty,
     )
 
 

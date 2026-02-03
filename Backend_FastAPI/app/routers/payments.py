@@ -109,8 +109,10 @@ async def record_payment(
             user_id=current_user.id,
         )
 
-        await db.refresh(payment)
-        return _build_payment_response(payment)
+        # Reload with relationships for P2 denormalized names
+        payment_repo = PaymentRepository(db)
+        payment = await payment_repo.get_by_id_with_relations(payment.id, unit_id)
+        return _build_payment_response(payment, current_user_id=current_user.id)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -169,8 +171,10 @@ async def verify_payment(
             verifier_id=current_user.id,
         )
 
-        await db.refresh(payment)
-        return _build_payment_response(payment)
+        # Reload with relationships for P2 denormalized names
+        payment_repo = PaymentRepository(db)
+        payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
+        return _build_payment_response(payment, current_user_id=current_user.id)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -232,8 +236,10 @@ async def reject_payment(
             rejector_id=current_user.id,
         )
 
-        await db.refresh(payment)
-        return _build_payment_response(payment)
+        # Reload with relationships for P2 denormalized names
+        payment_repo = PaymentRepository(db)
+        payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
+        return _build_payment_response(payment, current_user_id=current_user.id)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -265,14 +271,15 @@ async def get_payment(
     payment_repo = PaymentRepository(db)
     unit_id = None if current_user.role == "admin" else current_user.unit_id
 
-    payment = await payment_repo.get_by_id(payment_id, unit_id)
+    # Use get_by_id_with_relations to load user relationships for P2 denormalized names
+    payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
     if not payment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Payment not found"
         )
 
-    return _build_payment_response(payment)
+    return _build_payment_response(payment, current_user_id=current_user.id)
 
 
 @limiter.limit(RateLimits.DATA_READ)
@@ -526,8 +533,44 @@ async def get_payment_methods(
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def _build_payment_response(payment) -> finance_schemas.PaymentResponse:
-    """Build PaymentResponse from Payment model."""
+def _build_payment_response(
+    payment,
+    current_user_id: Optional[int] = None,
+) -> finance_schemas.PaymentResponse:
+    """
+    Build PaymentResponse from Payment model.
+
+    Args:
+        payment: Payment ORM model (with relationships loaded)
+        current_user_id: Current user's ID for permission flag computation
+
+    Permission Flags (Maker-Checker):
+        - can_verify: True if payment is pending AND current_user != creator
+        - can_reject: True if payment is pending AND current_user != creator
+
+    Denormalized Names (P2):
+        - Extracted from payment.created_by and payment.verified_by relationships
+    """
+    # P1: Compute permission flags based on maker-checker rule
+    status_value = payment.status.value if hasattr(payment.status, "value") else payment.status
+    is_pending = status_value == "pending"
+    is_different_user = current_user_id is not None and payment.created_by_id != current_user_id
+
+    can_verify = is_pending and is_different_user
+    can_reject = is_pending and is_different_user
+
+    # P2: Extract denormalized user names from relationships
+    created_by_name = None
+    verified_by_name = None
+
+    # Try to get creator name from relationship
+    if hasattr(payment, "created_by") and payment.created_by is not None:
+        created_by_name = payment.created_by.full_name or payment.created_by.email
+
+    # Try to get verifier name from relationship
+    if hasattr(payment, "verified_by") and payment.verified_by is not None:
+        verified_by_name = payment.verified_by.full_name or payment.verified_by.email
+
     return finance_schemas.PaymentResponse(
         id=payment.id,
         invoice_id=payment.invoice_id,
@@ -546,6 +589,12 @@ def _build_payment_response(payment) -> finance_schemas.PaymentResponse:
         notes=payment.notes,
         created_at=payment.created_at,
         updated_at=payment.updated_at,
+        # P1: Permission flags
+        can_verify=can_verify,
+        can_reject=can_reject,
+        # P2: Denormalized names
+        created_by_name=created_by_name,
+        verified_by_name=verified_by_name,
     )
 
 

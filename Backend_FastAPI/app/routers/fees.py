@@ -492,8 +492,19 @@ async def recalculate_fee(
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def _build_fee_response(fee) -> finance_schemas.FeeResponse:
-    """Build FeeResponse from Fee model."""
+def _build_fee_response(fee, first_due_date=None) -> finance_schemas.FeeResponse:
+    """
+    Build FeeResponse from Fee model.
+
+    Args:
+        fee: Fee ORM model
+        first_due_date: Optional first invoice due date for quick reference (P3)
+
+    Permission Flags Logic:
+        - can_waive: status not in terminal states AND remaining_amount > 0
+        - can_cancel: status not in terminal states AND paid_amount == 0
+        - can_recalculate: status not in terminal states AND paid_amount == 0
+    """
     applied_discounts = []
     for ad in fee.applied_discounts:
         snapshot = ad.calculation_snapshot or {}
@@ -508,6 +519,15 @@ def _build_fee_response(fee) -> finance_schemas.FeeResponse:
                 application_order=ad.application_order,
             )
         )
+
+    # P1: Compute permission flags based on status and amounts
+    terminal_statuses = {"paid", "cancelled", "waived"}
+    status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
+    is_terminal = status_value in terminal_statuses
+
+    can_waive = not is_terminal and fee.remaining_amount > 0
+    can_cancel = not is_terminal and fee.paid_amount == 0
+    can_recalculate = not is_terminal and fee.paid_amount == 0
 
     return finance_schemas.FeeResponse(
         id=fee.id,
@@ -527,12 +547,24 @@ def _build_fee_response(fee) -> finance_schemas.FeeResponse:
         created_at=fee.created_at,
         updated_at=fee.updated_at,
         applied_discounts=applied_discounts,
+        # P1: Permission flags
+        can_waive=can_waive,
+        can_cancel=can_cancel,
+        can_recalculate=can_recalculate,
+        # P3: First invoice due date
+        due_date=first_due_date,
     )
 
 
 def _build_fee_detail_response(fee, invoices) -> finance_schemas.FeeDetailResponse:
     """Build FeeDetailResponse from Fee model with invoices."""
-    base_response = _build_fee_response(fee)
+    # P3: Get first invoice due date for quick reference
+    first_due_date = None
+    if invoices:
+        sorted_invoices = sorted(invoices, key=lambda x: x.due_date)
+        first_due_date = sorted_invoices[0].due_date if sorted_invoices else None
+
+    base_response = _build_fee_response(fee, first_due_date=first_due_date)
 
     invoice_summaries = [
         finance_schemas.InvoiceSummaryResponse(

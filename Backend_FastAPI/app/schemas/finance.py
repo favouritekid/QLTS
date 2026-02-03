@@ -180,6 +180,17 @@ class FeeResponse(FeeBase):
     # Nested data
     applied_discounts: List[FeeAppliedDiscountResponse] = []
 
+    # P1: Permission flags - computed in router based on status and amounts
+    # can_waive: status not in terminal states AND remaining_amount > 0
+    # can_cancel: status not in terminal states AND paid_amount == 0
+    # can_recalculate: status not in terminal states AND paid_amount == 0
+    can_waive: bool = False
+    can_cancel: bool = False
+    can_recalculate: bool = False
+
+    # P3: First invoice due date for quick reference
+    due_date: Optional[date] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -239,6 +250,16 @@ class InvoiceResponse(InvoiceBase):
     cancelled_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+
+    # P1: Permission flags - computed in router based on status and amounts
+    # can_issue: status == 'draft'
+    # can_cancel: status not in ['paid', 'cancelled'] AND paid_amount == 0
+    # can_record_payment: status == 'issued' AND remaining_amount > 0
+    # can_apply_penalty: status == 'overdue'
+    can_issue: bool = False
+    can_cancel: bool = False
+    can_record_payment: bool = False
+    can_apply_penalty: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -382,6 +403,15 @@ class PaymentResponse(BaseModel):
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+    # P1: Permission flags (Maker-Checker enforcement)
+    # Computed in router based on current user context
+    can_verify: bool = False
+    can_reject: bool = False
+
+    # P2: Denormalized user display names
+    created_by_name: Optional[str] = None
+    verified_by_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
