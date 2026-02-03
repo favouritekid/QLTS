@@ -11,14 +11,18 @@ import {
   Activity,
   Bell,
   Building2,
+  Calculator,
   ClipboardCheck,
   Cog,
+  CreditCard,
   Database,
+  DollarSign,
   FileText,
   FolderTree,
   History,
   LayoutDashboard,
   Percent,
+  Receipt,
   Settings,
   Share2,
   ShieldCheck,
@@ -124,7 +128,42 @@ export const navigationConfig: NavigationConfig = {
     },
 
     // =========================================================================
-    // 3. NOTIFICATIONS - All notification features (NEW)
+    // 3. FINANCE - Financial management (Accountant, Manager, Admin)
+    // =========================================================================
+    {
+      title: "Finance",
+      items: [
+        {
+          label: "Finance Dashboard",
+          href: "/finance",
+          icon: DollarSign,
+          roles: ["accountant", "manager", "admin"],
+          excludePaths: ["/finance/fees", "/finance/invoices", "/finance/payments"],
+        },
+        {
+          label: "Fees",
+          href: "/finance/fees",
+          icon: Calculator,
+          roles: ["accountant", "manager", "admin"],
+        },
+        {
+          label: "Invoices",
+          href: "/finance/invoices",
+          icon: Receipt,
+          roles: ["accountant", "manager", "admin"],
+        },
+        {
+          label: "Pending Payments",
+          href: "/finance/payments",
+          icon: CreditCard,
+          roles: ["accountant", "manager", "admin"],
+          // Badge for pending count can be added dynamically
+        },
+      ],
+    },
+
+    // =========================================================================
+    // 4. NOTIFICATIONS - All notification features
     // =========================================================================
     {
       title: "Notifications",
@@ -152,7 +191,7 @@ export const navigationConfig: NavigationConfig = {
     },
 
     // =========================================================================
-    // 4. ORGANIZATION - Structure and programs
+    // 5. ORGANIZATION - Structure and programs
     // =========================================================================
     {
       title: "Organization",
@@ -186,7 +225,7 @@ export const navigationConfig: NavigationConfig = {
     },
 
     // =========================================================================
-    // 5. USER MANAGEMENT - People and access control
+    // 6. USER MANAGEMENT - People and access control
     // =========================================================================
     {
       title: "User Management",
@@ -207,7 +246,7 @@ export const navigationConfig: NavigationConfig = {
     },
 
     // =========================================================================
-    // 6. AUTOMATION & RULES - Workflows and configurations (NEW)
+    // 7. AUTOMATION & RULES - Workflows and configurations
     // =========================================================================
     {
       title: "Automation & Rules",
@@ -234,7 +273,7 @@ export const navigationConfig: NavigationConfig = {
     },
 
     // =========================================================================
-    // 7. SYSTEM - System-level settings and monitoring
+    // 8. SYSTEM - System-level settings and monitoring
     // =========================================================================
     {
       title: "System",
