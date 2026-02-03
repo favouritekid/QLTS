@@ -76,7 +76,9 @@ async def get_invoice(
     try:
         invoice = await invoice_service.get_invoice(invoice_id, unit_id)
 
-        return _build_invoice_detail_response(invoice)
+        return _build_invoice_detail_response(
+            invoice, current_user_role=current_user.role
+        )
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -169,7 +171,7 @@ async def issue_invoice(
         )
 
         await db.refresh(invoice)
-        return _build_invoice_response(invoice)
+        return _build_invoice_response(invoice, current_user_role=current_user.role)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -230,7 +232,7 @@ async def cancel_invoice(
         )
 
         await db.refresh(invoice)
-        return _build_invoice_response(invoice)
+        return _build_invoice_response(invoice, current_user_role=current_user.role)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -291,7 +293,7 @@ async def apply_penalty(
         )
 
         await db.refresh(invoice)
-        return _build_invoice_response(invoice)
+        return _build_invoice_response(invoice, current_user_role=current_user.role)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -303,24 +305,37 @@ async def apply_penalty(
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def _build_invoice_response(invoice) -> finance_schemas.InvoiceResponse:
+def _build_invoice_response(
+    invoice, current_user_role: str = None
+) -> finance_schemas.InvoiceResponse:
     """
     Build InvoiceResponse from Invoice model.
 
-    Permission Flags Logic:
-        - can_issue: status == 'draft'
-        - can_cancel: status not in ['paid', 'cancelled'] AND paid_amount == 0
-        - can_record_payment: status == 'issued' AND remaining_amount > 0
-        - can_apply_penalty: status == 'overdue'
+    Args:
+        invoice: Invoice ORM model
+        current_user_role: Current user's role for role-aware permission flags
+
+    Permission Flags Logic (Role-Aware):
+        - can_issue: status == 'draft' (any role with permission)
+        - can_cancel: status not terminal AND paid == 0 AND role in [admin, manager]
+        - can_record_payment: status == 'issued' AND remaining > 0 (any role)
+        - can_apply_penalty: status == 'overdue' AND role in [admin, manager]
     """
-    # P1: Compute permission flags based on status and amounts
+    # P1: Compute permission flags based on status, amounts, AND role
     status_value = invoice.status.value if hasattr(invoice.status, "value") else invoice.status
     remaining_amount = invoice.amount - invoice.paid_amount
 
+    # Role-aware permission computation
+    is_manager_or_admin = current_user_role in ["admin", "manager"]
+
     can_issue = status_value == "draft"
-    can_cancel = status_value not in ["paid", "cancelled"] and invoice.paid_amount == 0
+    can_cancel = (
+        status_value not in ["paid", "cancelled"]
+        and invoice.paid_amount == 0
+        and is_manager_or_admin
+    )
     can_record_payment = status_value == "issued" and remaining_amount > 0
-    can_apply_penalty = status_value == "overdue"
+    can_apply_penalty = status_value == "overdue" and is_manager_or_admin
 
     return finance_schemas.InvoiceResponse(
         id=invoice.id,
@@ -345,9 +360,11 @@ def _build_invoice_response(invoice) -> finance_schemas.InvoiceResponse:
     )
 
 
-def _build_invoice_detail_response(invoice) -> finance_schemas.InvoiceDetailResponse:
+def _build_invoice_detail_response(
+    invoice, current_user_role: str = None
+) -> finance_schemas.InvoiceDetailResponse:
     """Build InvoiceDetailResponse from Invoice model with payments."""
-    base_response = _build_invoice_response(invoice)
+    base_response = _build_invoice_response(invoice, current_user_role=current_user_role)
 
     payment_summaries = [
         finance_schemas.PaymentSummaryResponse(

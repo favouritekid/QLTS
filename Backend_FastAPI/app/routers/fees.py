@@ -150,7 +150,9 @@ async def calculate_fee(
         )
 
         # Build response with nested data
-        return _build_fee_detail_response(fee, invoices)
+        return _build_fee_detail_response(
+            fee, invoices, current_user_role=current_user.role
+        )
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -193,7 +195,9 @@ async def get_fee(
         invoice_repo = fee_service.invoice_repo
         invoices = await invoice_repo.get_by_fee_id(fee_id)
 
-        return _build_fee_detail_response(fee, invoices)
+        return _build_fee_detail_response(
+            fee, invoices, current_user_role=current_user.role
+        )
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -353,7 +357,7 @@ async def waive_fee(
         )
 
         await db.refresh(fee)
-        return _build_fee_response(fee)
+        return _build_fee_response(fee, current_user_role=current_user.role)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -416,7 +420,7 @@ async def cancel_fee(
         )
 
         await db.refresh(fee)
-        return _build_fee_response(fee)
+        return _build_fee_response(fee, current_user_role=current_user.role)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -480,7 +484,7 @@ async def recalculate_fee(
         )
 
         await db.refresh(fee)
-        return _build_fee_response(fee)
+        return _build_fee_response(fee, current_user_role=current_user.role)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -492,18 +496,21 @@ async def recalculate_fee(
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def _build_fee_response(fee, first_due_date=None) -> finance_schemas.FeeResponse:
+def _build_fee_response(
+    fee, first_due_date=None, current_user_role: str = None
+) -> finance_schemas.FeeResponse:
     """
     Build FeeResponse from Fee model.
 
     Args:
         fee: Fee ORM model
         first_due_date: Optional first invoice due date for quick reference (P3)
+        current_user_role: Current user's role for role-aware permission flags
 
-    Permission Flags Logic:
-        - can_waive: status not in terminal states AND remaining_amount > 0
-        - can_cancel: status not in terminal states AND paid_amount == 0
-        - can_recalculate: status not in terminal states AND paid_amount == 0
+    Permission Flags Logic (Role-Aware):
+        - can_waive: status not terminal AND remaining > 0 AND role in [admin, manager]
+        - can_cancel: status not terminal AND paid == 0 AND role == admin
+        - can_recalculate: status not terminal AND paid == 0 AND role in [admin, manager]
     """
     applied_discounts = []
     for ad in fee.applied_discounts:
@@ -520,14 +527,18 @@ def _build_fee_response(fee, first_due_date=None) -> finance_schemas.FeeResponse
             )
         )
 
-    # P1: Compute permission flags based on status and amounts
+    # P1: Compute permission flags based on status, amounts, AND role
     terminal_statuses = {"paid", "cancelled", "waived"}
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in terminal_statuses
 
-    can_waive = not is_terminal and fee.remaining_amount > 0
-    can_cancel = not is_terminal and fee.paid_amount == 0
-    can_recalculate = not is_terminal and fee.paid_amount == 0
+    # Role-aware permission computation
+    is_manager_or_admin = current_user_role in ["admin", "manager"]
+    is_admin = current_user_role == "admin"
+
+    can_waive = not is_terminal and fee.remaining_amount > 0 and is_manager_or_admin
+    can_cancel = not is_terminal and fee.paid_amount == 0 and is_admin
+    can_recalculate = not is_terminal and fee.paid_amount == 0 and is_manager_or_admin
 
     return finance_schemas.FeeResponse(
         id=fee.id,
@@ -556,7 +567,9 @@ def _build_fee_response(fee, first_due_date=None) -> finance_schemas.FeeResponse
     )
 
 
-def _build_fee_detail_response(fee, invoices) -> finance_schemas.FeeDetailResponse:
+def _build_fee_detail_response(
+    fee, invoices, current_user_role: str = None
+) -> finance_schemas.FeeDetailResponse:
     """Build FeeDetailResponse from Fee model with invoices."""
     # P3: Get first invoice due date for quick reference
     first_due_date = None
@@ -564,7 +577,9 @@ def _build_fee_detail_response(fee, invoices) -> finance_schemas.FeeDetailRespon
         sorted_invoices = sorted(invoices, key=lambda x: x.due_date)
         first_due_date = sorted_invoices[0].due_date if sorted_invoices else None
 
-    base_response = _build_fee_response(fee, first_due_date=first_due_date)
+    base_response = _build_fee_response(
+        fee, first_due_date=first_due_date, current_user_role=current_user_role
+    )
 
     invoice_summaries = [
         finance_schemas.InvoiceSummaryResponse(

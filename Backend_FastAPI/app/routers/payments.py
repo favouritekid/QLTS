@@ -112,7 +112,11 @@ async def record_payment(
         # Reload with relationships for P2 denormalized names
         payment_repo = PaymentRepository(db)
         payment = await payment_repo.get_by_id_with_relations(payment.id, unit_id)
-        return _build_payment_response(payment, current_user_id=current_user.id)
+        return _build_payment_response(
+            payment,
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -174,7 +178,11 @@ async def verify_payment(
         # Reload with relationships for P2 denormalized names
         payment_repo = PaymentRepository(db)
         payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
-        return _build_payment_response(payment, current_user_id=current_user.id)
+        return _build_payment_response(
+            payment,
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -239,7 +247,11 @@ async def reject_payment(
         # Reload with relationships for P2 denormalized names
         payment_repo = PaymentRepository(db)
         payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
-        return _build_payment_response(payment, current_user_id=current_user.id)
+        return _build_payment_response(
+            payment,
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -279,7 +291,11 @@ async def get_payment(
             detail="Payment not found"
         )
 
-    return _build_payment_response(payment, current_user_id=current_user.id)
+    return _build_payment_response(
+            payment,
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
 
 
 @limiter.limit(RateLimits.DATA_READ)
@@ -536,6 +552,7 @@ async def get_payment_methods(
 def _build_payment_response(
     payment,
     current_user_id: Optional[int] = None,
+    current_user_role: str = None,
 ) -> finance_schemas.PaymentResponse:
     """
     Build PaymentResponse from Payment model.
@@ -543,21 +560,25 @@ def _build_payment_response(
     Args:
         payment: Payment ORM model (with relationships loaded)
         current_user_id: Current user's ID for permission flag computation
+        current_user_role: Current user's role for role-aware permission flags
 
-    Permission Flags (Maker-Checker):
-        - can_verify: True if payment is pending AND current_user != creator
-        - can_reject: True if payment is pending AND current_user != creator
+    Permission Flags (Maker-Checker + Role-Aware):
+        - can_verify: pending AND different_user AND role in [admin, manager]
+        - can_reject: pending AND different_user AND role in [admin, manager]
 
     Denormalized Names (P2):
         - Extracted from payment.created_by and payment.verified_by relationships
     """
-    # P1: Compute permission flags based on maker-checker rule
+    # P1: Compute permission flags based on maker-checker rule AND role
     status_value = payment.status.value if hasattr(payment.status, "value") else payment.status
     is_pending = status_value == "pending"
     is_different_user = current_user_id is not None and payment.created_by_id != current_user_id
 
-    can_verify = is_pending and is_different_user
-    can_reject = is_pending and is_different_user
+    # Role-aware permission computation
+    is_manager_or_admin = current_user_role in ["admin", "manager"]
+
+    can_verify = is_pending and is_different_user and is_manager_or_admin
+    can_reject = is_pending and is_different_user and is_manager_or_admin
 
     # P2: Extract denormalized user names from relationships
     created_by_name = None
