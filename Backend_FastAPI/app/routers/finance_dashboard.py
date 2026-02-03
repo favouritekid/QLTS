@@ -85,10 +85,15 @@ async def get_dashboard_stats(
         FeeStatusEnum.invoiced.value,
         FeeStatusEnum.partial.value,
     ]
+    # Note: remaining_amount is a @property, not a column.
+    # Must calculate as: final_amount - paid_amount - waived_amount
     pending_fees_query = (
         select(
             func.count(Fee.id).label("count"),
-            func.coalesce(func.sum(Fee.remaining_amount), 0).label("amount")
+            func.coalesce(
+                func.sum(Fee.final_amount - Fee.paid_amount - Fee.waived_amount),
+                0
+            ).label("amount")
         )
         .join(models.AdmissionProfile)
         .join(models.Lead)

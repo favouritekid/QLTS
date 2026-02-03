@@ -218,3 +218,14 @@ backups/
 exports/
 *.dump
 migration_data/
+
+# ===================================
+# AI/Claude generated files
+# ===================================
+.agent/
+.agents/
+.claude/skills/
+docs/
+
+# Lint output
+frontend/lint_output.txt
