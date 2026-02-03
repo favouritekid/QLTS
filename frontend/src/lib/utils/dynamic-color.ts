@@ -272,7 +272,7 @@ export function getDynamicBadgeStyle(
     darkModeAdjust = true,
   } = options;
 
-  let bgColor = sanitizeColor(color, fallback);
+  const bgColor = sanitizeColor(color, fallback);
 
   if (isDarkMode && darkModeAdjust) {
     // For dark mode: use muted background, brighter text

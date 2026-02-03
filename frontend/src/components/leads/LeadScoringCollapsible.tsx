@@ -188,7 +188,7 @@ export function LeadScoringCollapsible({
               </div>
               {insights.officer_summary && (
                 <p className="mt-1 text-xs text-muted-foreground italic">
-                  "{insights.officer_summary}"
+                  &quot;{insights.officer_summary}&quot;
                 </p>
               )}
             </div>

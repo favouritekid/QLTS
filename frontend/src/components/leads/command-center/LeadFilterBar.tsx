@@ -109,7 +109,7 @@ function FilterDropdown({ label, count, children }: FilterDropdownProps) {
           variant="outline"
           size="sm"
           className={cn(
-            "h-9 md:h-8 gap-1 transition-all duration-200",
+            "h-9 md:h-8 gap-1 transition-colors duration-200",
             count > 0 && "border-primary bg-primary/5"
           )}
         >
@@ -145,12 +145,13 @@ function FilterPill({ label, onRemove }: FilterPillProps) {
   return (
     <Badge
       variant="secondary"
-      className="animate-in fade-in-0 zoom-in-95 h-6 gap-1 pr-1 text-xs transition-all duration-200"
+      className="motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 h-6 gap-1 pr-1 text-xs transition-colors duration-200"
     >
       {label}
       <button
         onClick={onRemove}
         className="hover:bg-muted ml-0.5 rounded-full p-0.5 transition-colors"
+        aria-label={`Xóa bộ lọc ${label}`}
       >
         <X className="h-3 w-3" />
       </button>
@@ -355,6 +356,7 @@ export function LeadFilterBar({
                 onSearchChange("");
               }}
               className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2"
+              aria-label="Xóa tìm kiếm"
             >
               <X className="h-4 w-4" />
             </button>
@@ -602,7 +604,7 @@ export function LeadFilterBar({
 
       {/* Mobile: Collapsible Filters */}
       {mobileFiltersOpen && (
-        <div className="animate-in slide-in-from-top-2 border-t px-3 py-3 md:hidden">
+        <div className="motion-safe:animate-in motion-safe:slide-in-from-top-2 border-t px-3 py-3 md:hidden">
           <div className="flex flex-wrap gap-2">
             {/* Status Filter - Admin only */}
             {isAdminFlag && (

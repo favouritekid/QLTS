@@ -108,10 +108,13 @@ export const LeadCard = React.memo(function LeadCard({
     <Card
       onClick={() => onSelect(lead)}
       className={cn(
-        "p-3 cursor-pointer transition-all hover:shadow-md",
+        "p-3 cursor-pointer transition-shadow hover:shadow-md",
         "border-l-4",
         getBorderClass()
       )}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(lead); } }}
     >
       <div className="space-y-2">
         {/* Name & Phone Row */}
@@ -134,7 +137,7 @@ export const LeadCard = React.memo(function LeadCard({
                       className={cn(
                         "h-4 w-4",
                         getActivityIconColor(activityStatus),
-                        activityStatus === "overdue" && "animate-pulse"
+                        activityStatus === "overdue" && "motion-safe:animate-pulse"
                       )}
                     />
                     <span className={cn(

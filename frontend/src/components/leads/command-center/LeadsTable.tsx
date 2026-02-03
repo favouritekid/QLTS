@@ -166,6 +166,7 @@ function RowActions({ lead, onEdit, onDelete }: RowActionsProps) {
             e.stopPropagation();
             setActionSheetOpen(true);
           }}
+          aria-label="Mở menu thao tác"
         >
           <MoreHorizontal className="h-4 w-4" />
         </Button>
@@ -207,6 +208,7 @@ function RowActions({ lead, onEdit, onDelete }: RowActionsProps) {
           size="sm"
           className="h-8 w-8 p-0"
           onClick={(e) => e.stopPropagation()}
+          aria-label="Mở menu thao tác"
         >
           <MoreHorizontal className="h-4 w-4" />
         </Button>

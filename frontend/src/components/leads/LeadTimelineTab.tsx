@@ -329,7 +329,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
 
                 {/* Row 3: Notes (truncated) */}
                 {notes && !notes.startsWith("Ghi nhận:") && (
-                  <p className="text-xs text-muted-foreground truncate mt-1 italic">"{notes}"</p>
+                  <p className="text-xs text-muted-foreground truncate mt-1 italic">&quot;{notes}&quot;</p>
                 )}
               </div>
             </div>

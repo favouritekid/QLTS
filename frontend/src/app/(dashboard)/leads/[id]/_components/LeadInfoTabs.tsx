@@ -427,7 +427,7 @@ export function LeadInfoTabs({
 
                     {/* Row 2: Notes (if any, not auto-generated) */}
                     {notes && !notes.startsWith("Ghi nhận:") && !notes.startsWith("Ghi nhận nhanh:") && (
-                      <p className="text-xs text-muted-foreground italic pl-9 truncate">"{notes}"</p>
+                      <p className="text-xs text-muted-foreground italic pl-9 truncate">&quot;{notes}&quot;</p>
                     )}
 
                     {/* Row 3: Scheduled follow-up */}

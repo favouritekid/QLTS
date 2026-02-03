@@ -179,6 +179,7 @@ export const LeadFilters = React.memo(function LeadFilters({
             <button
               onClick={() => onSearchChange("")}
               className="text-muted-foreground hover:text-foreground absolute top-2.5 right-2.5"
+              aria-label="Xóa tìm kiếm"
             >
               <X className="h-4 w-4" />
             </button>

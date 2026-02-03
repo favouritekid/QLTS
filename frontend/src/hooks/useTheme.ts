@@ -16,7 +16,7 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useSyncExternalStore, useCallback } from "react";
 
 export type Theme = "light" | "dark" | "system";
 
@@ -29,35 +29,28 @@ export interface UseThemeReturn {
   mounted: boolean;
 }
 
+// Check if dark mode is active by looking at document class
+function checkDarkMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return document.documentElement.classList.contains("dark");
+}
+
+// Get current theme from localStorage
+function getTheme(): Theme {
+  if (typeof window === "undefined") return "system";
+  return (localStorage.getItem("theme") as Theme) || "system";
+}
+
 /**
  * Hook to access current theme state
  */
 export function useTheme(): UseThemeReturn {
-  const [theme, setTheme] = useState<Theme>("system");
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [mounted, setMounted] = useState(false);
-
-  // Check if dark mode is active
-  const checkDarkMode = useCallback(() => {
-    if (typeof window === "undefined") return false;
-    return document.documentElement.classList.contains("dark");
-  }, []);
-
-  useEffect(() => {
-    setMounted(true);
-
-    // Get saved theme
-    const savedTheme = (localStorage.getItem("theme") as Theme) || "system";
-    setTheme(savedTheme);
-
-    // Check initial dark mode state
-    setIsDarkMode(checkDarkMode());
-
-    // Create observer to watch for class changes on <html>
+  // Subscribe to dark mode changes via MutationObserver
+  const subscribeDarkMode = useCallback((callback: () => void) => {
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         if (mutation.attributeName === "class") {
-          setIsDarkMode(checkDarkMode());
+          callback();
         }
       });
     });
@@ -71,7 +64,7 @@ export function useTheme(): UseThemeReturn {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleMediaChange = () => {
       // Re-check after a small delay to let ThemeToggle update classes
-      setTimeout(() => setIsDarkMode(checkDarkMode()), 50);
+      setTimeout(callback, 50);
     };
     mediaQuery.addEventListener("change", handleMediaChange);
 
@@ -79,7 +72,40 @@ export function useTheme(): UseThemeReturn {
       observer.disconnect();
       mediaQuery.removeEventListener("change", handleMediaChange);
     };
-  }, [checkDarkMode]);
+  }, []);
+
+  // Subscribe to theme changes via storage event
+  const subscribeTheme = useCallback((callback: () => void) => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "theme") {
+        callback();
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
+
+  // Use useSyncExternalStore for reactive state
+  const isDarkMode = useSyncExternalStore(
+    subscribeDarkMode,
+    checkDarkMode,
+    () => false // Server snapshot
+  );
+
+  const theme = useSyncExternalStore(
+    subscribeTheme,
+    getTheme,
+    () => "system" as Theme // Server snapshot
+  );
+
+  // For mounted, we can use useSyncExternalStore with a simple check
+  const mounted = useSyncExternalStore(
+    () => () => {}, // No subscription needed
+    () => true, // Client is always mounted
+    () => false // Server is not mounted
+  );
 
   return {
     theme,

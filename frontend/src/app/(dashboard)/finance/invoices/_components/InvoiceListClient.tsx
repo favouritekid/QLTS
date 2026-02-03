@@ -111,6 +111,7 @@ export function InvoiceListClient() {
   })
 
   // Transform to view models
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- toInvoiceListViewModel is pure
   const invoiceViewModels = React.useMemo(() => {
     if (!data?.items) return []
     return toInvoiceListViewModel(data.items)

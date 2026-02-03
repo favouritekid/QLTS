@@ -978,6 +978,7 @@ class TestFeeGateEnrollment:
         mock_fee = MagicMock()
         mock_fee.id = 1
         mock_fee.status = "paid"
+        mock_fee.fee_type = "tuition"
         mock_fee.remaining_amount = Decimal("0")
 
         mock_fee_repo = MagicMock()
@@ -985,7 +986,7 @@ class TestFeeGateEnrollment:
 
         mock_db = MagicMock()
 
-        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_fee_repo):
             # Should NOT raise any exception
             await check_enrollment_fee_eligibility(mock_db, profile_id=100)
 
@@ -1001,6 +1002,7 @@ class TestFeeGateEnrollment:
         mock_fee = MagicMock()
         mock_fee.id = 1
         mock_fee.status = "waived"
+        mock_fee.fee_type = "tuition"
         mock_fee.remaining_amount = Decimal("0")
 
         mock_fee_repo = MagicMock()
@@ -1008,7 +1010,7 @@ class TestFeeGateEnrollment:
 
         mock_db = MagicMock()
 
-        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_fee_repo):
             # Should NOT raise any exception
             await check_enrollment_fee_eligibility(mock_db, profile_id=100)
 
@@ -1025,6 +1027,7 @@ class TestFeeGateEnrollment:
         mock_fee = MagicMock()
         mock_fee.id = 1
         mock_fee.status = "pending"
+        mock_fee.fee_type = "tuition"
         mock_fee.remaining_amount = Decimal("5000000")
 
         mock_fee_repo = MagicMock()
@@ -1032,7 +1035,7 @@ class TestFeeGateEnrollment:
 
         mock_db = MagicMock()
 
-        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_fee_repo):
             with pytest.raises(BadRequest) as exc_info:
                 await check_enrollment_fee_eligibility(mock_db, profile_id=100)
 
@@ -1052,6 +1055,7 @@ class TestFeeGateEnrollment:
         mock_fee = MagicMock()
         mock_fee.id = 1
         mock_fee.status = "partial"
+        mock_fee.fee_type = "tuition"
         mock_fee.remaining_amount = Decimal("3000000")
 
         mock_fee_repo = MagicMock()
@@ -1059,7 +1063,7 @@ class TestFeeGateEnrollment:
 
         mock_db = MagicMock()
 
-        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_fee_repo):
             with pytest.raises(BadRequest) as exc_info:
                 await check_enrollment_fee_eligibility(mock_db, profile_id=100)
 
@@ -1081,7 +1085,7 @@ class TestFeeGateEnrollment:
 
         mock_db = MagicMock()
 
-        with patch("app.services.admission_service.FeeRepository", return_value=mock_fee_repo):
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_fee_repo):
             with pytest.raises(BadRequest) as exc_info:
                 await check_enrollment_fee_eligibility(mock_db, profile_id=100)
 

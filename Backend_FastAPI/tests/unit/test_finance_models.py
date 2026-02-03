@@ -12,7 +12,7 @@ Coverage Target: Core model logic and enum values
 
 import pytest
 from decimal import Decimal
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 from app.models.finance import (
     # Enums
@@ -63,12 +63,15 @@ class TestFeeStatusEnum:
     """Test FeeStatusEnum values."""
 
     def test_all_fee_statuses_defined(self):
-        """Verify all 5 fee statuses are defined."""
+        """Verify all 8 fee statuses are defined."""
         expected_statuses = {
             "pending",
             "calculated",
             "invoiced",
+            "partial",
             "paid",
+            "overdue",
+            "waived",
             "cancelled",
         }
         actual_statuses = {s.value for s in FeeStatusEnum}
@@ -87,10 +90,11 @@ class TestInvoiceStatusEnum:
     """Test InvoiceStatusEnum values."""
 
     def test_all_invoice_statuses_defined(self):
-        """Verify all 5 invoice statuses are defined."""
+        """Verify all 6 invoice statuses are defined."""
         expected_statuses = {
             "draft",
             "issued",
+            "partial",
             "paid",
             "overdue",
             "cancelled",
@@ -253,25 +257,25 @@ class TestFeeModel:
 
         assert fee.is_fully_paid is False
 
-    def test_can_waive_true(self):
-        """Test can_waive property when has remaining."""
+    def test_is_overdue_true(self):
+        """Test is_overdue property when past due date."""
         fee = Fee()
-        fee.status = FeeStatusEnum.calculated.value
+        fee.due_date = date.today() - timedelta(days=1)
         fee.final_amount = Decimal("500000")
-        fee.paid_amount = Decimal("100000")
+        fee.paid_amount = Decimal("0")
         fee.waived_amount = Decimal("0")
 
-        assert fee.can_waive is True
+        assert fee.is_overdue is True
 
-    def test_can_waive_false_when_paid(self):
-        """Test can_waive property when fully paid."""
+    def test_is_overdue_false_when_paid(self):
+        """Test is_overdue property when fully paid."""
         fee = Fee()
-        fee.status = FeeStatusEnum.paid.value
+        fee.due_date = date.today() - timedelta(days=1)
         fee.final_amount = Decimal("500000")
         fee.paid_amount = Decimal("500000")
         fee.waived_amount = Decimal("0")
 
-        assert fee.can_waive is False
+        assert fee.is_overdue is False
 
 
 class TestInvoiceModel:
@@ -281,14 +285,26 @@ class TestInvoiceModel:
         """Test remaining_amount property calculation."""
         invoice = Invoice()
         invoice.amount = Decimal("500000")
+        invoice.penalty_amount = Decimal("0")
         invoice.paid_amount = Decimal("200000")
 
         assert invoice.remaining_amount == Decimal("300000")
+
+    def test_remaining_amount_with_penalty(self):
+        """Test remaining_amount includes penalty."""
+        invoice = Invoice()
+        invoice.amount = Decimal("500000")
+        invoice.penalty_amount = Decimal("50000")
+        invoice.paid_amount = Decimal("200000")
+
+        # remaining = 500000 + 50000 - 200000 = 350000
+        assert invoice.remaining_amount == Decimal("350000")
 
     def test_is_fully_paid_true(self):
         """Test is_fully_paid property when paid."""
         invoice = Invoice()
         invoice.amount = Decimal("500000")
+        invoice.penalty_amount = Decimal("0")
         invoice.paid_amount = Decimal("500000")
 
         assert invoice.is_fully_paid is True
@@ -296,26 +312,40 @@ class TestInvoiceModel:
     def test_is_overdue_true(self):
         """Test is_overdue property when past due date."""
         invoice = Invoice()
-        invoice.due_date = datetime.now(timezone.utc).date() - timedelta(days=1)
-        invoice.status = InvoiceStatusEnum.issued.value
+        invoice.due_date = date.today() - timedelta(days=1)
+        invoice.amount = Decimal("500000")
+        invoice.penalty_amount = Decimal("0")
+        invoice.paid_amount = Decimal("0")
 
         assert invoice.is_overdue is True
 
     def test_is_overdue_false_when_paid(self):
         """Test is_overdue property when paid."""
         invoice = Invoice()
-        invoice.due_date = datetime.now(timezone.utc).date() - timedelta(days=1)
-        invoice.status = InvoiceStatusEnum.paid.value
+        invoice.due_date = date.today() - timedelta(days=1)
+        invoice.amount = Decimal("500000")
+        invoice.penalty_amount = Decimal("0")
+        invoice.paid_amount = Decimal("500000")
 
         assert invoice.is_overdue is False
 
     def test_is_overdue_false_when_future(self):
         """Test is_overdue property when future due date."""
         invoice = Invoice()
-        invoice.due_date = datetime.now(timezone.utc).date() + timedelta(days=30)
-        invoice.status = InvoiceStatusEnum.issued.value
+        invoice.due_date = date.today() + timedelta(days=30)
+        invoice.amount = Decimal("500000")
+        invoice.penalty_amount = Decimal("0")
+        invoice.paid_amount = Decimal("0")
 
         assert invoice.is_overdue is False
+
+    def test_total_due_property(self):
+        """Test total_due property."""
+        invoice = Invoice()
+        invoice.amount = Decimal("500000")
+        invoice.penalty_amount = Decimal("25000")
+
+        assert invoice.total_due == Decimal("525000")
 
 
 class TestPaymentModel:

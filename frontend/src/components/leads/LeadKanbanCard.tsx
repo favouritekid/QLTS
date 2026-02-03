@@ -1,6 +1,7 @@
 // src/components/leads/LeadKanbanCard.tsx
 "use client";
 
+import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
@@ -47,6 +48,17 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
     transition,
     isDragging: isSortableDragging,
   } = useSortable({ id: lead.id });
+
+  // Hydration-safe date calculation
+  const [daysInPipeline, setDaysInPipeline] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (lead.created_at) {
+      const days = Math.floor(
+        (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
+      );
+      setDaysInPipeline(days);
+    }
+  }, [lead.created_at]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -126,6 +138,7 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
               className="h-6 w-6 p-0"
               asChild
               onClick={(e) => e.stopPropagation()}
+              aria-label="Xem chi tiết lead"
             >
               <Link href={`/leads/${lead.id}`}>
                 <Eye className="h-3 w-3" />
@@ -133,14 +146,10 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
             </Button>
           </div>
 
-          {/* Time indicator */}
-          {lead.created_at && (
+          {/* Time indicator - hydration safe */}
+          {daysInPipeline !== null && (
             <div className="text-xs text-muted-foreground">
-              {Math.floor(
-                (new Date().getTime() - new Date(lead.created_at).getTime()) /
-                  (1000 * 60 * 60 * 24)
-              )}{" "}
-              days in pipeline
+              {daysInPipeline} days in pipeline
             </div>
           )}
         </CardContent>

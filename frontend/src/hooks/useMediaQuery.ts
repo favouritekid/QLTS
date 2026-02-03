@@ -7,34 +7,32 @@
  * const isDesktop = useMediaQuery("(min-width: 1024px)");
  */
 
-import { useState, useEffect } from "react";
+import { useSyncExternalStore, useCallback } from "react";
 
 export function useMediaQuery(query: string): boolean {
-  // Default to false on server (SSR safe)
-  const [matches, setMatches] = useState(false);
+  // Subscribe function for useSyncExternalStore
+  const subscribe = useCallback(
+    (callback: () => void) => {
+      const mediaQuery = window.matchMedia(query);
+      mediaQuery.addEventListener("change", callback);
+      return () => {
+        mediaQuery.removeEventListener("change", callback);
+      };
+    },
+    [query]
+  );
 
-  useEffect(() => {
-    // Create media query list
-    const mediaQuery = window.matchMedia(query);
-
-    // Set initial value
-    setMatches(mediaQuery.matches);
-
-    // Define handler
-    const handler = (event: MediaQueryListEvent) => {
-      setMatches(event.matches);
-    };
-
-    // Add listener
-    mediaQuery.addEventListener("change", handler);
-
-    // Cleanup
-    return () => {
-      mediaQuery.removeEventListener("change", handler);
-    };
+  // Get current snapshot
+  const getSnapshot = useCallback(() => {
+    return window.matchMedia(query).matches;
   }, [query]);
 
-  return matches;
+  // Server snapshot (SSR safe - default to false)
+  const getServerSnapshot = useCallback(() => {
+    return false;
+  }, []);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
 // Convenience hooks for common breakpoints (Tailwind defaults)

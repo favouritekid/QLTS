@@ -1,7 +1,7 @@
 // src/components/leads/command-center/LeadDetailPanel.tsx
 "use client";
 
-import React, { useRef, useEffect, useState, useMemo } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -126,16 +126,23 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   const isMobile = useIsMobile();
 
-  // ✅ FIX Minor: Track mounted state to avoid hydration mismatch
-  const [isMounted, setIsMounted] = useState(false);
-  useEffect(() => { setIsMounted(true); }, []);
-
-  // ✅ FIX Minor: Use useMemo instead of useEffect + useState to avoid double render
-  // Only calculate on client side (isMounted) to avoid hydration mismatch
-  const daysSinceContact = useMemo(() => {
-    if (!isMounted || !lead?.last_consultation_at) return null;
-    return Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24));
-  }, [isMounted, lead?.last_consultation_at]);
+  // ✅ FIX: Calculate days since contact in useEffect to avoid impure Date.now() in render
+  // Also prevents hydration mismatch (useState defaults to null, matching SSR)
+  const [daysSinceContact, setDaysSinceContact] = useState<number | null>(null);
+  useEffect(() => {
+    // Intentional setState: synchronizing display value with system time
+    // This is a valid use case per React docs for external system synchronization
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (!lead?.last_consultation_at) {
+      setDaysSinceContact(null);
+      return;
+    }
+    const days = Math.floor(
+      (Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24)
+    );
+    setDaysSinceContact(days);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [lead?.last_consultation_at]);
 
   // Auto-scroll to top when leadId changes
   useEffect(() => {
@@ -274,9 +281,9 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 size="sm"
                 className="h-7 w-7 p-0"
                 onClick={() => setActionSheetOpen(true)}
+                aria-label="Mở menu thao tác"
               >
                 <MoreVertical className="h-4 w-4" />
-                <span className="sr-only">Menu</span>
               </Button>
               <MobileActionSheet
                 open={actionSheetOpen}
@@ -343,9 +350,8 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           ) : (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label="Mở menu thao tác">
                   <MoreVertical className="h-4 w-4" />
-                  <span className="sr-only">Menu</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
@@ -420,7 +426,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                     <div 
                       className={cn(
-                        "h-full rounded-full transition-all duration-500",
+                        "h-full rounded-full transition-[width] duration-500",
                         lead.lead_score >= 70 ? "bg-success-500" : lead.lead_score >= 40 ? "bg-info-500" : "bg-muted-foreground/50"
                       )}
                       style={{ width: `${Math.min(lead.lead_score, 100)}%` }}
@@ -437,7 +443,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                     <div 
                       className={cn(
-                        "h-full rounded-full transition-all duration-500",
+                        "h-full rounded-full transition-[width] duration-500",
                         lead.cached_urgency_score >= 70 ? "bg-error-500" : lead.cached_urgency_score >= 40 ? "bg-warning-400" : "bg-success-500"
                       )}
                       style={{ width: `${Math.min(lead.cached_urgency_score, 100)}%` }}

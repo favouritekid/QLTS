@@ -55,12 +55,13 @@ export function BaseCard({
 }: BaseCardProps) {
   // Separate CardActions from other children to position it absolutely
   const childArray = React.Children.toArray(children)
-  const actionsChild = childArray.find(
-    (child) => React.isValidElement(child) && child.type && (child.type as any).displayName === "CardActions"
-  )
-  const otherChildren = childArray.filter(
-    (child) => !(React.isValidElement(child) && child.type && (child.type as any).displayName === "CardActions")
-  )
+  const isCardActions = (child: React.ReactNode): boolean => {
+    if (!React.isValidElement(child)) return false
+    const type = child.type as { displayName?: string }
+    return type?.displayName === "CardActions"
+  }
+  const actionsChild = childArray.find(isCardActions)
+  const otherChildren = childArray.filter((child) => !isCardActions(child))
 
   return (
     <div

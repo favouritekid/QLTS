@@ -69,7 +69,7 @@ export function InvoiceIssueDialog({
               Bạn có chắc chắn muốn xuất hóa đơn <strong className="font-mono">{invoiceNumber}</strong>?
             </p>
             <p>
-              Sau khi xuất, hóa đơn sẽ chuyển sang trạng thái "Đã xuất" và có thể ghi nhận thanh toán.
+              Sau khi xuất, hóa đơn sẽ chuyển sang trạng thái &quot;Đã xuất&quot; và có thể ghi nhận thanh toán.
             </p>
           </AlertDialogDescription>
         </AlertDialogHeader>

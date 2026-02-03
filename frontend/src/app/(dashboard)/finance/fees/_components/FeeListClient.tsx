@@ -138,6 +138,7 @@ export function FeeListClient() {
   })
 
   // Transform to view models
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- toFeeListViewModel is pure
   const feeViewModels = React.useMemo(() => {
     if (!data?.items) return []
     return toFeeListViewModel(data.items)

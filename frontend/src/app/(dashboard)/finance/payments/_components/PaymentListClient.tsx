@@ -96,6 +96,7 @@ export function PaymentListClient() {
   const rejectMutation = useRejectPayment()
 
   // Transform to view models
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- view model functions are pure
   const payments = React.useMemo(() => {
     if (!data?.items) return []
     if (statusFilter === "pending") {
@@ -105,6 +106,7 @@ export function PaymentListClient() {
   }, [data?.items, statusFilter])
 
   // Stats
+   
   const stats = React.useMemo(() => {
     const pending = payments.filter((p) => p.status === "pending")
     const needsAttention = statusFilter === "pending"
