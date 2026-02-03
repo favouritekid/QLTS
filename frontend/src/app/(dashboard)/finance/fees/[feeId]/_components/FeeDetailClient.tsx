@@ -36,6 +36,7 @@ import { FEE_TYPE_LABELS, type FeeType, type InvoiceStatus } from "@/types/finan
 import { cn } from "@/lib/utils"
 import { FeeWaiveDialog } from "./FeeWaiveDialog"
 import { FeeCancelDialog } from "./FeeCancelDialog"
+import { FeeRecalculateDialog } from "./FeeRecalculateDialog"
 
 // =============================================================================
 // TYPES
@@ -69,6 +70,9 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(
     searchParams.get("action") === "cancel"
   )
+  const [recalculateDialogOpen, setRecalculateDialogOpen] = React.useState(
+    searchParams.get("action") === "recalculate"
+  )
 
   // Fetch fee detail
   const { data: fee, isLoading, error } = useFeeViewModel(feeId)
@@ -77,6 +81,7 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   const handleDialogClose = React.useCallback(() => {
     setWaiveDialogOpen(false)
     setCancelDialogOpen(false)
+    setRecalculateDialogOpen(false)
     // Remove action from URL
     router.replace(`/finance/fees/${feeId}`)
   }, [feeId, router])
@@ -136,7 +141,7 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
             </Button>
           )}
           {fee.show_recalculate_button && (
-            <Button variant="outline">
+            <Button variant="outline" onClick={() => setRecalculateDialogOpen(true)}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Tính lại
             </Button>
@@ -384,6 +389,16 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
         onOpenChange={(open) => {
           if (!open) handleDialogClose()
           else setCancelDialogOpen(open)
+        }}
+        feeId={feeId}
+        feeType={fee.fee_type_label}
+      />
+
+      <FeeRecalculateDialog
+        open={recalculateDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) handleDialogClose()
+          else setRecalculateDialogOpen(open)
         }}
         feeId={feeId}
         feeType={fee.fee_type_label}

@@ -53,6 +53,7 @@ import {
 } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
 import { useMediaQuery } from "@/hooks/useMediaQuery"
+import { FeeCalculateDialog } from "./FeeCalculateDialog"
 
 // =============================================================================
 // FILTER OPTIONS
@@ -116,6 +117,11 @@ export function FeeListClient() {
       ? parseInt(searchParams.get("profile_id")!)
       : undefined,
   }
+
+  // Calculate dialog state (from URL param ?action=calculate)
+  const [calculateDialogOpen, setCalculateDialogOpen] = React.useState(
+    searchParams.get("action") === "calculate"
+  )
 
   // Local state
   const [filters, setFilters] = React.useState<FeeFilters>(initialFilters)
@@ -190,6 +196,21 @@ export function FeeListClient() {
     router.push(`/finance/fees/${fee.id}?action=recalculate`)
   }
 
+  // Handle calculate dialog close - remove action from URL
+  const handleCalculateDialogChange = React.useCallback(
+    (open: boolean) => {
+      setCalculateDialogOpen(open)
+      if (!open) {
+        // Remove action param from URL when closing
+        const params = new URLSearchParams(searchParams.toString())
+        params.delete("action")
+        const queryString = params.toString()
+        router.replace(`/finance/fees${queryString ? `?${queryString}` : ""}`)
+      }
+    },
+    [router, searchParams]
+  )
+
   // Check if any filters are active
   const hasActiveFilters = filters.status || filters.fee_type || filters.profile_id
 
@@ -219,11 +240,9 @@ export function FeeListClient() {
             {hasActiveFilters && " (đã lọc)"}
           </p>
         </div>
-        <Button asChild>
-          <Link href="/finance/fees?action=calculate">
-            <Plus className="h-4 w-4 mr-2" />
-            Tính phí mới
-          </Link>
+        <Button onClick={() => setCalculateDialogOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          Tính phí mới
         </Button>
       </div>
 
@@ -360,6 +379,13 @@ export function FeeListClient() {
           </Button>
         </div>
       )}
+
+      {/* Calculate Fee Dialog */}
+      <FeeCalculateDialog
+        open={calculateDialogOpen}
+        onOpenChange={handleCalculateDialogChange}
+        defaultProfileId={filters.profile_id}
+      />
     </div>
   )
 }

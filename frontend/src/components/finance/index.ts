@@ -40,3 +40,6 @@ export {
   type PaymentCardProps,
   type PendingPaymentCardProps,
 } from "./PaymentCard"
+
+// Cross-reference components
+export { FeeStatusLink, type FeeStatusLinkProps } from "./FeeStatusLink"
