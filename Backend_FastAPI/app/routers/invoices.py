@@ -25,7 +25,7 @@ import structlog
 
 from app import database, models, schemas
 from app.core import deps
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, RequireManager
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.invoice_service import InvoiceService
@@ -190,7 +190,7 @@ async def cancel_invoice(
     invoice_id: int,
     reason: str = Query(..., min_length=1, max_length=500, description="Cancellation reason"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireManager,
 ):
     """
     Cancel an invoice.
@@ -202,15 +202,8 @@ async def cancel_invoice(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Requires 'invoices:cancel' permission
+    - Role enforced via RequireManager dependency
     """
-    # Check permission - only admin/manager can cancel
-    if current_user.role not in ["admin", "manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers and admins can cancel invoices"
-        )
-
     invoice_service = InvoiceService(db)
     unit_id = None if current_user.role == "admin" else current_user.unit_id
 
@@ -251,7 +244,7 @@ async def apply_penalty(
     invoice_id: int,
     penalty_amount: Optional[Decimal] = Query(None, gt=0, description="Penalty amount (auto-calculated if not provided)"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireManager,
 ):
     """
     Apply late payment penalty to an overdue invoice.
@@ -263,15 +256,8 @@ async def apply_penalty(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Requires 'invoices:penalty' permission
+    - Role enforced via RequireManager dependency
     """
-    # Check permission - only admin/manager can apply penalty
-    if current_user.role not in ["admin", "manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers and admins can apply penalties"
-        )
-
     invoice_service = InvoiceService(db)
     unit_id = None if current_user.role == "admin" else current_user.unit_id
 

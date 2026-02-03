@@ -27,7 +27,7 @@ import structlog
 
 from app import database, models, schemas
 from app.core import deps
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, RequireAdmin, RequireManager
 from app.core.rate_limits import limiter, RateLimits
 from app.models.finance import FeeTypeEnum
 from app.schemas import finance as finance_schemas
@@ -314,7 +314,7 @@ async def waive_fee(
     fee_id: int,
     data: finance_schemas.FeeWaiveRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireManager,
 ):
     """
     Waive part or all of a fee amount.
@@ -326,15 +326,8 @@ async def waive_fee(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Requires 'fees:waive' permission
+    - Role enforced via RequireManager dependency
     """
-    # Check permission - only admin/manager can waive
-    if current_user.role not in ["admin", "manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers and admins can waive fees"
-        )
-
     fee_service = FeeCalculationService(db)
     unit_id = None if current_user.role == "admin" else current_user.unit_id
 
@@ -378,7 +371,7 @@ async def cancel_fee(
     fee_id: int,
     reason: str = Query(..., min_length=1, max_length=500, description="Cancellation reason"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireAdmin,
 ):
     """
     Cancel a fee (only if no payments made).
@@ -390,17 +383,10 @@ async def cancel_fee(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Requires 'fees:cancel' permission
+    - Role enforced via RequireAdmin dependency
     """
-    # Check permission - only admin can cancel
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can cancel fees"
-        )
-
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None  # Admin can access all units
 
     try:
         fee, _ = await fee_service.cancel_fee(
@@ -440,7 +426,7 @@ async def recalculate_fee(
     new_base_amount: Decimal = Query(..., gt=0, description="New base amount"),
     reason: str = Query(..., min_length=1, max_length=500, description="Recalculation reason"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireManager,
 ):
     """
     Recalculate fee with new base amount.
@@ -452,15 +438,8 @@ async def recalculate_fee(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Requires 'fees:recalculate' permission
+    - Role enforced via RequireManager dependency
     """
-    # Check permission - only admin/manager can recalculate
-    if current_user.role not in ["admin", "manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers and admins can recalculate fees"
-        )
-
     fee_service = FeeCalculationService(db)
     unit_id = None if current_user.role == "admin" else current_user.unit_id
 

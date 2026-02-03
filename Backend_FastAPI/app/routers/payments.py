@@ -30,7 +30,7 @@ import structlog
 
 from app import database, models, schemas
 from app.core import deps
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, RequireManager
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.payment_service import PaymentService
@@ -136,7 +136,7 @@ async def verify_payment(
     request: Request,
     payment_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireManager,
 ):
     """
     Verify a pending manual payment.
@@ -148,15 +148,8 @@ async def verify_payment(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Requires 'payments:verify' permission
+    - Role enforced via RequireManager dependency
     """
-    # Check permission - only admin/manager can verify
-    if current_user.role not in ["admin", "manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers and admins can verify payments"
-        )
-
     payment_service = PaymentService(db)
     unit_id = None if current_user.role == "admin" else current_user.unit_id
 
@@ -203,7 +196,7 @@ async def reject_payment(
     payment_id: int,
     reason: str = Query(..., min_length=1, max_length=500, description="Rejection reason"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireManager,
 ):
     """
     Reject a pending manual payment.
@@ -215,15 +208,8 @@ async def reject_payment(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Requires 'payments:reject' permission
+    - Role enforced via RequireManager dependency
     """
-    # Check permission - only admin/manager can reject
-    if current_user.role not in ["admin", "manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers and admins can reject payments"
-        )
-
     payment_service = PaymentService(db)
     unit_id = None if current_user.role == "admin" else current_user.unit_id
 
