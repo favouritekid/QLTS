@@ -242,6 +242,84 @@ class PaymentRepository(BaseRepository[Payment]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def get_filtered_with_count(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        invoice_id: Optional[int] = None,
+        method_id: Optional[int] = None,
+    ) -> Tuple[List[Payment], int]:
+        """
+        Get filtered list of payments with pagination AND total count.
+
+        Args:
+            skip: Number of records to skip
+            limit: Maximum records to return
+            unit_id: Filter by lead.unit_id (for IDOR protection)
+            statuses: List of statuses to filter
+            invoice_id: Filter by invoice ID
+            method_id: Filter by payment method ID
+
+        Returns:
+            Tuple of (List of Payment instances, total_count)
+        """
+        base_conditions = []
+
+        # IDOR Filter
+        if unit_id is not None:
+            base_conditions.append(models.Lead.unit_id == unit_id)
+
+        if statuses and len(statuses) > 0:
+            base_conditions.append(Payment.status.in_(statuses))
+
+        if invoice_id:
+            base_conditions.append(Payment.invoice_id == invoice_id)
+
+        if method_id:
+            base_conditions.append(Payment.method_id == method_id)
+
+        # Count query
+        count_query = (
+            select(func.count(Payment.id))
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+        )
+        if base_conditions:
+            count_query = count_query.where(and_(*base_conditions))
+
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        # Data query
+        data_query = (
+            select(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(Payment.invoice).joinedload(Invoice.fee).joinedload(
+                    Fee.admission_profile
+                ).joinedload(models.AdmissionProfile.lead),
+                joinedload(Payment.method),
+                joinedload(Payment.created_by),
+            )
+            .offset(skip)
+            .limit(limit)
+            .order_by(Payment.created_at.desc())
+        )
+        if base_conditions:
+            data_query = data_query.where(and_(*base_conditions))
+
+        result = await self.db.execute(data_query)
+        payments = list(result.scalars().all())
+
+        return payments, total
+
     async def check_self_approval(
         self,
         payment_id: int,

@@ -54,6 +54,110 @@ def get_client_ip(request: Request) -> str:
 
 
 # ==============================================================================
+# PAYMENT LIST
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "",
+    response_model=finance_schemas.PaymentsPage,
+    summary="List payments with pagination and filters",
+)
+async def list_payments(
+    request: Request,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
+    status: Optional[str] = Query(None, description="Filter by status (comma-separated)"),
+    invoice_id: Optional[int] = Query(None, description="Filter by invoice ID"),
+    method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    List payments with pagination and filters.
+
+    **Common Filters:**
+    - status=pending: For verification queue (Checker workflow)
+    - status=verified: For verified payments
+    - status=rejected: For rejected payments
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'payments:read' permission
+    """
+    payment_repo = PaymentRepository(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    # Convert page/page_size to skip/limit
+    skip = (page - 1) * page_size
+    limit = min(page_size, 100)
+
+    # Parse comma-separated values
+    statuses: Optional[List[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    payments, total = await payment_repo.get_filtered_with_count(
+        skip=skip,
+        limit=limit,
+        unit_id=unit_id,
+        statuses=statuses,
+        invoice_id=invoice_id,
+        method_id=method_id,
+    )
+
+    # Build response items with profile name and method name
+    items = []
+    for payment in payments:
+        profile_name = None
+        method_name = None
+        created_by_name = None
+
+        # Get profile name from relationship
+        if payment.invoice and payment.invoice.fee:
+            fee = payment.invoice.fee
+            if fee.admission_profile and fee.admission_profile.lead:
+                profile_name = fee.admission_profile.lead.full_name
+
+        # Get method name from relationship
+        if payment.method:
+            method_name = payment.method.name
+
+        # Get creator name from relationship
+        if payment.created_by:
+            created_by_name = payment.created_by.full_name or payment.created_by.email
+
+        # Compute permission flags for maker-checker
+        status_value = payment.status.value if hasattr(payment.status, "value") else payment.status
+        is_pending = status_value == "pending"
+        is_different_user = payment.created_by_id != current_user.id
+        is_manager_or_admin = current_user.role in ["admin", "manager"]
+        can_verify = is_pending and is_different_user and is_manager_or_admin
+        can_reject = is_pending and is_different_user and is_manager_or_admin
+
+        items.append(finance_schemas.PaymentListItem(
+            id=payment.id,
+            invoice_id=payment.invoice_id,
+            amount=payment.amount,
+            status=payment.status,
+            payment_date=payment.payment_date,
+            created_at=payment.created_at,
+            profile_name=profile_name,
+            method_name=method_name,
+            created_by_name=created_by_name,
+            can_verify=can_verify,
+            can_reject=can_reject,
+        ))
+
+    return finance_schemas.PaymentsPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+# ==============================================================================
 # MANUAL PAYMENT FLOW
 # ==============================================================================
 

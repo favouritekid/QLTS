@@ -48,6 +48,87 @@ def get_client_ip(request: Request) -> str:
 
 
 # ==============================================================================
+# INVOICE LIST
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "",
+    response_model=finance_schemas.InvoicesPage,
+    summary="List invoices with pagination and filters",
+)
+async def list_invoices(
+    request: Request,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    status: Optional[str] = Query(None, description="Filter by status (comma-separated)"),
+    fee_id: Optional[int] = Query(None, description="Filter by fee ID"),
+    overdue_only: Optional[bool] = Query(None, description="Filter only overdue invoices"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    List invoices with pagination and filters.
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'invoices:read' permission
+    """
+    invoice_repo = InvoiceRepository(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    # Convert page/page_size to skip/limit
+    skip = (page - 1) * page_size
+    limit = min(page_size, 100)
+
+    # Parse comma-separated values
+    statuses: Optional[List[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    invoices, total = await invoice_repo.get_filtered_with_count(
+        skip=skip,
+        limit=limit,
+        unit_id=unit_id,
+        statuses=statuses,
+        fee_id=fee_id,
+        overdue_only=overdue_only,
+    )
+
+    # Build response items with profile name and fee type
+    items = []
+    for invoice in invoices:
+        profile_name = None
+        fee_type = None
+
+        # Get profile name and fee type from relationship
+        if invoice.fee:
+            fee_type = invoice.fee.fee_type
+            if invoice.fee.admission_profile and invoice.fee.admission_profile.lead:
+                profile_name = invoice.fee.admission_profile.lead.full_name
+
+        items.append(finance_schemas.InvoiceListItem(
+            id=invoice.id,
+            invoice_number=invoice.invoice_number,
+            installment_no=invoice.installment_no,
+            amount=invoice.amount,
+            paid_amount=invoice.paid_amount,
+            remaining_amount=invoice.amount - invoice.paid_amount,
+            due_date=invoice.due_date,
+            status=invoice.status,
+            profile_name=profile_name,
+            fee_type=fee_type,
+        ))
+
+    return finance_schemas.InvoicesPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+# ==============================================================================
 # INVOICE RETRIEVAL
 # ==============================================================================
 

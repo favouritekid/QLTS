@@ -52,6 +52,98 @@ def get_client_ip(request: Request) -> str:
 
 
 # ==============================================================================
+# FEE LIST
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "",
+    response_model=finance_schemas.FeesPage,
+    summary="List fees with pagination and filters",
+)
+async def list_fees(
+    request: Request,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    status: Optional[str] = Query(None, description="Filter by status (comma-separated)"),
+    fee_type: Optional[str] = Query(None, description="Filter by fee type (comma-separated)"),
+    profile_id: Optional[int] = Query(None, description="Filter by profile ID"),
+    academic_year: Optional[str] = Query(None, description="Filter by academic year"),
+    has_outstanding: Optional[bool] = Query(None, description="Filter by outstanding balance > 0"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    List fees with pagination and filters.
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'fees:read' permission
+    """
+    fee_repo = FeeRepository(db)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    # Convert page/page_size to skip/limit
+    skip = (page - 1) * page_size
+    limit = min(page_size, 100)
+
+    # Parse comma-separated values
+    statuses: Optional[List[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    fee_types: Optional[List[str]] = None
+    if fee_type:
+        fee_types = [f.strip() for f in fee_type.split(",") if f.strip()]
+
+    fees, total = await fee_repo.get_filtered_with_count(
+        skip=skip,
+        limit=limit,
+        unit_id=unit_id,
+        statuses=statuses,
+        fee_types=fee_types,
+        has_outstanding=has_outstanding,
+        profile_id=profile_id,
+        academic_year=academic_year,
+    )
+
+    # Build response items with profile name
+    items = []
+    for fee in fees:
+        profile_name = None
+        due_date = None
+
+        # Get profile name from relationship
+        if fee.admission_profile:
+            profile_name = fee.admission_profile.lead.full_name if fee.admission_profile.lead else None
+
+        # Get first invoice due date
+        if fee.invoices:
+            sorted_invoices = sorted(fee.invoices, key=lambda x: x.due_date)
+            if sorted_invoices:
+                due_date = sorted_invoices[0].due_date
+
+        items.append(finance_schemas.FeeListItem(
+            id=fee.id,
+            fee_type=fee.fee_type,
+            academic_year=fee.academic_year,
+            final_amount=fee.final_amount,
+            paid_amount=fee.paid_amount,
+            remaining_amount=fee.remaining_amount,
+            status=fee.status,
+            profile_name=profile_name,
+            due_date=due_date,
+        ))
+
+    return finance_schemas.FeesPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+# ==============================================================================
 # FEE CALCULATION
 # ==============================================================================
 

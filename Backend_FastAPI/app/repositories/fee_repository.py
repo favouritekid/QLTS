@@ -540,6 +540,89 @@ class InvoiceRepository(BaseRepository[Invoice]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def get_filtered_with_count(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        fee_id: Optional[int] = None,
+        overdue_only: Optional[bool] = None,
+    ) -> Tuple[List[Invoice], int]:
+        """
+        Get filtered list of invoices with pagination AND total count.
+
+        Args:
+            skip: Number of records to skip
+            limit: Maximum records to return
+            unit_id: Filter by lead.unit_id (for IDOR protection)
+            statuses: List of statuses to filter
+            fee_id: Filter by fee ID
+            overdue_only: Filter only overdue invoices
+
+        Returns:
+            Tuple of (List of Invoice instances, total_count)
+        """
+        base_conditions = []
+
+        # IDOR Filter
+        if unit_id is not None:
+            base_conditions.append(models.Lead.unit_id == unit_id)
+
+        if statuses and len(statuses) > 0:
+            base_conditions.append(Invoice.status.in_(statuses))
+
+        if fee_id:
+            base_conditions.append(Invoice.fee_id == fee_id)
+
+        if overdue_only:
+            today = date.today()
+            base_conditions.append(
+                and_(
+                    Invoice.due_date < today,
+                    Invoice.status.in_([
+                        InvoiceStatusEnum.draft.value,
+                        InvoiceStatusEnum.issued.value
+                    ])
+                )
+            )
+
+        # Count query
+        count_query = (
+            select(func.count(Invoice.id))
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+        )
+        if base_conditions:
+            count_query = count_query.where(and_(*base_conditions))
+
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        # Data query
+        data_query = (
+            select(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(Invoice.fee).joinedload(Fee.admission_profile).joinedload(
+                    models.AdmissionProfile.lead
+                ),
+            )
+            .offset(skip)
+            .limit(limit)
+            .order_by(Invoice.due_date)
+        )
+        if base_conditions:
+            data_query = data_query.where(and_(*base_conditions))
+
+        result = await self.db.execute(data_query)
+        invoices = list(result.scalars().all())
+
+        return invoices, total
+
     async def get_overdue_invoices(
         self,
         unit_id: Optional[int] = None,

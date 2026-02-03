@@ -46,6 +46,8 @@ from .routers import (
     config_data, # ✅ NEW: Dynamic Config Data (Categories, Import)
     document_groups,  # ✅ PHASE A.3: DocumentGroup CRUD
     fees,  # ✅ FINANCE MODULE: Fee Calculation & Management
+    finance_dashboard,  # ✅ FINANCE MODULE: Dashboard Statistics
+    installment_plans,  # ✅ FINANCE MODULE: Installment Plans
     invoices,  # ✅ FINANCE MODULE: Invoice Lifecycle
     kpi_config,  # ✅ PHASE 5: KPI Configuration Admin
     leads,
@@ -643,6 +645,8 @@ fastapi_app.include_router(fees.router, prefix="/api")
 fastapi_app.include_router(invoices.router, prefix="/api")
 fastapi_app.include_router(payments.router, prefix="/api")
 fastapi_app.include_router(accounting.router, prefix="/api")
+fastapi_app.include_router(finance_dashboard.router, prefix="/api")
+fastapi_app.include_router(installment_plans.router, prefix="/api")
 
 # ===============================================================
 # === ADMIN ROUTERS (PHASE 2 COMPLETE) =========================

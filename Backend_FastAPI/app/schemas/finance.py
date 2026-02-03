@@ -660,3 +660,83 @@ class ProfileFinanceSummary(BaseModel):
     overdue_invoices: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# PAGINATION RESPONSE SCHEMAS
+# ==============================================================================
+
+class FeeListItem(FeeSummaryResponse):
+    """Fee item for list view with additional profile info."""
+    profile_name: Optional[str] = None
+    due_date: Optional[date] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FeesPage(BaseModel):
+    """Paginated fees response."""
+    items: List[FeeListItem]
+    total: int
+    page: int
+    page_size: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InvoiceListItem(InvoiceSummaryResponse):
+    """Invoice item for list view with additional info."""
+    profile_name: Optional[str] = None
+    fee_type: Optional[FeeTypeEnum] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InvoicesPage(BaseModel):
+    """Paginated invoices response."""
+    items: List[InvoiceListItem]
+    total: int
+    page: int
+    page_size: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaymentListItem(PaymentSummaryResponse):
+    """Payment item for list view with additional info."""
+    profile_name: Optional[str] = None
+    method_name: Optional[str] = None
+    created_by_name: Optional[str] = None
+    can_verify: bool = False
+    can_reject: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaymentsPage(BaseModel):
+    """Paginated payments response."""
+    items: List[PaymentListItem]
+    total: int
+    page: int
+    page_size: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# DASHBOARD STATS SCHEMA
+# ==============================================================================
+
+class FinanceDashboardStats(BaseModel):
+    """Finance dashboard statistics."""
+    pending_fees_count: int = 0
+    pending_fees_amount: Decimal = Decimal("0")
+    pending_payments_count: int = 0
+    overdue_invoices_count: int = 0
+    overdue_amount: Decimal = Decimal("0")
+    today_collections: Decimal = Decimal("0")
+    monthly_collections: Decimal = Decimal("0")
+    pending_overpayments_count: int = 0
+    pending_refunds_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
