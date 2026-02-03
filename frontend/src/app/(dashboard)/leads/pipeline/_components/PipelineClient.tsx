@@ -3,6 +3,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { RefreshCw, Filter, Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
 
-import { PipelineBoard } from "@/components/leads/PipelineBoard";
+// ✅ PERFORMANCE: Dynamic import for heavy @dnd-kit components (~50KB)
+// This defers loading until the component is actually rendered
+const PipelineBoard = dynamic(
+  () => import("@/components/leads/PipelineBoard").then((m) => m.PipelineBoard),
+  {
+    ssr: false, // @dnd-kit doesn't support SSR
+    loading: () => <Skeleton className="h-[400px] md:h-[600px] w-full rounded-lg" />,
+  }
+);
 import { useFullPipeline } from "@/hooks/usePipeline";
 import { useExportLeads } from "@/hooks/useLeads";
 import type { PipelineQueryParams, FullPipeline } from "@/types/pipeline.types";

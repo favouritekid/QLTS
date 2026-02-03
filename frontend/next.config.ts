@@ -7,6 +7,21 @@ const nextConfig: NextConfig = {
   /* config options here */
   reactCompiler: true,
 
+  // ✅ PERFORMANCE: Optimize barrel imports for smaller bundles
+  // These libraries use barrel exports that would otherwise import entire library
+  // This enables tree-shaking at build time, reducing bundle size by 200-800KB
+  experimental: {
+    optimizePackageImports: [
+      "lucide-react",        // Icon library - only import used icons
+      "@tanstack/react-table", // Table library
+      "recharts",            // Chart library (~150KB without optimization)
+      "@dnd-kit/core",       // Drag-and-drop core
+      "@dnd-kit/sortable",   // Drag-and-drop sortable
+      "date-fns",            // Date utility functions
+      "@radix-ui/react-icons", // Radix icons
+    ],
+  },
+
   // ✅ Phase 1: Enable Partial Pre-Rendering for faster initial loads
   // Note: cacheComponents has been promoted from experimental in Next.js 16
   // WARNING:

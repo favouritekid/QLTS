@@ -2,12 +2,22 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 import { WorkloadCard } from "@/components/officer/WorkloadCard";
-import { PerformanceChart } from "@/components/officer/PerformanceChart";
 import { FunnelChart } from "@/components/officer/FunnelChart";
+
+// ✅ PERFORMANCE: Dynamic import for heavy recharts component (~150KB)
+// This defers loading until the component is actually rendered
+const PerformanceChart = dynamic(
+  () => import("@/components/officer/PerformanceChart").then((m) => m.PerformanceChart),
+  {
+    ssr: false, // recharts doesn't support SSR well
+    loading: () => <Skeleton className="h-80 w-full rounded-lg" />,
+  }
+);
 import { TodaySchedule } from "@/components/officer/TodaySchedule";
 import { 
   KPICardsGrid, 

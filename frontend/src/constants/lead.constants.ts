@@ -64,17 +64,29 @@ export const LEAD_STATUS_OPTIONS: LeadStatusOption[] = [
   },
 ];
 
-// Helper to get status by value
+// ✅ PERFORMANCE: O(1) lookup Maps (pre-computed at module load)
+// Replaces O(n) .find() calls with O(1) Map.get()
+const LEAD_STATUS_MAP = new Map(
+  LEAD_STATUS_OPTIONS.map((option) => [option.value, option])
+);
+const LEAD_STATUS_COLOR_MAP = new Map(
+  LEAD_STATUS_OPTIONS.map((option) => [option.value, option.color])
+);
+const LEAD_STATUS_LABEL_MAP = new Map(
+  LEAD_STATUS_OPTIONS.map((option) => [option.value, option.label])
+);
+
+// Helper to get status by value - O(1) lookup
 export const getLeadStatusOption = (value: LeadStatus): LeadStatusOption | undefined =>
-  LEAD_STATUS_OPTIONS.find((option) => option.value === value);
+  LEAD_STATUS_MAP.get(value);
 
-// Helper to get status color
+// Helper to get status color - O(1) lookup
 export const getLeadStatusColor = (value: LeadStatus): string =>
-  getLeadStatusOption(value)?.color ?? "bg-muted-foreground";
+  LEAD_STATUS_COLOR_MAP.get(value) ?? "bg-muted-foreground";
 
-// Helper to get status label
+// Helper to get status label - O(1) lookup
 export const getLeadStatusLabel = (value: LeadStatus): string =>
-  getLeadStatusOption(value)?.label ?? value;
+  LEAD_STATUS_LABEL_MAP.get(value) ?? value;
 
 // =============================================================================
 // LEAD SOURCE OPTIONS
@@ -97,13 +109,21 @@ export const LEAD_SOURCE_OPTIONS: LeadSourceOption[] = [
   { value: "other", label: "Khác" },
 ];
 
-// Helper to get source by value
-export const getLeadSourceOption = (value: LeadSource): LeadSourceOption | undefined =>
-  LEAD_SOURCE_OPTIONS.find((option) => option.value === value);
+// ✅ PERFORMANCE: O(1) lookup Maps for source options
+const LEAD_SOURCE_MAP = new Map(
+  LEAD_SOURCE_OPTIONS.map((option) => [option.value, option])
+);
+const LEAD_SOURCE_LABEL_MAP = new Map(
+  LEAD_SOURCE_OPTIONS.map((option) => [option.value, option.label])
+);
 
-// Helper to get source label
+// Helper to get source by value - O(1) lookup
+export const getLeadSourceOption = (value: LeadSource): LeadSourceOption | undefined =>
+  LEAD_SOURCE_MAP.get(value);
+
+// Helper to get source label - O(1) lookup
 export const getLeadSourceLabel = (value: LeadSource): string =>
-  getLeadSourceOption(value)?.label ?? value;
+  LEAD_SOURCE_LABEL_MAP.get(value) ?? value;
 
 // =============================================================================
 // STATUS WORKFLOW HELPERS
@@ -125,14 +145,18 @@ export const COMPLEX_STATUS_IDS: LeadStatus[] = [
  */
 export const SCHEDULABLE_STATUS_IDS: LeadStatus[] = ["contacted", "qualified"];
 
-/**
- * Check if a status is complex (requires additional info)
- */
-export const isComplexStatus = (status: LeadStatus): boolean =>
-  COMPLEX_STATUS_IDS.includes(status);
+// ✅ PERFORMANCE: O(1) lookup Sets for status checks
+const COMPLEX_STATUS_SET = new Set(COMPLEX_STATUS_IDS);
+const SCHEDULABLE_STATUS_SET = new Set(SCHEDULABLE_STATUS_IDS);
 
 /**
- * Check if a status is schedulable
+ * Check if a status is complex (requires additional info) - O(1) lookup
+ */
+export const isComplexStatus = (status: LeadStatus): boolean =>
+  COMPLEX_STATUS_SET.has(status);
+
+/**
+ * Check if a status is schedulable - O(1) lookup
  */
 export const isSchedulableStatus = (status: LeadStatus): boolean =>
-  SCHEDULABLE_STATUS_IDS.includes(status);
+  SCHEDULABLE_STATUS_SET.has(status);
