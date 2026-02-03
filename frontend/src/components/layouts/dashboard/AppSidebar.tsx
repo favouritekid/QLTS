@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useAppNavigation } from "@/hooks/useAppNavigation";
+import { useFinanceDashboard } from "@/hooks/finance/useFinanceDashboard";
 
 const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
   <TooltipProvider delayDuration={0}>
@@ -60,10 +61,15 @@ export function AppSidebar() {
     unread_only: true,
   });
 
-  const unreadCount = notificationsData?.unread_count || 0;
+  // Fetch finance dashboard stats for pending payments badge
+  const { data: financeStats } = useFinanceDashboard();
 
-  // Add notification badge dynamically to the navigation
-  // Find the "Notifications" group and add badge to "Inbox" item
+  const unreadCount = notificationsData?.unread_count || 0;
+  const pendingPaymentsCount = financeStats?.pending_payments_count || 0;
+
+  // Add dynamic badges to navigation
+  // - Notifications group: unread count on "Inbox"
+  // - Finance group: pending payments count on "Pending Payments"
   const navigationWithBadges = navigation.map((group) => {
     if (group.title === "Notifications") {
       return {
@@ -79,6 +85,22 @@ export function AppSidebar() {
         }),
       };
     }
+
+    if (group.title === "Finance") {
+      return {
+        ...group,
+        items: group.items.map((item) => {
+          if (item.href === "/finance/payments") {
+            return {
+              ...item,
+              badge: pendingPaymentsCount > 0 ? pendingPaymentsCount : undefined,
+            } as NavigationLink;
+          }
+          return item as NavigationLink;
+        }),
+      };
+    }
+
     return {
       ...group,
       items: group.items as NavigationLink[],

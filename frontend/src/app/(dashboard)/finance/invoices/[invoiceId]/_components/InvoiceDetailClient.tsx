@@ -29,6 +29,7 @@ import {
   User,
   Receipt,
   Calendar,
+  Wifi,
 } from "lucide-react"
 import { useInvoiceViewModel } from "@/hooks/finance/useInvoiceViewModel"
 import { AmountDisplay, InvoiceStatusBadge, PaymentStatusBadge } from "@/components/finance"
@@ -38,6 +39,7 @@ import { PaymentRecordDialog } from "./PaymentRecordDialog"
 import { InvoiceIssueDialog } from "./InvoiceIssueDialog"
 import { InvoiceCancelDialog } from "./InvoiceCancelDialog"
 import { InvoicePenaltyDialog } from "./InvoicePenaltyDialog"
+import { OnlinePaymentDialog } from "./OnlinePaymentDialog"
 
 // =============================================================================
 // TYPES
@@ -76,6 +78,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   const [penaltyDialogOpen, setPenaltyDialogOpen] = React.useState(
     searchParams.get("action") === "penalty"
   )
+  const [onlinePaymentOpen, setOnlinePaymentOpen] = React.useState(
+    searchParams.get("action") === "online-payment"
+  )
 
   // Fetch invoice detail
   const { data: invoice, isLoading, error } = useInvoiceViewModel(invoiceId)
@@ -86,6 +91,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
     setIssueDialogOpen(false)
     setCancelDialogOpen(false)
     setPenaltyDialogOpen(false)
+    setOnlinePaymentOpen(false)
     router.replace(`/finance/invoices/${invoiceId}`)
   }, [invoiceId, router])
 
@@ -151,10 +157,16 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
             </Button>
           )}
           {invoice.show_record_payment_button && (
-            <Button onClick={() => setRecordPaymentOpen(true)}>
-              <CreditCard className="h-4 w-4 mr-2" />
-              Ghi nhận thanh toán
-            </Button>
+            <>
+              <Button onClick={() => setRecordPaymentOpen(true)}>
+                <CreditCard className="h-4 w-4 mr-2" />
+                Ghi nhận thanh toán
+              </Button>
+              <Button variant="outline" onClick={() => setOnlinePaymentOpen(true)}>
+                <Wifi className="h-4 w-4 mr-2" />
+                Thanh toán online
+              </Button>
+            </>
           )}
           {invoice.show_penalty_button && (
             <Button
@@ -417,6 +429,17 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
         daysOverdue={invoice.days_until_due !== null && invoice.days_until_due < 0
           ? Math.abs(invoice.days_until_due)
           : undefined}
+      />
+
+      <OnlinePaymentDialog
+        open={onlinePaymentOpen}
+        onOpenChange={(open) => {
+          if (!open) handleDialogClose()
+          else setOnlinePaymentOpen(open)
+        }}
+        invoiceId={invoiceId}
+        maxAmount={invoice.remaining_amount_formatted}
+        invoiceNumber={invoice.invoice_number}
       />
     </div>
   )

@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge"
 import { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { getStatusConfig } from "@/lib/status-config"
+import { FeeStatusLink } from "@/components/finance"
 
 interface AdmissionHeaderProps {
   profile: AdmissionProfileResponse | null
@@ -33,6 +34,13 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
         >
           {statusConfig.label}
         </Badge>
+      )}
+
+      <span className="text-muted-foreground hidden md:inline">·</span>
+
+      {/* Fee Status Badge - Cross-reference to Finance module */}
+      {profile?.id && (
+        <FeeStatusLink profileId={profile.id} variant="badge" />
       )}
 
       <span className="text-muted-foreground hidden md:inline">·</span>
