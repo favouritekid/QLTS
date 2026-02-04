@@ -111,7 +111,8 @@ export function NotificationDropdown() {
         </div>
 
         {/* Notifications List */}
-        <ScrollArea className="h-[400px]">
+        {/* ✅ PERFORMANCE: virtual-list enables content-visibility for off-screen items */}
+        <ScrollArea className="h-[400px] virtual-list">
           {isLoading ? (
             <div className="space-y-2 p-2">
               {[1, 2, 3].map((i) => (
@@ -133,7 +134,8 @@ export function NotificationDropdown() {
             <div className="divide-y">
               {notifications.map((notification) => {
                 const wrapperClassName = cn(
-                  "block transition-colors hover:bg-muted/50",
+                  // ✅ PERFORMANCE: virtual-notification for content-visibility
+                  "block transition-colors hover:bg-muted/50 virtual-notification",
                   !notification.is_read && "bg-muted/30"
                 );
 

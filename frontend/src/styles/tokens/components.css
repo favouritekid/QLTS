@@ -1,6 +1,45 @@
 /* components.css - Component-specific utilities */
 
 @layer utilities {
+  /* =========================================================================
+   * PERFORMANCE: Content Visibility Utilities
+   * =========================================================================
+   * content-visibility: auto - Browser skips rendering off-screen content
+   * contain-intrinsic-size - Provides size hint to prevent layout shifts
+   *
+   * Usage: Add to scrollable containers with many items
+   * ========================================================================= */
+
+  /* For scrollable list containers (ScrollArea, overflow-auto) */
+  .virtual-list {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 500px;
+  }
+
+  /* For individual list items (cards, rows) */
+  .virtual-item {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 80px;
+  }
+
+  /* For table rows */
+  .virtual-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 52px;
+  }
+
+  /* For larger card items */
+  .virtual-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 120px;
+  }
+
+  /* For notification/action items */
+  .virtual-notification {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 64px;
+  }
+
   /* Scrollbar Utilities */
   .scrollbar-thin {
     scrollbar-width: thin;

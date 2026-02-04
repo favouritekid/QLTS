@@ -139,7 +139,8 @@ export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
             )}
           </div>
         ) : (
-          <ScrollArea className="h-[350px]">
+          /* ✅ PERFORMANCE: virtual-list for content-visibility optimization */
+          <ScrollArea className="h-[350px] virtual-list">
             <div className="space-y-2 pr-3">
               {filteredActions.map((action) => (
                 <PriorityActionCard

@@ -57,7 +57,8 @@ export function ActionableLists({ lists }: ActionableListsProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="h-[300px]">
+          {/* ✅ PERFORMANCE: virtual-list for content-visibility */}
+          <ScrollArea className="h-[300px] virtual-list">
             {lists.high_score.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
                 No high-score leads at the moment
@@ -67,7 +68,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                 {lists.high_score.map((lead) => (
                   <div
                     key={lead.id}
-                    className="flex items-start justify-between border-b pb-3 last:border-0"
+                    className="flex items-start justify-between border-b pb-3 last:border-0 virtual-item"
                   >
                     <div className="space-y-1 flex-1">
                       <div className="flex items-center gap-2">
@@ -113,7 +114,8 @@ export function ActionableLists({ lists }: ActionableListsProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="h-[300px]">
+          {/* ✅ PERFORMANCE: virtual-list for content-visibility */}
+          <ScrollArea className="h-[300px] virtual-list">
             {lists.stale.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
                 Great! No stale leads
@@ -123,7 +125,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                 {lists.stale.map((lead) => (
                   <div
                     key={lead.id}
-                    className="flex items-start justify-between border-b pb-3 last:border-0"
+                    className="flex items-start justify-between border-b pb-3 last:border-0 virtual-item"
                   >
                     <div className="space-y-1 flex-1">
                       <p className="font-medium text-sm">{lead.full_name}</p>
@@ -161,7 +163,8 @@ export function ActionableLists({ lists }: ActionableListsProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="h-[300px]">
+          {/* ✅ PERFORMANCE: virtual-list for content-visibility */}
+          <ScrollArea className="h-[300px] virtual-list">
             {lists.upcoming.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
                 No consultations scheduled today
@@ -171,7 +174,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                 {lists.upcoming.map((consult) => (
                   <div
                     key={consult.id}
-                    className="flex items-start justify-between border-b pb-3 last:border-0"
+                    className="flex items-start justify-between border-b pb-3 last:border-0 virtual-item"
                   >
                     <div className="space-y-1 flex-1">
                       <p className="font-medium text-sm">{consult.lead_name}</p>
