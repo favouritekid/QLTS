@@ -2,12 +2,15 @@
 /**
  * KPI Card Component for Officer Dashboard
  * Clean, minimalist design following shadcn/ui standards
- * 
+ *
  * Design: White background, subtle border, large numbers, semantic trend colors
+ *
+ * ✅ PERFORMANCE: React.memo prevents re-renders when parent updates unrelated state
  */
 
 "use client";
 
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { TrendingUp, TrendingDown, Minus, type LucideIcon } from "lucide-react";
@@ -29,7 +32,7 @@ interface KPICardProps {
   inverseTrend?: boolean;
 }
 
-export function KPICard({
+export const KPICard = memo(function KPICard({
   title,
   value,
   subtitle,
@@ -110,4 +113,7 @@ export function KPICard({
       </CardContent>
     </Card>
   );
-}
+});
+
+// ✅ Display name for React DevTools debugging
+KPICard.displayName = "KPICard";

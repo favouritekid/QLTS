@@ -2,10 +2,13 @@
 /**
  * Priority Action Card - Enhanced version
  * Compact action item with Zalo, Phone, and navigation buttons
+ *
+ * ✅ PERFORMANCE: React.memo prevents re-renders when sibling actions update
  */
 
 "use client";
 
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,7 +81,7 @@ const getScoreBadgeClass = (score: number) => {
   return "bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground";
 };
 
-export function PriorityActionCard({
+export const PriorityActionCard = memo(function PriorityActionCard({
   action,
   onCall,
   onZalo,
@@ -182,4 +185,7 @@ export function PriorityActionCard({
       </div>
     </div>
   );
-}
+});
+
+// ✅ Display name for React DevTools debugging
+PriorityActionCard.displayName = "PriorityActionCard";

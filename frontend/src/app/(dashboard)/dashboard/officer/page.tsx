@@ -7,7 +7,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 import { WorkloadCard } from "@/components/officer/WorkloadCard";
-import { FunnelChart } from "@/components/officer/FunnelChart";
+
+// ✅ PERFORMANCE: Dynamic import for FunnelChart with complex SVG rendering (~30KB)
+// This defers loading until the component is actually rendered
+const FunnelChart = dynamic(
+  () => import("@/components/officer/FunnelChart").then((m) => m.FunnelChart),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-80 w-full rounded-lg" />,
+  }
+);
 
 // ✅ PERFORMANCE: Dynamic import for heavy recharts component (~150KB)
 // This defers loading until the component is actually rendered
