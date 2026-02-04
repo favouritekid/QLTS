@@ -20,6 +20,9 @@ import { useSyncExternalStore, useCallback } from "react";
 
 export type Theme = "light" | "dark" | "system";
 
+// ✅ VALIDATION: Valid theme values for schema compatibility
+const VALID_THEMES: Theme[] = ["light", "dark", "system"];
+
 export interface UseThemeReturn {
   /** Current theme setting */
   theme: Theme;
@@ -35,10 +38,15 @@ function checkDarkMode(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
-// Get current theme from localStorage
+// Get current theme from localStorage (with validation)
 function getTheme(): Theme {
   if (typeof window === "undefined") return "system";
-  return (localStorage.getItem("theme") as Theme) || "system";
+  const stored = localStorage.getItem("theme");
+  // ✅ VALIDATION: Reset invalid values to prevent schema issues
+  if (stored && VALID_THEMES.includes(stored as Theme)) {
+    return stored as Theme;
+  }
+  return "system";
 }
 
 /**

@@ -63,7 +63,14 @@ export interface UseLeadsFilterReturn {
 // CONSTANTS
 // =============================================================================
 
-const LEADS_FILTERS_STORAGE_KEY = "leads_filters_v2";
+const LEADS_FILTERS_STORAGE_KEY = "leads_filters";
+// ✅ VERSIONING: Increment when StoredFilters schema changes
+const STORAGE_VERSION = 2;
+
+interface VersionedStorage {
+  version: number;
+  data: StoredFilters;
+}
 
 const DEFAULT_FILTERS: StoredFilters = {
   page: 1,
@@ -79,12 +86,17 @@ const DEFAULT_FILTERS: StoredFilters = {
 };
 
 // =============================================================================
-// STORAGE HELPERS
+// STORAGE HELPERS (with versioning)
 // =============================================================================
 
 function saveFiltersToStorage(filters: StoredFilters) {
   try {
-    localStorage.setItem(LEADS_FILTERS_STORAGE_KEY, JSON.stringify(filters));
+    // ✅ VERSIONING: Store with version for schema compatibility
+    const versioned: VersionedStorage = {
+      version: STORAGE_VERSION,
+      data: filters,
+    };
+    localStorage.setItem(LEADS_FILTERS_STORAGE_KEY, JSON.stringify(versioned));
   } catch {
     // Ignore localStorage errors
   }
@@ -94,10 +106,20 @@ function loadFiltersFromStorage(): StoredFilters | null {
   try {
     const stored = localStorage.getItem(LEADS_FILTERS_STORAGE_KEY);
     if (stored) {
-      return JSON.parse(stored) as StoredFilters;
+      const parsed = JSON.parse(stored);
+
+      // ✅ VERSIONING: Check version and reset if mismatched
+      if (parsed?.version !== STORAGE_VERSION) {
+        // Clear stale data with incompatible schema
+        localStorage.removeItem(LEADS_FILTERS_STORAGE_KEY);
+        return null;
+      }
+
+      return parsed.data as StoredFilters;
     }
   } catch {
-    // Ignore parse errors
+    // Ignore parse errors, clear corrupted data
+    localStorage.removeItem(LEADS_FILTERS_STORAGE_KEY);
   }
   return null;
 }

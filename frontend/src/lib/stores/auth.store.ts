@@ -10,10 +10,15 @@
  *
  * This store only manages user info for UI purposes.
  * Authentication state is derived from cookie presence (verified by middleware).
+ *
+ * ✅ PERFORMANCE: Schema versioning prevents stale data issues after updates
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { User } from "@/types/api.types";
+
+// ✅ VERSIONING: Increment when schema changes to auto-reset stale data
+const STORAGE_VERSION = 1;
 
 interface AuthState {
   user: User | null;
@@ -57,11 +62,20 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "auth-storage", // localStorage key (only stores user info now)
+      version: STORAGE_VERSION, // ✅ VERSIONING: Auto-reset on schema change
       partialize: (state) => ({
         // ✅ SECURITY FIX: Only persist user info (not token)
         user: state.user,
         // isAuthenticated will be re-derived from cookies on page load
       }),
+      migrate: (persistedState, version) => {
+        // ✅ VERSIONING: Handle migration when version changes
+        if (version !== STORAGE_VERSION) {
+          // Reset to default state on version mismatch
+          return { user: null, isAuthenticated: false };
+        }
+        return persistedState as AuthState;
+      },
       onRehydrateStorage: () => (state) => {
         // ✅ SECURITY FIX: Check if cookies exist to set isAuthenticated
         // This is a client-side hint only; real auth is verified by middleware
