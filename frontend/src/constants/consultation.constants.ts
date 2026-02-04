@@ -67,15 +67,20 @@ export const OUTCOME_TYPE_OPTIONS: OutcomeTypeOption[] = [
   },
 ];
 
-// Helpers
+// ✅ PERFORMANCE: Pre-built Map for O(1) lookups instead of O(n) .find()
+const OUTCOME_TYPE_MAP = new Map<OutcomeType, OutcomeTypeOption>(
+  OUTCOME_TYPE_OPTIONS.map((option) => [option.value, option])
+);
+
+// Helpers - O(1) lookups via Map
 export const getOutcomeTypeOption = (value: OutcomeType): OutcomeTypeOption | undefined =>
-  OUTCOME_TYPE_OPTIONS.find((option) => option.value === value);
+  OUTCOME_TYPE_MAP.get(value);
 
 export const getOutcomeTypeColor = (value: OutcomeType): string =>
-  getOutcomeTypeOption(value)?.color ?? "text-muted-foreground";
+  OUTCOME_TYPE_MAP.get(value)?.color ?? "text-muted-foreground";
 
 export const getOutcomeTypeBgColor = (value: OutcomeType): string =>
-  getOutcomeTypeOption(value)?.bgColor ?? "bg-muted";
+  OUTCOME_TYPE_MAP.get(value)?.bgColor ?? "bg-muted";
 
 // =============================================================================
 // PRESET COLORS
@@ -104,13 +109,23 @@ export const PRESET_COLORS: PresetColor[] = [
   { name: "Lime", value: "#84CC16" },
 ];
 
-// Helper to get color by value
-export const getPresetColorName = (value: string): string | undefined =>
-  PRESET_COLORS.find((c) => c.value.toLowerCase() === value.toLowerCase())?.name;
+// ✅ PERFORMANCE: Pre-built Map for O(1) lookups (case-insensitive via lowercase keys)
+const PRESET_COLOR_NAME_MAP = new Map<string, string>(
+  PRESET_COLORS.map((c) => [c.value.toLowerCase(), c.name])
+);
 
-// Helper to check if a color is from preset
+// ✅ PERFORMANCE: Pre-built Set for O(1) membership check
+const PRESET_COLOR_SET = new Set<string>(
+  PRESET_COLORS.map((c) => c.value.toLowerCase())
+);
+
+// Helper to get color by value - O(1) lookup
+export const getPresetColorName = (value: string): string | undefined =>
+  PRESET_COLOR_NAME_MAP.get(value.toLowerCase());
+
+// Helper to check if a color is from preset - O(1) lookup
 export const isPresetColor = (value: string): boolean =>
-  PRESET_COLORS.some((c) => c.value.toLowerCase() === value.toLowerCase());
+  PRESET_COLOR_SET.has(value.toLowerCase());
 
 // =============================================================================
 // DEFAULT VALUES
