@@ -346,21 +346,40 @@ async def get_enhanced_dashboard_stats(
         "direction": "up" if conversion_diff > 0 else "down" if conversion_diff < 0 else "neutral",
         "comparison": f"vs {filter_days} ngày trước"
     }
-    
+
     # === 4. AVERAGE RESPONSE TIME ===
-    avg_response_time = 2.5  # Placeholder
-    avg_response_trend = {
-        "value": 15,
-        "direction": "down",
-        "comparison": "vs TB"
-    }
-    
+    # Response time = Time from lead assignment to first consultation (in hours)
+    repo = OfficerRepository(db)
+    avg_response_time = await repo.get_avg_response_time_hours(officer_id, filter_start, filter_end)
+
+    # Default to 0 if no data
+    if avg_response_time is None:
+        avg_response_time = 0.0
+
+    # Get previous period response time for trend
+    prev_response_time = await repo.get_avg_response_time_hours(officer_id, prev_filter_start, prev_filter_end)
+
+    if prev_response_time is not None and prev_response_time > 0:
+        # Calculate percentage change (lower is better for response time)
+        response_diff_pct = ((avg_response_time - prev_response_time) / prev_response_time) * 100
+        avg_response_trend = {
+            "value": abs(round(response_diff_pct, 1)),
+            # For response time: negative change (faster) is "down" direction, which is good
+            "direction": "up" if response_diff_pct > 0 else "down" if response_diff_pct < 0 else "neutral",
+            "comparison": f"vs {filter_days} ngày trước"
+        }
+    else:
+        avg_response_trend = {
+            "value": 0,
+            "direction": "neutral",
+            "comparison": "Chưa có dữ liệu"
+        }
+
     # === 5. PRIORITY ACTIONS ===
     priority_actions = await _calculate_priority_actions(db, officer_id)
-    
+
     # === 6. PERFORMANCE TRENDS (within date range) - OPTIMIZED ===
-    # Use batch query instead of N+1 day loop
-    repo = OfficerRepository(db)
+    # Use batch query instead of N+1 day loop (repo already initialized in section 4)
     trends_data = await repo.get_performance_trends_batch(officer_id, filter_start, filter_end)
     performance_trends = [
         {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted}
@@ -648,6 +667,8 @@ async def _calculate_priority_actions(
             "lead_score": lead_score,
             "reason": reason,
             "days_since_contact": days_since_contact,
+            "phone": lead.phone,  # For Zalo/Phone quick actions
+            "last_contact_at": last_contact,  # For display
             "_score": score  # For sorting
         })
     

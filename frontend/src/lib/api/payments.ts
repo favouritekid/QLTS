@@ -229,13 +229,30 @@ export async function getInstallmentPlan(id: number): Promise<InstallmentPlan> {
 // DASHBOARD
 // ============================================================================
 
+export interface FinanceDashboardParams {
+  start_date?: string // YYYY-MM-DD
+  end_date?: string // YYYY-MM-DD
+}
+
 /**
  * Get finance dashboard statistics
  *
+ * @param params - Optional date range for period_collections
  * @returns Dashboard stats (pending counts, amounts, collections)
+ *
+ * @example
+ * ```ts
+ * // Get dashboard with custom date range
+ * const stats = await paymentsApi.getFinanceDashboard({
+ *   start_date: '2024-01-01',
+ *   end_date: '2024-01-31'
+ * })
+ * ```
  */
-export async function getFinanceDashboard(): Promise<FinanceDashboardStats> {
-  const response = await api.get<FinanceDashboardStats>(API_ENDPOINTS.FINANCE.DASHBOARD)
+export async function getFinanceDashboard(params?: FinanceDashboardParams): Promise<FinanceDashboardStats> {
+  const response = await api.get<FinanceDashboardStats>(API_ENDPOINTS.FINANCE.DASHBOARD, {
+    params,
+  })
   return response.data
 }
 

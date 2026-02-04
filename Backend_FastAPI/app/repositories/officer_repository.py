@@ -972,3 +972,72 @@ class OfficerRepository(BaseRepository[models.User]):
         )
         result = await self.db.execute(query)
         return result.fetchall()
+
+    # =========================================================================
+    # Response Time Calculation
+    # =========================================================================
+
+    async def get_avg_response_time_hours(
+        self,
+        officer_id: int,
+        start_date: date,
+        end_date: date,
+    ) -> Optional[float]:
+        """
+        Calculate average response time in hours for an officer.
+
+        Response time = Time from lead assignment to first consultation.
+        Only considers leads that:
+        - Were assigned to this officer within the date range
+        - Have at least one consultation by this officer
+        - Have a valid assigned_at timestamp
+
+        Returns:
+            Average response time in hours, or None if no data
+        """
+        # Subquery to get the first consultation date for each lead by this officer
+        first_consult_subq = (
+            select(
+                models.Consultation.lead_id,
+                func.min(models.Consultation.consultation_date).label("first_consultation")
+            )
+            .where(
+                models.Consultation.officer_id == officer_id,
+                models.Consultation.deleted_at.is_(None),
+            )
+            .group_by(models.Consultation.lead_id)
+        ).subquery()
+
+        # Main query: Get leads assigned in date range with their first consultation
+        # Calculate time difference in hours
+        query = (
+            select(
+                func.avg(
+                    func.extract(
+                        'epoch',
+                        first_consult_subq.c.first_consultation - models.Lead.assigned_at
+                    ) / 3600  # Convert seconds to hours
+                ).label("avg_hours")
+            )
+            .join(
+                first_consult_subq,
+                first_consult_subq.c.lead_id == models.Lead.id
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.assigned_at.isnot(None),
+                models.Lead.deleted_at.is_(None),
+                func.date(models.Lead.assigned_at) >= start_date,
+                func.date(models.Lead.assigned_at) <= end_date,
+                # Ensure first consultation is after assignment (valid response)
+                first_consult_subq.c.first_consultation >= models.Lead.assigned_at,
+            )
+        )
+
+        result = await self.db.execute(query)
+        avg_hours = result.scalar()
+
+        if avg_hours is None:
+            return None
+
+        return round(float(avg_hours), 1)

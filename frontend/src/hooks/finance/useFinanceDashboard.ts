@@ -7,7 +7,7 @@
 import { useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { AxiosError } from "axios"
-import { paymentsApi } from "@/lib/api/payments"
+import { paymentsApi, type FinanceDashboardParams } from "@/lib/api/payments"
 import type { ApiErrorResponse } from "@/types/api.types"
 import type { FinanceDashboardStats } from "@/types/finance.types"
 import { formatVND, parseAmount } from "@/lib/zod/finance"
@@ -18,30 +18,47 @@ import { formatVND, parseAmount } from "@/lib/zod/finance"
 
 export const financeDashboardKeys = {
   all: ["finance", "dashboard"] as const,
-  stats: () => [...financeDashboardKeys.all, "stats"] as const,
+  stats: (params?: FinanceDashboardParams) => [...financeDashboardKeys.all, "stats", params ?? {}] as const,
 }
 
 // =====================================================================
 // QUERIES
 // =====================================================================
 
+export interface UseFinanceDashboardOptions {
+  enabled?: boolean
+  startDate?: string // YYYY-MM-DD format
+  endDate?: string // YYYY-MM-DD format
+}
+
 /**
  * Get finance dashboard statistics
  *
  * @example
  * ```tsx
+ * // Basic usage
  * const { data: stats, isLoading } = useFinanceDashboard()
+ *
+ * // With date filtering
+ * const { data: stats } = useFinanceDashboard({
+ *   startDate: '2024-01-01',
+ *   endDate: '2024-01-31'
+ * })
  *
  * if (stats) {
  *   console.log(`Pending fees: ${stats.pending_fees_count}`)
- *   console.log(`Pending payments: ${stats.pending_payments_count}`)
+ *   console.log(`Period collections: ${stats.period_collections}`)
  * }
  * ```
  */
-export function useFinanceDashboard(options?: { enabled?: boolean }) {
+export function useFinanceDashboard(options?: UseFinanceDashboardOptions) {
+  const params: FinanceDashboardParams | undefined = options?.startDate || options?.endDate
+    ? { start_date: options.startDate, end_date: options.endDate }
+    : undefined
+
   return useQuery<FinanceDashboardStats, AxiosError<ApiErrorResponse>>({
-    queryKey: financeDashboardKeys.stats(),
-    queryFn: () => paymentsApi.getFinanceDashboard(),
+    queryKey: financeDashboardKeys.stats(params),
+    queryFn: () => paymentsApi.getFinanceDashboard(params),
     staleTime: 1000 * 60, // 1 minute
     gcTime: 1000 * 60 * 5, // 5 minutes
     enabled: options?.enabled ?? true,
@@ -66,6 +83,11 @@ export interface FinanceDashboardViewModel {
   overdue_amount_formatted: string
   today_collections_formatted: string
   monthly_collections_formatted: string
+  period_collections_formatted: string
+
+  // Period info
+  period_start: string | null
+  period_end: string | null
 
   // Computed values
   total_pending_count: number
@@ -112,6 +134,11 @@ function toFinanceDashboardViewModel(
     overdue_amount_formatted: formatVND(stats.overdue_amount),
     today_collections_formatted: formatVND(stats.today_collections),
     monthly_collections_formatted: formatVND(stats.monthly_collections),
+    period_collections_formatted: formatVND(stats.period_collections),
+
+    // Period info
+    period_start: stats.period_start,
+    period_end: stats.period_end,
 
     // Computed values
     total_pending_count: totalPendingCount,
@@ -187,7 +214,7 @@ function toFinanceDashboardViewModel(
  * }
  * ```
  */
-export function useFinanceDashboardViewModel(options?: { enabled?: boolean }) {
+export function useFinanceDashboardViewModel(options?: UseFinanceDashboardOptions) {
   const query = useFinanceDashboard(options)
 
   const viewModel = useMemo(() => {

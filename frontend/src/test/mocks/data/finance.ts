@@ -300,6 +300,9 @@ export const mockDashboardStats: FinanceDashboardStats = {
   overdue_amount: "20000000",
   today_collections: "15000000",
   monthly_collections: "150000000",
+  period_collections: "45000000",
+  period_start: "2026-01-29",
+  period_end: "2026-02-04",
   pending_overpayments_count: 1,
   pending_refunds_count: 0,
 };

@@ -33,7 +33,7 @@ export interface PriorityAction {
   priority: "urgent" | "high" | "medium";
   lead_id: number;
   lead_name: string;
-  lead_score: number;
+  lead_score?: number | null; // Can be null/undefined from backend
   reason: string;
   phone?: string;
   days_since_contact?: number;
@@ -74,8 +74,9 @@ const typeConfig = {
   },
 };
 
-// Lead score badge color based on score
-const getScoreBadgeClass = (score: number) => {
+// Lead score badge color based on score (handles null/undefined)
+const getScoreBadgeClass = (score?: number | null) => {
+  if (score == null) return "bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground";
   if (score >= 80) return "bg-error-100 text-error-700 dark:bg-error-900/30 dark:text-error-400";
   if (score >= 60) return "bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-400";
   return "bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground";
@@ -119,12 +120,12 @@ export const PriorityActionCard = memo(function PriorityActionCard({
             >
               {action.lead_name}
             </Link>
-            {/* Enhanced lead score badge */}
-            <Badge 
-              variant="secondary" 
+            {/* Enhanced lead score badge (handles null/undefined) */}
+            <Badge
+              variant="secondary"
               className={cn("text-[10px] h-4 px-1.5 font-mono", getScoreBadgeClass(action.lead_score))}
             >
-              {action.lead_score}
+              {action.lead_score ?? "–"}
             </Badge>
           </div>
           <div className="flex items-center gap-2 mt-0.5">

@@ -14,10 +14,13 @@ import {
   TrendingUp,
   ArrowRight,
   Plus,
+  CalendarDays,
 } from "lucide-react"
 import { useFinanceDashboard } from "@/hooks/finance/useFinanceDashboard"
 import { AmountDisplay } from "@/components/finance"
 import { cn } from "@/lib/utils"
+import { DashboardDateProvider, useDashboardDate } from "@/contexts/DashboardDateContext"
+import { DateRangeFilter } from "@/components/officer/dashboard/DateRangeFilter"
 
 // =============================================================================
 // STAT CARD COMPONENT
@@ -124,15 +127,14 @@ function QuickAction({ title, description, icon, href }: QuickActionProps) {
 // =============================================================================
 
 /**
- * FinanceDashboardClient - Client component for Finance Dashboard
- *
- * Displays:
- * - Key statistics (pending payments, overdue, collections)
- * - Quick actions
- * - Recent activity
+ * Inner component that uses the date context
  */
-export function FinanceDashboardClient() {
-  const { data: stats, isLoading, error } = useFinanceDashboard()
+function FinanceDashboardInner() {
+  const { startDate, endDate } = useDashboardDate()
+  const { data: stats, isLoading, error } = useFinanceDashboard({
+    startDate,
+    endDate,
+  })
 
   if (error) {
     return (
@@ -153,19 +155,30 @@ export function FinanceDashboardClient() {
   return (
     <div className="h-full flex flex-col p-4 sm:p-6 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Finance Dashboard</h1>
-          <p className="text-muted-foreground">
-            Quản lý học phí, hóa đơn và thanh toán
-          </p>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Finance Dashboard</h1>
+            <p className="text-muted-foreground">
+              Quản lý học phí, hóa đơn và thanh toán
+            </p>
+          </div>
+          <Button asChild>
+            <Link href="/finance/fees?action=calculate">
+              <Plus className="h-4 w-4 mr-2" />
+              Tính phí mới
+            </Link>
+          </Button>
         </div>
-        <Button asChild>
-          <Link href="/finance/fees?action=calculate">
-            <Plus className="h-4 w-4 mr-2" />
-            Tính phí mới
-          </Link>
-        </Button>
+
+        {/* Date Range Filter */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CalendarDays className="h-4 w-4" />
+            <span>Lọc theo thời gian:</span>
+          </div>
+          <DateRangeFilter />
+        </div>
       </div>
 
       {/* Stats Grid */}
@@ -206,19 +219,20 @@ export function FinanceDashboardClient() {
           isLoading={isLoading}
         />
         <StatCard
-          title="Thu tháng này"
+          title="Thu trong kỳ"
           value={
             isLoading ? (
               "..."
             ) : (
               <AmountDisplay
-                amount={stats?.monthly_collections ?? "0"}
+                amount={stats?.period_collections ?? "0"}
                 size="xl"
                 showCurrency={false}
               />
             )
           }
-          icon={<TrendingUp className="h-4 w-4" />}
+          description={stats?.period_start && stats?.period_end ? `${stats.period_start} → ${stats.period_end}` : undefined}
+          icon={<CalendarDays className="h-4 w-4" />}
           isLoading={isLoading}
         />
       </div>
@@ -290,6 +304,25 @@ export function FinanceDashboardClient() {
         </Card>
       </div>
     </div>
+  )
+}
+
+/**
+ * FinanceDashboardClient - Client component for Finance Dashboard
+ *
+ * Displays:
+ * - Key statistics (pending payments, overdue, collections)
+ * - Date range filter for period collections
+ * - Quick actions
+ * - Overview statistics
+ *
+ * Wrapped with DashboardDateProvider to enable date filtering.
+ */
+export function FinanceDashboardClient() {
+  return (
+    <DashboardDateProvider defaultPreset="7d">
+      <FinanceDashboardInner />
+    </DashboardDateProvider>
   )
 }
 

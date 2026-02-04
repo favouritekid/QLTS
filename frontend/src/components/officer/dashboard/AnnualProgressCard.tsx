@@ -73,6 +73,39 @@ const statusConfig = {
   },
 };
 
+/**
+ * KPI code to display name mapping
+ * Synced with Backend_FastAPI/app/services/kpi_service.py DEFAULT_KPIS
+ */
+const KPI_NAME_LABELS: Record<string, string> = {
+  // Enrollment KPIs
+  enrollments: "Nhập học",
+  enrollments_monthly: "Nhập học tháng",
+  enrollments_annual: "Nhập học năm",
+
+  // Consultation KPIs
+  consultations_daily: "Tư vấn ngày",
+  consultations_monthly: "Tư vấn tháng",
+  consultations: "Tư vấn",
+
+  // Performance KPIs
+  conversion_rate: "Tỷ lệ chuyển đổi",
+  response_time_hours: "Thời gian phản hồi",
+
+  // Lead KPIs
+  leads_assigned: "Lead được giao",
+  leads_contacted: "Lead đã liên hệ",
+  leads_converted: "Lead chuyển đổi",
+};
+
+/**
+ * Get display name for KPI code
+ * Falls back to code if not found
+ */
+function getKpiDisplayName(kpiCode: string): string {
+  return KPI_NAME_LABELS[kpiCode] ?? kpiCode;
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -116,7 +149,7 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
   const StatusIcon = config.icon;
 
   // Format KPI name for display
-  const kpiName = progress.kpi_code === "enrollments" ? "Nhập học" : progress.kpi_code;
+  const kpiName = getKpiDisplayName(progress.kpi_code);
 
   return (
     <Card className={cn("border bg-card overflow-hidden", className)}>

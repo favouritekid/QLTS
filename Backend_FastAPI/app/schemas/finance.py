@@ -736,6 +736,9 @@ class FinanceDashboardStats(BaseModel):
     overdue_amount: Decimal = Decimal("0")
     today_collections: Decimal = Decimal("0")
     monthly_collections: Decimal = Decimal("0")
+    period_collections: Decimal = Decimal("0")
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
     pending_overpayments_count: int = 0
     pending_refunds_count: int = 0
 

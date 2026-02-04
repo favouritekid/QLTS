@@ -42,11 +42,17 @@ router = APIRouter(prefix="/finance", tags=["Finance - Dashboard"])
 )
 async def get_dashboard_stats(
     request: Request,
+    start_date: Optional[date] = Query(None, description="Start date for period collections (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for period collections (YYYY-MM-DD)"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
     Get finance dashboard statistics.
+
+    **Query Parameters:**
+    - start_date: Optional start date for period_collections calculation (default: 7 days ago)
+    - end_date: Optional end date for period_collections calculation (default: today)
 
     **Returns:**
     - pending_fees_count: Number of fees pending payment
@@ -56,6 +62,7 @@ async def get_dashboard_stats(
     - overdue_amount: Total overdue amount
     - today_collections: Total collections today
     - monthly_collections: Total collections this month
+    - period_collections: Total collections for custom date range
     - pending_overpayments_count: Number of unresolved overpayments
     - pending_refunds_count: Number of pending refund requests
 
@@ -68,6 +75,12 @@ async def get_dashboard_stats(
     month_start = date(today.year, today.month, 1)
     today_start = datetime.combine(today, datetime.min.time())
     today_end = datetime.combine(today, datetime.max.time())
+
+    # Default date range: 7 days if not specified
+    effective_start = start_date if start_date else today - timedelta(days=6)
+    effective_end = end_date if end_date else today
+    period_start_dt = datetime.combine(effective_start, datetime.min.time())
+    period_end_dt = datetime.combine(effective_end, datetime.max.time())
 
     # Build base conditions for IDOR
     base_fee_query = select(Fee).join(models.AdmissionProfile).join(models.Lead)
@@ -190,6 +203,26 @@ async def get_dashboard_stats(
     result = await db.execute(monthly_query)
     monthly_collections = Decimal(str(result.scalar() or 0))
 
+    # 5.5. Period collections (custom date range)
+    period_query = (
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .join(Invoice)
+        .join(Fee)
+        .join(models.AdmissionProfile)
+        .join(models.Lead)
+        .where(
+            and_(
+                Payment.status == PaymentStatusEnum.verified.value,
+                Payment.verified_at >= period_start_dt,
+                Payment.verified_at <= period_end_dt,
+            )
+        )
+    )
+    if unit_id is not None:
+        period_query = period_query.where(models.Lead.unit_id == unit_id)
+    result = await db.execute(period_query)
+    period_collections = Decimal(str(result.scalar() or 0))
+
     # 6. Pending overpayments count
     overpayments_query = (
         select(func.count(OverpaymentRecord.id))
@@ -225,6 +258,9 @@ async def get_dashboard_stats(
         overdue_amount=overdue_amount,
         today_collections=today_collections,
         monthly_collections=monthly_collections,
+        period_collections=period_collections,
+        period_start=effective_start,
+        period_end=effective_end,
         pending_overpayments_count=pending_overpayments_count,
         pending_refunds_count=pending_refunds_count,
     )

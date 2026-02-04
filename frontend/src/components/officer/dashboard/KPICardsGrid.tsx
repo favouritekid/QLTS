@@ -9,6 +9,7 @@
 import { useRouter } from "next/navigation";
 import { Phone, Users, TrendingUp, Clock } from "lucide-react";
 import { KPICard } from "./KPICard";
+import { useDashboardDate, DATE_PRESET_LABELS } from "@/contexts/DashboardDateContext";
 
 interface TrendInfo {
   value: number;
@@ -34,6 +35,10 @@ interface KPICardsGridProps {
 
 export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   const router = useRouter();
+  const { preset } = useDashboardDate();
+
+  // Get dynamic subtitle based on date filter
+  const periodLabel = DATE_PRESET_LABELS[preset] || preset;
 
   // Navigate to leads page
   const goToLeads = () => router.push("/leads");
@@ -54,7 +59,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
       <KPICard
         title="Leads đang xử lý"
         value={kpis.active_leads}
-        subtitle="Chưa hoàn thành"
+        subtitle={periodLabel}
         trend={kpis.active_leads_trend}
         icon={Users}
         onClick={goToLeads}
@@ -64,7 +69,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
       <KPICard
         title="Tỉ lệ chuyển đổi"
         value={`${kpis.conversion_rate}%`}
-        subtitle="Tháng này"
+        subtitle={periodLabel}
         trend={kpis.conversion_rate_trend}
         icon={TrendingUp}
         onClick={goToLeads}
@@ -74,7 +79,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
       <KPICard
         title="Thời gian phản hồi"
         value={`${kpis.avg_response_time}h`}
-        subtitle="Trung bình"
+        subtitle={periodLabel}
         trend={kpis.avg_response_time_trend}
         icon={Clock}
         onClick={goToLeads}

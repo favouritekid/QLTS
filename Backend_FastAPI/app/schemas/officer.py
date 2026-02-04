@@ -118,6 +118,9 @@ class PriorityAction(BaseModel):
     reason: str  # AI-generated explanation
     due_at: Optional[datetime] = None
     days_since_contact: Optional[int] = None
+    # Contact info for quick actions (Zalo, Phone)
+    phone: Optional[str] = None
+    last_contact_at: Optional[datetime] = None
 
 
 class OfficerDashboardEnhanced(BaseModel):

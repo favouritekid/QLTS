@@ -325,6 +325,9 @@ export interface FinanceDashboardStats {
   overdue_amount: string
   today_collections: string
   monthly_collections: string
+  period_collections: string
+  period_start: string | null
+  period_end: string | null
   pending_overpayments_count: number
   pending_refunds_count: number
 }
