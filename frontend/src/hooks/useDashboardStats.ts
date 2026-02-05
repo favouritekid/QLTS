@@ -70,6 +70,9 @@ export interface FunnelStage {
     negative: number;
     neutral: number;
   };
+  // SPEC 2026-02-04: Early Exit metrics
+  early_exit_count?: number;  // FINAL leads (negative) at this stage
+  move_forward?: number;      // lead_count - early_exit_count
 }
 
 export interface LeadPreview {
@@ -147,16 +150,45 @@ export interface DashboardFilters {
 
 async function fetchDashboard(filters: DashboardFilters): Promise<EnhancedOfficerStats> {
   const params = new URLSearchParams();
-  
+
   if (filters.startDate) params.append("start_date", filters.startDate);
   if (filters.endDate) params.append("end_date", filters.endDate);
   if (filters.scope) params.append("scope", filters.scope);
   if (filters.officerId) params.append("officer_id", filters.officerId.toString());
   if (filters.unitId) params.append("unit_id", filters.unitId.toString());
-  
+
   const url = `/api/officer/dashboard${params.toString() ? `?${params.toString()}` : ""}`;
-  const response = await api.get(url);
-  return response.data;
+
+  try {
+    const response = await api.get<EnhancedOfficerStats>(url);
+
+    // Ensure we never return undefined (React Query requirement)
+    if (!response.data) {
+      console.error("[fetchDashboard] API returned empty response for:", url, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        data: response.data,
+        dataType: typeof response.data,
+      });
+      throw new Error(`Dashboard API returned empty response (status: ${response.status})`);
+    }
+
+    // Validate response has required fields
+    if (!response.data.kpis || !response.data.status_overview) {
+      console.error("[fetchDashboard] API returned incomplete response for:", url, {
+        hasKpis: !!response.data.kpis,
+        hasStatusOverview: !!response.data.status_overview,
+        keys: Object.keys(response.data),
+      });
+      throw new Error("Dashboard API returned incomplete response");
+    }
+
+    return response.data;
+  } catch (error) {
+    console.error("[fetchDashboard] API error for:", url, error);
+    throw error;
+  }
 }
 
 async function fetchTeamStats(startDate?: string, endDate?: string): Promise<TeamStats> {

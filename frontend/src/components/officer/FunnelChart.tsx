@@ -2,10 +2,23 @@
 /**
  * Pipeline Funnel Chart - Industrial Standard
  * Designed for management decision-making
- * 
+ *
+ * SPEC 2026-02-04: Funnel Calculation Logic
+ * - Filter: counts_for_funnel = TRUE (excludes activity logs)
+ * - Filter: stage_id IS NOT NULL (excludes universal statuses)
+ * - Early Exit: FINAL leads (negative) displayed at each non-final stage
+ * - Net Conversion Rate: Enrolled / (Enrolled + Lost) - strategic KPI
+ *
+ * Key Metrics:
+ * - Won: stage = stg06 (positive outcome)
+ * - Lost: outcome = negative AND counts_for_funnel = TRUE
+ * - In-Progress: is_final = FALSE AND stage IN stg01–stg05
+ *
  * Features:
  * - Clean, professional design (minimal colors, no excessive animations)
  * - Separate "Core Flow" stages from "Outcome" stages
+ * - Early Exit badges at each stage (FINAL leads lost before reaching outcome)
+ * - Net Conversion Rate as primary metric (ignores in-progress leads)
  * - Color-coded conversion indicators
  * - Actionable insights through tooltips
  * - Configurable stage IDs via props
@@ -15,6 +28,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -49,20 +63,78 @@ interface FunnelStage {
   is_final_stage?: boolean;
   conversion_rate?: number | null;  // Historical conversion % (30 days)
   outcome_breakdown?: OutcomeBreakdown;  // positive/negative/neutral counts
+  // SPEC 2026-02-04: Early Exit metrics
+  early_exit_count?: number;  // FINAL leads (negative) at this stage
+  move_forward?: number;      // lead_count - early_exit_count
 }
 
 // Funnel configuration interface - allows customization via props
 interface FunnelConfig {
   positiveStageIds: string[];  // Stage IDs considered as positive outcome
   negativeStageIds: string[];  // Stage IDs considered as negative outcome
-  bottleneckThreshold: number; // Conversion rate below this triggers bottleneck warning  
+  bottleneckThreshold: number; // Conversion rate below this triggers bottleneck warning
 }
 
-// Default configuration
+// Default configuration - uses actual stage IDs from database seed
+// See: Backend_FastAPI/csv_data/pipeline_stage.csv
 const DEFAULT_CONFIG: FunnelConfig = {
-  positiveStageIds: ["stg06", "enrolled"],
-  negativeStageIds: ["stg07", "lost", "not_enrolled"],
+  positiveStageIds: ["stg06"],  // "Đã nhập học" - enrolled successfully
+  negativeStageIds: ["stg07"],  // "Không đi học" - did not enroll
   bottleneckThreshold: 50,
+};
+
+/**
+ * Auto-detect if a final stage is positive or negative based on:
+ * 1. Configured stage IDs
+ * 2. Stage name heuristics (Vietnamese keywords)
+ * 3. Outcome breakdown statistics
+ */
+const isPositiveOutcome = (stage: FunnelStage, config: FunnelConfig): boolean => {
+  // 1. Check configured IDs first
+  if (config.positiveStageIds.includes(stage.stage_id)) return true;
+  if (config.negativeStageIds.includes(stage.stage_id)) return false;
+
+  // 2. Heuristics based on Vietnamese stage names
+  const nameLower = stage.stage_name.toLowerCase();
+  if (nameLower.includes("nhập học") || nameLower.includes("hoàn thành") || nameLower.includes("thành công")) {
+    return true;
+  }
+  if (nameLower.includes("không") || nameLower.includes("từ chối") || nameLower.includes("hủy")) {
+    return false;
+  }
+
+  // 3. Fallback: Check outcome breakdown if available
+  if (stage.outcome_breakdown) {
+    const { positive, negative } = stage.outcome_breakdown;
+    if (positive > negative) return true;
+    if (negative > positive) return false;
+  }
+
+  // Default: Unknown final stage treated as neutral (neither positive nor negative)
+  return false;
+};
+
+const isNegativeOutcome = (stage: FunnelStage, config: FunnelConfig): boolean => {
+  // 1. Check configured IDs first
+  if (config.negativeStageIds.includes(stage.stage_id)) return true;
+  if (config.positiveStageIds.includes(stage.stage_id)) return false;
+
+  // 2. Heuristics based on Vietnamese stage names
+  const nameLower = stage.stage_name.toLowerCase();
+  if (nameLower.includes("không") || nameLower.includes("từ chối") || nameLower.includes("hủy") || nameLower.includes("thất bại")) {
+    return true;
+  }
+  if (nameLower.includes("nhập học") || nameLower.includes("hoàn thành") || nameLower.includes("thành công")) {
+    return false;
+  }
+
+  // 3. Fallback: Check outcome breakdown if available
+  if (stage.outcome_breakdown) {
+    const { positive, negative } = stage.outcome_breakdown;
+    if (negative > positive) return true;
+  }
+
+  return false;
 };
 
 interface FunnelChartProps {
@@ -71,6 +143,12 @@ interface FunnelChartProps {
   previousPeriodConversion?: number;
   /** Optional configuration to override defaults */
   config?: Partial<FunnelConfig>;
+  /** Scope filter for navigation context */
+  scope?: "personal" | "team" | "organization";
+  /** Selected unit ID (for organization scope) */
+  unitId?: number | null;
+  /** Selected officer ID (for drill-down) */
+  officerId?: number | null;
 }
 
 // ============================================================================
@@ -172,9 +250,17 @@ const getConversionStatus = (rate: number | null): {
 // MAIN COMPONENT
 // ============================================================================
 
-export function FunnelChart({ funnel, previousPeriodConversion, config }: FunnelChartProps) {
+export function FunnelChart({
+  funnel,
+  previousPeriodConversion,
+  config,
+  scope,
+  unitId,
+  officerId,
+}: FunnelChartProps) {
   const router = useRouter();
-  
+  const { startDate, endDate } = useDashboardDate();
+
   // Merge user config with defaults
   const mergedConfig: FunnelConfig = {
     ...DEFAULT_CONFIG,
@@ -213,80 +299,90 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
   // Calculate total leads by summing all stages (core + outcome)
   // This is correct for ACTUAL count approach (not cumulative)
   const totalLeads = sortedFunnel.reduce((sum, s) => sum + s.lead_count, 0);
-  
-  // Calculate total drop-off (leads with negative outcome across all stages)
-  const totalDropoff = sortedFunnel.reduce((sum, s) => 
-    sum + (s.outcome_breakdown?.negative || 0), 0
+
+  // SPEC 2026-02-04: Calculate Early Exit total (FINAL leads at non-final stages)
+  const totalEarlyExit = coreStages.reduce((sum, s) =>
+    sum + (s.early_exit_count || 0), 0
   );
-  
-  // Calculate overall conversion (completed outcomes / total leads)
-  // Using configurable positive stage IDs
-  const enrolledStage = outcomeStages.find(s => 
-    mergedConfig.positiveStageIds.includes(s.stage_id)
-  );
-  const failedStages = outcomeStages.filter(s => 
-    mergedConfig.negativeStageIds.includes(s.stage_id)
-  );
-  const enrolledCount = enrolledStage?.lead_count || 0;
-  const failedCount = failedStages.reduce((sum, s) => sum + s.lead_count, 0);
+
+  // SPEC 2026-02-04: Calculate Lost total (early exits + negative outcomes at final stages)
+  const positiveStages = outcomeStages.filter(s => isPositiveOutcome(s, mergedConfig));
+  const negativeStages = outcomeStages.filter(s => isNegativeOutcome(s, mergedConfig));
+  const enrolledCount = positiveStages.reduce((sum, s) => sum + s.lead_count, 0);
+  const failedCount = negativeStages.reduce((sum, s) => sum + s.lead_count, 0);
+
+  // Total Lost = Early Exits + Failed at final stage
+  const totalLost = totalEarlyExit + failedCount;
+
+  // SPEC 2026-02-04: Net Conversion Rate = Enrolled / (Enrolled + Lost)
+  // This is the TRUE business metric (ignores in-progress leads)
+  const netConversionRate = (enrolledCount + totalLost) > 0
+    ? (enrolledCount / (enrolledCount + totalLost)) * 100
+    : 0;
+
+  // Gross conversion (for display/comparison)
   const completedCount = enrolledCount + failedCount;
   const overallConversion = totalLeads > 0 ? (completedCount / totalLeads) * 100 : 0;
 
   // Calculate metrics for each stage
+  // NOTE: dropOff is ESTIMATED from count difference, NOT measured from actual transitions.
+  // Backend conversion_rate IS accurate (uses LeadStatusHistory transitions).
+  // The dropOff here is for visualization purposes only.
   const stageMetrics = coreStages.map((stage, index) => {
     const percentFromTotal = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
-    
-    // Use historical conversion rate from backend if available
+
+    // Use historical conversion rate from backend if available (this is ACCURATE)
     const historicalConversion = stage.conversion_rate;
     const hasHistoricalData = historicalConversion !== null && historicalConversion !== undefined;
-    
+
     if (index === 0) {
-      return { 
+      return {
         conversion: hasHistoricalData ? historicalConversion : null,
-        dropOff: 0, 
-        dropOffPercent: 0,
+        countDiff: 0,  // Renamed from dropOff for clarity
+        countDiffPercent: 0,
         percentFromTotal,
         prevCount: stage.lead_count,
         hasHistoricalData
       };
     }
-    
+
     const prevCount = coreStages[index - 1].lead_count;
     const conversion = hasHistoricalData ? historicalConversion : null;
-    const dropOff = Math.max(0, prevCount - stage.lead_count);
-    const dropOffPercent = prevCount > 0 ? (dropOff / prevCount) * 100 : 0;
-    
-    return { 
-      conversion, 
-      dropOff, 
-      dropOffPercent, 
-      percentFromTotal, 
+    // Count difference (NOT actual drop-off, just current distribution difference)
+    const countDiff = Math.max(0, prevCount - stage.lead_count);
+    const countDiffPercent = prevCount > 0 ? (countDiff / prevCount) * 100 : 0;
+
+    return {
+      conversion,
+      countDiff,  // Renamed for clarity - this is count difference, not measured drop-off
+      countDiffPercent,
+      percentFromTotal,
       prevCount,
       hasHistoricalData
     };
   });
 
   // =========== IMPROVED BOTTLENECK DETECTION ===========
-  // Find bottleneck using both conversion rate AND volume impact
-  // Priority: Stages where high volume is lost (dropOff * severity)
+  // Find bottleneck using both conversion rate AND estimated volume impact
+  // Priority: Stages with low conversion rate and high count difference
   const findBottleneck = (metrics: typeof stageMetrics, threshold: number) => {
     let maxImpact = -1;
     let bottleneckIdx = -1;
-    
+
     metrics.forEach((metric, idx) => {
       if (idx === 0 || metric.conversion === null) return;
       if (metric.conversion >= threshold) return; // Skip healthy stages
-      
-      // Impact = volume lost * severity (inverse of conversion rate)
+
+      // Impact = estimated count diff * severity (inverse of conversion rate)
       const severity = (100 - metric.conversion) / 100;
-      const impact = metric.dropOff * severity;
-      
+      const impact = metric.countDiff * severity;
+
       if (impact > maxImpact) {
         maxImpact = impact;
         bottleneckIdx = idx;
       }
     });
-    
+
     return bottleneckIdx;
   };
   const bottleneckIndex = findBottleneck(stageMetrics, mergedConfig.bottleneckThreshold);
@@ -296,9 +392,25 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
     ? overallConversion - previousPeriodConversion
     : null;
 
-  // Navigate to leads filtered by stage
+  // Navigate to leads filtered by stage, preserving date and scope context
   const handleStageClick = (stageId: string) => {
-    router.push(`/leads?stage=${stageId}`);
+    const params = new URLSearchParams();
+    params.set("stage", stageId);
+
+    // Include date range from global filter
+    if (startDate) params.set("from", startDate);
+    if (endDate) params.set("to", endDate);
+
+    // Include scope filters for drill-down context
+    if (officerId) {
+      params.set("officer_id", officerId.toString());
+    } else if (scope === "team" && unitId) {
+      params.set("unit_id", unitId.toString());
+    } else if (scope === "organization" && unitId) {
+      params.set("unit_id", unitId.toString());
+    }
+
+    router.push(`/leads?${params.toString()}`);
   };
 
   return (
@@ -310,19 +422,19 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
             <CardTitle className="text-base font-semibold">
               Pipeline Funnel
             </CardTitle>
-            
-            {/* Overall Conversion with Trend */}
+
+            {/* SPEC 2026-02-04: Net Conversion as primary metric */}
             <div className="flex items-center gap-3">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-2 cursor-help">
-                    <span className="text-sm text-muted-foreground">Tổng chuyển đổi:</span>
+                    <span className="text-sm text-muted-foreground">Net Conversion:</span>
                     <span className={cn(
                       "text-lg font-bold",
-                      overallConversion >= 10 ? "text-success-600" :
-                      overallConversion >= 5 ? "text-warning-600" : "text-error-600"
+                      netConversionRate >= 50 ? "text-success-600" :
+                      netConversionRate >= 30 ? "text-warning-600" : "text-error-600"
                     )}>
-                      {overallConversion.toFixed(1)}%
+                      {netConversionRate.toFixed(1)}%
                     </span>
                     {conversionTrend !== null && (
                       <div className={cn(
@@ -338,15 +450,35 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                     )}
                   </div>
                 </TooltipTrigger>
-                <TooltipContent>
-                  <p className="text-xs">
-                    {enrolledCount} / {totalLeads} leads hoàn thành nhập học
+                <TooltipContent className="max-w-[280px]">
+                  <div className="text-xs space-y-1.5">
+                    <p className="font-medium border-b border-white/20 pb-1">
+                      Net Conversion Rate (Strategic KPI)
+                    </p>
+                    <p className="text-white/90">
+                      <span className="font-semibold text-success-300">{enrolledCount}</span> enrolled /
+                      (<span className="text-success-300">{enrolledCount}</span> + <span className="text-error-300">{totalLost}</span>) =
+                      <span className="font-bold ml-1">{netConversionRate.toFixed(1)}%</span>
+                    </p>
+                    <p className="text-white/60 text-[10px]">
+                      • Won (Enrolled): {enrolledCount}
+                      <br />• Lost (Early Exit + Failed): {totalLost}
+                      {totalEarlyExit > 0 && (
+                        <span className="block pl-2">└ Early Exit: {totalEarlyExit}</span>
+                      )}
+                      {failedCount > 0 && (
+                        <span className="block pl-2">└ Failed: {failedCount}</span>
+                      )}
+                    </p>
                     {conversionTrend !== null && (
-                      <span className="block mt-1">
+                      <p className="text-white/70 pt-1 border-t border-white/20">
                         So với kỳ trước: {conversionTrend > 0 ? "+" : ""}{conversionTrend.toFixed(1)}%
-                      </span>
+                      </p>
                     )}
-                  </p>
+                    <p className="text-white/40 text-[9px] italic border-t border-white/20 pt-1">
+                      * Không tính leads đang xử lý, phản ánh chất lượng đầu vào + quy trình
+                    </p>
+                  </div>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -382,9 +514,9 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                           <span className={cn("text-xs font-semibold tabular-nums", conversionStatus.textColor)}>
                             {metrics.conversion !== null ? `${metrics.conversion.toFixed(0)}%` : "N/A"}
                           </span>
-                          {metrics.dropOff > 0 && (
+                          {metrics.countDiff > 0 && (
                             <span className="text-xs text-muted-foreground tabular-nums">
-                              -{metrics.dropOff}
+                              Δ{metrics.countDiff}
                             </span>
                           )}
                           {isBottleneck && (
@@ -427,11 +559,14 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                             <p className="text-white/70 pl-2">
                               {`• "${stage.stage_name}": ${stage.lead_count} leads`}
                             </p>
-                            {metrics.dropOff > 0 && (
-                              <p className="text-warning-300 pl-2">
-                                • Chênh lệch: -{metrics.dropOff} leads ({metrics.dropOffPercent.toFixed(0)}%)
+                            {metrics.countDiff > 0 && (
+                              <p className="text-white/50 pl-2 text-[10px]">
+                                • Chênh lệch số lượng: Δ{metrics.countDiff} ({metrics.countDiffPercent.toFixed(0)}%)
                               </p>
                             )}
+                            <p className="text-white/40 text-[9px] italic mt-1">
+                              * Chênh lệch ≠ drop-off thực tế (chỉ là hiệu số lượng hiện tại)
+                            </p>
                           </div>
                           
                           {/* Status */}
@@ -506,16 +641,72 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                       </TooltipContent>
                     </Tooltip>
 
-                    {/* Right: Lead count with outcome breakdown */}
-                    <div className="w-24 shrink-0 flex items-center justify-end gap-1.5">
-                      <span className="text-sm font-bold tabular-nums text-foreground">
-                        {stage.lead_count}
-                      </span>
-                      {stage.outcome_breakdown && stage.outcome_breakdown.negative > 0 && (
-                        <span className="text-xs text-error-500 font-medium">
-                          −{stage.outcome_breakdown.negative}
-                        </span>
-                      )}
+                    {/* Right: Detailed metrics breakdown */}
+                    <div className="w-36 shrink-0">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex flex-col items-end cursor-help text-xs">
+                            {/* Entered (total at stage) */}
+                            <div className="flex items-center gap-1">
+                              <span className="text-muted-foreground">Entered:</span>
+                              <span className="font-bold tabular-nums text-foreground">
+                                {stage.lead_count}
+                              </span>
+                            </div>
+                            {/* Move Forward (continues to next stage) */}
+                            {(stage.move_forward !== undefined || stage.early_exit_count !== undefined) && (
+                              <div className="flex items-center gap-1 text-success-600">
+                                <ArrowDown className="h-3 w-3" />
+                                <span className="tabular-nums font-medium">
+                                  {stage.move_forward ?? (stage.lead_count - (stage.early_exit_count || 0))}
+                                </span>
+                              </div>
+                            )}
+                            {/* Early Exit */}
+                            {stage.early_exit_count !== undefined && stage.early_exit_count > 0 && (
+                              <div className="flex items-center gap-1 text-error-500">
+                                <XCircle className="h-3 w-3" />
+                                <span className="tabular-nums font-medium">
+                                  {stage.early_exit_count}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="left" className="max-w-[220px]">
+                          <div className="text-xs space-y-1.5">
+                            <p className="font-medium border-b border-white/20 pb-1">
+                              {stage.stage_name}
+                            </p>
+                            <div className="space-y-1">
+                              <p className="text-white/90">
+                                <span className="text-white/60">Entered:</span>{" "}
+                                <span className="font-semibold">{stage.lead_count}</span> leads
+                              </p>
+                              {(stage.move_forward !== undefined || stage.early_exit_count !== undefined) && (
+                                <p className="text-success-300">
+                                  <span className="text-white/60">→ Moved Forward:</span>{" "}
+                                  <span className="font-semibold">
+                                    {stage.move_forward ?? (stage.lead_count - (stage.early_exit_count || 0))}
+                                  </span>
+                                </p>
+                              )}
+                              {stage.early_exit_count !== undefined && stage.early_exit_count > 0 && (
+                                <p className="text-error-300">
+                                  <span className="text-white/60">✖ Early Exit:</span>{" "}
+                                  <span className="font-semibold">{stage.early_exit_count}</span>
+                                  <span className="text-white/50 text-[10px] ml-1">
+                                    (leads kết thúc tại đây)
+                                  </span>
+                                </p>
+                              )}
+                            </div>
+                            <p className="text-white/50 pt-1 border-t border-white/20 text-[10px]">
+                              Click để xem danh sách chi tiết
+                            </p>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </div>
                 </div>
@@ -531,8 +722,8 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {outcomeStages.map(stage => {
-                  const isPositive = mergedConfig.positiveStageIds.includes(stage.stage_id);
-                  const isNegative = mergedConfig.negativeStageIds.includes(stage.stage_id);
+                  const isPositive = isPositiveOutcome(stage, mergedConfig);
+                  const isNegative = isNegativeOutcome(stage, mergedConfig);
                   const percent = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
                   
                   return (
@@ -580,16 +771,73 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
           )}
 
           {/* === SUMMARY === */}
-          <div className="pt-3 border-t flex items-center justify-between text-xs text-muted-foreground">
-            <div className="flex items-center gap-1.5">
-              <Users className="h-3.5 w-3.5" />
-              <span>Tổng đầu vào: <strong className="text-foreground">{totalLeads}</strong></span>
+          <div className="pt-3 border-t space-y-2">
+            {/* Row 1: Total Leads & Net Conversion */}
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <div className="flex items-center gap-1.5">
+                <Users className="h-3.5 w-3.5" />
+                <span>Tổng đầu vào: <strong className="text-foreground">{totalLeads}</strong></span>
+              </div>
+              {/* SPEC 2026-02-04: Net Conversion Rate for strategic reporting */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1.5 cursor-help">
+                    <Target className="h-3.5 w-3.5" />
+                    <span>Net Conversion: </span>
+                    <strong className={cn(
+                      netConversionRate >= 50 ? "text-success-600" :
+                      netConversionRate >= 30 ? "text-warning-600" : "text-error-600"
+                    )}>
+                      {netConversionRate.toFixed(1)}%
+                    </strong>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[240px]">
+                  <div className="text-xs space-y-1">
+                    <p className="font-medium">Net Conversion Rate</p>
+                    <p className="text-white/80">
+                      {enrolledCount} / ({enrolledCount} + {totalLost}) = {netConversionRate.toFixed(1)}%
+                    </p>
+                    <p className="text-white/60 text-[10px]">
+                      Công thức: Enrolled / (Enrolled + Lost)
+                      <br />• Enrolled: {enrolledCount} leads
+                      <br />• Lost (Early Exit + Failed): {totalLost} leads
+                    </p>
+                    <p className="text-white/50 text-[10px] italic border-t border-white/20 pt-1 mt-1">
+                      * Không tính leads đang xử lý (In-Progress)
+                    </p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
             </div>
-            {totalDropoff > 0 && (
-              <div className="flex items-center gap-1.5 text-error-600">
-                <AlertTriangle className="h-3 w-3" />
-                <span>
-                  Drop-off: {totalDropoff} ({(totalDropoff / Math.max(totalLeads, 1) * 100).toFixed(0)}%)
+            {/* Row 2: Early Exit & Lost breakdown */}
+            {totalLost > 0 && (
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <div className="flex items-center gap-3">
+                  {totalEarlyExit > 0 && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1 text-error-500 cursor-help">
+                          <XCircle className="h-3 w-3" />
+                          <span>Early Exit: {totalEarlyExit}</span>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-xs">
+                          {totalEarlyExit} leads đã kết thúc (FINAL) trước khi đến stage cuối cùng
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                  {failedCount > 0 && (
+                    <div className="flex items-center gap-1 text-error-600">
+                      <AlertTriangle className="h-3 w-3" />
+                      <span>Failed: {failedCount}</span>
+                    </div>
+                  )}
+                </div>
+                <span className="text-error-600 font-medium">
+                  Tổng Lost: {totalLost} ({(totalLost / Math.max(totalLeads, 1) * 100).toFixed(0)}%)
                 </span>
               </div>
             )}
