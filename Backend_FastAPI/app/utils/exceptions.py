@@ -329,6 +329,39 @@ class WebSocketServiceError(ServiceError):
 
 
 # ============================================================================
+# TRANSIENT/RETRYABLE EXCEPTIONS
+# ============================================================================
+
+
+class TransientError(ServiceError):
+    """
+    Base class for transient errors that should trigger retry.
+
+    Used for temporary failures that may succeed on retry, such as:
+    - Database lock contention
+    - External service timeouts
+    - Rate limiting
+
+    Celery tasks can catch this and call self.retry() with appropriate parameters.
+    """
+
+    detail = "A transient error occurred. Please retry."
+    error_code = "TRANSIENT_ERROR"
+
+
+class LockContentionError(TransientError):
+    """
+    Database lock contention error.
+
+    Raised when a database row lock cannot be obtained (e.g., FOR UPDATE SKIP LOCKED).
+    The operation should be retried after a short delay.
+    """
+
+    detail = "Database lock contention. Please retry."
+    error_code = "LOCK_CONTENTION"
+
+
+# ============================================================================
 # LEGACY SUPPORT (Deprecated)
 # ============================================================================
 
@@ -380,4 +413,7 @@ EXCEPTION_HTTP_STATUS_MAP = {
     EmailServiceError: 500,
     UserServiceError: 500,
     WebSocketServiceError: 500,
+    # 503 Service Unavailable (Transient/Retryable)
+    TransientError: 503,
+    LockContentionError: 503,
 }
