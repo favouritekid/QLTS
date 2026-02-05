@@ -126,28 +126,36 @@ class OfficerRepository(BaseRepository[models.User]):
     ) -> Dict[str, Dict[str, Any]]:
         """
         Get lead counts and outcome breakdown for ALL stages in ONE query.
-        
+
         OPTIMIZATION: Replaces N+1 loop with single GROUP BY query.
         Before: 14 queries (7 stages × 2 queries each)
         After: 1 query
-        
+
+        SPEC COMPLIANCE (2026-02-04):
+        - Filter: counts_for_funnel = TRUE (exclude activity logs)
+        - Filter: stage_id IS NOT NULL (exclude universal statuses)
+        - Early Exit: Counts FINAL leads at non-final stages
+
         Returns:
-            Dict[stage_id, {count, positive, negative, neutral}]
+            Dict[stage_id, {count, positive, negative, neutral, early_exit_count}]
         """
         # Base conditions
         conditions = [
             models.Lead.assigned_officer_id == officer_id,
             models.Lead.deleted_at.is_(None),
+            # SPEC: Exclude universal statuses (stage_id = NULL)
+            models.Lead.pipeline_stage_id.isnot(None),
         ]
-        
+
         # Optional date filter
         if start_date and end_date:
             conditions.extend([
                 func.date(models.Lead.created_at) >= start_date,
                 func.date(models.Lead.created_at) <= end_date,
             ])
-        
+
         # Single query with conditional aggregations
+        # SPEC: Only count leads with counts_for_funnel = TRUE
         query = (
             select(
                 models.Lead.pipeline_stage_id,
@@ -168,17 +176,30 @@ class OfficerRepository(BaseRepository[models.User]):
                         (models.ConsultationStatus.outcome_type == "neutral", 1),
                     )
                 ).label("neutral_count"),
+                # SPEC: Early Exit = FINAL leads at this stage (outcome=negative, is_final=TRUE)
+                func.count(
+                    case(
+                        (and_(
+                            models.ConsultationStatus.is_final == True,
+                            models.ConsultationStatus.outcome_type == "negative",
+                        ), 1),
+                    )
+                ).label("early_exit_count"),
             )
-            .outerjoin(
+            .join(
                 models.ConsultationStatus,
                 models.Lead.consultation_status_id == models.ConsultationStatus.id
             )
-            .where(*conditions)
+            .where(
+                *conditions,
+                # SPEC: counts_for_funnel = TRUE (only funnel-relevant statuses)
+                models.ConsultationStatus.counts_for_funnel == True,
+            )
             .group_by(models.Lead.pipeline_stage_id)
         )
-        
+
         result = await self.db.execute(query)
-        
+
         # Build result dict
         stage_data = {}
         for row in result.fetchall():
@@ -189,8 +210,9 @@ class OfficerRepository(BaseRepository[models.User]):
                     "positive": row.positive_count or 0,
                     "negative": row.negative_count or 0,
                     "neutral": row.neutral_count or 0,
+                    "early_exit_count": row.early_exit_count or 0,
                 }
-        
+
         return stage_data
     
     async def get_stage_transition_rates(
@@ -853,40 +875,119 @@ class OfficerRepository(BaseRepository[models.User]):
 
         OPTIMIZATION: Single GROUP BY query instead of N queries per stage.
 
+        SPEC COMPLIANCE (2026-02-04):
+        - Filter: counts_for_funnel = TRUE (exclude activity logs)
+        - Filter: stage_id IS NOT NULL (exclude universal statuses)
+        - Early Exit: Counts FINAL leads (negative) at non-final stages
+        - Outcome breakdown: positive/negative/neutral counts
+
         Returns:
-            List of funnel stage dicts with counts
+            List of funnel stage dicts with counts, early_exit, and outcome breakdown
         """
         # Get all stages
         stages = await self.get_all_pipeline_stages()
-        
-        # Batch query for all stage counts
+        stage_by_id = {s.id: s for s in stages}
+
+        # SPEC: Batch query with counts_for_funnel filter and outcome breakdown
         count_query = (
             select(
                 models.Lead.pipeline_stage_id,
-                func.count(models.Lead.id).label("count")
+                func.count(models.Lead.id).label("total_count"),
+                # Outcome breakdown
+                func.count(
+                    case(
+                        (models.ConsultationStatus.outcome_type == "positive", 1),
+                    )
+                ).label("positive_count"),
+                func.count(
+                    case(
+                        (models.ConsultationStatus.outcome_type == "negative", 1),
+                    )
+                ).label("negative_count"),
+                func.count(
+                    case(
+                        (models.ConsultationStatus.outcome_type == "neutral", 1),
+                    )
+                ).label("neutral_count"),
+                # SPEC: Early Exit = FINAL leads with negative outcome
+                func.count(
+                    case(
+                        (and_(
+                            models.ConsultationStatus.is_final == True,
+                            models.ConsultationStatus.outcome_type == "negative",
+                        ), 1),
+                    )
+                ).label("early_exit_count"),
+            )
+            .join(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id
             )
             .where(
                 models.Lead.assigned_officer_id.in_(officer_ids),
                 models.Lead.deleted_at.is_(None),
+                # SPEC: Exclude universal statuses (stage_id = NULL)
+                models.Lead.pipeline_stage_id.isnot(None),
+                # SPEC: counts_for_funnel = TRUE
+                models.ConsultationStatus.counts_for_funnel == True,
             )
             .group_by(models.Lead.pipeline_stage_id)
         )
         count_result = await self.db.execute(count_query)
-        
-        # Build lookup
-        stage_counts = {row.pipeline_stage_id: row.count for row in count_result.fetchall()}
-        
-        # Build funnel
-        funnel = []
+
+        # Build lookup with all metrics
+        stage_counts = {}
+        for row in count_result.fetchall():
+            stage_counts[row.pipeline_stage_id] = {
+                "count": row.total_count,
+                "positive": row.positive_count,
+                "negative": row.negative_count,
+                "neutral": row.neutral_count,
+                "early_exit_count": row.early_exit_count,
+            }
+
+        # SPEC: Calculate Net Conversion Rate
+        total_enrolled = 0
+        total_lost = 0
+
         for stage in stages:
+            stage_data = stage_counts.get(stage.id, {})
+            if stage.is_final_stage:
+                total_enrolled += stage_data.get("positive", 0)
+                total_lost += stage_data.get("negative", 0)
+            else:
+                total_lost += stage_data.get("early_exit_count", 0)
+
+        net_conversion_rate = round(
+            (total_enrolled / (total_enrolled + total_lost)) * 100, 1
+        ) if (total_enrolled + total_lost) > 0 else 0.0
+
+        # Build funnel with all metrics
+        funnel = []
+        for idx, stage in enumerate(stages):
+            stage_data = stage_counts.get(stage.id, {})
+            lead_count = stage_data.get("count", 0)
+            early_exit_count = stage_data.get("early_exit_count", 0)
+            move_forward = lead_count - early_exit_count if not stage.is_final_stage else lead_count
+
             funnel.append({
                 "stage_id": stage.id,
                 "stage_name": stage.name,
                 "stage_order": stage.order,
-                "lead_count": stage_counts.get(stage.id, 0),
+                "lead_count": lead_count,
                 "is_final_stage": stage.is_final_stage,
+                "fill": f"var(--chart-{idx % 5 + 1})",
+                "conversion_rate": None,  # TODO: Calculate from transitions
+                # SPEC: Early Exit metrics
+                "early_exit_count": early_exit_count,
+                "move_forward": move_forward,
+                "outcome_breakdown": {
+                    "positive": stage_data.get("positive", 0),
+                    "negative": stage_data.get("negative", 0),
+                    "neutral": stage_data.get("neutral", 0),
+                },
             })
-        
+
         return funnel
 
     async def get_team_overview(
@@ -941,9 +1042,15 @@ class OfficerRepository(BaseRepository[models.User]):
         self,
         week_start: date,
         week_end: date,
+        unit_ids: Optional[List[int]] = None,
     ) -> List[Tuple[int, str, str, int]]:
         """
         Get ALL officers ranked by consultations for the week.
+
+        Args:
+            week_start: Start date for the ranking period
+            week_end: End date for the ranking period
+            unit_ids: Optional list of unit IDs to filter officers (includes children)
 
         Returns list of (user_id, username, full_name, consultation_count)
         """
@@ -967,9 +1074,16 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.User.role == "officer",
                 models.User.status == "active",
             )
-            .group_by(models.User.id, models.User.username, models.User.full_name)
-            .order_by(func.count(models.Consultation.id).desc())
         )
+
+        # Filter by unit IDs if provided
+        if unit_ids:
+            query = query.where(models.User.unit_id.in_(unit_ids))
+
+        query = query.group_by(
+            models.User.id, models.User.username, models.User.full_name
+        ).order_by(func.count(models.Consultation.id).desc())
+
         result = await self.db.execute(query)
         return result.fetchall()
 

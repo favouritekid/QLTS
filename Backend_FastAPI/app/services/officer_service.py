@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models, schemas
 from ..core.events import SystemEvents
 from ..repositories import OfficerRepository
+from ..repositories.organization_repository import OrganizationRepository
 from .notification_dispatcher import dispatch
 from . import kpi_service
 
@@ -48,7 +49,31 @@ async def get_officer_dashboard_stats(
     all_stages = await repo.get_all_pipeline_stages()
     stage_counts = await repo.get_funnel_stage_counts_batch(officer_id)
     transition_rates = await repo.get_stage_transition_rates(officer_id, days=30)
-    
+
+    # Pre-build stage lookup dict for O(1) access (optimization)
+    stage_by_id = {s.id: s for s in all_stages}
+
+    # SPEC 2026-02-04: Calculate Net Conversion Rate
+    # Formula: Enrolled / (Enrolled + Lost)
+    # Enrolled = stage stg06 (is_final_stage=True, positive outcome)
+    # Lost = All FINAL leads with negative outcome (includes early exits)
+    total_enrolled = 0
+    total_lost = 0
+
+    for stage in all_stages:
+        stage_data = stage_counts.get(stage.id, {})
+        if stage.is_final_stage:
+            # Final stage: count positive as Won, negative as Lost
+            total_enrolled += stage_data.get("positive", 0)
+            total_lost += stage_data.get("negative", 0)
+        else:
+            # Non-final stage: count early_exit (FINAL + negative) as Lost
+            total_lost += stage_data.get("early_exit_count", 0)
+
+    net_conversion_rate = round(
+        (total_enrolled / (total_enrolled + total_lost)) * 100, 1
+    ) if (total_enrolled + total_lost) > 0 else 0.0
+
     sales_funnel = []
     for idx, stage in enumerate(all_stages):
         stage_data = stage_counts.get(stage.id, {})
@@ -56,20 +81,27 @@ async def get_officer_dashboard_stats(
         positive_count = stage_data.get("positive", 0)
         negative_count = stage_data.get("negative", 0)
         neutral_count = stage_data.get("neutral", 0)
-        
-        # Calculate conversion rate from transitions
+        early_exit_count = stage_data.get("early_exit_count", 0)
+
+        # Calculate conversion rate from transitions (optimized with dict lookup)
         conversion_rate = None
         if stage.id in transition_rates:
             transitions_from = transition_rates[stage.id]
             total_out = sum(transitions_from.values())
             if total_out > 0:
+                # Count progressive transitions (to higher non-final stages)
                 progressive = sum(
                     count for to_id, count in transitions_from.items()
-                    if any(s.id == to_id and s.order > stage.order and not s.is_final_stage 
-                           for s in all_stages)
+                    if to_id in stage_by_id
+                    and stage_by_id[to_id].order > stage.order
+                    and not stage_by_id[to_id].is_final_stage
                 )
                 conversion_rate = round((progressive / total_out) * 100, 1)
-        
+
+        # SPEC: Calculate move_forward = leads that continue to next stage
+        # move_forward = lead_count - early_exit_count (for non-final stages)
+        move_forward = lead_count - early_exit_count if not stage.is_final_stage else lead_count
+
         sales_funnel.append({
             "stage_id": stage.id,
             "stage_name": stage.name,
@@ -78,13 +110,19 @@ async def get_officer_dashboard_stats(
             "is_final_stage": stage.is_final_stage,
             "fill": f"var(--chart-{idx % 5 + 1})",
             "conversion_rate": conversion_rate,
+            # SPEC: Early Exit metrics per stage
+            "early_exit_count": early_exit_count,
+            "move_forward": move_forward,
             "outcome_breakdown": {
                 "positive": positive_count,
                 "negative": negative_count,
                 "neutral": neutral_count,
             }
         })
-    
+
+    # Store net_conversion_rate for response (used in enhanced dashboard)
+    # Note: This is stored at module level for now, will be added to response later
+
     # 5. Actionable Lists (optimized queries)
     high_score_leads = await repo.get_high_score_leads(officer_id, limit=5)
     stale_leads = await repo.get_stale_leads(officer_id, stale_days=3, limit=5)
@@ -196,7 +234,26 @@ async def _get_sales_funnel_in_range(
         officer_id, start_date=filter_start, end_date=filter_end
     )
     transition_rates = await repo.get_stage_transition_rates(officer_id, days=30)
-    
+
+    # Pre-build stage lookup dict for O(1) access (optimization)
+    stage_by_id = {s.id: s for s in all_stages}
+
+    # SPEC 2026-02-04: Calculate Net Conversion Rate
+    total_enrolled = 0
+    total_lost = 0
+
+    for stage in all_stages:
+        stage_data = stage_counts.get(stage.id, {})
+        if stage.is_final_stage:
+            total_enrolled += stage_data.get("positive", 0)
+            total_lost += stage_data.get("negative", 0)
+        else:
+            total_lost += stage_data.get("early_exit_count", 0)
+
+    net_conversion_rate = round(
+        (total_enrolled / (total_enrolled + total_lost)) * 100, 1
+    ) if (total_enrolled + total_lost) > 0 else 0.0
+
     sales_funnel = []
     for idx, stage in enumerate(all_stages):
         stage_data = stage_counts.get(stage.id, {})
@@ -204,20 +261,26 @@ async def _get_sales_funnel_in_range(
         positive_count = stage_data.get("positive", 0)
         negative_count = stage_data.get("negative", 0)
         neutral_count = stage_data.get("neutral", 0)
-        
-        # Calculate conversion rate from transitions
+        early_exit_count = stage_data.get("early_exit_count", 0)
+
+        # Calculate conversion rate from transitions (optimized with dict lookup)
         conversion_rate = None
         if stage.id in transition_rates:
             transitions_from = transition_rates[stage.id]
             total_out = sum(transitions_from.values())
             if total_out > 0:
+                # Count progressive transitions (to higher non-final stages)
                 progressive = sum(
                     count for to_id, count in transitions_from.items()
-                    if any(s.id == to_id and s.order > stage.order and not s.is_final_stage 
-                           for s in all_stages)
+                    if to_id in stage_by_id
+                    and stage_by_id[to_id].order > stage.order
+                    and not stage_by_id[to_id].is_final_stage
                 )
                 conversion_rate = round((progressive / total_out) * 100, 1)
-        
+
+        # SPEC: move_forward = lead_count - early_exit_count
+        move_forward = lead_count - early_exit_count if not stage.is_final_stage else lead_count
+
         sales_funnel.append({
             "stage_id": stage.id,
             "stage_name": stage.name,
@@ -226,13 +289,15 @@ async def _get_sales_funnel_in_range(
             "is_final_stage": stage.is_final_stage,
             "fill": f"var(--chart-{idx % 5 + 1})",
             "conversion_rate": conversion_rate,
+            "early_exit_count": early_exit_count,
+            "move_forward": move_forward,
             "outcome_breakdown": {
                 "positive": positive_count,
                 "negative": negative_count,
                 "neutral": neutral_count,
             }
         })
-    
+
     return sales_funnel
 
 
@@ -570,7 +635,7 @@ async def get_aggregated_dashboard_stats(
 
 
 def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
-    """Return empty stats when no officers found."""
+    """Return empty stats when no officers found in the selected unit/scope."""
     return {
         "kpis": {
             "consultations_today": 0,
@@ -599,6 +664,8 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "stale": [],
             "upcoming": [],
         },
+        # Phase 6: Annual progress (null when no officers)
+        "annual_progress": None,
     }
 
 
@@ -687,29 +754,67 @@ async def _calculate_priority_actions(
 # =============================================================================
 
 async def get_weekly_leaderboard(
-    db: AsyncSession, officer_id: int, limit: int = 5
+    db: AsyncSession,
+    officer_id: int,
+    limit: int = 5,
+    start_date: date = None,
+    end_date: date = None,
+    scope: str = None,
+    unit_id: int = None,
+    requesting_user: models.User = None,
 ) -> Dict[str, Any]:
     """
     Get weekly leaderboard for gamification.
-    
+
     REFACTORED: Uses OfficerRepository.get_all_weekly_rankings.
     - Reduced from 2 queries to 1 batch query.
-    
+
     Shows top officers by consultations this week.
     Includes current officer's rank even if not in top N.
     PHASE 6: Now includes rank change vs previous week.
+
+    Args:
+        officer_id: Current user's ID (for marking "you" in leaderboard)
+        limit: Number of top entries to show
+        start_date: Optional custom start date (defaults to this week's Monday)
+        end_date: Optional custom end date (defaults to today)
+        scope: "personal" | "team" | "organization"
+        unit_id: Filter by specific unit (for organization scope)
+        requesting_user: The user making the request (for team scope)
     """
     repo = OfficerRepository(db)
     today = datetime.now(timezone.utc).date()
-    week_start = today - timedelta(days=today.weekday())  # Monday
-    prev_week_start = week_start - timedelta(days=7)
-    prev_week_end = week_start - timedelta(days=1)
-    
-    # Get all officers' stats for THIS week using Repository
-    all_officers = await repo.get_all_weekly_rankings(week_start, today)
-    
-    # Get PREVIOUS week ranks using Repository
-    prev_officers = await repo.get_all_weekly_rankings(prev_week_start, prev_week_end)
+
+    # Use provided dates or default to current week
+    if start_date and end_date:
+        period_start = start_date
+        period_end = end_date
+    else:
+        period_start = today - timedelta(days=today.weekday())  # Monday
+        period_end = today
+
+    # Calculate previous period for rank comparison
+    period_length = (period_end - period_start).days + 1
+    prev_period_end = period_start - timedelta(days=1)
+    prev_period_start = prev_period_end - timedelta(days=period_length - 1)
+
+    # Determine unit filter based on scope
+    unit_ids = None
+    if scope == "team" and requesting_user and requesting_user.unit_id:
+        # Team scope: filter by requesting user's unit
+        org_repo = OrganizationRepository(db)
+        unit_ids = await org_repo.get_descendant_unit_ids(requesting_user.unit_id)
+    elif scope == "organization" and unit_id:
+        # Organization scope with specific unit: filter by that unit and descendants
+        org_repo = OrganizationRepository(db)
+        unit_ids = await org_repo.get_descendant_unit_ids(unit_id)
+    # For "personal" scope or no scope: show all officers (no filter)
+
+    # Get all officers' stats for THIS period using Repository
+    all_officers = await repo.get_all_weekly_rankings(period_start, period_end, unit_ids)
+
+    # Get PREVIOUS period ranks using Repository
+    prev_officers = await repo.get_all_weekly_rankings(prev_period_start, prev_period_end, unit_ids)
     
     # Build previous week rank lookup
     prev_ranks = {officer.id: rank for rank, officer in enumerate(prev_officers, 1)}
@@ -762,7 +867,8 @@ async def get_weekly_leaderboard(
             current_user_rank = len(all_officers) + 1
     
     return {
-        "week_start": week_start.isoformat(),
+        "week_start": period_start.isoformat(),
+        "week_end": period_end.isoformat(),
         "total_officers": len(all_officers) + (1 if current_user_rank is None else 0),
         "current_user_rank": current_user_rank or (len(all_officers) + 1),
         "leaderboard": leaderboard,

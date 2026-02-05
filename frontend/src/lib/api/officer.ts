@@ -12,9 +12,17 @@ export interface LeaderboardEntry {
 
 export interface WeeklyLeaderboardData {
   week_start: string;
+  week_end?: string;
   total_officers: number;
   current_user_rank: number;
   leaderboard: LeaderboardEntry[];
+}
+
+export interface LeaderboardFilters {
+  startDate?: string;
+  endDate?: string;
+  scope?: "personal" | "team" | "organization";
+  unitId?: number | null;
 }
 
 export interface ScheduleActivity {
@@ -57,8 +65,15 @@ export interface AvailabilityPayload {
  * Handles all officer dashboard related endpoints
  */
 export const officerApi = {
-  getLeaderboard: async () => {
-    const response = await api.get<WeeklyLeaderboardData>("/api/officer/leaderboard");
+  getLeaderboard: async (filters?: LeaderboardFilters) => {
+    const params = new URLSearchParams();
+    if (filters?.startDate) params.append("start_date", filters.startDate);
+    if (filters?.endDate) params.append("end_date", filters.endDate);
+    if (filters?.scope) params.append("scope", filters.scope);
+    if (filters?.unitId) params.append("unit_id", filters.unitId.toString());
+
+    const url = `/api/officer/leaderboard${params.toString() ? `?${params.toString()}` : ""}`;
+    const response = await api.get<WeeklyLeaderboardData>(url);
     return response.data;
   },
 

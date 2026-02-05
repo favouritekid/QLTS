@@ -171,8 +171,9 @@ class LeaderboardEntry(BaseModel):
 
 
 class WeeklyLeaderboard(BaseModel):
-    """Weekly leaderboard response."""
-    week_start: str  # ISO date string
+    """Leaderboard response (weekly or custom date range)."""
+    week_start: str  # ISO date string (period start)
+    week_end: Optional[str] = None  # ISO date string (period end, for custom range)
     total_officers: int
     current_user_rank: int
     leaderboard: List[LeaderboardEntry]

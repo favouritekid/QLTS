@@ -2,25 +2,33 @@
 /**
  * Weekly Leaderboard Component
  * Shows top officers by consultations for gamification
+ *
+ * Now supports date range and scope filtering to align with dashboard filters.
  */
 
 "use client";
 
-// useQuery removed, officerApi removed
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { 
-  Crown, 
-  Medal, 
-  TrendingUp, 
-  TrendingDown, 
-  Minus, 
-  Trophy 
+import {
+  Crown,
+  Medal,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Trophy
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
+import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import { useWeeklyLeaderboard } from "@/hooks/officer/useWeeklyLeaderboard";
+
+interface WeeklyLeaderboardProps {
+  /** Dashboard scope (affects unit filtering) */
+  scope?: "personal" | "team" | "organization";
+  /** Selected unit ID (for organization scope) */
+  unitId?: number | null;
+}
 
 const getRankIcon = (rank: number) => {
   switch (rank) {
@@ -79,8 +87,14 @@ const getRankBg = (rank: number, isCurrentUser: boolean) => {
   }
 };
 
-export function WeeklyLeaderboard() {
-  const { data, isLoading, error } = useWeeklyLeaderboard();
+export function WeeklyLeaderboard({ scope, unitId }: WeeklyLeaderboardProps) {
+  const { startDate, endDate } = useDashboardDate();
+  const { data, isLoading, error } = useWeeklyLeaderboard({
+    startDate,
+    endDate,
+    scope,
+    unitId,
+  });
 
   if (isLoading) {
     return (
@@ -120,14 +134,27 @@ export function WeeklyLeaderboard() {
     return null;
   }
 
+  // Format date range for display
+  const formatDateRange = () => {
+    if (data.week_end && data.week_start !== data.week_end) {
+      return `${data.week_start} → ${data.week_end}`;
+    }
+    return data.week_start;
+  };
+
   return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-medium flex items-center gap-2">
-            <Trophy className="h-5 w-5 text-amber-500" />
-            Bảng xếp hạng tuần
-          </CardTitle>
+          <div>
+            <CardTitle className="text-base font-medium flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-amber-500" />
+              Bảng xếp hạng
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {formatDateRange()}
+            </p>
+          </div>
           <Badge variant="outline" className="text-xs">
             #{data.current_user_rank}/{data.total_officers}
           </Badge>

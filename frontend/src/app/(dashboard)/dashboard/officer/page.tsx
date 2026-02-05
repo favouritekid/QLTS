@@ -239,7 +239,7 @@ function DashboardContent() {
           <WorkloadCard statusOverview={stats.status_overview} />
           <TodaySchedule />
           <PriorityActionsPanel actions={stats.priority_actions} />
-          <WeeklyLeaderboard />
+          <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} />
         </div>
       </div>
     </div>
