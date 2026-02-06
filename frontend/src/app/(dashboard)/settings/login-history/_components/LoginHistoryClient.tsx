@@ -35,6 +35,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { API_BASE_URL } from "@/lib/api/client";
+import { getCSRFToken, CSRF_HEADER_NAME } from "@/lib/api/csrf";
 import type {
   LoginHistoryItem,
   LoginHistoryResponse,
@@ -58,9 +59,13 @@ async function fetchLoginHistory(): Promise<LoginHistoryResponse> {
  * Confirm a login as legitimate
  */
 async function confirmLogin(data: ConfirmLoginRequest): Promise<ConfirmLoginResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrfToken = getCSRFToken();
+  if (csrfToken) headers[CSRF_HEADER_NAME] = csrfToken;
+
   const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SECURITY.CONFIRM_LOGIN}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     credentials: "include",
     body: JSON.stringify(data),
   });
@@ -72,8 +77,13 @@ async function confirmLogin(data: ConfirmLoginRequest): Promise<ConfirmLoginResp
  * Secure account after suspicious login
  */
 async function secureAccount(loginId: number): Promise<SecureAccountResponse> {
+  const headers: Record<string, string> = {};
+  const csrfToken = getCSRFToken();
+  if (csrfToken) headers[CSRF_HEADER_NAME] = csrfToken;
+
   const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SECURITY.SECURE_ACCOUNT}?login_id=${loginId}`, {
     method: "POST",
+    headers,
     credentials: "include",
   });
   if (!res.ok) throw new Error("Failed to secure account");
