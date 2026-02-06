@@ -3,28 +3,40 @@
 
 /**
  * Mobile Bottom Navigation
- * 
+ *
  * Fixed bottom navigation bar for mobile devices.
  * Shows main navigation items with icons and unread badges.
  * Only visible on screens < 1024px (lg breakpoint).
+ *
+ * Uses useAppNavigation() for role-based filtering (consistent with AppSidebar).
  */
 
+import { useMemo } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { Home, Users, Bell, User, GraduationCap } from "lucide-react";
+import { User } from "lucide-react";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useAppNavigation } from "@/hooks/useAppNavigation";
 
-interface NavItem {
-  href: string;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  badge?: number;
-}
+/**
+ * Priority-ordered hrefs to show on mobile bottom nav.
+ * First 4 matches from the user's role-filtered navigation are displayed,
+ * plus Profile as the 5th item.
+ */
+const MOBILE_PRIORITY_HREFS = [
+  "/dashboard/officer",
+  "/dashboard",
+  "/leads",
+  "/admissions",
+  "/finance",
+  "/notifications",
+];
 
 export function MobileBottomNav() {
   const pathname = usePathname();
-  
+  const { navigation } = useAppNavigation();
+
   // Fetch unread notification count for badge
   const { data: notificationsData } = useNotifications({
     page: 1,
@@ -34,44 +46,48 @@ export function MobileBottomNav() {
 
   const unreadCount = notificationsData?.unread_count || 0;
 
-  const navItems: NavItem[] = [
-    {
-      href: "/dashboard",
-      icon: Home,
-      label: "Tổng quan",
-    },
-    {
-      href: "/leads",
-      icon: Users,
-      label: "Leads",
-    },
-    {
-      href: "/admissions",
-      icon: GraduationCap,
-      label: "Tuyển sinh",
-    },
-    {
-      href: "/notifications",
-      icon: Bell,
-      label: "Thông báo",
-      badge: unreadCount > 0 ? unreadCount : undefined,
-    },
-    {
-      href: "/profile",
-      icon: User,
-      label: "Hồ sơ",
-    },
-  ];
+  // Flatten role-filtered navigation items
+  const allNavItems = useMemo(() => {
+    return navigation.flatMap(group => group.items);
+  }, [navigation]);
+
+  // Build mobile nav: pick top 4 from priority list + profile
+  const mobileItems = useMemo(() => {
+    const items: Array<{
+      href: string;
+      icon: React.ComponentType<{ className?: string }>;
+      label: string;
+      badge?: number;
+    }> = [];
+
+    for (const href of MOBILE_PRIORITY_HREFS) {
+      if (items.length >= 4) break;
+      const found = allNavItems.find(item => item.href === href);
+      if (found?.icon) {
+        items.push({
+          href: found.href,
+          icon: found.icon,
+          label: found.label,
+          badge: found.href === "/notifications" && unreadCount > 0 ? unreadCount : undefined,
+        });
+      }
+    }
+
+    // Always add profile as the last (5th) item
+    items.push({ href: "/profile", icon: User, label: "Hồ sơ" });
+
+    return items;
+  }, [allNavItems, unreadCount]);
 
   const isActive = (href: string) => {
-    if (href === "/dashboard") {
+    if (href === "/dashboard" || href === "/dashboard/officer") {
       return pathname === "/dashboard" || pathname === "/dashboard/officer";
     }
     return pathname.startsWith(href);
   };
 
   return (
-    <nav 
+    <nav
       className={cn(
         // Base styles
         "fixed bottom-0 left-0 right-0 z-50",
@@ -82,10 +98,10 @@ export function MobileBottomNav() {
       )}
     >
       <div className="flex items-center justify-around h-16 px-2">
-        {navItems.map((item) => {
+        {mobileItems.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.href);
-          
+
           return (
             <Link
               key={item.href}
@@ -96,8 +112,8 @@ export function MobileBottomNav() {
                 "min-w-[56px] min-h-[44px] px-2 py-1",
                 "rounded-lg transition-colors",
                 // Active/inactive states
-                active 
-                  ? "text-primary bg-primary/10" 
+                active
+                  ? "text-primary bg-primary/10"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
               )}
             >

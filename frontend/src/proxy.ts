@@ -16,7 +16,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { decodeJWT, isTokenExpired } from "@/lib/auth/jwt-decode";
-import { hasAdminAccess } from "@/lib/config/roles";
+import { hasAdminAccess, hasFinanceAccess } from "@/lib/config/roles";
 
 // ============================================
 // 🛣️ ROUTE CONFIGURATION
@@ -38,6 +38,11 @@ const PUBLIC_ROUTES = [
 const ADMIN_ROUTES = ["/admin"];
 
 /**
+ * Finance routes (requires accountant, manager, or admin role)
+ */
+const FINANCE_ROUTES = ["/finance"];
+
+/**
  * Protected routes that require authentication
  * Note: Currently not used - all non-public routes are treated as protected by default
  * Kept for potential future use if specific route handling is needed
@@ -57,6 +62,7 @@ export function proxy(request: NextRequest) {
 
   const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
   const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
+  const isFinanceRoute = FINANCE_ROUTES.some((route) => pathname.startsWith(route));
 
   // Allow public routes without auth check
   if (isPublicRoute) {
@@ -124,6 +130,20 @@ export function proxy(request: NextRequest) {
     }
 
     console.log(`[Proxy] ✅ Admin access granted for role '${userRole}': ${pathname}`);
+  }
+
+  if (isFinanceRoute) {
+    const userRole = payload.role;
+
+    if (!hasFinanceAccess(userRole)) {
+      console.warn(
+        `[Proxy] ❌ Unauthorized role '${userRole || "undefined"}' for finance route: ${pathname}`
+      );
+
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+
+    console.log(`[Proxy] ✅ Finance access granted for role '${userRole}': ${pathname}`);
   }
 
   // ========================================
