@@ -19,7 +19,7 @@ Functions:
 - verify_password_reset_token() - Verify password reset tokens
 """
 
-import uuid
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Tuple
 
@@ -75,7 +75,7 @@ def create_access_token(
     # Add token metadata
     to_encode.update({
         "exp": expire,
-        "jti": str(uuid.uuid4()),  # Unique token ID
+        "jti": secrets.token_urlsafe(16),  # 128-bit cryptographically random token ID
         "type": "access",
         "r_jti": refresh_jti,  # Link to refresh token (for token family)
     })
@@ -126,7 +126,7 @@ def create_refresh_token(
     # Add token metadata
     to_encode.update({
         "exp": expire,
-        "jti": str(uuid.uuid4()),  # Unique token ID
+        "jti": secrets.token_urlsafe(16),  # 128-bit cryptographically random token ID
         "type": "refresh",
     })
 

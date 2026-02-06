@@ -597,7 +597,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
 
     # ✅ NEW: Content Security Policy
-    # Restrictive CSP for API - adjust based on your frontend needs
+    # Restrictive CSP for production, permissive for development
     if settings.APP_ENV == "production":
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
@@ -609,6 +609,16 @@ async def add_security_headers(request: Request, call_next):
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
             "form-action 'self'"
+        )
+    else:
+        # Development/test: permissive CSP that still prevents major attacks
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self' http://localhost:* http://127.0.0.1:*; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: http://localhost:* http://127.0.0.1:*; "
+            "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; "
+            "frame-ancestors 'none'"
         )
 
     # ✅ Referrer Policy
