@@ -757,9 +757,8 @@ async def get_application_for_user(
                 manager_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail="You do not have permission to access this application. "
-                       "This application belongs to a lead outside your managed units."
+            raise ResourceNotFoundError(
+                detail="Application not found"
             )
 
     # OFFICER: Access to applications for their assigned leads only
@@ -781,9 +780,8 @@ async def get_application_for_user(
                 officer_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail="You do not have permission to access this application. "
-                       "This application belongs to a lead assigned to another officer."
+            raise ResourceNotFoundError(
+                detail="Application not found"
             )
 
     # ACCESS DENIED - Unknown role or no permission
@@ -795,8 +793,8 @@ async def get_application_for_user(
         lead_officer_id=lead.assigned_officer_id,
         lead_unit_id=lead.unit_id
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to access this application."
+    raise ResourceNotFoundError(
+        detail="Application not found"
     )
 
 
@@ -1006,9 +1004,8 @@ async def get_distribution_rule_for_user(
                 user_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail=f"You do not have permission to access this distribution rule. "
-                       f"This rule belongs to unit {rule.unit_id}, which is not in your managed units."
+            raise ResourceNotFoundError(
+                detail="Distribution rule not found"
             )
 
     # Officer or other roles: deny access
@@ -1018,9 +1015,8 @@ async def get_distribution_rule_for_user(
         user_id=current_user.id,
         user_role=current_user.role
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to manage distribution rules. "
-               "Only Admins and Managers can access this resource."
+    raise ResourceNotFoundError(
+        detail="Distribution rule not found"
     )
 
 
@@ -1118,9 +1114,8 @@ async def get_organizational_unit_for_user(
                 user_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail=f"You do not have permission to access this organizational unit. "
-                       f"Unit {unit_id} is not in your managed units."
+            raise ResourceNotFoundError(
+                detail="Organizational unit not found"
             )
 
     # Officer: allow read-only if enabled and user belongs to this unit
@@ -1139,8 +1134,8 @@ async def get_organizational_unit_for_user(
                 user_unit_id=current_user.unit_id,
                 user_id=current_user.id
             )
-            raise PermissionDeniedError(
-                detail=f"You can only view your own organizational unit (Unit {current_user.unit_id})."
+            raise ResourceNotFoundError(
+                detail="Organizational unit not found"
             )
 
     # Officer without read permission or other roles: deny access
@@ -1151,9 +1146,8 @@ async def get_organizational_unit_for_user(
         user_role=current_user.role,
         allow_read_only=allow_read_only
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to access organizational units. "
-               "Only Admins and Managers can manage organizational units."
+    raise ResourceNotFoundError(
+        detail="Organizational unit not found"
     )
 
 
@@ -1248,9 +1242,8 @@ async def verify_user_management_permission(
                 current_user_id=current_user.id,
                 current_username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail=f"You do not have permission to manage this user. "
-                       f"User belongs to unit {target_user.unit_id}, which is not in your managed units."
+            raise ResourceNotFoundError(
+                detail="User not found"
             )
 
     # Officer or other roles: deny access
@@ -1260,9 +1253,8 @@ async def verify_user_management_permission(
         current_user_id=current_user.id,
         current_user_role=current_user.role
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to manage users. "
-               "Only Admins and Managers can perform user management operations."
+    raise ResourceNotFoundError(
+        detail="User not found"
     )
 
 

@@ -967,7 +967,7 @@ async def export_leads(
                 try:
                     if len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
-                except:
+                except (TypeError, ValueError):
                     pass
             adjusted_width = min(max_length + 2, 50)  # Cap at 50
             ws.column_dimensions[column_letter].width = adjusted_width
@@ -1108,7 +1108,7 @@ async def download_import_template(
                 try:
                     if len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
-                except:
+                except (TypeError, ValueError):
                     pass
             adjusted_width = max(max_length + 2, 15)  # Min 15 chars
             ws.column_dimensions[column_letter].width = adjusted_width

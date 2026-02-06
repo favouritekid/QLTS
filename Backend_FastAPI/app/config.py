@@ -176,6 +176,38 @@ class Settings(BaseSettings):
         validation_alias="DEVICE_FINGERPRINT_SALT"
     )
 
+    def _validate_production_secrets(self):
+        """Fail-fast validation for production environment secrets."""
+        if self.APP_ENV != "production":
+            return
+
+        weak_secrets = [
+            "a-very-hard-to-guess-string-for-fastapi",
+            "another-super-secret-key-for-fastapi",
+            "your-secret-key-here-change-in-production",
+            "your-jwt-secret-key-here-change-in-production",
+        ]
+
+        if self.SECRET_KEY in weak_secrets or len(self.SECRET_KEY) < 32:
+            raise RuntimeError(
+                "CRITICAL: SECRET_KEY is weak or default. "
+                "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+            )
+        if self.JWT_SECRET_KEY in weak_secrets or len(self.JWT_SECRET_KEY) < 32:
+            raise RuntimeError(
+                "CRITICAL: JWT_SECRET_KEY is weak or default. "
+                "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+            )
+        if self.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
+            raise RuntimeError(
+                "CRITICAL: DEVICE_FINGERPRINT_SALT is still the default value. "
+                "Generate with: openssl rand -base64 32"
+            )
+        if self.LOG_LEVEL == "DEBUG":
+            raise RuntimeError(
+                "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."
+            )
+
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
         "consultation_count_multiplier": 5,
@@ -307,6 +339,8 @@ class Settings(BaseSettings):
 # --- Khởi tạo Settings ---
 try:
     settings = Settings()
+    # ✅ SECURITY: Fail-fast validation for production secrets
+    settings._validate_production_secrets()
     print(
         f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}, DB_URL={settings.DATABASE_URL[:30]}..."
     )  # Log một phần DB_URL

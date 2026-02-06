@@ -450,6 +450,10 @@ fastapi_app = FastAPI(
     description="API for managing leads, users, and system configurations.",
     version="1.0.0",
     lifespan=lifespan,
+    # ✅ SECURITY: Disable API docs in production to prevent information disclosure
+    docs_url="/docs" if settings.APP_ENV != "production" else None,
+    redoc_url="/redoc" if settings.APP_ENV != "production" else None,
+    openapi_url="/openapi.json" if settings.APP_ENV != "production" else None,
 )
 
 
@@ -534,6 +538,31 @@ if settings.APP_ENV == "test" and not _cors_origins:
     _cors_origins = ["http://testserver", "http://localhost"]
     log.info("Test environment: Using test CORS origins", origins=_cors_origins)
 
+# ===============================================================
+# === MIDDLEWARE STACK (Order matters! Last added = outermost = runs first)
+# ===
+# === Request flow: CORS → HTTPS Redirect → CSRF → App
+# === Response flow: App → CSRF → HTTPS Redirect → CORS
+# ===
+# === CORS must be outermost so error responses from inner middleware
+# === (e.g., CSRF 403) always include CORS headers.
+# ===============================================================
+
+# --- Layer 3 (innermost): CSRF Protection ---
+# Validates X-CSRF-Token header for state-changing requests (POST/PUT/DELETE/PATCH)
+# Token is set as a readable cookie on login, frontend sends it in headers
+if settings.APP_ENV != "test":  # Disabled in tests by default
+    fastapi_app.add_middleware(CSRFMiddleware)
+    log.info("✅ CSRF protection middleware enabled")
+
+# --- Layer 2: HTTPS Redirect (production only) ---
+if settings.APP_ENV == "production":
+    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+    fastapi_app.add_middleware(HTTPSRedirectMiddleware)
+    log.info("✅ HTTPS redirect enabled for production")
+
+# --- Layer 1 (outermost): CORS - MUST be last added ---
+# Ensures ALL responses (including middleware errors) have CORS headers
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -542,26 +571,6 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Set-Cookie"],
 )
-
-# ===============================================================
-# === CSRF PROTECTION MIDDLEWARE (Double-Submit Cookie Pattern)
-# ===============================================================
-# Validates X-CSRF-Token header for state-changing requests (POST/PUT/DELETE/PATCH)
-# Token is set as a readable cookie on login, frontend sends it in headers
-# Protects against CSRF attacks even with SameSite=Lax cookies
-if settings.APP_ENV != "test":  # Disabled in tests by default
-    fastapi_app.add_middleware(CSRFMiddleware)
-    log.info("✅ CSRF protection middleware enabled")
-
-
-# ===============================================================
-# === HTTPS REDIRECT MIDDLEWARE (✅ SECURITY FIX: Force HTTPS)
-# ===============================================================
-
-if settings.APP_ENV == "production":
-    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-    fastapi_app.add_middleware(HTTPSRedirectMiddleware)
-    log.info("✅ HTTPS redirect enabled for production")
 
 
 # ===============================================================

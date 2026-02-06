@@ -141,8 +141,8 @@ class BulkActionSchema(BaseModel):
 
 
 class AdminUserCreate(UserCreate):
-    role: str = "user"
-    status: str = "active"
+    role: Literal["admin", "manager", "accountant", "officer", "user"] = "user"
+    status: Literal["active", "pending", "banned"] = "active"
 
 
 class UserUpdate(BaseModel):

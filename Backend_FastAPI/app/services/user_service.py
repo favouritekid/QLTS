@@ -1017,6 +1017,14 @@ async def reset_password(
         Tuple of (user, post_commit_callback)
     """
     try:
+        # ✅ SECURITY: Check if token was already used (single-use enforcement)
+        token_hash = token[:32]  # Use prefix as key to avoid storing full token
+        used_key = f"reset_token_used:{token_hash}"
+        already_used = await safe_redis_get(used_key)
+        if already_used:
+            log.warning("Reset token reuse attempt blocked", token_prefix=token[:10])
+            raise InvalidToken(detail="This reset link has already been used")
+
         email = verify_password_reset_token(token)
         if not email:
             log.warning(
@@ -1055,6 +1063,8 @@ async def reset_password(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
+            # ✅ SECURITY: Blacklist token after successful use (single-use enforcement)
+            await safe_redis_set(used_key, "1", ex=1800)  # 30 min (matches token expiry)
             log.info("User password reset successfully", user_id=user.id)
 
         return user, _post_commit
