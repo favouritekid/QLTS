@@ -98,7 +98,7 @@ async def get_active_sessions(
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_session(
     request: Request,
-    session_id: int,
+    session: models.UserSession = Depends(deps.get_session_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(deps.get_current_user),
 ):
@@ -107,36 +107,36 @@ async def revoke_session(
 
     Security:
         - Requires authentication
-        - Users can only revoke their own sessions
+        - IDOR protection via get_session_for_user dependency (returns 404 if not owned)
 
     Raises:
         404: Session not found or doesn't belong to user
     """
-    log.info("Revoking session", user_id=current_user.id, session_id=session_id)
+    log.info("Revoking session", user_id=current_user.id, session_id=session.id)
 
     success, callback = await session_service.revoke_session(
         db=db,
-        session_id=session_id,
+        session_id=session.id,
         user_id=current_user.id
     )
 
     if not success:
         log.warning(
-            "Session not found or already revoked",
+            "Session already revoked",
             user_id=current_user.id,
-            session_id=session_id,
+            session_id=session.id,
         )
         raise SessionNotFoundError(detail="Session not found or already revoked")
 
     await db.commit()
-    
+
     if callback:
         await callback()
 
     log.info(
         "Session revoked successfully",
         user_id=current_user.id,
-        session_id=session_id,
+        session_id=session.id,
     )
 
     return None  # 204 No Content

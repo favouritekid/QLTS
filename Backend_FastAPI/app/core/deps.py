@@ -888,6 +888,45 @@ async def get_notification_for_user(
     )
 
 
+async def get_session_for_user(
+    session_id: int = Path(..., description="ID of the Session"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> models.UserSession:
+    """
+    Verify ownership and retrieve a user session.
+
+    **IDOR Prevention:**
+    Returns 404 (not 403) when session doesn't belong to user,
+    preventing attackers from enumerating valid session IDs.
+
+    Args:
+        session_id: ID of the session to access
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
+
+    Returns:
+        UserSession model if access is permitted
+
+    Raises:
+        ResourceNotFoundError: If session doesn't exist OR user doesn't own it
+    """
+    from ..repositories.session_repository import SessionRepository
+
+    repo = SessionRepository(db)
+    session = await repo.get_for_update(session_id, current_user.id)
+
+    if not session:
+        log.warning(
+            "IDOR attempt or session not found",
+            session_id=session_id,
+            user_id=current_user.id,
+        )
+        raise ResourceNotFoundError(detail="Session not found")
+
+    return session
+
+
 async def get_user_managed_units(
     db: AsyncSession,
     user_id: int
