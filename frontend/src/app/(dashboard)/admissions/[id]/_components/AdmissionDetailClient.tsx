@@ -1,25 +1,55 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useForm, FormProvider, useWatch } from "react-hook-form"
+import { useState, useEffect, useCallback } from "react"
+import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
 
 import {
-  useGetAdmission,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import { Label } from "@/components/ui/label"
+
+// T3.3 Fix: Use ViewModel hook instead of separate hooks
+import {
+  useAdmissionViewModel,
   useUpdateAdmission,
   useSubmitAdmission,
+  useApproveAdmission,  // ✅ NEW
+  useRejectAdmission,   // ✅ NEW
   useEnrollStudent,
+  useDeleteAdmission,
 } from "@/hooks/admissions"
 import {
   admissionProfileUpdateSchema,
   type AdmissionProfileResponse,
   type AdmissionProfileUpdate,
+  type AdmissionProfileUpdateInput,
 } from "@/lib/zod/admissions"
+
+// Architecture Standards (Phase 7)
+import { usePermissions } from "@/hooks/usePermissions"
 
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
-import { useAdmissionValidation } from "../_hooks/useAdmissionValidation"
 import { AdmissionActions } from "./AdmissionActions"
 
 // Tabs
@@ -31,12 +61,6 @@ import { DocumentsTab } from "./tabs/DocumentsTab"
 import { TuitionTab } from "./tabs/TuitionTab"
 import { FinalizeTab } from "./tabs/FinalizeTab"
 
-interface SubmitResult {
-  status: "approved" | "rejected" | null
-  message?: string | null
-  errors?: string[] | null
-}
-
 interface AdmissionDetailClientProps {
   profileId: number
   initialData: AdmissionProfileResponse
@@ -46,179 +70,398 @@ export function AdmissionDetailClient({
   profileId,
   initialData,
 }: AdmissionDetailClientProps) {
-  // 1. Data Fetching
-  const { data: profile } = useGetAdmission(profileId, {
+  // =========================================================================
+  // 1. Data Fetching via ViewModel (T3.3 - Architecture Compliant)
+  // =========================================================================
+  const { data: vm, isLoading } = useAdmissionViewModel(profileId, {
     initialData,
-    staleTime: 15000, // 15 seconds - auto-refresh when stale
+    staleTime: 0, // Phase 4 Fix: Always refetch on invalidate for realtime badge updates
   })
 
+  // Mutations
   const updateMutation = useUpdateAdmission(profileId)
   const submitMutation = useSubmitAdmission(profileId)
+  const approveMutation = useApproveAdmission(profileId)  // ✅ NEW
+  const rejectMutation = useRejectAdmission(profileId)    // ✅ NEW
   const enrollMutation = useEnrollStudent(profileId)
+  const deleteMutation = useDeleteAdmission(profileId)
 
-  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
-  
-  // 2. Navigation State
+  // =========================================================================
+  // 2. Permission-Based Rendering (from ViewModel)
+  // =========================================================================
+  // ViewModel includes permissions field via ...rest spread (useAdmissionViewModel.ts:209)
+  // Safe to pass directly to usePermissions
+  const { can } = usePermissions(vm)
+
+  // =========================================================================
+  // 3. Backend-Computed State (from ViewModel - NO local calculation)
+  // @see FRONTEND_ARCHITECTURE_V3.md Section 2.6
+  // =========================================================================
+  const isEligible = vm?.isEligible ?? false
+  const validationErrors = vm?.validationErrors ?? []
+  const validationSummary = vm?.validationSummary
+  const groupedValidationErrors = vm?.groupedValidationErrors
+  const stepsStatusRecord = vm?.stepsStatus ?? {}
+
+  // =========================================================================
+  // 4. Derived Profile (for component compatibility)
+  // ViewModel spreads all AdmissionProfileResponse fields via ...rest
+  // Type assertion is safe but needed for TypeScript compatibility
+  // =========================================================================
+  const profile = vm as AdmissionProfileResponse | null
+
+  // =========================================================================
+  // 5. Navigation State
+  // =========================================================================
   const [currentStep, setCurrentStep] = useState(1)
+  const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false)
+  const [pendingStep, setPendingStep] = useState<number | null>(null)
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
+  const [rejectReason, setRejectReason] = useState("")
 
-  const isDraft = profile?.status === "draft" || profile?.status === "rejected"
-  const isApproved = profile?.status === "approved"
-  const isEditable = isDraft
-
-  // 3. Form Setup
-  const form = useForm<AdmissionProfileUpdate>({
+  // =========================================================================
+  // 6. Form Setup
+  // =========================================================================
+  const form = useForm<AdmissionProfileUpdateInput>({
     resolver: zodResolver(admissionProfileUpdateSchema),
+    mode: "onBlur", // ADR-FE-001: Validate on blur, not on every change
     defaultValues: {
-      citizen_id: profile?.citizen_id || "",
-      full_name: profile?.full_name || "",
-      phone: profile?.phone || "",
-      email: profile?.email || "",
-      dob: profile?.dob || undefined,
-      gender: profile?.gender || "",
-      social_insurance_number: profile?.social_insurance_number || "",
-      nationality: profile?.nationality || "",
-      ethnicity: profile?.ethnicity || "",
-      religion: profile?.religion || "",
-      disability_type: profile?.disability_type || "",
-      permanent_province: profile?.permanent_province || "",
-      permanent_district: profile?.permanent_district || "",
-      permanent_ward: profile?.permanent_ward || "",
-      place_of_birth: profile?.place_of_birth || "",
-      native_place: profile?.native_place || "",
-      union_entry_date: profile?.union_entry_date || undefined,
-      party_entry_date: profile?.party_entry_date || undefined,
-      party_official_entry_date: profile?.party_official_entry_date || undefined,
-      family_info: profile?.family_info || [],
-      academic_history: profile?.academic_history || [],
-      admission_scores: profile?.admission_scores || {},
-      documents_checklist: profile?.documents_checklist || [],
-      version: profile?.version ?? 1,
+      citizen_id: vm?.citizen_id || "",
+      full_name: vm?.full_name || "",
+      phone: vm?.phone || "",
+      email: vm?.email || "",
+      dob: vm?.dob || undefined,
+      gender: vm?.gender || "",
+      social_insurance_number: (profile as AdmissionProfileResponse)?.social_insurance_number || "",
+      nationality: (profile as AdmissionProfileResponse)?.nationality || "",
+      ethnicity: (profile as AdmissionProfileResponse)?.ethnicity || "",
+      religion: (profile as AdmissionProfileResponse)?.religion || "NONE",
+      disability_type: (profile as AdmissionProfileResponse)?.disability_type || "NONE",
+      permanent_province: (profile as AdmissionProfileResponse)?.permanent_province || "",
+      permanent_district: (profile as AdmissionProfileResponse)?.permanent_district || "",
+      permanent_ward: (profile as AdmissionProfileResponse)?.permanent_ward || "",
+      place_of_birth: (profile as AdmissionProfileResponse)?.place_of_birth || "",
+      native_place: (profile as AdmissionProfileResponse)?.native_place || "",
+      union_entry_date: (profile as AdmissionProfileResponse)?.union_entry_date || undefined,
+      party_entry_date: (profile as AdmissionProfileResponse)?.party_entry_date || undefined,
+      party_official_entry_date: (profile as AdmissionProfileResponse)?.party_official_entry_date || undefined,
+      family_info: vm?.family_info || [],
+      academic_history: vm?.academic_history || [],
+      admission_scores: vm?.admission_scores || {},
+      documents_checklist: vm?.documents_checklist || [],
+      version: vm?.version ?? 1,
     },
   })
 
-  // 3.1 Form Reset on Data Update
+  // Form Reset on Data Update
+  // CRITICAL: Use vm.version as dependency to detect server-side changes
+  // vm.version is incremented by backend on each successful update
   useEffect(() => {
-    if (profile) {
+    if (vm) {
+      const p = vm as unknown as AdmissionProfileResponse
       form.reset({
-        citizen_id: profile.citizen_id || "",
-        full_name: profile.full_name || "",
-        phone: profile.phone || "",
-        email: profile.email || "",
-        dob: profile.dob || undefined,
-        gender: profile.gender || "",
-        social_insurance_number: profile.social_insurance_number || "",
-        nationality: profile.nationality || "",
-        ethnicity: profile.ethnicity || "",
-        religion: profile.religion || "",
-        disability_type: profile.disability_type || "",
-        permanent_province: profile.permanent_province || "",
-        permanent_district: profile.permanent_district || "",
-        permanent_ward: profile.permanent_ward || "",
-        place_of_birth: profile.place_of_birth || "",
-        native_place: profile.native_place || "",
-        union_entry_date: profile.union_entry_date || undefined,
-        party_entry_date: profile.party_entry_date || undefined,
-        party_official_entry_date: profile.party_official_entry_date || undefined,
-        family_info: profile.family_info || [],
-        academic_history: profile.academic_history || [],
-        admission_scores: profile.admission_scores || {},
-        documents_checklist: profile.documents_checklist || [],
-        version: profile.version ?? 1,
+        citizen_id: vm.citizen_id || "",
+        full_name: vm.full_name || "",
+        phone: vm.phone || "",
+        email: vm.email || "",
+        dob: vm.dob || undefined,
+        gender: vm.gender || "",
+        social_insurance_number: p.social_insurance_number || "",
+        nationality: p.nationality || "",
+        ethnicity: p.ethnicity || "",
+        religion: p.religion || "NONE",
+        disability_type: p.disability_type || "NONE",
+        permanent_province: p.permanent_province || "",
+        permanent_district: p.permanent_district || "",
+        permanent_ward: p.permanent_ward || "",
+        place_of_birth: p.place_of_birth || "",
+        native_place: p.native_place || "",
+        union_entry_date: p.union_entry_date || undefined,
+        party_entry_date: p.party_entry_date || undefined,
+        party_official_entry_date: p.party_official_entry_date || undefined,
+        family_info: vm.family_info || [],
+        academic_history: vm.academic_history || [],
+        admission_scores: vm.admission_scores || {},
+        documents_checklist: vm.documents_checklist || [],
+        version: vm.version ?? 1,
       })
     }
-  }, [profile, form])
+  }, [vm?.version, form]) // Use version as stable change indicator
 
-  // 4. Real-time Validation Logic (Pipeline Status)
-  const { stepsStatus, isEligible, missingItems, metrics } = useAdmissionValidation(form, profile)
-  
-  // Watch for validation changes to update local step status if needed, 
-  // but strictly speaking dependent components use derived state.
-  // We keep stepsStatus for Layout.
+  // Phase 3: Sync backend validation_errors to RHF field errors
+  // Trigger on vm.version change (stable indicator of backend updates)
+  useEffect(() => {
+    const errors = vm?.validationErrors ?? []
 
-  // Determine global eligibility (already returned by hook)
-  // const isEligible = stepsStatus[7] !== "locked" -> handled by hook
+    // Clear all previous errors first
+    form.clearErrors()
 
-  // 5. Handlers
-  const handleSave = () => {
-    const data = form.getValues()
-    const payload = {
-      ...data,
-      citizen_id: data.citizen_id === "" ? null : data.citizen_id,
-      admission_scores: !data.admission_scores?.gpa ? null : data.admission_scores
+    if (errors.length > 0) {
+      errors.forEach(error => {
+        const lower = error.toLowerCase()
+
+        // Skip document-related errors (they don't map to fields)
+        if (lower.includes("tài liệu") || lower.includes("minh chứng") || lower.includes("document")) {
+          return
+        }
+
+        // Map FIELD errors only (not documents)
+        if (lower.includes("chưa nhập cccd") || lower.includes("citizen_id")) {
+          form.setError("citizen_id", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập họ tên") || lower.includes("full_name")) {
+          form.setError("full_name", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập email") || lower.includes("email không hợp lệ")) {
+          form.setError("email", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập số điện thoại") || lower.includes("phone")) {
+          form.setError("phone", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập ngày sinh") || lower.includes("dob")) {
+          form.setError("dob", { type: "backend", message: error })
+        } else if (lower.includes("chưa chọn giới tính")) {
+          form.setError("gender", { type: "backend", message: error })
+        } else if (lower.includes("gpa") && !lower.includes("tài liệu")) {
+          form.setError("admission_scores", { type: "backend", message: error })
+        }
+        // Add more field-specific mappings as needed
+      })
     }
-    updateMutation.mutate(payload)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vm?.version])
+
+  // =========================================================================
+  // Phase 4: Unsaved Changes Warning
+  // =========================================================================
+  const isDirty = form.formState.isDirty
+
+  // Warn on browser navigation (back/close/refresh)
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault()
+        e.returnValue = "" // Chrome requires returnValue to be set
+      }
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
+  }, [isDirty])
+
+  // =========================================================================
+  // 7. Handlers
+  // =========================================================================
+  const handleStepChange = useCallback((newStep: number) => {
+    if (isDirty) {
+      setPendingStep(newStep)
+      setUnsavedDialogOpen(true)
+      return
+    }
+    setCurrentStep(newStep)
+  }, [isDirty])
+
+  const handleConfirmStepChange = useCallback(() => {
+    if (pendingStep !== null) {
+      form.reset(form.getValues(), { keepValues: true })
+      setCurrentStep(pendingStep)
+      setPendingStep(null)
+    }
+    setUnsavedDialogOpen(false)
+  }, [pendingStep, form])
+
+  const handleSave = () => {
+    // Phase 4: Save draft without validation
+    // "Lưu thay đổi" should allow incomplete data (draft mode)
+    // Use getValues() instead of handleSubmit() to bypass required validation
+    const data = form.getValues()
+
+    // Transform empty strings to null manually (since we're not using handleSubmit)
+    const transformedData: Record<string, unknown> = { ...data }
+    Object.keys(transformedData).forEach(key => {
+      if (transformedData[key] === "") {
+        transformedData[key] = null
+      }
+    })
+
+    updateMutation.mutate(transformedData as AdmissionProfileUpdate, {
+      onSuccess: () => {
+        // Reset dirty state after successful save
+        form.reset(form.getValues(), { keepValues: true })
+      }
+    })
   }
 
   const handleSubmit = async () => {
-    const result = await submitMutation.mutateAsync()
-    setSubmitResult(result)
-    // On success, maybe redirect or refresh
+    await submitMutation.mutateAsync()
   }
 
   const handleEnroll = () => {
     enrollMutation.mutate()
   }
 
+  /**
+   * Approve Handler (Manager/Admin)
+   * Thin Client: Only delegates to mutation, NO business logic
+   * Version read from ViewModel (backend source of truth)
+   */
+  const handleApprove = () => {
+    if (!vm?.version) {
+      toast.error("Không thể phê duyệt: thiếu version")
+      return
+    }
+    
+    approveMutation.mutate({
+      version: vm.version,
+      notes: undefined, // Optional approval notes
+    })
+  }
+
+  /**
+   * Reject Handler (Manager/Admin)
+   * Thin Client: Only collects input and delegates to mutation
+   * Validation handled by Zod schema in mutation hook
+   */
+  const handleReject = () => {
+    setRejectReason("")
+    setRejectDialogOpen(true)
+  }
+
+  const handleConfirmReject = () => {
+    if (rejectReason.length < 10) {
+      toast.error("Lý do từ chối phải có ít nhất 10 ký tự")
+      return
+    }
+    if (!vm?.version) {
+      toast.error("Không thể từ chối: thiếu version")
+      return
+    }
+    rejectMutation.mutate({
+      reason: rejectReason,
+      version: vm.version,
+    })
+    setRejectDialogOpen(false)
+  }
+
+  // Phase 7: Delete Handler
+  const handleDelete = () => {
+    deleteMutation.mutate()
+  }
+
   const handleCheckCondition = () => {
-      // Logic to highlight errors
-      // Could scroll to first error step
-      if (stepsStatus[1] === "error") setCurrentStep(1)
-      else if (stepsStatus[2] === "error") setCurrentStep(2)
-      else if (stepsStatus[4] === "error") setCurrentStep(4)
+    // Navigate to first error step using backend-computed status
+    if (stepsStatusRecord[1] === "error") handleStepChange(1)
+    else if (stepsStatusRecord[4] === "error") handleStepChange(4)
+    else if (stepsStatusRecord[5] === "error") handleStepChange(5)
   }
 
   if (!profile) return null
 
+  // =========================================================================
+  // 8. Render
+  // =========================================================================
   return (
     <FormProvider {...form}>
-        <AdmissionLayout 
-            profile={profile}
-            currentStep={currentStep}
-            onStepChange={setCurrentStep}
-            stepsStatus={stepsStatus}
-            validation={{ isEligible, missingItems }}
-        >
-            {/* ALERT MESSAGES */}
-            {submitResult && submitResult.status === "rejected" && (
-                <div className="mb-6">
-                    <Alert variant="destructive">
-                    <AlertDescription>
-                        <ul className="list-disc pl-5">
-                        {submitResult.errors?.map((err, idx) => (
-                            <li key={idx}>{err}</li>
-                        ))}
-                        </ul>
-                    </AlertDescription>
-                    </Alert>
-                </div>
-            )}
-
-            {/* TAB CONTENT */}
-            <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
-                {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as any} isEditable={isEditable} />}
-                {currentStep === 2 && <FamilyTab form={form as any} isEditable={isEditable} />}
-                {currentStep === 3 && <AcademicHistoryTab form={form as any} isEditable={isEditable} />}
-                {currentStep === 4 && <ScoresTab form={form as any} isEditable={isEditable} minGpa={metrics.minGpa} appliedRules={profile.applied_rules} />}
-                {currentStep === 5 && <DocumentsTab profile={profile} isEditable={isEditable} />}
-                {currentStep === 6 && <TuitionTab profile={profile} />}
-                {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
-            </div>
-
-            {/* STICKY ACTIONS */}
-            <AdmissionActions 
-                status={profile.status}
-                isDraft={isDraft}
-                isApproved={isApproved}
-                isSaving={updateMutation.isPending}
-                isSubmitting={submitMutation.isPending}
-                isEnrolling={enrollMutation.isPending}
-                onSave={handleSave}
-                onSubmit={handleSubmit}
-                onEnroll={handleEnroll}
-                onCheckCondition={handleCheckCondition}
-                isEligible={isEligible}
+      <AdmissionLayout
+        profile={profile}
+        currentStep={currentStep}
+        onStepChange={handleStepChange}
+        stepsStatus={stepsStatusRecord}
+        validation={{ isEligible, missingItems: [] }}
+        validationErrors={validationErrors}
+        validationSummary={validationSummary}
+        groupedValidationErrors={groupedValidationErrors}
+      >
+        {/* TAB CONTENT */}
+        <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
+          {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
+          {currentStep === 2 && <FamilyTab form={form} isEditable={can('edit')} />}
+          {currentStep === 3 && <AcademicHistoryTab form={form} isEditable={can('edit')} />}
+          {currentStep === 4 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
+          {currentStep === 5 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
+          {currentStep === 6 && <TuitionTab profile={profile} />}
+          {currentStep === 7 && (
+            <FinalizeTab
+              profile={profile}
+              isEligible={isEligible}
+              onSubmit={handleSubmit}
+              isSubmitting={submitMutation.isPending}
+              onApprove={handleApprove}              // ✅ NEW
+              onReject={handleReject}                // ✅ NEW
+              isApproving={approveMutation.isPending} // ✅ NEW
+              isRejecting={rejectMutation.isPending} // ✅ NEW
+              canApprove={can('approve')}
             />
-        </AdmissionLayout>
+          )}
+        </div>
+
+        {/* STICKY ACTIONS (Phase 2: Context-based buttons) */}
+        <AdmissionActions
+          profile={profile}
+          currentStep={currentStep}
+          onStepChange={handleStepChange}
+          isSaving={updateMutation.isPending}
+          isSubmitting={submitMutation.isPending}
+          isEnrolling={enrollMutation.isPending}
+          onSave={handleSave}
+          onSubmit={handleSubmit}
+          onEnroll={handleEnroll}
+          onDelete={handleDelete}
+          isDeleting={deleteMutation.isPending}
+          onCheckCondition={handleCheckCondition}
+        />
+      </AdmissionLayout>
+
+      {/* Unsaved Changes Dialog */}
+      <AlertDialog open={unsavedDialogOpen} onOpenChange={setUnsavedDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Thay đổi chưa lưu</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn có thay đổi chưa lưu. Bạn có chắc muốn chuyển sang bước khác? Thay đổi sẽ bị mất.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Ở lại và lưu</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmStepChange}>
+              Tiếp tục
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reject Reason Dialog */}
+      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Từ chối hồ sơ</DialogTitle>
+            <DialogDescription>
+              Nhập lý do từ chối (tối thiểu 10 ký tự).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="reject-reason">Lý do từ chối</Label>
+            <Textarea
+              id="reject-reason"
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Nhập lý do từ chối…"
+              rows={3}
+            />
+            {rejectReason.length > 0 && rejectReason.length < 10 && (
+              <p className="text-sm text-destructive">Tối thiểu 10 ký tự ({rejectReason.length}/10)</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>
+              Hủy
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmReject}
+              disabled={rejectReason.length < 10 || rejectMutation.isPending}
+            >
+              {rejectMutation.isPending ? "Đang từ chối…" : "Từ chối"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </FormProvider>
   )
 }

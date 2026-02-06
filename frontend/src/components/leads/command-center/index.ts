@@ -15,3 +15,5 @@ export { BulkDeleteDialog } from "./BulkDeleteDialog";
 export { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 // ✅ Phase 3: Contextual empty states
 export { EmptyLeadsState } from "./EmptyLeadsState";
+// Mobile components
+export { MobileLeadCard, MobileLeadList } from "./MobileLeadCard";

@@ -1,8 +1,8 @@
 // src/components/leads/ConsultationDialog.tsx
 "use client";
 
-import { useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useEffect, useMemo } from "react";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Loader2 } from "lucide-react";
@@ -12,10 +12,10 @@ import { FormDialog, useFormDialogClose } from "@/components/ui/form-dialog";
 import {
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { FormActions } from "@/components/common/form/ResponsiveFormLayout";
 import {
   Form,
   FormControl,
@@ -36,9 +36,11 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { DateTimePicker } from "@/components/common/form";
 
-import { useAddConsultation, useUpdateConsultation } from "@/hooks/useLeads";
-import { useAllowedNextStatuses } from "@/hooks/usePipeline";
+import { useAddConsultation, useUpdateConsultation, useLead } from "@/hooks/useLeads";
+import { useAllowedNextStatuses, useConsultationStatuses } from "@/hooks/usePipeline";
+import { useWorkflowContext, getAllowedStatusIds } from "@/hooks/useWorkflowContext";
 import { SmartConsultationStatusSelector } from "@/components/common/selectors";
+import { LossReasonQuickSelect, requiresLossReason } from "@/components/leads/LossReasonQuickSelect";
 import type { Consultation, ConsultationUpdate } from "@/types/lead.types";
 
 // Unified validation schema with optional fields for flexibility
@@ -48,6 +50,9 @@ const consultationSchema = z.object({
   notes: z.string().max(1000, "Ghi chú không được quá 1000 ký tự").optional(),
   method: z.enum(["phone", "email", "in_person", "sms", "video_call"]).optional(),
   duration_minutes: z.number().min(0).max(480).optional(),
+  // Loss Reason fields (required when status is final negative)
+  loss_reason_code: z.string().optional().nullable(),
+  loss_reason_note: z.string().max(200, "Ghi chú lý do không được quá 200 ký tự").optional(),
 });
 
 type ConsultationFormValues = z.infer<typeof consultationSchema>;
@@ -89,6 +94,7 @@ function CancelButton({ disabled }: { disabled?: boolean }) {
  * - FormDialog wrapper prevents accidental data loss
  * - isDirty check shows confirmation when closing with unsaved changes
  * - Allowed next statuses for workflow compliance in edit mode
+ * - ✅ Phase-based filtering via useWorkflowContext
  */
 export function ConsultationDialog({
   open,
@@ -103,10 +109,48 @@ export function ConsultationDialog({
   const addMutation = useAddConsultation();
   const updateMutation = useUpdateConsultation();
 
-  // Get allowed next statuses for edit mode (workflow compliance)
+  // ✅ FIX: Fetch lead data to get current consultation status for CREATE mode
+  const { data: lead } = useLead(leadId, open && isCreate);
+
+  // Determine current status ID based on mode:
+  // - CREATE mode: use lead's current consultation_status_id
+  // - EDIT mode: use the consultation's status (for editing existing consultation)
+  const currentStatusId = isCreate
+    ? (lead?.consultation_status_id || null)
+    : (consultation?.consultation_status_id || null);
+
+  // Get allowed next statuses using FSM engine (filtered by selectable_mode)
+  // This ensures officers only see statuses they're allowed to select
   const { data: allowedStatuses, isLoading: statusesLoading } = useAllowedNextStatuses(
-    isEdit ? (consultation?.consultation_status_id || null) : null
+    currentStatusId,
+    leadId
   );
+
+  // ✅ PHASE-BASED WORKFLOW: Get workflow context for phase filtering
+  const { data: workflowContext } = useWorkflowContext(leadId, { enabled: open });
+  const allowedByPhase = getAllowedStatusIds(workflowContext);
+
+  // Combine transition-based and phase-based filtering for BOTH modes
+  const filteredAllowedStatusIds = useMemo(() => {
+    const transitionIds = allowedStatuses?.map(s => s.id) || [];
+
+    // If no allowed statuses yet (loading), return undefined to show loading state
+    if (transitionIds.length === 0 && statusesLoading) {
+      return undefined;
+    }
+
+    // If no phase context, use transition-based filtering only
+    if (allowedByPhase.size === 0) {
+      return transitionIds.length > 0 ? transitionIds : undefined;
+    }
+
+    // Intersect: status must be allowed by BOTH transitions AND phase
+    const filtered = transitionIds.filter(id => allowedByPhase.has(id));
+    return filtered.length > 0 ? filtered : transitionIds; // Fallback to transition-only if phase filter returns empty
+  }, [allowedStatuses, allowedByPhase, statusesLoading]);
+
+  // Fetch all consultation statuses to check is_final/outcome_type
+  const { data: allStatuses = [] } = useConsultationStatuses();
 
   const form = useForm<ConsultationFormValues>({
     resolver: zodResolver(consultationSchema),
@@ -116,8 +160,18 @@ export function ConsultationDialog({
       notes: "",
       method: "phone",
       duration_minutes: undefined,
+      loss_reason_code: null,
+      loss_reason_note: "",
     },
   });
+
+  // Watch status_id to conditionally show loss reason
+  const watchedStatusId = useWatch({ control: form.control, name: "status_id" });
+  const selectedStatus = useMemo(() => {
+    return allStatuses.find(s => s.id === watchedStatusId) || null;
+  }, [allStatuses, watchedStatusId]);
+  const showLossReason = requiresLossReason(selectedStatus);
+
 
   // Reset/populate form when dialog opens
   useEffect(() => {
@@ -136,6 +190,9 @@ export function ConsultationDialog({
         notes: consultation.notes || "",
         method: consultation.method || "phone",
         duration_minutes: consultation.duration_minutes || undefined,
+        // Loss reason from consultation (if available)
+        loss_reason_code: (consultation as unknown as { loss_reason_code?: string })?.loss_reason_code || null,
+        loss_reason_note: (consultation as unknown as { loss_reason_note?: string })?.loss_reason_note || "",
       });
     } else if (isCreate) {
       // Reset to empty for create mode
@@ -145,11 +202,25 @@ export function ConsultationDialog({
         notes: "",
         method: "phone",
         duration_minutes: undefined,
+        loss_reason_code: null,
+        loss_reason_note: "",
       });
     }
   }, [open, consultation, isEdit, isCreate, form]);
 
   const onSubmit = async (data: ConsultationFormValues) => {
+    // Check if loss reason is required for the selected status
+    const targetStatus = allStatuses.find(s => s.id === data.status_id);
+    const needsLossReason = requiresLossReason(targetStatus);
+
+    if (needsLossReason && !data.loss_reason_code) {
+      form.setError("loss_reason_code", {
+        type: "required",
+        message: "Vui lòng chọn lý do không tiếp tục",
+      });
+      return;
+    }
+
     if (isCreate) {
       // Create mode: validate required fields
       if (!data.scheduled_at || !data.status_id) {
@@ -164,6 +235,11 @@ export function ConsultationDialog({
             status_id: data.status_id,
             notes: data.notes,
             method: data.method || "phone",
+            // Include loss reason if provided
+            ...(data.loss_reason_code && {
+              loss_reason_code: data.loss_reason_code,
+              loss_reason_note: data.loss_reason_note,
+            }),
           },
         },
         {
@@ -174,12 +250,23 @@ export function ConsultationDialog({
       );
     } else if (isEdit && consultation) {
       // Edit mode: partial update
-      const updateData: ConsultationUpdate = {};
+      const updateData: ConsultationUpdate & {
+        loss_reason_code?: string | null;
+        loss_reason_note?: string;
+      } = {};
       if (data.scheduled_at) updateData.scheduled_at = data.scheduled_at.toISOString();
       if (data.status_id) updateData.status_id = data.status_id;
       if (data.notes !== undefined) updateData.notes = data.notes;
       if (data.method) updateData.method = data.method;
       if (data.duration_minutes !== undefined) updateData.duration_minutes = data.duration_minutes;
+      // Include loss reason
+      if (needsLossReason) {
+        updateData.loss_reason_code = data.loss_reason_code;
+        if (data.loss_reason_note) updateData.loss_reason_note = data.loss_reason_note;
+      } else {
+        // Clear loss reason if status is not final negative
+        updateData.loss_reason_code = null;
+      }
 
       updateMutation.mutate(
         {
@@ -286,10 +373,14 @@ export function ConsultationDialog({
                   <FormControl>
                     <SmartConsultationStatusSelector
                       value={field.value}
-                      onChange={field.onChange}
+                      onChange={(value) => {
+                        field.onChange(value);
+                        // Clear loss reason error when status changes
+                        form.clearErrors("loss_reason_code");
+                      }}
                       placeholder="Chọn trạng thái"
-                      allowedStatusIds={isEdit ? allowedStatuses?.map(s => s.id) : undefined}
-                      disabled={isEdit && statusesLoading}
+                      allowedStatusIds={filteredAllowedStatusIds}
+                      disabled={statusesLoading}
                       variant="select"
                       showOutcomeType
                     />
@@ -303,6 +394,35 @@ export function ConsultationDialog({
                 </FormItem>
               )}
             />
+
+            {/* Loss Reason - Only shown when status is final negative */}
+            {showLossReason && (
+              <FormField
+                control={form.control}
+                name="loss_reason_code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormControl>
+                      <LossReasonQuickSelect
+                        value={field.value ?? null}
+                        onChange={(code, note) => {
+                          field.onChange(code);
+                          if (note !== undefined) {
+                            form.setValue("loss_reason_note", note);
+                          }
+                          // Clear error on selection
+                          form.clearErrors("loss_reason_code");
+                        }}
+                        note={form.watch("loss_reason_note")}
+                        onNoteChange={(note) => form.setValue("loss_reason_note", note)}
+                        error={form.formState.errors.loss_reason_code?.message}
+                        required
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* Notes */}
             <FormField
@@ -359,13 +479,13 @@ export function ConsultationDialog({
               />
             )}
 
-            <DialogFooter>
+            <FormActions stackOnMobile showDivider>
               <CancelButton disabled={isSubmitting} />
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isCreate ? "Lưu lịch hẹn" : "Cập Nhật"}
               </Button>
-            </DialogFooter>
+            </FormActions>
           </form>
         </Form>
       </DialogContent>

@@ -57,13 +57,13 @@ export function SessionsClient({ initialData }: SessionsClientProps) {
     revokeSessionMutation.isPending || revokeAllOthersMutation.isPending;
 
   return (
-    <div className="container max-w-4xl py-8">
+    <div className="max-w-4xl space-y-4 md:space-y-6">
       {/* Success Message */}
       {successMessage && (
-        <Alert className="mb-6 border-green-500 bg-green-50">
-          <CheckCircle2 className="h-4 w-4 text-green-600" />
-          <AlertTitle className="text-green-800">Thành công</AlertTitle>
-          <AlertDescription className="text-green-700">
+        <Alert className="mb-6 border-success-500 bg-success-50">
+          <CheckCircle2 className="h-4 w-4 text-success-600" />
+          <AlertTitle className="text-success-800">Thành công</AlertTitle>
+          <AlertDescription className="text-success-700">
             {successMessage}
           </AlertDescription>
         </Alert>

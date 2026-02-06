@@ -31,14 +31,24 @@ from .config import settings
 from .database import engine as async_db_engine
 from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
+from .database import AsyncSessionLocal  # For auto-sync templates
 from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
+from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
 from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
+    accounting,  # ✅ FINANCE MODULE: Accounting Period Management
+    administrative,  # ✅ PHASE 4: Administrative Nodes (Province/District/Ward)
     admission_config,  # ✅ PHASE 3: Admission Config + Scoring API
+    admission_paths,  # ✅ PHASE 1: Admission Configuration Console
     admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
     applications,
     auth,
     config_data, # ✅ NEW: Dynamic Config Data (Categories, Import)
+    document_groups,  # ✅ PHASE A.3: DocumentGroup CRUD
+    fees,  # ✅ FINANCE MODULE: Fee Calculation & Management
+    finance_dashboard,  # ✅ FINANCE MODULE: Dashboard Statistics
+    installment_plans,  # ✅ FINANCE MODULE: Installment Plans
+    invoices,  # ✅ FINANCE MODULE: Invoice Lifecycle
     kpi_config,  # ✅ PHASE 5: KPI Configuration Admin
     leads,
     monitoring,
@@ -48,6 +58,7 @@ from .routers import (
     notifications,
     officer,
     organization,
+    payments,  # ✅ FINANCE MODULE: Payment Processing
     pipeline,
     profile,
     security,  # ✅ LOGIN SECURITY: Phase 5 - User response flow
@@ -152,121 +163,186 @@ async def lifespan(app: FastAPI):
         log.info("Casbin 'casbin_rule' table checked/created.")
         adapter = AsyncCasbinAdapter(async_db_engine)
         log.info(f"Casbin Adapter successfully initialized: Type={type(adapter)}")
-        enforcer = casbin.AsyncEnforcer("auth_model.conf", adapter)
+        # ✅ FIX: Use absolute path to avoid working directory issues
+        auth_model_path = Path(__file__).parent.parent / "auth_model.conf"
+        log.info(f"Loading Casbin model from: {auth_model_path}")
+        enforcer = casbin.AsyncEnforcer(str(auth_model_path), adapter)
         await enforcer.load_policy()
         fastapi_app.state.enforcer = enforcer
         log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
 
-        # ✅ DEPRECATED: Default policies are now managed via Alembic migration
-        # Migration: i4j5k6l7m8n9_add_default_casbin_policies.py
+        # =========================================================================
+        # POLICY INITIALIZATION (Phase 4 Fix)
+        # Reference: AUTHORIZATION_DECISIONS.md Decision 14
+        # =========================================================================
         #
-        # This fallback logic is kept for backward compatibility only.
-        # If this runs, it means the migration hasn't been executed yet.
+        # ❌ DEPRECATED: Hardcoded fallback policies have been REMOVED
+        # Policies are now SINGLE SOURCE OF TRUTH from:
+        #   1. policy_templates.py (definition)
+        #   2. Alembic migrations (seeding)
+        #   3. casbin_rule table (runtime)
+        #
+        # If no policies exist:
+        #   - PRODUCTION: Fail-fast (don't start with broken auth)
+        #   - DEV/TEST: Add admin wildcard only (minimal bootstrap)
+        #
         if not enforcer.get_policy():
+            if settings.APP_ENV == "production":
+                log.critical(
+                    "🚨 CRITICAL: No Casbin policies found in production! "
+                    "This means migrations haven't been run. "
+                    "Run: alembic upgrade head"
+                )
+                raise RuntimeError(
+                    "Casbin policies not initialized. Run migrations: alembic upgrade head"
+                )
+            else:
+                # DEV/TEST: Auto-seed from policy_templates.py (Single Source of Truth)
+                from app.casbin_config.policy_templates import SYSTEM_ROLES, apply_template
+                from app.services.casbin_service import CasbinPolicyService
+                
+                log.warning(
+                    "⚠️ No policies found. Auto-seeding from policy_templates.py..."
+                )
+                
+                # Create CasbinPolicyService for proper tracking column updates
+                async with AsyncSessionLocal() as db_session:
+                    casbin_service = CasbinPolicyService(db_session, enforcer)
+                    
+                    total_policies_added = 0
+                    for role_config in SYSTEM_ROLES:
+                        template_id = role_config.get("template_id")
+                        role_name = role_config["name"]
+                        
+                        if template_id:
+                            template_policies = apply_template(template_id, role_name)
+                            
+                            # Convert to tuples for batch operation
+                            policies_tuples = [
+                                (p["subject"], p["object"], p["action"])
+                                for p in template_policies
+                            ]
+                            
+                            # Use add_policies_batch to properly fill tracking columns
+                            batch_result = await casbin_service.add_policies_batch(
+                                policies=policies_tuples,
+                                validate=False,  # Skip validation for bootstrap
+                                template_id=template_id,
+                                applied_by=None  # System seed - no user
+                            )
+                            
+                            total_policies_added += batch_result["added"]
+                            log.info(
+                                f"  ✓ Seeded {role_name} with {batch_result['added']} policies from template '{template_id}'"
+                            )
+                    
+                    log.info(
+                        f"✅ Bootstrap complete: Seeded {len(SYSTEM_ROLES)} system roles "
+                        f"with {total_policies_added} total policies from policy_templates.py"
+                    )
+
+                    # =========================================================================
+                    # FIX: SEED ROLE INHERITANCE (g-policies) - Diamond Inheritance Pattern
+                    # =========================================================================
+                    # Diamond Hierarchy (Separation of Duties):
+                    #
+                    #                    ┌─────────┐
+                    #                    │  Admin  │
+                    #                    └────┬────┘
+                    #                      ▲   ▲
+                    #          ┌───────────┘   └───────────┐
+                    #          │                           │
+                    #     ┌────┴─────┐               ┌─────┴────┐
+                    #     │ Manager  │               │Accountant│
+                    #     └────┬─────┘               └─────┬────┘
+                    #          │                           │
+                    #          └───────────┐   ┌───────────┘
+                    #                      ▼   ▼
+                    #                    ┌─────────┐
+                    #                    │ Officer │
+                    #                    └────┬────┘
+                    #                         │
+                    #                    ┌────┴────┐
+                    #                    │  User   │
+                    #                    └─────────┘
+                    #
+                    # Benefits:
+                    # - Manager: User/Lead management (admission workflow)
+                    # - Accountant: Finance operations (payments, invoices)
+                    # - Manager does NOT inherit Accountant (separation of duties)
+                    # - Admin inherits BOTH branches (full access)
+                    #
+                    role_inheritance = [
+                        ("g", "role:officer", "role:user"),       # Officer inherits from User
+                        ("g", "role:accountant", "role:officer"), # Accountant inherits from Officer
+                        ("g", "role:manager", "role:officer"),    # Manager inherits from Officer (NOT from Accountant!)
+                        ("g", "role:admin", "role:manager"),      # Admin inherits from Manager
+                        ("g", "role:admin", "role:accountant"),   # Admin ALSO inherits from Accountant (Diamond!)
+                    ]
+                    
+                    from sqlalchemy import text
+                    
+                    # Insert 'g' policies directly to ensure they exist
+                    # We mark them with template_id='_system_inheritance' to distinguish from legacy
+                    for ptype, child, parent in role_inheritance:
+                        await db_session.execute(text("""
+                            INSERT INTO casbin_rule (ptype, v0, v1, template_id, applied_at)
+                            SELECT CAST(:ptype AS VARCHAR), CAST(:child AS VARCHAR), CAST(:parent AS VARCHAR), '_system_inheritance', NOW()
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM casbin_rule 
+                                WHERE ptype = CAST(:ptype AS VARCHAR) AND v0 = CAST(:child AS VARCHAR) AND v1 = CAST(:parent AS VARCHAR)
+                            )
+                        """), {"ptype": ptype, "child": child, "parent": parent})
+                        
+                    log.info(f"  ✓ Seeded {len(role_inheritance)} role inheritance rules")
+
+
+                    # Commit tracking column updates to DB
+                    # NOTE: Casbin adapter auto-commits policies, but tracking columns
+                    # are updated via db_session which needs explicit commit
+                    await db_session.commit()
+                    log.info("✅ Tracking columns (template_id, applied_at, applied_by) persisted to database")
+
+        # =========================================================================
+        # AUTO-SYNC TEMPLATES (Phase 5: Drift Detection & Auto-Sync)
+        # Reference: AUTHORIZATION_DECISIONS.md Decision 14
+        # =========================================================================
+        # After policies are loaded, check for drift from templates
+        # DEV mode with AUTO_SYNC_TEMPLATES=True: auto-sync to fix drift
+        # Otherwise: just log warnings for manual review
+        #
+        if settings.AUTO_SYNC_TEMPLATES and settings.APP_ENV == "development":
+            from app.services.casbin_service import CasbinPolicyService
+            
+            # Need a DB session for the service
+            async with AsyncSessionLocal() as db_session:
+                casbin_service = CasbinPolicyService(db_session, enforcer)
+                
+                drift_result = await casbin_service.detect_all_drift()
+                roles_with_drift = drift_result["summary"]["roles_with_drift"]
+                
+                if roles_with_drift > 0:
+                    log.warning(
+                        f"⚠️ Drift detected in {roles_with_drift} roles. "
+                        f"AUTO_SYNC_TEMPLATES is enabled, syncing now..."
+                    )
+                    
+                    # Auto-sync in development mode
+                    sync_result = await casbin_service.sync_all_roles_from_templates(dry_run=False)
+                    
+                    # Reload policies after sync
+                    await enforcer.load_policy()
+                    
+                    log.info(
+                        f"✅ Auto-sync complete: {sync_result['hint']}"
+                    )
+                else:
+                    log.info("✅ No drift detected - all roles match their templates")
+        elif settings.AUTO_SYNC_TEMPLATES and settings.APP_ENV == "production":
             log.warning(
-                "⚠️ No Casbin policies found! Adding default policies as FALLBACK. "
-                "This should NOT happen in production if migrations are run correctly. "
-                "Please run: alembic upgrade head"
+                "⚠️ AUTO_SYNC_TEMPLATES is enabled but ignored in production. "
+                "Use POST /api/admin/roles/sync-all-from-templates for manual sync."
             )
-            # Admin policies (explicit paths due to keyMatch4 limitations)
-            await enforcer.add_policy("role:admin", "/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/users/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/roles/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/policies/*", ".*")
-
-            # ← PHASE 3 & 4: Very explicit sync endpoints (new paths to avoid route conflicts)
-            await enforcer.add_policy("role:admin", "/api/admin/sync/status", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/sync/users", "POST")
-            await enforcer.add_policy("role:admin", "/api/admin/sync/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/roles", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/policies", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/policies/statistics", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/policies/suggestions", "GET")
-
-            await enforcer.add_policy("role:manager", "/api/admin/users", ".*")
-            await enforcer.add_policy("role:manager", "/api/leads/*", ".*")
-            await enforcer.add_policy("role:manager", "/api/leads", "GET")
-            await enforcer.add_policy("role:officer", "/api/leads", "GET")
-            await enforcer.add_policy("role:officer", "/api/leads/{lead_id}", "GET")
-            await enforcer.add_policy(
-                "role:officer", "/api/leads/{lead_id}/consultations", "POST"
-            )
-            await enforcer.add_policy(
-                "role:officer", "/api/leads/{lead_id}/action", "POST"
-            )
-            await enforcer.add_policy("role:user", "/api/profile", "GET")
-            await enforcer.add_policy("role:user", "/api/profile", "PUT")
-            await enforcer.add_policy("role:officer", "/api/profile", "GET")
-            await enforcer.add_policy("role:officer", "/api/profile", "PUT")
-            await enforcer.add_policy("role:manager", "/api/profile", "GET")
-            await enforcer.add_policy("role:manager", "/api/profile", "PUT")
-
-            # Notification policies - all authenticated users can access their own notifications
-            await enforcer.add_policy("role:user", "/api/notifications", "GET")
-            await enforcer.add_policy("role:user", "/api/notifications/mark-as-read", "POST")
-            await enforcer.add_policy("role:user", "/api/notifications/mark-all-as-read", "POST")
-            await enforcer.add_policy("role:user", "/api/notifications/{notification_id}", "DELETE")
-            await enforcer.add_policy("role:officer", "/api/notifications", "GET")
-            await enforcer.add_policy("role:officer", "/api/notifications/mark-as-read", "POST")
-            await enforcer.add_policy("role:officer", "/api/notifications/mark-all-as-read", "POST")
-            await enforcer.add_policy("role:officer", "/api/notifications/{notification_id}", "DELETE")
-            await enforcer.add_policy("role:manager", "/api/notifications", "GET")
-            await enforcer.add_policy("role:manager", "/api/notifications/mark-as-read", "POST")
-            await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
-            await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
-
-            # ✅ PHASE 2.2: Notification Rules (Admin-only) - Visual notification management
-            await enforcer.add_policy("role:admin", "/api/notification-rules", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-rules", "POST")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "PUT")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "DELETE")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}/toggle", "PATCH")
-
-            # ✅ PHASE 3.1: Notification Templates (Admin-only) - Reusable template management
-            await enforcer.add_policy("role:admin", "/api/notification-templates", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-templates", "POST")
-            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "PUT")
-            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "DELETE")
-
-            # ✅ SECURITY FIX: Organization policies - all authenticated users can read, admin can write
-            # READ operations - accessible by all authenticated users
-            await enforcer.add_policy("role:user", "/api/organization-units", "GET")
-            await enforcer.add_policy("role:user", "/api/organization-units/tree-with-aggregation", "GET")
-            await enforcer.add_policy("role:user", "/api/programs", "GET")
-            await enforcer.add_policy("role:user", "/api/programs/{program_id}/offerings", "GET")
-            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info", "GET")
-            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
-            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/current", "GET")
-
-            await enforcer.add_policy("role:officer", "/api/organization-units", "GET")
-            await enforcer.add_policy("role:officer", "/api/organization-units/tree-with-aggregation", "GET")
-            await enforcer.add_policy("role:officer", "/api/programs", "GET")
-            await enforcer.add_policy("role:officer", "/api/programs/{program_id}/offerings", "GET")
-            await enforcer.add_policy("role:officer", "/api/program-offerings", "GET")
-            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info", "GET")
-            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
-            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/current", "GET")
-            await enforcer.add_policy("role:officer", "/api/leads/import", "POST")
-
-            await enforcer.add_policy("role:manager", "/api/organization-units", "GET")
-            await enforcer.add_policy("role:manager", "/api/organization-units/tree-with-aggregation", "GET")
-            await enforcer.add_policy("role:manager", "/api/programs", "GET")
-            await enforcer.add_policy("role:manager", "/api/programs/{program_id}/offerings", "GET")
-            await enforcer.add_policy("role:manager", "/api/program-offerings", "GET")
-            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info", "GET")
-            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
-            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/current", "GET")
-
-            # WRITE operations - admin only (CREATE/UPDATE/DELETE academic info)
-            await enforcer.add_policy("role:admin", "/api/offerings/{offering_id}/academic-info", "POST")
-            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "PATCH")
-            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "DELETE")
-
-            log.warning("⚠️ Fallback default policies added. Please run migrations!")
 
     except Exception as e:
         log.critical(
@@ -274,6 +350,8 @@ async def lifespan(app: FastAPI):
             error=str(e),
             exc_info=True,
         )
+        # ✅ FIX: Re-raise to prevent app from starting without authorization
+        raise
 
     # (Giữ nguyên logic Rate Limiter)
     if settings.APP_ENV != "test":
@@ -372,6 +450,10 @@ fastapi_app = FastAPI(
     description="API for managing leads, users, and system configurations.",
     version="1.0.0",
     lifespan=lifespan,
+    # ✅ SECURITY: Disable API docs in production to prevent information disclosure
+    docs_url="/docs" if settings.APP_ENV != "production" else None,
+    redoc_url="/redoc" if settings.APP_ENV != "production" else None,
+    openapi_url="/openapi.json" if settings.APP_ENV != "production" else None,
 )
 
 
@@ -456,6 +538,31 @@ if settings.APP_ENV == "test" and not _cors_origins:
     _cors_origins = ["http://testserver", "http://localhost"]
     log.info("Test environment: Using test CORS origins", origins=_cors_origins)
 
+# ===============================================================
+# === MIDDLEWARE STACK (Order matters! Last added = outermost = runs first)
+# ===
+# === Request flow: CORS → HTTPS Redirect → CSRF → App
+# === Response flow: App → CSRF → HTTPS Redirect → CORS
+# ===
+# === CORS must be outermost so error responses from inner middleware
+# === (e.g., CSRF 403) always include CORS headers.
+# ===============================================================
+
+# --- Layer 3 (innermost): CSRF Protection ---
+# Validates X-CSRF-Token header for state-changing requests (POST/PUT/DELETE/PATCH)
+# Token is set as a readable cookie on login, frontend sends it in headers
+if settings.APP_ENV != "test":  # Disabled in tests by default
+    fastapi_app.add_middleware(CSRFMiddleware)
+    log.info("✅ CSRF protection middleware enabled")
+
+# --- Layer 2: HTTPS Redirect (production only) ---
+if settings.APP_ENV == "production":
+    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+    fastapi_app.add_middleware(HTTPSRedirectMiddleware)
+    log.info("✅ HTTPS redirect enabled for production")
+
+# --- Layer 1 (outermost): CORS - MUST be last added ---
+# Ensures ALL responses (including middleware errors) have CORS headers
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -464,16 +571,6 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Set-Cookie"],
 )
-
-
-# ===============================================================
-# === HTTPS REDIRECT MIDDLEWARE (✅ SECURITY FIX: Force HTTPS)
-# ===============================================================
-
-if settings.APP_ENV == "production":
-    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-    fastapi_app.add_middleware(HTTPSRedirectMiddleware)
-    log.info("✅ HTTPS redirect enabled for production")
 
 
 # ===============================================================
@@ -500,7 +597,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
 
     # ✅ NEW: Content Security Policy
-    # Restrictive CSP for API - adjust based on your frontend needs
+    # Restrictive CSP for production, permissive for development
     if settings.APP_ENV == "production":
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
@@ -512,6 +609,16 @@ async def add_security_headers(request: Request, call_next):
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
             "form-action 'self'"
+        )
+    else:
+        # Development/test: permissive CSP that still prevents major attacks
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self' http://localhost:* http://127.0.0.1:*; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: http://localhost:* http://127.0.0.1:*; "
+            "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; "
+            "frame-ancestors 'none'"
         )
 
     # ✅ Referrer Policy
@@ -542,13 +649,23 @@ fastapi_app.include_router(leads.router, prefix="/api/leads")
 fastapi_app.include_router(applications.router, prefix="/api")
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ NEW: Admission Profile workflow
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
+fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
+fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
+fastapi_app.include_router(administrative.router, prefix="/api")  # ✅ PHASE 4: Administrative address nodes
 fastapi_app.include_router(pipeline.router, prefix="/api/pipeline")
 fastapi_app.include_router(organization.router, prefix="/api")
 fastapi_app.include_router(officer.router, prefix="/api")
 fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration Admin
 fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api")
+# ✅ FINANCE MODULE: Phase 4 - API Layer
+fastapi_app.include_router(fees.router, prefix="/api")
+fastapi_app.include_router(invoices.router, prefix="/api")
+fastapi_app.include_router(payments.router, prefix="/api")
+fastapi_app.include_router(accounting.router, prefix="/api")
+fastapi_app.include_router(finance_dashboard.router, prefix="/api")
+fastapi_app.include_router(installment_plans.router, prefix="/api")
 
 # ===============================================================
 # === ADMIN ROUTERS (PHASE 2 COMPLETE) =========================

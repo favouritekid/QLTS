@@ -32,8 +32,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/common/EmptyState";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { API_BASE_URL } from "@/lib/api/client";
+import { getCSRFToken, CSRF_HEADER_NAME } from "@/lib/api/csrf";
 import type {
   LoginHistoryItem,
   LoginHistoryResponse,
@@ -57,9 +59,13 @@ async function fetchLoginHistory(): Promise<LoginHistoryResponse> {
  * Confirm a login as legitimate
  */
 async function confirmLogin(data: ConfirmLoginRequest): Promise<ConfirmLoginResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrfToken = getCSRFToken();
+  if (csrfToken) headers[CSRF_HEADER_NAME] = csrfToken;
+
   const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SECURITY.CONFIRM_LOGIN}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     credentials: "include",
     body: JSON.stringify(data),
   });
@@ -71,8 +77,13 @@ async function confirmLogin(data: ConfirmLoginRequest): Promise<ConfirmLoginResp
  * Secure account after suspicious login
  */
 async function secureAccount(loginId: number): Promise<SecureAccountResponse> {
+  const headers: Record<string, string> = {};
+  const csrfToken = getCSRFToken();
+  if (csrfToken) headers[CSRF_HEADER_NAME] = csrfToken;
+
   const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SECURITY.SECURE_ACCOUNT}?login_id=${loginId}`, {
     method: "POST",
+    headers,
     credentials: "include",
   });
   if (!res.ok) throw new Error("Failed to secure account");
@@ -101,7 +112,7 @@ function RiskScoreBadge({ score }: { score: number }) {
     return <Badge variant="destructive">Rủi ro cao ({score})</Badge>;
   }
   if (score >= 40) {
-    return <Badge variant="default" className="bg-amber-500">Rủi ro trung bình ({score})</Badge>;
+    return <Badge variant="default" className="bg-warning-500">Rủi ro trung bình ({score})</Badge>;
   }
   if (score > 0) {
     return <Badge variant="secondary">Rủi ro thấp ({score})</Badge>;
@@ -137,12 +148,12 @@ function LoginHistoryCard({
   })();
 
   return (
-    <Card className={item.is_suspicious ? "border-amber-400 bg-amber-50/50" : ""}>
+    <Card className={item.is_suspicious ? "border-warning-400 bg-warning-50/50" : ""}>
       <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 md:gap-4">
           {/* Left: Device info and status badges */}
           <div className="flex-1 space-y-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 md:gap-2 text-sm md:text-base">
               <DeviceIcon type={item.device_type} />
               <span className="font-medium">
                 {item.browser || "Trình duyệt không xác định"}
@@ -179,17 +190,17 @@ function LoginHistoryCard({
             {/* Anomaly badges */}
             <div className="flex flex-wrap gap-1">
               {item.is_new_ip && (
-                <Badge variant="outline" className="text-amber-600 border-amber-400">
+                <Badge variant="outline" className="text-warning-600 border-warning-400">
                   IP mới
                 </Badge>
               )}
               {item.is_new_device && (
-                <Badge variant="outline" className="text-amber-600 border-amber-400">
+                <Badge variant="outline" className="text-warning-600 border-warning-400">
                   Thiết bị mới
                 </Badge>
               )}
               {item.is_new_location && (
-                <Badge variant="outline" className="text-amber-600 border-amber-400">
+                <Badge variant="outline" className="text-warning-600 border-warning-400">
                   Vị trí mới
                 </Badge>
               )}
@@ -198,23 +209,23 @@ function LoginHistoryCard({
           </div>
 
           {/* Right: Status and actions */}
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col items-start md:items-end gap-2">
             {item.user_response === "confirmed" && (
-              <Badge variant="default" className="bg-green-600">
+              <Badge variant="default" className="bg-success-600">
                 <ShieldCheck className="mr-1 h-3 w-3" />
                 Đã xác nhận
               </Badge>
             )}
             {item.user_response === "secured" && (
-              <Badge variant="default" className="bg-blue-600">
+              <Badge variant="default" className="bg-info-600">
                 <Shield className="mr-1 h-3 w-3" />
                 Đã bảo mật
               </Badge>
             )}
-            
+
             {/* Response buttons for suspicious logins without response */}
             {item.is_suspicious && !item.user_response && (
-              <div className="flex flex-col gap-2 items-end">
+              <div className="flex flex-col gap-2 items-start md:items-end w-full md:w-auto">
                 {/* C3 SECURITY FIX: Warning for stale logins */}
                 {isStale && (
                   <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded flex items-center gap-1">
@@ -222,28 +233,26 @@ function LoginHistoryCard({
                     <span>Đăng nhập cũ hơn 7 ngày - không thể xác nhận</span>
                   </div>
                 )}
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full md:w-auto">
                   <Button
-                    size="sm"
                     variant="outline"
                     onClick={() => onConfirm(item.id)}
                     disabled={isStale}
-                    className={isStale 
-                      ? "text-gray-400 cursor-not-allowed" 
-                      : "text-green-600 hover:text-green-700 hover:bg-green-50"
-                    }
+                    className={`flex-1 md:flex-none min-h-[44px] ${isStale
+                      ? "text-muted-foreground cursor-not-allowed"
+                      : "text-success-600 hover:text-success-700 hover:bg-success-50"
+                    }`}
                     title={isStale ? "Không thể xác nhận đăng nhập cũ hơn 7 ngày" : "Xác nhận đây là bạn"}
                   >
-                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    <CheckCircle2 className="mr-1.5 h-4 w-4" />
                     Là tôi
                   </Button>
                   <Button
-                    size="sm"
                     variant="outline"
                     onClick={() => onSecure(item.id)}
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    className="flex-1 md:flex-none min-h-[44px] text-error-600 hover:text-error-700 hover:bg-error-50"
                   >
-                    <ShieldAlert className="mr-1 h-3 w-3" />
+                    <ShieldAlert className="mr-1.5 h-4 w-4" />
                     Không phải tôi
                   </Button>
                 </div>
@@ -344,7 +353,7 @@ export function LoginHistoryClient() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold">Lịch sử đăng nhập</h2>
+        <h2 className="text-2xl font-bold font-display">Lịch sử đăng nhập</h2>
         <p className="text-muted-foreground">
           Xem lại các lần đăng nhập vào tài khoản của bạn và phát hiện hoạt động bất thường.
         </p>
@@ -352,10 +361,10 @@ export function LoginHistoryClient() {
 
       {/* Success Message */}
       {successMessage && (
-        <Alert className="border-green-500 bg-green-50">
-          <CheckCircle2 className="h-4 w-4 text-green-600" />
-          <AlertTitle className="text-green-800">Thành công</AlertTitle>
-          <AlertDescription className="text-green-700">
+        <Alert className="border-success-500 bg-success-50">
+          <CheckCircle2 className="h-4 w-4 text-success-600" />
+          <AlertTitle className="text-success-800">Thành công</AlertTitle>
+          <AlertDescription className="text-success-700">
             {successMessage}
           </AlertDescription>
         </Alert>
@@ -372,12 +381,12 @@ export function LoginHistoryClient() {
 
       {/* Suspicious logins warning */}
       {suspiciousLogins.length > 0 && (
-        <Alert variant="destructive" className="bg-amber-50 border-amber-400 text-amber-800">
-          <ShieldAlert className="h-4 w-4 text-amber-600" />
-          <AlertTitle className="text-amber-800">
+        <Alert variant="destructive" className="bg-warning-50 border-warning-400 text-warning-800">
+          <ShieldAlert className="h-4 w-4 text-warning-600" />
+          <AlertTitle className="text-warning-800">
             Phát hiện {suspiciousLogins.length} đăng nhập đáng ngờ
           </AlertTitle>
-          <AlertDescription className="text-amber-700">
+          <AlertDescription className="text-warning-700">
             Vui lòng xem xét các đăng nhập bên dưới và xác nhận xem đó có phải là bạn không.
           </AlertDescription>
         </Alert>
@@ -396,8 +405,12 @@ export function LoginHistoryClient() {
 
         {data?.items.length === 0 && (
           <Card>
-            <CardContent className="py-8 text-center text-muted-foreground">
-              Chưa có lịch sử đăng nhập nào.
+            <CardContent className="p-0">
+              <EmptyState
+                icon={<Clock className="h-12 w-12" />}
+                title="Chưa có lịch sử đăng nhập"
+                description="Lịch sử đăng nhập sẽ hiển thị ở đây sau khi bạn đăng nhập."
+              />
             </CardContent>
           </Card>
         )}
@@ -432,7 +445,7 @@ export function LoginHistoryClient() {
               onClick={handleSecureConfirm}
               disabled={secureMutation.isPending}
             >
-              {secureMutation.isPending ? "Đang xử lý..." : "Bảo mật ngay"}
+              {secureMutation.isPending ? "Đang xử lý…" : "Bảo mật ngay"}
             </Button>
           </DialogFooter>
         </DialogContent>

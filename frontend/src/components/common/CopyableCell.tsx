@@ -95,9 +95,9 @@ export function CopyableCell({
             onClick={handleCopy}
             className={cn(
               "group inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 -mx-1.5 -my-0.5",
-              "transition-all duration-150",
+              "transition-colors duration-150",
               "hover:bg-muted/80 active:bg-muted",
-              "focus:outline-none focus:ring-2 focus:ring-primary/20",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
               "cursor-pointer text-left",
               className
             )}
@@ -108,7 +108,7 @@ export function CopyableCell({
             {/* Value */}
             <span className={cn(
               "transition-colors",
-              copied && "text-green-600 dark:text-green-400"
+              copied && "text-success-600 dark:text-success-400"
             )}>
               {displayValue ?? value}
             </span>
@@ -116,13 +116,13 @@ export function CopyableCell({
             {/* Copy icon - appears on hover */}
             {showCopyIcon && (
               <span className={cn(
-                "transition-all duration-150",
-                copied 
-                  ? "opacity-100" 
+                "transition-opacity duration-150",
+                copied
+                  ? "opacity-100"
                   : "opacity-0 group-hover:opacity-60"
               )}>
                 {copied ? (
-                  <Check className="h-3 w-3 text-green-600 dark:text-green-400" />
+                  <Check className="h-3 w-3 text-success-600 dark:text-success-400" />
                 ) : (
                   <Copy className="h-3 w-3 text-muted-foreground" />
                 )}

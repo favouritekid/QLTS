@@ -18,7 +18,7 @@
 import React, { useMemo, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
-import { leadsApi } from "@/lib/api/leads";
+import { leadsApi } from "@/lib/api/leads"; // architecture-allow legacy
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -44,6 +44,8 @@ import {
   ChevronRight,
   GripVertical,
   Zap,
+  Edit,
+  Trash2,
 } from "lucide-react";
 import {
   Table,
@@ -69,7 +71,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useMediaQuery";
+import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -79,6 +84,7 @@ import { CopyableCell } from "@/components/common/CopyableCell";
 import { ActivityIndicator } from "@/components/common/ActivityIndicator";
 import { UrgencyBadge } from "@/components/common/UrgencyBadge";
 import { EmptyLeadsState } from "./EmptyLeadsState";
+import { MobileLeadList } from "./MobileLeadCard";
 
 // =============================================================================
 // TYPES
@@ -134,6 +140,93 @@ const columnHelper = createColumnHelper<Lead>();
 
 const getSourceLabel = (value: string) =>
   LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
+
+// =============================================================================
+// ROW ACTIONS COMPONENT - Responsive (mobile: action sheet, desktop: dropdown)
+// =============================================================================
+
+interface RowActionsProps {
+  lead: Lead;
+  onEdit: (lead: Lead) => void;
+  onDelete: (lead: Lead) => void;
+}
+
+function RowActions({ lead, onEdit, onDelete }: RowActionsProps) {
+  const isMobile = useIsMobile();
+  const [actionSheetOpen, setActionSheetOpen] = React.useState(false);
+
+  if (isMobile) {
+    return (
+      <>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            setActionSheetOpen(true);
+          }}
+          aria-label="Mở menu thao tác"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+        <MobileActionSheet
+          open={actionSheetOpen}
+          onOpenChange={setActionSheetOpen}
+          title={lead.full_name}
+        >
+          <MobileActionSheet.Item
+            icon={Edit}
+            onClick={() => {
+              setActionSheetOpen(false);
+              onEdit(lead);
+            }}
+          >
+            Chỉnh sửa
+          </MobileActionSheet.Item>
+          <MobileActionSheet.Item
+            icon={Trash2}
+            variant="destructive"
+            onClick={() => {
+              setActionSheetOpen(false);
+              onDelete(lead);
+            }}
+          >
+            Xóa
+          </MobileActionSheet.Item>
+          <MobileActionSheet.Cancel onClick={() => setActionSheetOpen(false)} />
+        </MobileActionSheet>
+      </>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={(e) => e.stopPropagation()}
+          aria-label="Mở menu thao tác"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => onEdit(lead)}>
+          Chỉnh sửa
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => onDelete(lead)}
+          className="text-destructive"
+        >
+          Xóa
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 // =============================================================================
 // MAIN COMPONENT
@@ -329,7 +422,8 @@ export function LeadsTable({
         cell: ({ row }) => {
           const stage = row.original.pipeline_stage;
           if (!stage) return <span className="text-muted-foreground">—</span>;
-          const color = STAGE_COLORS[stage.id] || "#6B7280";
+          // Use stage.color_code from database first, fallback to centralized STAGE_COLORS
+          const color = sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id] || "#6B7280";
           return (
             <Badge
               className="text-[10px] h-5 px-2 font-normal whitespace-nowrap"
@@ -346,20 +440,21 @@ export function LeadsTable({
         size: 110,
       }),
 
-      // Consultation Status column - text color from status.color
+      // Consultation Status column - using DynamicColorBadge
       columnHelper.accessor("consultation_status", {
         header: "Trạng thái TĐ",
         cell: ({ row }) => {
           const status = row.original.consultation_status;
           if (!status) return <span className="text-muted-foreground">—</span>;
           return (
-            <Badge
-              variant="secondary"
-              className="text-[10px] h-5 px-2 font-medium whitespace-nowrap"
-              style={{ color: status.color || status.color_code || "inherit" }}
+            <DynamicColorBadge
+              color={status.color || status.color_code}
+              variant="subtle"
+              size="sm"
+              className="text-[10px] h-5 px-2 whitespace-nowrap"
             >
               {status.name}
-            </Badge>
+            </DynamicColorBadge>
           );
         },
         size: 110,
@@ -400,9 +495,9 @@ export function LeadsTable({
           const score = row.original.lead_score ?? 0;
           // Color coding based on score ranges
           let colorClass = "text-muted-foreground";
-          if (score >= 70) colorClass = "text-green-600 font-semibold";
-          else if (score >= 50) colorClass = "text-blue-600 font-medium";
-          else if (score >= 30) colorClass = "text-yellow-600";
+          if (score >= 70) colorClass = "text-success-600 font-semibold";
+          else if (score >= 50) colorClass = "text-info-600 font-medium";
+          else if (score >= 30) colorClass = "text-warning-600";
           return (
             <div className={cn("text-sm text-right tabular-nums pr-2", colorClass)}>
               {score}
@@ -477,33 +572,15 @@ export function LeadsTable({
         size: 50,
       }),
 
-      // Actions column
+      // Actions column - Responsive (mobile: action sheet, desktop: dropdown)
       columnHelper.display({
         id: "actions",
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => onEditLead(row.original)}>
-                Chỉnh sửa
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onDeleteLead(row.original)}
-                className="text-destructive"
-              >
-                Xóa
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <RowActions
+            lead={row.original}
+            onEdit={onEditLead}
+            onDelete={onDeleteLead}
+          />
         ),
         size: 50,
         enableResizing: false,
@@ -646,22 +723,113 @@ export function LeadsTable({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [table, focusedRowIndex, onSelectLead, onEditLead, onSearchFocus, handleClearSelection]);
 
+  // Check if mobile
+  const isMobile = useIsMobile();
+
   // Loading skeleton
   if (isLoading) {
     return (
       <div className="space-y-2 p-4">
-        {Array.from({ length: 10 }).map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full" />
+        {Array.from({ length: isMobile ? 5 : 10 }).map((_, i) => (
+          <Skeleton key={i} className={isMobile ? "h-20 w-full rounded-lg" : "h-12 w-full"} />
         ))}
       </div>
     );
   }
 
+  // ==========================================================================
+  // MOBILE VIEW - Card-based layout for better touch experience
+  // ==========================================================================
+  if (isMobile) {
+    return (
+      <div className="flex h-full flex-col">
+        {/* Mobile Header */}
+        <div className="flex items-center justify-between border-b px-3 py-2">
+          <span className="text-muted-foreground text-sm tabular-nums">
+            {selectedLeads.length > 0 ? (
+              <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
+            ) : (
+              `${totalCount.toLocaleString()} lead`
+            )}
+          </span>
+        </div>
+
+        {/* Mobile List */}
+        <div className="flex-1 overflow-y-auto">
+          {leads.length === 0 ? (
+            <div className="p-4">
+              <EmptyLeadsState
+                hasFilters={hasFilters}
+                searchQuery={searchQuery}
+                totalCount={totalCount}
+                onResetFilters={onResetFilters}
+                onCreateLead={onCreateLead}
+              />
+            </div>
+          ) : (
+            <MobileLeadList
+              leads={leads}
+              selectedLeadId={selectedLeadId}
+              onSelectLead={onSelectLead}
+              onEditLead={onEditLead}
+              onDeleteLead={onDeleteLead}
+            />
+          )}
+        </div>
+
+        {/* Mobile Pagination */}
+        <div className="flex items-center justify-between border-t px-3 py-2">
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-{Math.min(page * pageSize, totalCount)} / {totalCount}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onPageChange?.(page - 1)}
+              disabled={page <= 1}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="text-muted-foreground min-w-[60px] text-center text-xs tabular-nums">
+              {page}/{totalPages || 1}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onPageChange?.(page + 1)}
+              disabled={page >= totalPages}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Bulk Actions Bar */}
+        {onBulkAssign && onBulkChangeStage && onBulkExport && onBulkDelete && (
+          <BulkActionsBar
+            selectedLeads={selectedLeads}
+            onClearSelection={handleClearSelection}
+            onBulkAssign={onBulkAssign}
+            onBulkChangeStage={onBulkChangeStage}
+            onBulkExport={onBulkExport}
+            onBulkDelete={onBulkDelete}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // DESKTOP VIEW - Table with virtualization
+  // ==========================================================================
   return (
     <div className="flex h-full flex-col" ref={tableContainerRef} tabIndex={0}>
       {/* Toolbar */}
       <div className="bg-muted/30 flex shrink-0 items-center justify-between border-b px-4 py-2">
-        <span className="text-muted-foreground text-sm">
+        <span className="text-muted-foreground text-sm tabular-nums">
           {selectedLeads.length > 0 ? (
             <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
           ) : (
@@ -771,7 +939,7 @@ export function LeadsTable({
                         });
                       }}
                       className={cn(
-                        "cursor-pointer transition-all duration-150",
+                        "cursor-pointer transition duration-150",
                         "border-b border-border/50", // Consistent row dividers
                         "hover:bg-muted/50",
                         // Zebra stripes for better readability
@@ -779,7 +947,7 @@ export function LeadsTable({
                         // ✅ Phase 2: Enhanced selected row - prominent background, left border, and subtle shadow
                         isSelected && "bg-primary/10 border-l-primary border-l-3 hover:bg-primary/15 shadow-sm",
                         // Focused row (keyboard nav) - visible highlight
-                        isFocused && !isSelected && "bg-blue-50 dark:bg-blue-950/30 border-l-blue-500 border-l-2"
+                        isFocused && !isSelected && "bg-info-50 dark:bg-info-950/30 border-l-info-500 border-l-2"
                       )}
                       style={{ 
                         height: virtualRow.size,
@@ -812,7 +980,7 @@ export function LeadsTable({
 
       {/* Footer with Pagination */}
       <div className="bg-muted/30 flex shrink-0 items-center justify-between border-t px-4 py-2">
-        <div className="text-muted-foreground text-sm">
+        <div className="text-muted-foreground text-sm tabular-nums">
           Hiển thị {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-
           {Math.min(page * pageSize, totalCount)} / {totalCount.toLocaleString()} lead
         </div>
@@ -826,7 +994,7 @@ export function LeadsTable({
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <span className="text-muted-foreground min-w-[100px] text-center text-sm">
+          <span className="text-muted-foreground min-w-[100px] text-center text-sm tabular-nums">
             Trang {page} / {totalPages || 1}
           </span>
           <Button

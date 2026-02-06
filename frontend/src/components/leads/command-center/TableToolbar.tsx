@@ -96,7 +96,7 @@ export function TableToolbar({
                   <button
                     onClick={() => onDensityChange(option.value)}
                     className={cn(
-                      "h-7 w-7 flex items-center justify-center rounded-sm transition-all",
+                      "h-7 w-7 flex items-center justify-center rounded-sm transition-colors",
                       isActive 
                         ? "bg-background shadow-sm text-foreground" 
                         : "text-muted-foreground hover:text-foreground"

@@ -10,9 +10,12 @@ from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
+import structlog
 
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app import models, database
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/cache", tags=["Admin - Cache Management"])
 
@@ -117,7 +120,8 @@ async def list_cache_keys(
         return result
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -167,7 +171,8 @@ async def get_cache_value(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -196,7 +201,8 @@ async def delete_cache_key(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -237,7 +243,8 @@ async def clear_cache_by_patterns(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -261,7 +268,8 @@ async def get_cache_stats(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -310,7 +318,8 @@ async def invalidate_organization_cache(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -342,7 +351,8 @@ async def invalidate_pipeline_cache(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -378,4 +388,5 @@ async def invalidate_config_cache(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
+        log.error("Redis operation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Cache service unavailable")

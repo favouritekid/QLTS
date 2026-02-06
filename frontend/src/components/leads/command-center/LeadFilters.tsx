@@ -27,7 +27,10 @@ import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { STAGE_COLORS } from "@/types/pipeline.types";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
+import { sanitizeColorCode } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { isAdmin as checkIsAdmin, canFilterByOfficer as checkCanFilterByOfficer } from "@/lib/utils/permissions";
 
 interface LeadFiltersProps {
   search: string;
@@ -95,10 +98,9 @@ export const LeadFilters = React.memo(function LeadFilters({
     setIsMounted(true);
   }, []);
 
-  // Role checks only work after hydration to prevent server/client mismatch
-  const isAdmin = isMounted && user?.role === "admin";
-  const isManager = isMounted && user?.role === "manager";
-  const canFilterByOfficer = isAdmin || isManager;
+  // ✅ SECURITY: Use centralized permission utility (UX only - backend enforces)
+  const isAdminFlag = isMounted && checkIsAdmin(user);
+  const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user);
 
   // Fetch officers list (always fetch, conditionally render UI)
   // We fetch all active users and filter by role on the client
@@ -177,6 +179,7 @@ export const LeadFilters = React.memo(function LeadFilters({
             <button
               onClick={() => onSearchChange("")}
               className="text-muted-foreground hover:text-foreground absolute top-2.5 right-2.5"
+              aria-label="Xóa tìm kiếm"
             >
               <X className="h-4 w-4" />
             </button>
@@ -186,7 +189,7 @@ export const LeadFilters = React.memo(function LeadFilters({
         {/* Bộ lọc */}
         <Accordion type="multiple" defaultValue={["pipeline_stage"]} className="space-y-2">
           {/* Bộ lọc trạng thái - Chỉ hiển thị cho Admin */}
-          {isAdmin && (
+          {isAdminFlag && (
             <AccordionItem value="status" className="rounded-lg border px-3">
               <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
                 Vòng đời Lead
@@ -242,10 +245,7 @@ export const LeadFilters = React.memo(function LeadFilters({
                       htmlFor={`stage-${stage.id}`}
                       className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                     >
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
-                      />
+                      <ColorDot color={sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id]} size="sm" />
                       {stage.name}
                     </Label>
                   </div>
@@ -327,7 +327,7 @@ export const LeadFilters = React.memo(function LeadFilters({
           </AccordionItem>
 
           {/* Bộ lọc cán bộ phụ trách - Multi-select, chỉ cho Admin/Manager */}
-          {(isAdmin || isManager) && (
+          {canFilterByOfficerFlag && (
             <AccordionItem value="officer" className="rounded-lg border px-3">
               <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
                 Cán bộ phụ trách

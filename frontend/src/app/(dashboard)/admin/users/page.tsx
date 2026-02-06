@@ -21,28 +21,31 @@
 
 import { Suspense } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PageContainer } from '@/components/layouts/PageContainer';
 import { serverApi } from '@/lib/api/server';
 import { AdminUsersClient } from './_components/AdminUsersClient';
 import { Card, CardContent } from '@/components/ui/card';
 
 /**
- * Loading component for Suspense boundary
+ * Loading component for Suspense boundary - matches AdminUsersClient structure
  */
 function AdminUsersLoading() {
   return (
-    <div className="space-y-6">
-      <header>
-        <Skeleton className="h-9 w-64 mb-2" />
-        <Skeleton className="h-5 w-96" />
-      </header>
+    <PageContainer maxWidth="xl">
+      {/* Header skeleton */}
+      <div className="space-y-2">
+        <Skeleton className="h-8 md:h-9 w-48 sm:w-64" />
+        <Skeleton className="h-5 w-64 sm:w-96" />
+      </div>
+      {/* Table skeleton */}
       <Card>
-        <CardContent className="p-6 space-y-4">
+        <CardContent className="p-4 md:p-6 space-y-4">
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-16 w-full" />
           ))}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }
 

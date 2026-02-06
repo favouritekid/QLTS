@@ -268,13 +268,13 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
   const getTypeColor = (type: string) => {
     switch (type) {
       case "success":
-        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+        return "bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200";
       case "warning":
-        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
+        return "bg-warning-100 text-warning-800 dark:bg-warning-900 dark:text-warning-200";
       case "error":
-        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+        return "bg-error-100 text-error-800 dark:bg-error-900 dark:text-error-200";
       default:
-        return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+        return "bg-info-100 text-info-800 dark:bg-info-900 dark:text-info-200";
     }
   };
 
@@ -286,7 +286,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Quy tắc thông báo</h1>
+          <h1 className="text-3xl font-bold font-display tracking-tight">Quy tắc thông báo</h1>
           <p className="text-muted-foreground">
             Quản lý cấu hình và quy tắc gửi thông báo
           </p>
@@ -311,7 +311,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Đang hoạt động</CardTitle>
-            <div className="h-2 w-2 rounded-full bg-green-500" />
+            <div className="h-2 w-2 rounded-full bg-success-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{enabledRules}</div>
@@ -320,7 +320,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Đã tắt</CardTitle>
-            <div className="h-2 w-2 rounded-full bg-gray-400" />
+            <div className="h-2 w-2 rounded-full bg-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{totalRules - enabledRules}</div>
@@ -434,7 +434,12 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
                           <CardDescription>{categoryInfo.description}</CardDescription>
                         </div>
                       </div>
-                      <Button variant="ghost" size="icon">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={isCollapsed ? "Mở rộng" : "Thu gọn"}
+                        aria-expanded={!isCollapsed}
+                      >
                         {isCollapsed ? (
                           <ChevronRight className="h-5 w-5" />
                         ) : (
@@ -523,6 +528,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
                                       onClick={() => handleEditClick(rule.id)}
                                       disabled={deleteMutation.isPending}
                                       title="Chỉnh sửa"
+                                      aria-label="Chỉnh sửa"
                                     >
                                       <Edit className="h-4 w-4" />
                                     </Button>
@@ -532,6 +538,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
                                       onClick={() => setDeleteRuleId(rule.id)}
                                       disabled={deleteMutation.isPending}
                                       title="Xóa"
+                                      aria-label="Xóa"
                                     >
                                       <Trash2 className="h-4 w-4 text-destructive" />
                                     </Button>
@@ -575,7 +582,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
               {deleteMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Đang xóa...
+                  Đang xóa…
                 </>
               ) : (
                 "Xóa quy tắc"

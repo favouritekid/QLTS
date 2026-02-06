@@ -1,0 +1,187 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, within, waitFor } from "@/test/utils/test-utils";
+import { MajorProgramPanel } from "./MajorProgramPanel";
+import * as UseProgramDataHooks from "@/hooks/admissions/useProgramData";
+import * as UseMasterDataHooks from "@/hooks/admissions/useMasterData";
+
+// Mock the hooks
+vi.mock("@/hooks/admissions/useProgramData", () => ({
+  useMajorPrograms: vi.fn(),
+  useCreateMajorProgram: vi.fn(),
+  useUpdateMajorProgram: vi.fn(),
+  useDeleteMajorProgram: vi.fn(),
+}));
+
+vi.mock("@/hooks/admissions/useMasterData", () => ({
+  useOrganizationUnits: vi.fn(),
+}));
+
+describe("MajorProgramPanel", () => {
+  const mockPrograms = [
+    {
+      id: 1,
+      code: "6480201",
+      name: "Công nghệ Thông tin",
+      degree_level: "Cao đẳng",
+      unit_id: 1,
+      is_heavy: false,
+      is_active: true,
+      offerings: [], // simplified
+    },
+    {
+      id: 2,
+      code: "7340101",
+      name: "Quản trị Kinh doanh",
+      degree_level: "Đại học",
+      unit_id: 2,
+      is_heavy: false,
+      is_active: true,
+      offerings: [],
+    }
+  ];
+
+  const mockUnits = [
+    { id: 1, name: "Khoa CNTT", type: "Khoa" },
+    { id: 2, name: "Khoa Kinh tế", type: "Khoa" },
+  ];
+
+  const mockCreateMutate = vi.fn();
+  const mockUpdateMutate = vi.fn();
+  const mockDeleteMutate = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    
+    (UseProgramDataHooks.useMajorPrograms as any).mockReturnValue({
+      data: mockPrograms,
+      isLoading: false,
+    });
+    
+    (UseMasterDataHooks.useOrganizationUnits as any).mockReturnValue({
+      data: mockUnits,
+      isLoading: false,
+    });
+    
+    (UseProgramDataHooks.useCreateMajorProgram as any).mockReturnValue({
+      mutateAsync: mockCreateMutate,
+    });
+    
+    (UseProgramDataHooks.useUpdateMajorProgram as any).mockReturnValue({
+      mutateAsync: mockUpdateMutate,
+    });
+    
+    (UseProgramDataHooks.useDeleteMajorProgram as any).mockReturnValue({
+      mutateAsync: mockDeleteMutate,
+    });
+  });
+
+  it("should render list grouped by degree level", () => {
+    render(<MajorProgramPanel />);
+
+    // Verify Group Headers and Data presence (might appear multiple times)
+    expect(screen.getAllByText("Cao đẳng").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Đại học").length).toBeGreaterThan(0);
+
+    // Verify Programs
+    expect(screen.getByText("Công nghệ Thông tin")).toBeInTheDocument();
+    expect(screen.getByText("6480201")).toBeInTheDocument();
+    expect(screen.getByText("Quản trị Kinh doanh")).toBeInTheDocument();
+    expect(screen.getByText("7340101")).toBeInTheDocument();
+    
+    // Verify Unit Name Resolution
+    expect(screen.getByText("Khoa CNTT")).toBeInTheDocument();
+    expect(screen.getByText("Khoa Kinh tế")).toBeInTheDocument();
+  });
+
+  it("should open create dialog and submit form correctly", async () => {
+    render(<MajorProgramPanel />);
+
+    // Click Add New
+    const addButton = screen.getByText("Add New");
+    fireEvent.click(addButton);
+
+    // Verify Dialog
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText("Create Ngành đào tạo")).toBeInTheDocument();
+
+    const withinDialog = within(dialog);
+
+    // Fill Form
+    // Input
+    fireEvent.change(withinDialog.getByLabelText(/Mã ngành/i), { target: { value: "NEW_CODE" } });
+    fireEvent.change(withinDialog.getByLabelText(/Tên chương trình/i), { target: { value: "New Program" } });
+    
+    // Custom Select Interaction (Mocking Radix Select is tricky, usually we assume it works or use userEvent)
+    // Here we might just check if inputs are present. For Select, we can simulate value selection if we can simpler or just verify rendering.
+    // Simplifying select test to just check if elements are there for now, or assume defaults are picked/rendered. 
+    // To properly test Select with RTL + Radix:
+    // await user.click(screen.getByRole('combobox', { name: /Trình độ đào tạo/i }));
+    // await user.click(screen.getByRole('option', { name: 'Trung cấp' }));
+    
+    // Let's assume default for this simple test or just check payload
+    
+    // Submit
+    const submitButton = withinDialog.getByText("Create");
+    fireEvent.click(submitButton);
+
+    // Check Mutation
+    await waitFor(() => {
+      expect(mockCreateMutate).toHaveBeenCalledWith(expect.objectContaining({
+        code: "NEW_CODE",
+        name: "New Program",
+        degree_level: "Cao đẳng", // Default
+        is_heavy: false,
+      }));
+    });
+  });
+
+  it("should open edit dialog and populate data correctly", async () => {
+    render(<MajorProgramPanel />);
+
+    // Edit "Công nghệ Thông tin"
+    const row = screen.getByText("6480201").closest("tr");
+    const editButton = row?.querySelector("button"); 
+    fireEvent.click(editButton!);
+
+    // Verify Dialog
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    const withinDialog = within(dialog);
+
+    // Verify Fields
+    await waitFor(() => {
+        const codeInput = withinDialog.getByLabelText(/Mã ngành/i) as HTMLInputElement;
+        expect(codeInput.value).toBe("6480201");
+    });
+
+    const codeInput = withinDialog.getByLabelText(/Mã ngành/i) as HTMLInputElement;
+    expect(codeInput.disabled).toBe(true);
+
+    const nameInput = withinDialog.getByLabelText(/Tên chương trình/i) as HTMLInputElement;
+    expect(nameInput.value).toBe("Công nghệ Thông tin");
+    
+    // Verify mapped Unit ID is present in the select (element existence check mainly as value is hidden)
+    // We can assume the correct value is passed to the component state
+  });
+
+  it("should call delete mutation when delete is confirmed", async () => {
+    render(<MajorProgramPanel />);
+
+    // Delete "Quản trị Kinh doanh"
+    const row = screen.getByText("7340101").closest("tr");
+    const buttons = row?.querySelectorAll("button");
+    const deleteButton = buttons?.[1];
+
+    fireEvent.click(deleteButton!);
+
+    // Wait for AlertDialog to appear and confirm deletion
+    const alertDialog = await screen.findByRole("alertdialog");
+    const confirmBtn = within(alertDialog).getByRole("button", { name: /xóa/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(mockDeleteMutate).toHaveBeenCalledWith(2);
+    });
+  });
+});

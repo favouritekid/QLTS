@@ -223,7 +223,8 @@ async def _create_or_update_user_assignment(
     user: models.User,
     new_role: str,
     new_unit_id: Optional[int],
-    assigned_by_user_id: Optional[int] = None
+    assigned_by_user_id: Optional[int] = None,
+    enforcer: Optional[casbin.AsyncEnforcer] = None  # ✅ ADDED enforcer
 ) -> Optional[models.UserUnitAssignment]:
     """
     ✅ PHASE 2: Temporal Architecture Helper
@@ -235,6 +236,7 @@ async def _create_or_update_user_assignment(
     2. Deactivate old assignment (set is_active=false, end_date=now())
     3. Create new assignment (with is_active=true)
     4. Update user cache fields (role, unit_id, current_assignment_id)
+    5. Sync Casbin grouping policies (g-rules) if enforcer provided
 
     Args:
         db: Database session
@@ -242,6 +244,7 @@ async def _create_or_update_user_assignment(
         new_role: New role to assign
         new_unit_id: New unit ID (can be None for non-unit users)
         assigned_by_user_id: ID of admin who made the assignment (None = system/migration)
+        enforcer: Casbin enforcer for g-rule sync
 
     Returns:
         New UserUnitAssignment object if assignment was created, None if skipped
@@ -252,6 +255,32 @@ async def _create_or_update_user_assignment(
         - Caller is responsible for commit/rollback
     """
     now = datetime.now(timezone.utc)
+
+    # ✅ CASBIN SYNC (Phase 7): Ensure g-rules are updated even if no unit assignment
+    # This fixes the issue where user has "officer" role in DB but "user" in Casbin
+    if enforcer:
+        try:
+            from app.services.casbin_service import CasbinPolicyService
+            casbin_service = CasbinPolicyService(db, enforcer)
+            
+            # Remove old roles and assign new one
+            await casbin_service.remove_user_roles(user.id)
+            await casbin_service.assign_role_to_user(user.id, new_role)
+            
+            log.info(
+                "Synced Casbin g-rules for user",
+                user_id=user.id,
+                new_role=new_role
+            )
+        except Exception as e:
+            # Don't fail the whole transaction if Casbin sync fails, but log critical error
+            log.error(
+                "Failed to sync Casbin g-rules",
+                user_id=user.id,
+                role=new_role,
+                error=str(e),
+                exc_info=True
+            )
 
     # Skip if user has no unit (regular users without unit assignment)
     if new_unit_id is None:
@@ -718,7 +747,8 @@ async def update_user(
                     user=db_user,
                     new_role=new_db_role,
                     new_unit_id=new_db_unit_id,
-                    assigned_by_user_id=assigned_by_user_id
+                    assigned_by_user_id=assigned_by_user_id,
+                    enforcer=enforcer  # ✅ Pass enforcer for Casbin sync
                 )
 
             db.add(db_user)
@@ -987,6 +1017,14 @@ async def reset_password(
         Tuple of (user, post_commit_callback)
     """
     try:
+        # ✅ SECURITY: Check if token was already used (single-use enforcement)
+        token_hash = token[:32]  # Use prefix as key to avoid storing full token
+        used_key = f"reset_token_used:{token_hash}"
+        already_used = await safe_redis_get(used_key)
+        if already_used:
+            log.warning("Reset token reuse attempt blocked", token_prefix=token[:10])
+            raise InvalidToken(detail="This reset link has already been used")
+
         email = verify_password_reset_token(token)
         if not email:
             log.warning(
@@ -1025,6 +1063,8 @@ async def reset_password(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
+            # ✅ SECURITY: Blacklist token after successful use (single-use enforcement)
+            await safe_redis_set(used_key, "1", ex=1800)  # 30 min (matches token expiry)
             log.info("User password reset successfully", user_id=user.id)
 
         return user, _post_commit

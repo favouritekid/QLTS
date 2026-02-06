@@ -1,0 +1,108 @@
+# Authorization Guardrails CI Workflow
+# ====================================
+# Prevents authorization violations from entering main branch
+#
+# Reference: AUTHORIZATION_IMPLEMENTATION_PLAN.md Phase -1
+
+name: Authorization Guardrails
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'Backend_FastAPI/app/**/*.py'
+      - 'Backend_FastAPI/tests/**/*.py'
+
+jobs:
+  auth-check:
+    name: Authorization Check
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: Backend_FastAPI
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check for inline role checks in routers
+        run: |
+          echo "🔍 Checking for inline role checks in routers..."
+          if grep -rn "\.role ==" app/routers/ --include="*.py" | grep -v "# OK:" | grep -v "test_"; then
+            echo ""
+            echo "❌ FAIL: Inline role check detected in router"
+            echo ""
+            echo "Move role checks to deps.py dependency instead:"
+            echo "  - Use CasbinAuth for dynamic authorization"
+            echo "  - Use require_admin / require_admin_or_manager for static checks"
+            echo ""
+            echo "If intentional, add '# OK: <reason>' comment to suppress"
+            exit 1
+          fi
+          echo "✅ No inline role checks in routers"
+
+      - name: Check for db.get() in routers (IDOR risk)
+        run: |
+          echo "🔍 Checking for direct db.get() in routers..."
+          if grep -rn "db\.get\|await db\.get" app/routers/ --include="*.py" | grep -v "# IDOR-SAFE:" | grep -v "test_"; then
+            echo ""
+            echo "❌ FAIL: Direct db.get() detected in router (IDOR risk)"
+            echo ""
+            echo "Use ownership-verified dependencies instead:"
+            echo "  - get_lead_for_user"
+            echo "  - get_notification_for_user"
+            echo "  - get_application_for_user"
+            echo ""
+            echo "If intentional (e.g., fetching lookup data), add '# IDOR-SAFE: <reason>' comment"
+            exit 1
+          fi
+          echo "✅ No direct db.get() in routers"
+
+      - name: Check router endpoints have authorization
+        run: |
+          echo "🔍 Checking all router endpoints have authorization..."
+          python scripts/check_router_auth.py
+          echo "✅ All router endpoints have authorization"
+
+  run-security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    needs: auth-check
+
+    defaults:
+      run:
+        working-directory: Backend_FastAPI
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+
+      - name: Run authorization tests
+        run: |
+          echo "🔒 Running authorization tests..."
+          pytest tests/security/ -v --tb=short
+          echo "✅ All authorization tests passed"
+
+      - name: Authorization tests gate
+        if: failure()
+        run: |
+          echo "❌ Authorization tests failed - PR blocked"
+          echo ""
+          echo "Security tests must pass before merging."
+          echo "Check test output above for failures."
+          exit 1

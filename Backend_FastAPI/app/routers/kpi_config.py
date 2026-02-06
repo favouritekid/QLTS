@@ -30,7 +30,16 @@ router = APIRouter(prefix="/api/admin/kpi-config", tags=["Admin - KPI Configurat
 # ============================================================================
 # SECURITY GATEWAY DEPENDENCIES (Phase 6 Refactor)
 # ============================================================================
-# These replace inline role checks per MASTER_ARCHITECTURE.md Section 0.2
+# AUTH DECISION: Using static require_* instead of Casbin because:
+# 1. Internal admin tool - NOT public-facing API
+# 2. No need for dynamic policy changes
+# 3. Simple role hierarchy: Admin can do everything, Manager can view
+# 4. Performance: No DB lookup required
+#
+# Reference: AUTHORIZATION_DECISIONS.md Decision 4
+# Review trigger: If KPI config needs to be accessed by other roles,
+#                 migrate to CasbinAuth
+# ============================================================================
 AdminDep = Depends(deps.require_admin)
 AdminOrManagerDep = Depends(deps.require_admin_or_manager)
 

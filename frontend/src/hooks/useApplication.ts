@@ -123,3 +123,46 @@ export function useUpdateApplication(applicationId: number) {
     },
   });
 }
+
+/**
+ * Delete an application (draft only)
+ *
+ * @example
+ * ```tsx
+ * const deleteApplication = useDeleteApplication();
+ *
+ * deleteApplication.mutate({ id: 123, leadId: 456 });
+ * ```
+ */
+export function useDeleteApplication() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    void,
+    AxiosError<ApiErrorResponse>,
+    { id: number; leadId: number }
+  >({
+    mutationFn: async ({ id }) => {
+      await api.delete(API_ENDPOINTS.APPLICATIONS.DELETE(id));
+    },
+
+    onSuccess: (_, { leadId }) => {
+      toast.success("Đã xóa hồ sơ!", {
+        description: "Hồ sơ tuyển sinh đã được xóa thành công",
+      });
+
+      // Invalidate lead detail to reset state to "no profile"
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : "Không thể xóa hồ sơ tuyển sinh";
+      toast.error("Lỗi", { description: message });
+    },
+  });
+}

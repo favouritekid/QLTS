@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 import structlog
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2.sandbox import SandboxedEnvironment
+from jinja2 import FileSystemLoader, select_autoescape
 
 from ..config import settings
 from .. import models
@@ -26,8 +27,10 @@ log = structlog.get_logger(__name__)
 # Path to email templates directory
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "emails"
 
-# Initialize Jinja2 environment
-jinja_env = Environment(
+# Initialize Jinja2 sandboxed environment
+# ✅ SECURITY: SandboxedEnvironment prevents template injection attacks
+# by restricting access to unsafe attributes and methods
+jinja_env = SandboxedEnvironment(
     loader=FileSystemLoader(str(TEMPLATES_DIR)),
     autoescape=select_autoescape(["html", "xml"]),
     trim_blocks=True,

@@ -680,7 +680,10 @@ class UserRepository(BaseRepository[models.User]):
                 models.Consultation.officer_id,
                 sql_func.count(models.Consultation.id)
             )
-            .where(models.Consultation.officer_id.in_(officer_ids))
+            .where(
+                models.Consultation.officer_id.in_(officer_ids),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+            )
             .group_by(models.Consultation.officer_id)
         )
         result = await self.db.execute(query)

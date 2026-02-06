@@ -821,29 +821,8 @@ async def update_document_type(
     db_type = await repo.update(db_type, update_data)
     new_code = db_type.code
 
-    # ✅ CASCADE: Update ProgramOffering.admission_rules if code changed
-    if old_code != new_code:
-        offerings = await repo.get_all_offerings_with_admission_rules()
-        updated_count = 0
-        for offering in offerings:
-            # admission_rules: {min_gpa, mandatory_docs[], admission_method}
-            rules = offering.admission_rules or {}
-            mandatory_docs = rules.get("mandatory_docs", [])
-            
-            if old_code in mandatory_docs:
-                # Replace old code with new code
-                new_docs = [new_code if d == old_code else d for d in mandatory_docs]
-                rules["mandatory_docs"] = new_docs
-                offering.admission_rules = rules # Trigger SQLAlchemy change tracking
-                updated_count += 1
-        
-        if updated_count > 0:
-            log.info(
-                "Cascaded DocumentType code change",
-                old_code=old_code,
-                new_code=new_code,
-                offerings_updated=updated_count
-            )
+    # Note: Old cascade logic for ProgramOffering.admission_rules removed.
+    # Documents are now managed via relational DocumentGroup tables.
 
     # ✅ Create post-commit callback
     async def _post_commit():
@@ -1168,76 +1147,116 @@ async def delete_distribution_rule(
 
 
 # =============================================================================
-# SUBJECT GROUP CONFIGURATION (Phase 6: Dynamic Admission Scoring)
+# SUBJECT GROUP CONFIGURATION (Migrated to Relational SubjectGroup)
 # =============================================================================
+
+from app.models.admission_config import SubjectGroup, SubjectGroupSubject
+from sqlalchemy.orm import selectinload
+
+
+def _build_subject_group_response(group: SubjectGroup) -> dict:
+    """Build a response dict from SubjectGroup with subjects array."""
+    sorted_mappings = sorted(group.subject_mappings, key=lambda m: m.position)
+    return {
+        "id": group.id,
+        "code": group.code,
+        "name": group.name,
+        "subjects": [m.subject.code for m in sorted_mappings],
+        "display_order": group.display_order,
+        "is_active": group.is_active,
+    }
+
 
 async def get_subject_groups(
     db: AsyncSession,
     active_only: bool = True
-) -> List[models.ConfigSubjectGroup]:
+) -> List[dict]:
     """
     Get all subject groups for admission scoring.
+    
+    MIGRATED: Now uses relational SubjectGroup instead of ConfigSubjectGroup.
     
     Args:
         db: Database session
         active_only: If True, only return active groups
         
     Returns:
-        List of ConfigSubjectGroup models ordered by display_order
+        List of subject group dicts with subjects array
     """
     from sqlalchemy import select
     
-    query = select(models.ConfigSubjectGroup)
+    query = (
+        select(SubjectGroup)
+        .options(
+            selectinload(SubjectGroup.subject_mappings)
+            .selectinload(SubjectGroupSubject.subject)
+        )
+    )
     
     if active_only:
-        query = query.where(models.ConfigSubjectGroup.is_active == True)
+        query = query.where(SubjectGroup.is_active == True)
     
-    query = query.order_by(models.ConfigSubjectGroup.display_order)
+    query = query.order_by(SubjectGroup.display_order)
     
     result = await db.execute(query)
-    return result.scalars().all()
+    groups = result.scalars().all()
+    
+    return [_build_subject_group_response(group) for group in groups]
+
 
 
 async def get_subject_group_by_code(
     db: AsyncSession,
     code: str
-) -> models.ConfigSubjectGroup | None:
+) -> dict | None:
     """
     Get a specific subject group by code.
+    
+    MIGRATED: Now uses relational SubjectGroup.
     
     Args:
         db: Database session
         code: Subject group code (e.g., 'A00', 'D01')
         
     Returns:
-        ConfigSubjectGroup or None if not found
+        Subject group dict with subjects array, or None if not found
     """
     from sqlalchemy import select
     
     query = (
-        select(models.ConfigSubjectGroup)
-        .where(models.ConfigSubjectGroup.code == code.upper())
-        .where(models.ConfigSubjectGroup.is_active == True)
+        select(SubjectGroup)
+        .options(
+            selectinload(SubjectGroup.subject_mappings)
+            .selectinload(SubjectGroupSubject.subject)
+        )
+        .where(SubjectGroup.code == code.upper())
+        .where(SubjectGroup.is_active == True)
     )
     
     result = await db.execute(query)
-    return result.scalar_one_or_none()
+    group = result.scalar_one_or_none()
+    
+    if group:
+        return _build_subject_group_response(group)
+    return None
 
 
 async def get_subject_groups_by_codes(
     db: AsyncSession,
     codes: List[str]
-) -> List[models.ConfigSubjectGroup]:
+) -> List[dict]:
     """
     Get multiple subject groups by their codes.
     Used to resolve subject_groups array in admission_criteria.
+    
+    MIGRATED: Now uses relational SubjectGroup.
     
     Args:
         db: Database session
         codes: List of codes (e.g., ['A00', 'D01', 'B00'])
         
     Returns:
-        List of ConfigSubjectGroup models matching the codes
+        List of subject group dicts matching the codes
     """
     from sqlalchemy import select
     
@@ -1247,12 +1266,18 @@ async def get_subject_groups_by_codes(
     upper_codes = [c.upper() for c in codes]
     
     query = (
-        select(models.ConfigSubjectGroup)
-        .where(models.ConfigSubjectGroup.code.in_(upper_codes))
-        .where(models.ConfigSubjectGroup.is_active == True)
-        .order_by(models.ConfigSubjectGroup.display_order)
+        select(SubjectGroup)
+        .options(
+            selectinload(SubjectGroup.subject_mappings)
+            .selectinload(SubjectGroupSubject.subject)
+        )
+        .where(SubjectGroup.code.in_(upper_codes))
+        .where(SubjectGroup.is_active == True)
+        .order_by(SubjectGroup.display_order)
     )
     
     result = await db.execute(query)
-    return result.scalars().all()
+    groups = result.scalars().all()
+    
+    return [_build_subject_group_response(group) for group in groups]
 

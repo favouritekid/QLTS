@@ -31,11 +31,11 @@ const getActivityStatus = (nextActivityAt: string | null | undefined): ActivityS
 const getActivityBadgeStyle = (status: ActivityStatus): string => {
   switch (status) {
     case "overdue":
-      return "bg-red-100 text-red-700 border-red-300";
+      return "bg-error-100 text-error-700 border-error-300";
     case "today":
-      return "bg-yellow-100 text-yellow-700 border-yellow-300";
+      return "bg-warning-100 text-warning-700 border-warning-300";
     case "future":
-      return "bg-blue-50 text-blue-600 border-blue-200";
+      return "bg-info-50 text-info-600 border-info-200";
     default:
       return "";
   }
@@ -85,28 +85,28 @@ const getStatusBadgeVariant = (status: LeadStatus) => {
 const getStatusColor = (status: LeadStatus) => {
   switch (status) {
     case "new":
-      return "bg-blue-500";
+      return "bg-info-500";
     case "assigned":
       return "bg-purple-500";
     case "contacted":
       return "bg-cyan-500";
     case "qualified":
-      return "bg-emerald-500";
+      return "bg-success-500";
     case "unqualified":
-      return "bg-gray-500";
+      return "bg-muted-foreground";
     case "converted":
-      return "bg-green-500";
+      return "bg-success-500";
     case "rejected":
-      return "bg-red-500";
+      return "bg-error-500";
     default:
-      return "bg-gray-500";
+      return "bg-muted-foreground";
   }
 };
 
 const getScoreColor = (score: number) => {
-  if (score >= 80) return "bg-red-100 text-red-700 border-red-200";
-  if (score >= 50) return "bg-yellow-100 text-yellow-700 border-yellow-200";
-  return "bg-gray-100 text-gray-700 border-gray-200";
+  if (score >= 80) return "bg-error-100 text-error-700 border-error-200";
+  if (score >= 50) return "bg-warning-100 text-warning-700 border-warning-200";
+  return "bg-muted text-muted-foreground border-border";
 };
 
 const getInitials = (name: string) => {
@@ -131,12 +131,12 @@ export const LeadListItem = React.memo(function LeadListItem({
     <div
       onClick={() => onSelect(lead)}
       className={cn(
-        "group relative p-3 border-b cursor-pointer transition-all",
+        "group relative p-3 border-b cursor-pointer transition-colors",
         "hover:bg-accent/50",
         isSelected && "bg-accent border-l-2 border-l-primary",
         // Activity urgency indicators
-        !isSelected && activityStatus === "overdue" && "border-l-2 border-l-red-500 bg-red-50/30",
-        !isSelected && activityStatus === "today" && "border-l-2 border-l-yellow-500 bg-yellow-50/30"
+        !isSelected && activityStatus === "overdue" && "border-l-2 border-l-error-500 bg-error-50/30",
+        !isSelected && activityStatus === "today" && "border-l-2 border-l-warning-500 bg-warning-50/30"
       )}
     >
       <div className="flex items-start gap-3">
@@ -232,7 +232,7 @@ export const LeadListItem = React.memo(function LeadListItem({
               e.stopPropagation();
               window.location.href = `tel:${lead.phone}`;
             }}
-            title="Call"
+            aria-label="Gọi điện"
           >
             <Phone className="h-3.5 w-3.5" />
           </Button>
@@ -244,7 +244,7 @@ export const LeadListItem = React.memo(function LeadListItem({
               e.stopPropagation();
               window.location.href = `mailto:${lead.email}`;
             }}
-            title="Email"
+            aria-label="Gửi email"
           >
             <Mail className="h-3.5 w-3.5" />
           </Button>
@@ -257,7 +257,7 @@ export const LeadListItem = React.memo(function LeadListItem({
                 e.stopPropagation();
                 onQuickAssign(lead);
               }}
-              title="Assign"
+              aria-label="Phân công"
             >
               <UserPlus className="h-3.5 w-3.5" />
             </Button>

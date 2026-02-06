@@ -13,20 +13,24 @@
 import { Suspense } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { PageContainer } from '@/components/layouts/PageContainer';
 import { serverApi } from '@/lib/api/server';
 import { NotificationsClient } from './_components/NotificationsClient';
 
 /**
- * Loading component
+ * Loading component - matches NotificationsClient structure
  */
 function NotificationsLoading() {
   return (
-    <div className="space-y-6">
+    <PageContainer maxWidth="md">
+      {/* Header skeleton */}
       <div className="space-y-2">
-        <Skeleton className="h-9 w-64" />
-        <Skeleton className="h-5 w-96" />
+        <Skeleton className="h-9 w-48 sm:w-64" />
+        <Skeleton className="h-5 w-64 sm:w-96" />
       </div>
+      {/* Tabs skeleton */}
       <Skeleton className="h-12 w-full max-w-md" />
+      {/* Content skeleton */}
       <Card>
         <CardHeader>
           <Skeleton className="h-6 w-32" />
@@ -37,7 +41,7 @@ function NotificationsLoading() {
           ))}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }
 

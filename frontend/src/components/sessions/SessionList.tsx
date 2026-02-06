@@ -106,7 +106,7 @@ export function SessionList({
             "absolute right-0 bottom-0 block h-2 w-2 rounded-full",
 
             // ✅ SỬA LỖI UX: Luôn là màu xanh (tất cả sessions đều active)
-            "bg-green-500",
+            "bg-success-500",
 
             // ✅ Tinh chỉnh: Dùng viền (ring) để làm nổi bật session hiện tại
             "ring-2",
@@ -122,7 +122,7 @@ export function SessionList({
       {/* Header (giữ nguyên) */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Phiên Đang Hoạt Động</h2>
+          <h2 className="text-2xl font-bold font-display tracking-tight">Phiên Đang Hoạt Động</h2>
           <p className="text-muted-foreground">Quản lý các phiên đăng nhập trên các thiết bị</p>
         </div>
         {otherSessions.length > 0 && (
@@ -186,10 +186,10 @@ export function SessionList({
                     {/* ✅ DEFENSE IN DEPTH: Disable revoke button for current session */}
                     <Button
                       variant={session.is_current ? "outline" : "destructive"}
-                      size="sm"
                       onClick={() => setSessionToRevoke(session)}
                       disabled={isLoading || session.is_current}
                       title={session.is_current ? "Đây là phiên hiện tại" : "Thu hồi phiên này"}
+                      className="min-h-[44px]"
                     >
                       {session.is_current ? "Hiện tại" : "Thu hồi"}
                     </Button>

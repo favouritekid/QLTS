@@ -6,6 +6,13 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 
 const STORAGE_KEY = "navigation-collapsed-groups";
+// ✅ VERSIONING: Increment when storage schema changes
+const STORAGE_VERSION = 1;
+
+interface VersionedStorage {
+  version: number;
+  data: string[];
+}
 
 /**
  * Hook return type
@@ -38,7 +45,7 @@ interface UseNavigationStateReturn {
 }
 
 /**
- * Load collapsed groups from localStorage
+ * Load collapsed groups from localStorage (with versioning)
  */
 function loadCollapsedGroups(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -47,23 +54,36 @@ function loadCollapsedGroups(): Set<string> {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      return new Set(Array.isArray(parsed) ? parsed : []);
+
+      // ✅ VERSIONING: Check version and reset if mismatched
+      if (parsed?.version !== STORAGE_VERSION) {
+        localStorage.removeItem(STORAGE_KEY);
+        return new Set();
+      }
+
+      return new Set(Array.isArray(parsed.data) ? parsed.data : []);
     }
   } catch (error) {
     console.warn("Failed to load navigation state from localStorage:", error);
+    localStorage.removeItem(STORAGE_KEY);
   }
 
   return new Set();
 }
 
 /**
- * Save collapsed groups to localStorage
+ * Save collapsed groups to localStorage (with versioning)
  */
 function saveCollapsedGroups(collapsedGroups: Set<string>): void {
   if (typeof window === "undefined") return;
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(collapsedGroups)));
+    // ✅ VERSIONING: Store with version for schema compatibility
+    const versioned: VersionedStorage = {
+      version: STORAGE_VERSION,
+      data: Array.from(collapsedGroups),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(versioned));
   } catch (error) {
     console.warn("Failed to save navigation state to localStorage:", error);
   }

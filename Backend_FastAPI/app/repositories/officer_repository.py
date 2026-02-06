@@ -126,28 +126,36 @@ class OfficerRepository(BaseRepository[models.User]):
     ) -> Dict[str, Dict[str, Any]]:
         """
         Get lead counts and outcome breakdown for ALL stages in ONE query.
-        
+
         OPTIMIZATION: Replaces N+1 loop with single GROUP BY query.
         Before: 14 queries (7 stages × 2 queries each)
         After: 1 query
-        
+
+        SPEC COMPLIANCE (2026-02-04):
+        - Filter: counts_for_funnel = TRUE (exclude activity logs)
+        - Filter: stage_id IS NOT NULL (exclude universal statuses)
+        - Early Exit: Counts FINAL leads at non-final stages
+
         Returns:
-            Dict[stage_id, {count, positive, negative, neutral}]
+            Dict[stage_id, {count, positive, negative, neutral, early_exit_count}]
         """
         # Base conditions
         conditions = [
             models.Lead.assigned_officer_id == officer_id,
             models.Lead.deleted_at.is_(None),
+            # SPEC: Exclude universal statuses (stage_id = NULL)
+            models.Lead.pipeline_stage_id.isnot(None),
         ]
-        
+
         # Optional date filter
         if start_date and end_date:
             conditions.extend([
                 func.date(models.Lead.created_at) >= start_date,
                 func.date(models.Lead.created_at) <= end_date,
             ])
-        
+
         # Single query with conditional aggregations
+        # SPEC: Only count leads with counts_for_funnel = TRUE
         query = (
             select(
                 models.Lead.pipeline_stage_id,
@@ -168,17 +176,30 @@ class OfficerRepository(BaseRepository[models.User]):
                         (models.ConsultationStatus.outcome_type == "neutral", 1),
                     )
                 ).label("neutral_count"),
+                # SPEC: Early Exit = FINAL leads at this stage (outcome=negative, is_final=TRUE)
+                func.count(
+                    case(
+                        (and_(
+                            models.ConsultationStatus.is_final == True,
+                            models.ConsultationStatus.outcome_type == "negative",
+                        ), 1),
+                    )
+                ).label("early_exit_count"),
             )
-            .outerjoin(
+            .join(
                 models.ConsultationStatus,
                 models.Lead.consultation_status_id == models.ConsultationStatus.id
             )
-            .where(*conditions)
+            .where(
+                *conditions,
+                # SPEC: counts_for_funnel = TRUE (only funnel-relevant statuses)
+                models.ConsultationStatus.counts_for_funnel == True,
+            )
             .group_by(models.Lead.pipeline_stage_id)
         )
-        
+
         result = await self.db.execute(query)
-        
+
         # Build result dict
         stage_data = {}
         for row in result.fetchall():
@@ -189,10 +210,320 @@ class OfficerRepository(BaseRepository[models.User]):
                     "positive": row.positive_count or 0,
                     "negative": row.negative_count or 0,
                     "neutral": row.neutral_count or 0,
+                    "early_exit_count": row.early_exit_count or 0,
                 }
-        
+
         return stage_data
-    
+
+    async def get_loss_reason_breakdown_by_stage(
+        self,
+        officer_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get loss reason breakdown aggregated by pipeline stage.
+
+        SPEC: LOSS_REASON_UX_SPEC.md / FUNNEL_FEASIBILITY_ANALYSIS.md Phase 2
+
+        Returns:
+            Dict[stage_id, [
+                {"reason_code": "PRICE_HIGH", "count": 10, "percentage": 25.0},
+                {"reason_code": "NO_CONTACT", "count": 8, "percentage": 20.0},
+                ...
+            ]]
+        """
+        # Build conditions
+        conditions = [
+            models.LeadStatusHistory.loss_reason_code.isnot(None),
+            models.Lead.deleted_at.is_(None),
+        ]
+
+        # Filter by officer or units
+        if officer_id:
+            conditions.append(models.Lead.assigned_officer_id == officer_id)
+        elif unit_ids:
+            conditions.append(models.Lead.unit_id.in_(unit_ids))
+
+        # Optional date filter
+        if start_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) >= start_date)
+        if end_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) <= end_date)
+
+        # Query: aggregate loss_reason_code by pipeline_stage_id
+        query = (
+            select(
+                models.LeadStatusHistory.new_pipeline_stage_id.label("stage_id"),
+                models.LeadStatusHistory.loss_reason_code,
+                func.count().label("count"),
+            )
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
+            .where(*conditions)
+            .group_by(
+                models.LeadStatusHistory.new_pipeline_stage_id,
+                models.LeadStatusHistory.loss_reason_code,
+            )
+            .order_by(
+                models.LeadStatusHistory.new_pipeline_stage_id,
+                func.count().desc(),
+            )
+        )
+
+        result = await self.db.execute(query)
+        rows = result.fetchall()
+
+        # Build stage -> loss breakdown dict
+        stage_breakdown: Dict[str, List[Dict[str, Any]]] = {}
+        stage_totals: Dict[str, int] = {}
+
+        # First pass: calculate totals per stage
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                stage_totals[stage_id] = stage_totals.get(stage_id, 0) + row.count
+
+        # Second pass: build breakdown with percentages
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                if stage_id not in stage_breakdown:
+                    stage_breakdown[stage_id] = []
+
+                total = stage_totals.get(stage_id, 1)
+                percentage = round((row.count / total) * 100, 1) if total > 0 else 0.0
+
+                stage_breakdown[stage_id].append({
+                    "reason_code": row.loss_reason_code,
+                    "count": row.count,
+                    "percentage": percentage,
+                })
+
+        return stage_breakdown
+
+    async def get_stage_velocity_stats(
+        self,
+        officer_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Calculate average time spent in each pipeline stage.
+
+        SPEC: FUNNEL_FEASIBILITY_ANALYSIS.md - Velocity / Time in Stage
+
+        Uses LeadStatusHistory to calculate time between stage transitions.
+        For each stage, calculates:
+        - avg_days: Average days spent in stage before moving to next
+        - median_days: Median days (approximated)
+        - min_days: Minimum days
+        - max_days: Maximum days
+        - sample_size: Number of transitions measured
+
+        Returns:
+            Dict[stage_id, {
+                "avg_days": 2.5,
+                "min_days": 0.5,
+                "max_days": 7.0,
+                "sample_size": 45
+            }]
+        """
+        # Build base conditions
+        conditions = [
+            models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.old_pipeline_stage_id != models.LeadStatusHistory.new_pipeline_stage_id,
+            models.Lead.deleted_at.is_(None),
+        ]
+
+        # Filter by officer or units
+        if officer_id:
+            conditions.append(models.Lead.assigned_officer_id == officer_id)
+        elif unit_ids:
+            conditions.append(models.Lead.unit_id.in_(unit_ids))
+
+        # Optional date filter
+        if start_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) >= start_date)
+        if end_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) <= end_date)
+
+        # Subquery: Get each transition with time to next transition
+        # Using a self-join approach to find "next transition" for each lead
+        # This calculates time_in_stage = next_changed_at - changed_at
+
+        # Step 1: Get all stage transitions with their timestamps
+        history_alias = models.LeadStatusHistory.__table__.alias("h2")
+
+        # Query to get stage durations by finding the next transition for each entry
+        # We use a correlated subquery to find the minimum changed_at that is > current changed_at
+        next_change_subq = (
+            select(func.min(history_alias.c.changed_at))
+            .where(
+                history_alias.c.lead_id == models.LeadStatusHistory.lead_id,
+                history_alias.c.changed_at > models.LeadStatusHistory.changed_at,
+            )
+            .correlate(models.LeadStatusHistory)
+            .scalar_subquery()
+        )
+
+        # Main query: Calculate duration in days for each transition
+        # duration = (next_changed_at - changed_at) in days
+        duration_expr = func.extract(
+            'epoch',
+            next_change_subq - models.LeadStatusHistory.changed_at
+        ) / 86400.0  # Convert seconds to days
+
+        query = (
+            select(
+                models.LeadStatusHistory.old_pipeline_stage_id.label("stage_id"),
+                func.avg(duration_expr).label("avg_days"),
+                func.min(duration_expr).label("min_days"),
+                func.max(duration_expr).label("max_days"),
+                func.count().label("sample_size"),
+            )
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
+            .where(
+                *conditions,
+                next_change_subq.isnot(None),  # Only count transitions that have a "next" transition
+            )
+            .group_by(models.LeadStatusHistory.old_pipeline_stage_id)
+        )
+
+        result = await self.db.execute(query)
+        rows = result.fetchall()
+
+        # Build result dict
+        velocity_stats: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                avg_days = float(row.avg_days) if row.avg_days else 0.0
+                min_days = float(row.min_days) if row.min_days else 0.0
+                max_days = float(row.max_days) if row.max_days else 0.0
+
+                velocity_stats[stage_id] = {
+                    "avg_days": round(avg_days, 2),
+                    "min_days": round(min_days, 2),
+                    "max_days": round(max_days, 2),
+                    "sample_size": row.sample_size or 0,
+                }
+
+        return velocity_stats
+
+    async def get_estimated_lost_revenue_by_stage(
+        self,
+        officer_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        academic_year: Optional[int] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Calculate estimated lost revenue per pipeline stage.
+
+        SPEC: FUNNEL_FEASIBILITY_ANALYSIS.md - Estimated Lost Revenue
+
+        For each stage, calculates revenue from leads that dropped out (negative outcome).
+        Uses tuition_fee_per_year from OfferingAcademicInfo based on Lead's offering_id.
+
+        Formula: lost_revenue = COUNT(lost_leads) * AVG(tuition_fee_per_year)
+
+        Args:
+            officer_id: Filter by specific officer
+            unit_ids: Filter by unit IDs (if officer_id not provided)
+            start_date: Filter leads created after this date
+            end_date: Filter leads created before this date
+            academic_year: Specific academic year for tuition lookup (default: current year)
+
+        Returns:
+            Dict[stage_id, {
+                "lost_leads_count": 10,
+                "avg_tuition": 15000000.0,
+                "total_lost_revenue": 150000000.0,
+                "leads_with_tuition": 8  # leads that have offering with tuition data
+            }]
+        """
+        from datetime import datetime as dt
+
+        # Default to current academic year if not specified
+        if academic_year is None:
+            academic_year = dt.now().year
+
+        # Build base conditions
+        conditions = [
+            models.Lead.deleted_at.is_(None),
+            models.Lead.pipeline_stage_id.isnot(None),
+            # Filter for negative outcomes (lost leads)
+            models.ConsultationStatus.outcome_type == "negative",
+            models.ConsultationStatus.is_final == True,
+        ]
+
+        # Filter by officer or units
+        if officer_id:
+            conditions.append(models.Lead.assigned_officer_id == officer_id)
+        elif unit_ids:
+            conditions.append(models.Lead.unit_id.in_(unit_ids))
+
+        # Optional date filter
+        if start_date:
+            conditions.append(func.date(models.Lead.created_at) >= start_date)
+        if end_date:
+            conditions.append(func.date(models.Lead.created_at) <= end_date)
+
+        # Query: Group lost leads by stage with tuition info
+        # JOIN: Lead -> ProgramOffering -> OfferingAcademicInfo
+        query = (
+            select(
+                models.Lead.pipeline_stage_id.label("stage_id"),
+                func.count(models.Lead.id).label("lost_leads_count"),
+                func.avg(models.OfferingAcademicInfo.tuition_fee_per_year).label("avg_tuition"),
+                func.sum(models.OfferingAcademicInfo.tuition_fee_per_year).label("total_lost_revenue"),
+                func.count(models.OfferingAcademicInfo.tuition_fee_per_year).label("leads_with_tuition"),
+            )
+            .join(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id
+            )
+            .outerjoin(
+                models.ProgramOffering,
+                models.Lead.offering_id == models.ProgramOffering.id
+            )
+            .outerjoin(
+                models.OfferingAcademicInfo,
+                and_(
+                    models.OfferingAcademicInfo.offering_id == models.ProgramOffering.id,
+                    models.OfferingAcademicInfo.academic_year == academic_year,
+                    models.OfferingAcademicInfo.is_published == True,
+                    models.OfferingAcademicInfo.is_deleted == False,
+                )
+            )
+            .where(*conditions)
+            .group_by(models.Lead.pipeline_stage_id)
+        )
+
+        result = await self.db.execute(query)
+        rows = result.fetchall()
+
+        # Build result dict
+        revenue_stats: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                avg_tuition = float(row.avg_tuition) if row.avg_tuition else 0.0
+                total_revenue = float(row.total_lost_revenue) if row.total_lost_revenue else 0.0
+
+                revenue_stats[stage_id] = {
+                    "lost_leads_count": row.lost_leads_count or 0,
+                    "avg_tuition": round(avg_tuition, 0),
+                    "total_lost_revenue": round(total_revenue, 0),
+                    "leads_with_tuition": row.leads_with_tuition or 0,
+                }
+
+        return revenue_stats
+
     async def get_stage_transition_rates(
         self,
         officer_id: int,
@@ -200,7 +531,7 @@ class OfficerRepository(BaseRepository[models.User]):
     ) -> Dict[str, Dict[str, int]]:
         """
         Get transition counts between stages for conversion rate calculation.
-        
+
         Returns:
             Dict[from_stage_id, Dict[to_stage_id, count]]
         """
@@ -291,7 +622,7 @@ class OfficerRepository(BaseRepository[models.User]):
             if date_str in trends:
                 trends[date_str].assigned = row.count
         
-        # Query 2: Consultations per day
+        # Query 2: Consultations per day (exclude soft-deleted)
         consult_query = (
             select(
                 func.date(models.Consultation.consultation_date).label("day"),
@@ -302,7 +633,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
-                models.Lead.deleted_at.is_(None)
+                models.Lead.deleted_at.is_(None),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
             )
             .group_by(func.date(models.Consultation.consultation_date))
         )
@@ -373,7 +705,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
-                models.Lead.deleted_at.is_(None)
+                models.Lead.deleted_at.is_(None),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -578,6 +911,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.User.status == "active",
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
             )
             .group_by(models.User.id, models.User.username, models.User.full_name)
             .order_by(func.count(models.Consultation.id).desc())
@@ -593,7 +927,7 @@ class OfficerRepository(BaseRepository[models.User]):
         week_end: date,
     ) -> int:
         """Get officer's rank based on consultation count."""
-        # Subquery to count consultations per officer
+        # Subquery to count consultations per officer (exclude soft-deleted)
         subq = (
             select(
                 models.Consultation.officer_id,
@@ -602,17 +936,19 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
             )
             .group_by(models.Consultation.officer_id)
         ).subquery()
-        
-        # Count how many have more consultations
+
+        # Count how many have more consultations (exclude soft-deleted)
         my_count_query = (
             select(func.count(models.Consultation.id))
             .where(
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
             )
         )
         my_count = (await self.db.execute(my_count_query)).scalar() or 0
@@ -661,11 +997,12 @@ class OfficerRepository(BaseRepository[models.User]):
         officer_count = (await self.db.execute(officer_count_query)).scalar() or 1
         
         # Total consultations
-        # JOIN with Lead to filter soft-deleted leads
+        # JOIN with Lead to filter soft-deleted leads and consultations
         consult_conditions = [
             func.date(models.Consultation.consultation_date) >= start_date,
             func.date(models.Consultation.consultation_date) <= end_date,
-            models.Lead.deleted_at.is_(None) # Exclude consultations of deleted leads
+            models.Lead.deleted_at.is_(None),  # Exclude consultations of deleted leads
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
         ]
         
         if unit_id:
@@ -775,7 +1112,7 @@ class OfficerRepository(BaseRepository[models.User]):
         """
         today = datetime.now(timezone.utc).date()
         
-        # Query 1: Consultations (batch)
+        # Query 1: Consultations (batch, exclude soft-deleted)
         consult_query = (
             select(
                 func.count(models.Consultation.id).label("range_count"),
@@ -788,7 +1125,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Consultation.officer_id.in_(officer_ids),
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
-                models.Lead.deleted_at.is_(None)
+                models.Lead.deleted_at.is_(None),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -846,40 +1184,119 @@ class OfficerRepository(BaseRepository[models.User]):
 
         OPTIMIZATION: Single GROUP BY query instead of N queries per stage.
 
+        SPEC COMPLIANCE (2026-02-04):
+        - Filter: counts_for_funnel = TRUE (exclude activity logs)
+        - Filter: stage_id IS NOT NULL (exclude universal statuses)
+        - Early Exit: Counts FINAL leads (negative) at non-final stages
+        - Outcome breakdown: positive/negative/neutral counts
+
         Returns:
-            List of funnel stage dicts with counts
+            List of funnel stage dicts with counts, early_exit, and outcome breakdown
         """
         # Get all stages
         stages = await self.get_all_pipeline_stages()
-        
-        # Batch query for all stage counts
+        stage_by_id = {s.id: s for s in stages}
+
+        # SPEC: Batch query with counts_for_funnel filter and outcome breakdown
         count_query = (
             select(
                 models.Lead.pipeline_stage_id,
-                func.count(models.Lead.id).label("count")
+                func.count(models.Lead.id).label("total_count"),
+                # Outcome breakdown
+                func.count(
+                    case(
+                        (models.ConsultationStatus.outcome_type == "positive", 1),
+                    )
+                ).label("positive_count"),
+                func.count(
+                    case(
+                        (models.ConsultationStatus.outcome_type == "negative", 1),
+                    )
+                ).label("negative_count"),
+                func.count(
+                    case(
+                        (models.ConsultationStatus.outcome_type == "neutral", 1),
+                    )
+                ).label("neutral_count"),
+                # SPEC: Early Exit = FINAL leads with negative outcome
+                func.count(
+                    case(
+                        (and_(
+                            models.ConsultationStatus.is_final == True,
+                            models.ConsultationStatus.outcome_type == "negative",
+                        ), 1),
+                    )
+                ).label("early_exit_count"),
+            )
+            .join(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id
             )
             .where(
                 models.Lead.assigned_officer_id.in_(officer_ids),
                 models.Lead.deleted_at.is_(None),
+                # SPEC: Exclude universal statuses (stage_id = NULL)
+                models.Lead.pipeline_stage_id.isnot(None),
+                # SPEC: counts_for_funnel = TRUE
+                models.ConsultationStatus.counts_for_funnel == True,
             )
             .group_by(models.Lead.pipeline_stage_id)
         )
         count_result = await self.db.execute(count_query)
-        
-        # Build lookup
-        stage_counts = {row.pipeline_stage_id: row.count for row in count_result.fetchall()}
-        
-        # Build funnel
-        funnel = []
+
+        # Build lookup with all metrics
+        stage_counts = {}
+        for row in count_result.fetchall():
+            stage_counts[row.pipeline_stage_id] = {
+                "count": row.total_count,
+                "positive": row.positive_count,
+                "negative": row.negative_count,
+                "neutral": row.neutral_count,
+                "early_exit_count": row.early_exit_count,
+            }
+
+        # SPEC: Calculate Net Conversion Rate
+        total_enrolled = 0
+        total_lost = 0
+
         for stage in stages:
+            stage_data = stage_counts.get(stage.id, {})
+            if stage.is_final_stage:
+                total_enrolled += stage_data.get("positive", 0)
+                total_lost += stage_data.get("negative", 0)
+            else:
+                total_lost += stage_data.get("early_exit_count", 0)
+
+        net_conversion_rate = round(
+            (total_enrolled / (total_enrolled + total_lost)) * 100, 1
+        ) if (total_enrolled + total_lost) > 0 else 0.0
+
+        # Build funnel with all metrics
+        funnel = []
+        for idx, stage in enumerate(stages):
+            stage_data = stage_counts.get(stage.id, {})
+            lead_count = stage_data.get("count", 0)
+            early_exit_count = stage_data.get("early_exit_count", 0)
+            move_forward = lead_count - early_exit_count if not stage.is_final_stage else lead_count
+
             funnel.append({
                 "stage_id": stage.id,
                 "stage_name": stage.name,
                 "stage_order": stage.order,
-                "lead_count": stage_counts.get(stage.id, 0),
+                "lead_count": lead_count,
                 "is_final_stage": stage.is_final_stage,
+                "fill": f"var(--chart-{idx % 5 + 1})",
+                "conversion_rate": None,  # TODO: Calculate from transitions
+                # SPEC: Early Exit metrics
+                "early_exit_count": early_exit_count,
+                "move_forward": move_forward,
+                "outcome_breakdown": {
+                    "positive": stage_data.get("positive", 0),
+                    "negative": stage_data.get("negative", 0),
+                    "neutral": stage_data.get("neutral", 0),
+                },
             })
-        
+
         return funnel
 
     async def get_team_overview(
@@ -910,6 +1327,7 @@ class OfficerRepository(BaseRepository[models.User]):
                     models.Consultation.officer_id == models.User.id,
                     func.date(models.Consultation.consultation_date) >= start_date,
                     func.date(models.Consultation.consultation_date) <= end_date,
+                    models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
                 )
             )
             .where(models.User.id.in_(officer_ids))
@@ -933,9 +1351,15 @@ class OfficerRepository(BaseRepository[models.User]):
         self,
         week_start: date,
         week_end: date,
+        unit_ids: Optional[List[int]] = None,
     ) -> List[Tuple[int, str, str, int]]:
         """
         Get ALL officers ranked by consultations for the week.
+
+        Args:
+            week_start: Start date for the ranking period
+            week_end: End date for the ranking period
+            unit_ids: Optional list of unit IDs to filter officers (includes children)
 
         Returns list of (user_id, username, full_name, consultation_count)
         """
@@ -952,14 +1376,91 @@ class OfficerRepository(BaseRepository[models.User]):
                     models.Consultation.officer_id == models.User.id,
                     func.date(models.Consultation.consultation_date) >= week_start,
                     func.date(models.Consultation.consultation_date) <= week_end,
+                    models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
                 )
             )
             .where(
                 models.User.role == "officer",
                 models.User.status == "active",
             )
-            .group_by(models.User.id, models.User.username, models.User.full_name)
-            .order_by(func.count(models.Consultation.id).desc())
         )
+
+        # Filter by unit IDs if provided
+        if unit_ids:
+            query = query.where(models.User.unit_id.in_(unit_ids))
+
+        query = query.group_by(
+            models.User.id, models.User.username, models.User.full_name
+        ).order_by(func.count(models.Consultation.id).desc())
+
         result = await self.db.execute(query)
         return result.fetchall()
+
+    # =========================================================================
+    # Response Time Calculation
+    # =========================================================================
+
+    async def get_avg_response_time_hours(
+        self,
+        officer_id: int,
+        start_date: date,
+        end_date: date,
+    ) -> Optional[float]:
+        """
+        Calculate average response time in hours for an officer.
+
+        Response time = Time from lead assignment to first consultation.
+        Only considers leads that:
+        - Were assigned to this officer within the date range
+        - Have at least one consultation by this officer
+        - Have a valid assigned_at timestamp
+
+        Returns:
+            Average response time in hours, or None if no data
+        """
+        # Subquery to get the first consultation date for each lead by this officer
+        first_consult_subq = (
+            select(
+                models.Consultation.lead_id,
+                func.min(models.Consultation.consultation_date).label("first_consultation")
+            )
+            .where(
+                models.Consultation.officer_id == officer_id,
+                models.Consultation.deleted_at.is_(None),
+            )
+            .group_by(models.Consultation.lead_id)
+        ).subquery()
+
+        # Main query: Get leads assigned in date range with their first consultation
+        # Calculate time difference in hours
+        query = (
+            select(
+                func.avg(
+                    func.extract(
+                        'epoch',
+                        first_consult_subq.c.first_consultation - models.Lead.assigned_at
+                    ) / 3600  # Convert seconds to hours
+                ).label("avg_hours")
+            )
+            .join(
+                first_consult_subq,
+                first_consult_subq.c.lead_id == models.Lead.id
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.assigned_at.isnot(None),
+                models.Lead.deleted_at.is_(None),
+                func.date(models.Lead.assigned_at) >= start_date,
+                func.date(models.Lead.assigned_at) <= end_date,
+                # Ensure first consultation is after assignment (valid response)
+                first_consult_subq.c.first_consultation >= models.Lead.assigned_at,
+            )
+        )
+
+        result = await self.db.execute(query)
+        avg_hours = result.scalar()
+
+        if avg_hours is None:
+            return None
+
+        return round(float(avg_hours), 1)

@@ -1,15 +1,25 @@
 "use client"
 
-import { useFieldArray, UseFormReturn, FieldValues } from "react-hook-form"
+import { useFieldArray, UseFormReturn } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Plus, Trash2, Users, UserCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import type { AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+
+interface FamilyMember {
+  id: string;
+  full_name: string;
+  relationship: string;
+  phone: string;
+  occupation: string;
+  is_primary_guardian: boolean;
+}
 
 interface FamilyTabProps {
-  form: UseFormReturn<FieldValues>
+  form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
 }
 
@@ -22,8 +32,8 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
   // Helper to get original index
   const getOriginalIndex = (id: string) => fields.findIndex(f => f.id === id)
 
-  const guardians = fields.filter((f: any) => f.is_primary_guardian)
-  const others = fields.filter((f: any) => !f.is_primary_guardian)
+  const guardians = fields.filter((f: Partial<FamilyMember>) => f.is_primary_guardian)
+  const others = fields.filter((f: Partial<FamilyMember>) => !f.is_primary_guardian)
 
   const addMember = (isPrimary: boolean) => {
     append({
@@ -36,93 +46,119 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
   }
 
   return (
-    <div className="space-y-6">
-      {/* 1. NGƯỜI GIÁM HỘ CHÍNH */}
-      <Card className="border-l-4 border-l-blue-500">
-        <CardHeader>
-          <div className="flex justify-between items-center">
-             <div>
-                <CardTitle className="flex items-center gap-2">
-                    <UserCheck className="w-5 h-5 text-blue-600" />
-                    Người giám hộ chính
-                </CardTitle>
-                <CardDescription>Người chịu trách nhiệm pháp lý (Bắt buộc)</CardDescription>
-             </div>
-             {isEditable && (
-                <Button size="sm" variant="outline" onClick={() => addMember(true)}>
-                    <Plus className="w-4 h-4 mr-1" /> Thêm giám hộ
-                </Button>
-             )}
-          </div>
+    <div className="space-y-8">
+      {/* 1. NGƯỜI GIÁM HỘ CHÍNH (MANDATORY) */}
+      <Card className="shadow-sm">
+        <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-primary" />
+                Người giám hộ chính
+            </CardTitle>
+            <CardDescription className="text-sm">
+                Người chịu trách nhiệm pháp lý (Bắt buộc)
+            </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        
+        <CardContent className="space-y-6 pt-6">
+           {/* List of Guardians */}
+           <div className="space-y-4">
+               {guardians.map((field, idx) => {
+                   const index = getOriginalIndex(field.id)
+                   return (
+                       <MemberRow 
+                            key={field.id} 
+                            form={form} 
+                            index={index} 
+                            isEditable={isEditable} 
+                            onRemove={() => remove(index)}
+                            isPrimary={true}
+                        />
+                   )
+               })}
+           </div>
+
+           {/* Empty State / Validation Alert */}
            {guardians.length === 0 && (
-               <div className="text-center py-4 text-red-500 bg-red-50 rounded-md border border-red-100">
-                  <p>⚠️ Chưa có người giám hộ chính. Vui lòng thêm ít nhất 1 người.</p>
+               <div className="flex items-start gap-3 p-4 bg-warning-50 border border-warning-200 rounded-md text-warning-800">
+                  <div className="mt-0.5">⚠️</div>
+                  <div className="text-sm">
+                      <p className="font-medium">Chưa có người giám hộ chính</p>
+                      <p className="opacity-90">Vui lòng thêm ít nhất 01 người giám hộ hợp lệ để tiếp tục.</p>
+                  </div>
                </div>
            )}
-           {guardians.map((field, idx) => {
-               const index = getOriginalIndex(field.id)
-               return (
-                   <MemberRow 
-                        key={field.id} 
-                        form={form} 
-                        index={index} 
-                        isEditable={isEditable} 
-                        onRemove={() => remove(index)}
-                        isPrimary={true}
-                    />
-               )
-           })}
+
+           {/* ADD BUTTON - Bottom of content */}
+           {isEditable && (
+               <Button 
+                    variant={guardians.length === 0 ? "default" : "outline"}
+                    className="w-full sm:w-auto mt-4"
+                    onClick={() => addMember(true)}
+                >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Thêm người giám hộ chính
+                </Button>
+           )}
         </CardContent>
       </Card>
 
-      {/* 2. THÀNH VIÊN KHÁC */}
-      <Card>
-        <CardHeader>
-           <div className="flex justify-between items-center">
-             <div>
-                <CardTitle className="flex items-center gap-2">
-                    <Users className="w-5 h-5" />
-                    Thành viên khác
-                </CardTitle>
-                <CardDescription>Bố, mẹ, anh, chị, em...</CardDescription>
-             </div>
-             {isEditable && (
-                <Button size="sm" variant="outline" onClick={() => addMember(false)}>
-                    <Plus className="w-4 h-4 mr-1" /> Thêm thành viên
-                </Button>
-             )}
-          </div>
+      {/* 2. THÀNH VIÊN KHÁC (OPTIONAL) */}
+      <Card className="shadow-sm border-border">
+        <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
+                <Users className="w-5 h-5" />
+                Thành viên khác
+            </CardTitle>
+            <CardDescription className="text-sm">
+                Bố, mẹ, anh, chị, em (không bắt buộc)
+            </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+
+        <CardContent className="space-y-6 pt-6">
+           {/* List of Other Members */}
+           <div className="space-y-4">
+               {others.map((field, idx) => {
+                   const index = getOriginalIndex(field.id)
+                   return (
+                       <MemberRow 
+                            key={field.id} 
+                            form={form} 
+                            index={index} 
+                            isEditable={isEditable} 
+                            onRemove={() => remove(index)}
+                            isPrimary={false}
+                        />
+                   )
+               })}
+           </div>
+
+           {/* Empty State - Neutral */}
            {others.length === 0 && (
-               <div className="text-center py-8 text-muted-foreground italic">
-                  Chưa có thông tin thành viên khác
+               <div className="text-center py-8 text-muted-foreground bg-muted/50 rounded-lg border border-dashed border-border">
+                  <p>— Chưa có thông tin thành viên khác —</p>
                </div>
            )}
-           {others.map((field, idx) => {
-               const index = getOriginalIndex(field.id)
-               return (
-                   <MemberRow 
-                        key={field.id} 
-                        form={form} 
-                        index={index} 
-                        isEditable={isEditable} 
-                        onRemove={() => remove(index)}
-                        isPrimary={false}
-                    />
-               )
-           })}
+
+            {/* ADD BUTTON - Bottom */}
+            {isEditable && (
+                <Button 
+                    variant="outline"
+                    className="w-full sm:w-auto mt-4"
+                    onClick={() => addMember(false)}
+                >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Thêm thành viên
+                </Button>
+            )}
         </CardContent>
       </Card>
     </div>
   )
 }
 
-function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: UseFormReturn<FieldValues>, index: number, isEditable: boolean, onRemove: () => void, isPrimary: boolean }) {
+function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: UseFormReturn<AdmissionProfileUpdateInput>, index: number, isEditable: boolean, onRemove: () => void, isPrimary: boolean }) {
     return (
-        <div className="p-4 border rounded-lg bg-white relative group">
+        <div className="p-4 border rounded-lg bg-card relative group">
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
                 <div className="md:col-span-3">
                     <FormField
@@ -187,7 +223,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                 
                 {isEditable && (
                     <div className="md:col-span-1 flex items-end justify-end pb-2">
-                        <Button variant="ghost" size="icon" onClick={onRemove} className="text-destructive hover:bg-red-50">
+                        <Button variant="ghost" size="icon" onClick={onRemove} className="text-destructive hover:bg-error-50" aria-label="Xóa người giám hộ">
                             <Trash2 className="w-4 h-4" />
                         </Button>
                     </div>
@@ -195,7 +231,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
             </div>
             {isPrimary && (
                 <div className="absolute top-2 right-2">
-                    <Badge variant="secondary" className="bg-blue-100 text-blue-700">Giám hộ chính</Badge>
+                    <Badge variant="secondary" className="bg-info-100 text-info-700">Giám hộ chính</Badge>
                 </div>
             )}
         </div>

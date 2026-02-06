@@ -1,0 +1,113 @@
+/* admission.css - Admission-specific tokens for QLTS */
+
+:root {
+  /* Admission Status Colors */
+  --admission-draft-bg: oklch(0.95 0.02 250);
+  --admission-draft-fg: oklch(0.45 0.05 250);
+  --admission-draft-border: oklch(0.85 0.03 250);
+
+  --admission-submitted-bg: oklch(0.93 0.08 220);
+  --admission-submitted-fg: oklch(0.35 0.12 220);
+  --admission-submitted-border: oklch(0.75 0.10 220);
+
+  --admission-reviewing-bg: oklch(0.94 0.10 85);
+  --admission-reviewing-fg: oklch(0.45 0.15 85);
+  --admission-reviewing-border: oklch(0.80 0.12 85);
+
+  --admission-approved-bg: oklch(0.93 0.10 145);
+  --admission-approved-fg: oklch(0.35 0.15 145);
+  --admission-approved-border: oklch(0.75 0.12 145);
+
+  --admission-rejected-bg: oklch(0.94 0.08 25);
+  --admission-rejected-fg: oklch(0.45 0.18 25);
+  --admission-rejected-border: oklch(0.80 0.12 25);
+
+  --admission-enrolled-bg: oklch(0.92 0.12 280);
+  --admission-enrolled-fg: oklch(0.35 0.18 280);
+  --admission-enrolled-border: oklch(0.75 0.15 280);
+
+  /* Lead Pipeline Colors */
+  --lead-new-bg: oklch(0.95 0.05 220);
+  --lead-new-fg: oklch(0.40 0.10 220);
+
+  --lead-contacted-bg: oklch(0.94 0.08 180);
+  --lead-contacted-fg: oklch(0.38 0.12 180);
+
+  --lead-qualified-bg: oklch(0.93 0.10 145);
+  --lead-qualified-fg: oklch(0.35 0.15 145);
+
+  --lead-converted-bg: oklch(0.92 0.12 280);
+  --lead-converted-fg: oklch(0.35 0.18 280);
+
+  --lead-lost-bg: oklch(0.94 0.03 0);
+  --lead-lost-fg: oklch(0.50 0.02 0);
+
+  /* Score Indicators */
+  --score-excellent-bg: oklch(0.92 0.12 145);
+  --score-excellent-fg: oklch(0.30 0.18 145);
+
+  --score-good-bg: oklch(0.93 0.10 180);
+  --score-good-fg: oklch(0.35 0.15 180);
+
+  --score-average-bg: oklch(0.94 0.10 85);
+  --score-average-fg: oklch(0.45 0.15 85);
+
+  --score-poor-bg: oklch(0.94 0.08 25);
+  --score-poor-fg: oklch(0.45 0.18 25);
+}
+
+/* Dark mode admission overrides */
+.dark {
+  --admission-draft-bg: oklch(0.25 0.02 250);
+  --admission-draft-fg: oklch(0.80 0.04 250);
+  --admission-draft-border: oklch(0.35 0.03 250);
+
+  --admission-submitted-bg: oklch(0.25 0.08 220);
+  --admission-submitted-fg: oklch(0.85 0.10 220);
+  --admission-submitted-border: oklch(0.40 0.10 220);
+
+  --admission-reviewing-bg: oklch(0.28 0.10 85);
+  --admission-reviewing-fg: oklch(0.88 0.12 85);
+  --admission-reviewing-border: oklch(0.42 0.12 85);
+
+  --admission-approved-bg: oklch(0.25 0.10 145);
+  --admission-approved-fg: oklch(0.88 0.12 145);
+  --admission-approved-border: oklch(0.40 0.12 145);
+
+  --admission-rejected-bg: oklch(0.28 0.08 25);
+  --admission-rejected-fg: oklch(0.88 0.12 25);
+  --admission-rejected-border: oklch(0.42 0.12 25);
+
+  --admission-enrolled-bg: oklch(0.25 0.12 280);
+  --admission-enrolled-fg: oklch(0.90 0.15 280);
+  --admission-enrolled-border: oklch(0.40 0.15 280);
+
+  /* Lead Pipeline - Dark */
+  --lead-new-bg: oklch(0.25 0.05 220);
+  --lead-new-fg: oklch(0.85 0.08 220);
+
+  --lead-contacted-bg: oklch(0.25 0.08 180);
+  --lead-contacted-fg: oklch(0.85 0.10 180);
+
+  --lead-qualified-bg: oklch(0.25 0.10 145);
+  --lead-qualified-fg: oklch(0.88 0.12 145);
+
+  --lead-converted-bg: oklch(0.25 0.12 280);
+  --lead-converted-fg: oklch(0.90 0.15 280);
+
+  --lead-lost-bg: oklch(0.25 0.02 0);
+  --lead-lost-fg: oklch(0.70 0.02 0);
+
+  /* Score Indicators - Dark */
+  --score-excellent-bg: oklch(0.25 0.12 145);
+  --score-excellent-fg: oklch(0.90 0.15 145);
+
+  --score-good-bg: oklch(0.25 0.10 180);
+  --score-good-fg: oklch(0.88 0.12 180);
+
+  --score-average-bg: oklch(0.28 0.10 85);
+  --score-average-fg: oklch(0.88 0.12 85);
+
+  --score-poor-bg: oklch(0.28 0.08 25);
+  --score-poor-fg: oklch(0.88 0.12 25);
+}

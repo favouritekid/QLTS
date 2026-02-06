@@ -205,7 +205,7 @@ export function MajorProgramDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Tên chương trình <span className="text-red-500">*</span>
+                    Tên chương trình <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input
@@ -226,7 +226,7 @@ export function MajorProgramDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Trình độ đào tạo <span className="text-red-500">*</span>
+                    Trình độ đào tạo <span className="text-error-500">*</span>
                   </FormLabel>
                   <Select
                     onValueChange={field.onChange}
@@ -236,14 +236,14 @@ export function MajorProgramDialog({
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder={
-                          degreeLevelsLoading ? "Đang tải..." : "Chọn trình độ đào tạo"
+                          degreeLevelsLoading ? "Đang tải…" : "Chọn trình độ đào tạo"
                         } />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {degreeLevelsLoading ? (
                         <SelectItem value="loading" disabled>
-                          Đang tải...
+                          Đang tải…
                         </SelectItem>
                       ) : degreeLevels.length === 0 ? (
                         <SelectItem value="empty" disabled>
@@ -273,7 +273,7 @@ export function MajorProgramDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Mã ngành <span className="text-red-500">*</span>
+                    Mã ngành <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     {isEditMode ? (
@@ -310,7 +310,7 @@ export function MajorProgramDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Đơn vị quản lý <span className="text-red-500">*</span>
+                    Đơn vị quản lý <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <SmartUnitSelector
@@ -356,7 +356,7 @@ export function MajorProgramDialog({
               control={form.control}
               name="is_heavy"
               render={({ field }) => (
-                <FormItem className="flex flex-row items-center justify-between rounded-lg border border-amber-200 bg-amber-50/50 p-4">
+                <FormItem className="flex flex-row items-center justify-between rounded-lg border border-warning-200 bg-warning-50/50 p-4">
                   <div className="space-y-0.5">
                     <FormLabel className="text-base">Ngành nghề nặng nhọc, độc hại</FormLabel>
                     <FormDescription>

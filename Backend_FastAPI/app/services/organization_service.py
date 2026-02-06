@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
+from sqlalchemy import update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models, schemas
@@ -60,11 +61,15 @@ def create_recursive_unit_loader(depth: int):
     if depth <= 0:
         return selectinload(models.OrganizationUnit.major_programs).selectinload(
             models.MajorProgram.offerings
+        ).selectinload(
+            models.ProgramOffering.academic_info_history
         )  # Base case: just load programs
 
     return selectinload(models.OrganizationUnit.children).options(
         selectinload(models.OrganizationUnit.major_programs).selectinload(
             models.MajorProgram.offerings
+        ).selectinload(
+            models.ProgramOffering.academic_info_history
         ),
         create_recursive_unit_loader(depth - 1)
     )
@@ -777,6 +782,7 @@ async def delete_major_program(
         await _check_unit_access(db, db_program.unit_id, current_user)
 
         program_name = db_program.name
+        program_code = db_program.code
 
         # 2. Thực hiện Soft Delete (Set is_active = False)
 
@@ -794,21 +800,13 @@ async def delete_major_program(
         )
         await db.execute(stmt_offerings)
 
-        # 2c. (Tùy chọn) Nếu muốn xóa mềm cả Level 3 (Academic Info)
-        # Tuy nhiên, logic thường thấy là: Nếu Level 2 Inactive thì Level 3 tự động ẩn.
-        # Nên không nhất thiết phải update Level 3 để tiết kiệm tài nguyên DB.
-
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
 
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            log.info(
-                "Major program and children soft-deleted successfully",
-                program_id=program_id,
-                program_name=program_name
-            )
+            log.info("Major program deleted", program_id=program_id, name=program_name)
             await invalidate_org_cache()
             await emit_organization_updated(
                 operation="delete",
@@ -816,8 +814,9 @@ async def delete_major_program(
                 resource_id=program_id,
                 resource_name=program_name
             )
-
+            
         return None, _post_commit
+
 
     except Exception as e:
         # ✅ Router will handle rollback
@@ -870,7 +869,7 @@ async def create_program_offering(
         repo = OrganizationRepository(db)
         
         # Verify program exists
-        program = await repo.get_major_program_by_id(offering_in.program_id)
+        program = await repo.get_major_program_by_id_full(offering_in.program_id)
         if not program:
             raise ResourceNotFoundError(
                 detail=f"Major program with id {offering_in.program_id} not found."
@@ -1027,7 +1026,6 @@ async def delete_program_offering(
         db.add(db_offering)
 
         # ✅ CASCADE: Soft delete related academic info
-        from sqlalchemy import update
         stmt_academic = (
             update(models.OfferingAcademicInfo)
             .where(models.OfferingAcademicInfo.offering_id == offering_id)
@@ -1632,19 +1630,20 @@ async def get_organization_tree_with_aggregation(
 
 async def get_programs_by_unit_tree(
     db: AsyncSession,
-    unit_id: int,
+    unit_id: Optional[int] = None,
     search_term: Optional[str] = None
 ) -> List[models.MajorProgram]:
     """
     Get all programs belonging to a unit and all its descendants.
+    If unit_id is None, returns ALL programs (flat list).
     
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
     """
-    if not unit_id:
-        return []
-
-    # ✅ Use Repository for CTE query and program search
     repo = OrganizationRepository(db)
+
+    # If no unit specified, return ALL programs
+    if not unit_id:
+        return await repo.get_all_major_programs(search_term=search_term)
     
     # Get all related unit IDs using recursive CTE
     all_related_unit_ids = await repo.get_descendant_unit_ids(unit_id)
@@ -1669,15 +1668,15 @@ async def get_all_program_offerings(
 ) -> List[models.ProgramOffering]:
     """
     Get all program offerings as flat list for dropdowns.
-    
+
     Uses OrganizationRepository with eager loading for program name display.
-    
+
     Args:
         db: Database session
         is_active: Filter by active status (None = all)
         skip: Offset for pagination
         limit: Maximum results
-        
+
     Returns:
         List of ProgramOffering with program loaded
     """
@@ -1687,4 +1686,38 @@ async def get_all_program_offerings(
         skip=skip,
         limit=limit
     )
+
+
+async def get_all_academic_infos(
+    db: AsyncSession,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 1000,
+) -> List[schemas.OfferingAcademicInfo]:
+    repo = OrganizationRepository(db)
+    # Receive list of tuples (model, path_count)
+    results = await repo.get_all_academic_infos(
+        is_active=is_active,
+        skip=skip,
+        limit=limit
+    )
+
+    response = []
+    for info_model, path_count in results:
+        # Map to Pydantic
+        item = schemas.OfferingAcademicInfo.model_validate(info_model)
+
+        # Populate computed fields
+        item.path_count = path_count
+
+        if path_count > 0:
+            item.admission_status = schemas.AdmissionStatus.CONFIGURED
+        elif (item.annual_admission_quota or 0) > 0:
+            item.admission_status = schemas.AdmissionStatus.READY
+        else:
+            item.admission_status = schemas.AdmissionStatus.NOT_ELIGIBLE
+
+        response.append(item)
+
+    return response
 

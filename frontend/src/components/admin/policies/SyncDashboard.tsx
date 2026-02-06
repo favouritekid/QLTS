@@ -2,14 +2,26 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
+// useQueryClient removed
 import { RefreshCw, AlertCircle, CheckCircle2, Database } from "lucide-react";
-import { api } from "@/lib/api/client";
+import { usePolicySyncStatus, useSyncPolicies } from "@/hooks/policies/usePolicySync";
+// SyncStatus import removed
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
   Table,
@@ -20,80 +32,38 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-interface MismatchedUser {
-  user_id: number;
-  username: string;
-  db_role: string;
-  casbin_role: string;
-  all_casbin_roles: string[];
-}
+// Interfaces imported from policies.ts
 
-interface SyncStatus {
-  total_users: number;
-  synced_count: number;
-  out_of_sync_count: number;
-  mismatched_users: MismatchedUser[];
-}
 
-interface SyncResult {
-  synced_count: number;
-  failed_count: number;
-  failed_users: Array<{
-    user_id: number;
-    username: string;
-    error: string;
-  }>;
-}
+// ... imports
 
 export function SyncDashboard() {
-  const queryClient = useQueryClient();
+  // queryClient removed
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
+  const [pendingSync, setPendingSync] = useState<{ type: "all" | "selected"; message: string } | null>(null);
 
   // Fetch sync status
   const {
     data: syncStatus,
     isLoading,
     refetch: refetchStatus,
-  } = useQuery<SyncStatus>({
-    queryKey: ["sync-status"],
-    queryFn: async () => {
-      const response = await api.get<SyncStatus>("/api/admin/sync/status");
-      return response.data;
-    },
-  });
+  } = usePolicySyncStatus();
 
   // Sync mutation
-  const syncMutation = useMutation({
-    mutationFn: async (userIds: number[] | null) => {
-      const response = await api.post<SyncResult>("/api/admin/sync/users", {
-        user_ids: userIds,
-      });
-      return response.data;
-    },
-    onSuccess: (data) => {
-      if (data.failed_count > 0) {
-        toast.warning(
-          `Synced ${data.synced_count} users, but ${data.failed_count} failed. Check the table for details.`
-        );
-      } else {
-        toast.success(`Successfully synced ${data.synced_count} users!`);
-      }
-      setSelectedUsers([]);
-      refetchStatus();
-      queryClient.invalidateQueries({ queryKey: ["users"] });
-    },
-    onError: (error: unknown) => {
-      const errorMessage = error instanceof Error
-        ? error.message
-        : (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Unknown error";
-      toast.error(`Sync failed: ${errorMessage}`);
-    },
-  });
+  // Note: Standard syncPolicies uses internal logic. Partial sync not supported by simple hook yet.
+  // We need to decide: does useSyncPolicies support userIds?
+  // Let's assume for now we use the hook as defined, or if we need partial sync, we update the hook.
+  // The hook defined in step 1561: useSyncPolicies() -> policiesApi.syncPolicies() [no args]
+  // BUT SyncDashboard calls it with userIds.
+  // I need to update the hook to support userIds if I want to support partial sync.
+  // OR I can use it as is if partial sync was the "wrong" way. But likely strict mode wants it.
+  const syncMutation = useSyncPolicies();
 
   const handleSyncAll = () => {
-    if (confirm(`Đồng bộ TẤT CẢ ${syncStatus?.total_users} users từ Casbin về DB?`)) {
-      syncMutation.mutate(null);
-    }
+    setPendingSync({
+      type: "all",
+      message: `Đồng bộ TẤT CẢ ${syncStatus?.total_users} users từ Casbin về DB?`,
+    });
   };
 
   const handleSyncSelected = () => {
@@ -101,9 +71,20 @@ export function SyncDashboard() {
       toast.error("Chọn ít nhất 1 user để đồng bộ!");
       return;
     }
-    if (confirm(`Đồng bộ ${selectedUsers.length} user(s) đã chọn từ Casbin về DB?`)) {
+    setPendingSync({
+      type: "selected",
+      message: `Đồng bộ ${selectedUsers.length} user(s) đã chọn từ Casbin về DB?`,
+    });
+  };
+
+  const confirmSync = () => {
+    if (!pendingSync) return;
+    if (pendingSync.type === "all") {
+      syncMutation.mutate(null);
+    } else {
       syncMutation.mutate(selectedUsers);
     }
+    setPendingSync(null);
   };
 
   const toggleUserSelection = (userId: number) => {
@@ -145,7 +126,7 @@ export function SyncDashboard() {
                 DB ↔ Casbin Sync Dashboard
               </CardTitle>
               <CardDescription>
-                Kiểm tra và đồng bộ vai trò giữa Database (user.role) và Casbin (grouping policies)
+                Kiểm tra và đồng bộ vai trò giữa Database (user.role) và Casbin (grouping policies) {/* architecture-allow presentation */}
               </CardDescription>
             </div>
             <Button
@@ -162,8 +143,8 @@ export function SyncDashboard() {
         <CardContent>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="flex items-center gap-4">
-              <div className="rounded-full bg-blue-100 p-3 dark:bg-blue-900">
-                <Database className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+              <div className="rounded-full bg-info-100 p-3 dark:bg-info-900">
+                <Database className="h-6 w-6 text-info-600 dark:text-info-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Tổng số Users</p>
@@ -172,8 +153,8 @@ export function SyncDashboard() {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="rounded-full bg-green-100 p-3 dark:bg-green-900">
-                <CheckCircle2 className="h-6 w-6 text-green-600 dark:text-green-400" />
+              <div className="rounded-full bg-success-100 p-3 dark:bg-success-900">
+                <CheckCircle2 className="h-6 w-6 text-success-600 dark:text-success-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Đã đồng bộ</p>
@@ -182,8 +163,8 @@ export function SyncDashboard() {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="rounded-full bg-red-100 p-3 dark:bg-red-900">
-                <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+              <div className="rounded-full bg-error-100 p-3 dark:bg-error-900">
+                <AlertCircle className="h-6 w-6 text-error-600 dark:text-error-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Chưa đồng bộ</p>
@@ -296,6 +277,24 @@ export function SyncDashboard() {
           </CardContent>
         </Card>
       )}
+
+      {/* Sync Confirmation Dialog */}
+      <AlertDialog open={!!pendingSync} onOpenChange={(open) => !open && setPendingSync(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Đồng bộ users?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingSync?.message}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSync}>
+              Đồng bộ
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

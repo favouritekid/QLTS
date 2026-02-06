@@ -1,6 +1,9 @@
 /**
  * TanStack Query Hooks for Admissons
- * Mirrored from useLeads.ts pattern
+ * 
+ * Phase 7: Refactored for Frontend Thin Client compliance
+ * - Uses handleApiError() for centralized error handling (ADR-FE-004)
+ * - Uses getStatusConfig() for async-first workflow (ADR-FE-003)
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -12,8 +15,15 @@ import { admissionsApi } from "@/lib/api/admissions"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
+  AdmissionListParams,
+  BulkApproveRequest,
+  BulkRejectRequest,
+  BulkAssignRequest,
 } from "@/lib/zod/admissions"
-import type { ApiErrorResponse } from "@/types/api.types"
+
+// Phase 7: Architecture Standards
+import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
+import { getStatusConfig } from "@/lib/status-config"
 
 // ============================================
 // QUERY KEYS
@@ -31,14 +41,23 @@ export const admissionsKeys = {
 // QUERIES
 // ============================================
 
-export function useListAdmissions(
-  filters?: { status?: string; page?: number; page_size?: number }
-) {
+export function useListAdmissions(filters?: AdmissionListParams) {
   return useQuery({
-    queryKey: admissionsKeys.list(filters),
-    queryFn: () => admissionsApi.listAdmissions(filters),
+    queryKey: admissionsKeys.list(filters as Record<string, unknown> | undefined),
+    queryFn: () => admissionsApi.listAdmissions({
+      page: filters?.page ?? 1,
+      page_size: filters?.page_size ?? 20,
+      status: filters?.status,
+      search: filters?.search,
+      major_id: filters?.major_id,
+      date_from: filters?.date_from,
+      date_to: filters?.date_to,
+      sort_by: filters?.sort_by,
+      order: filters?.order,
+    }),
     staleTime: 15000, // 15 seconds
     refetchOnWindowFocus: true,
+    placeholderData: (previousData) => previousData, // Keep showing old data while fetching new page
   })
 }
 
@@ -61,7 +80,7 @@ export function useGetAdmission(
 }
 
 // ============================================
-// MUTATIONS
+// MUTATIONS (Phase 7: Centralized Error Handling)
 // ============================================
 
 export function useCreateAdmission() {
@@ -76,17 +95,7 @@ export function useCreateAdmission() {
       router.push(`/admissions/${data.id}`)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string" 
-          ? detail 
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-      
-      toast.error("Lỗi tạo hồ sơ", {
-        description: message,
-      })
+      handleApiError(error, { context: "tạo hồ sơ" })
     },
   })
 }
@@ -103,16 +112,11 @@ export function useUpdateAdmission(id: number) {
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-
-      toast.error("Lỗi cập nhật", {
-        description: message,
+      // Phase 7: Use centralized handler with 409 conflict support
+      handleApiError(error, { 
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "cập nhật hồ sơ"
       })
     },
   })
@@ -124,26 +128,119 @@ export function useSubmitAdmission(id: number) {
   return useMutation({
     mutationFn: () => admissionsApi.submitAdmission(id),
     onSuccess: (data) => {
-      if (data.status === 'approved') {
-        toast.success("Hồ sơ đã được duyệt")
-      } else {
-        toast.error("Hồ sơ bị từ chối", {
-           description: `${data.errors?.length} lỗi được tìm thấy`
+      // Phase 7: Use status-config for async-first workflow (ADR-FE-003)
+      // Backend only returns "draft" (validation failed) or "submitted" (success)
+      // Other statuses (approved, rejected) come from separate action endpoints
+      
+      if (data.status === 'submitted') {
+        // Success: Profile is now pending approval
+        const config = getStatusConfig('submitted')
+        toast.info(config.bannerMessage || "Hồ sơ đã được nộp, đang chờ duyệt")
+      } else if (data.validation_errors && data.validation_errors.length > 0) {
+        // Validation failed (still draft status)
+        toast.error("Hồ sơ chưa đủ điều kiện", {
+          description: `${data.validation_errors.length} lỗi cần được khắc phục`
+        })
+      } else if (data.status === 'draft') {
+        // Draft without explicit errors
+        toast.warning("Hồ sơ chưa thể nộp", {
+          description: "Vui lòng kiểm tra lại thông tin"
         })
       }
+      
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
+      handleApiError(error, { 
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "nộp hồ sơ"
+      })
+    },
+  })
+}
 
-      toast.error("Lỗi nộp hồ sơ", {
-        description: message,
+/**
+ * Approve Admission Hook
+ * Manager/Admin action - transitions from submitted/resubmitted → approved
+ * 
+ * Architecture Compliance:
+ * - Uses centralized error handling (handleApiError)
+ * - Handles 409 Conflict (optimistic locking)
+ * - Displays status-driven toast messages
+ * - Invalidates cache on success
+ */
+export function useApproveAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { notes?: string; version: number }) =>
+      admissionsApi.approveAdmission(id, data),
+    onSuccess: (data) => {
+      // Status-driven messaging (FRONTEND_ARCHITECTURE_V3.md 2.3)
+      if (data.status === 'approved') {
+        toast.success("Hồ sơ đã được phê duyệt", {
+          description: `Trạng thái: ${getStatusConfig('approved').label || data.status}`
+        })
+      } else {
+        // Handle unexpected status (async-first principle)
+        toast.info("Yêu cầu phê duyệt đã được xử lý", {
+          description: `Trạng thái hiện tại: ${data.status}`
+        })
+      }
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      // Centralized error handler with 409 Conflict support
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "phê duyệt hồ sơ"
+      })
+    },
+  })
+}
+
+/**
+ * Reject Admission Hook
+ * Manager/Admin action - transitions from submitted/resubmitted → rejected
+ * 
+ * Architecture Compliance:
+ * - Uses centralized error handling (handleApiError)
+ * - Handles 409 Conflict (optimistic locking)
+ * - Displays status-driven toast messages
+ * - Invalidates cache on success
+ */
+export function useRejectAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string; version: number }) =>
+      admissionsApi.rejectAdmission(id, data),
+    onSuccess: (data) => {
+      // Status-driven messaging (FRONTEND_ARCHITECTURE_V3.md 2.3)
+      if (data.status === 'rejected') {
+        toast.success("Hồ sơ đã bị từ chối", {
+          description: data.rejection_reason || "Đã gửi lý do từ chối"
+        })
+      } else {
+        // Handle unexpected status (async-first principle)
+        toast.info("Yêu cầu từ chối đã được xử lý", {
+          description: `Trạng thái hiện tại: ${data.status}`
+        })
+      }
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      // Centralized error handler with 409 Conflict support
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "từ chối hồ sơ"
       })
     },
   })
@@ -156,7 +253,9 @@ export function useEnrollStudent(id: number) {
   return useMutation({
     mutationFn: () => admissionsApi.enrollStudent(id),
     onSuccess: (data) => {
-      toast.success("Nhập học thành công")
+      toast.success("Nhập học thành công", {
+        description: `Mã sinh viên: ${data.student_code}`
+      })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       // Delay navigation
       setTimeout(() => {
@@ -164,16 +263,10 @@ export function useEnrollStudent(id: number) {
       }, 1500)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-
-      toast.error("Lỗi nhập học", {
-        description: message,
+      handleApiError(error, { 
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "nhập học"
       })
     },
   })
@@ -183,34 +276,17 @@ export function useUploadAdmissionDocument(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (variables: { docCode: string, file: File }) => 
-        admissionsApi.uploadAdmissionDocument(id, variables.docCode, variables.file),
-    onSuccess: (data, variables) => {
+    mutationFn: (variables: { docCode: string, file: File, actualSubmissionFormat?: string }) =>
+        admissionsApi.uploadAdmissionDocument(id, variables.docCode, variables.file, variables.actualSubmissionFormat),
+    onSuccess: (updatedProfile, variables) => {
       toast.success("Tài liệu đã được tải lên")
-      
-      // Optimistic update: Update the specific document in cache immediately
-      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
-        if (!oldData) return oldData
-        
-        const updatedChecklist = oldData.documents_checklist?.map(doc => 
-          doc.code === variables.docCode 
-            ? { ...doc, status: "uploaded" as const, file_path: data.file_path, uploaded_at: data.uploaded_at }
-            : doc
-        ) || []
-        
-        return { ...oldData, documents_checklist: updatedChecklist }
-      })
-      
-      // Also invalidate to ensure consistency with server
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+
+      // ✅ Backend now returns full AdmissionProfileResponse with updated validation_summary
+      // Update cache directly (no need to refetch)
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-        const detail = error.response?.data?.detail
-        const message =
-          typeof detail === "string"
-            ? detail
-            : "Lỗi tải lên tài liệu"
-        toast.error(message)
+      handleApiError(error, { context: "tải lên tài liệu" })
     }
   })
 }
@@ -227,17 +303,229 @@ export function useDeleteAdmission(id: number) {
       router.push("/admissions")
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
+      handleApiError(error, { context: "xóa hồ sơ" })
+    },
+  })
+}
 
-      toast.error("Lỗi xóa hồ sơ", {
-        description: message,
+export function useMarkPaperSubmitted(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (variables: { docCode: string, actualSubmissionFormat: string }) =>
+      admissionsApi.markPaperSubmitted(id, variables.docCode, variables.actualSubmissionFormat),
+    onSuccess: (updatedProfile, variables) => {
+      toast.success("Đã xác nhận nhận giấy tờ")
+
+      // ✅ Backend now returns full AdmissionProfileResponse with updated validation_summary
+      // Update cache directly (no need to refetch)
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "xác nhận giấy tờ" })
+    }
+  })
+}
+
+export function useVerifyDocument(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (variables: { docCode: string, format: string }) =>
+      admissionsApi.verifyDocumentFormat(id, variables.docCode, variables.format),
+    onSuccess: (data, variables) => {
+      toast.success("Đã xác nhận tài liệu")
+      
+      // Update cache optimistically or invalidate
+      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
+        if (!oldData) return oldData
+        
+        const updatedChecklist = oldData.documents_checklist?.map(doc => 
+          doc.code === variables.docCode
+            ? { 
+                ...doc, 
+                status: "verified" as const, 
+                submission_format: variables.format 
+              }
+            : doc
+        ) || []
+        
+        return { ...oldData, documents_checklist: updatedChecklist }
       })
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "xác nhận tài liệu" })
+    }
+  })
+}
+
+export function useRejectDocument(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (variables: { docCode: string, reason: string }) =>
+      admissionsApi.rejectDocument(id, variables.docCode, variables.reason),
+    onSuccess: (data, variables) => {
+      toast.success("Đã từ chối tài liệu")
+
+      // Optimistic update
+      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
+        if (!oldData) return oldData
+
+        const updatedChecklist = oldData.documents_checklist?.map(doc =>
+          doc.code === variables.docCode
+            ? { ...doc, status: "rejected" as const, rejection_reason: variables.reason }
+            : doc
+        ) || []
+
+        return { ...oldData, documents_checklist: updatedChecklist }
+      })
+
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "từ chối tài liệu" })
+    }
+  })
+}
+
+export function useResetDocument(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (docCode: string) =>
+      admissionsApi.resetDocument(id, docCode),
+    onSuccess: (updatedProfile, docCode) => {
+      toast.success("Đã hoàn tác tài liệu")
+
+      // Update cache with full profile response
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "hoàn tác tài liệu" })
+    }
+  })
+}
+
+// ============================================
+// BULK ACTION MUTATIONS
+// ============================================
+
+/**
+ * Bulk Approve Hook
+ * Manager/Admin action - approve multiple profiles at once
+ */
+export function useBulkApproveAdmissions() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: BulkApproveRequest) =>
+      admissionsApi.bulkApproveAdmissions(data),
+    onSuccess: (result) => {
+      if (result.success_count > 0) {
+        toast.success(`Đã phê duyệt ${result.success_count} hồ sơ`, {
+          description: result.failed_count > 0
+            ? `${result.failed_count} hồ sơ thất bại`
+            : undefined
+        })
+      } else {
+        toast.error("Không thể phê duyệt hồ sơ nào", {
+          description: result.message
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "phê duyệt hàng loạt" })
+    },
+  })
+}
+
+/**
+ * Bulk Reject Hook
+ * Manager/Admin action - reject multiple profiles at once
+ */
+export function useBulkRejectAdmissions() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: BulkRejectRequest) =>
+      admissionsApi.bulkRejectAdmissions(data),
+    onSuccess: (result) => {
+      if (result.success_count > 0) {
+        toast.success(`Đã từ chối ${result.success_count} hồ sơ`, {
+          description: result.failed_count > 0
+            ? `${result.failed_count} hồ sơ thất bại`
+            : undefined
+        })
+      } else {
+        toast.error("Không thể từ chối hồ sơ nào", {
+          description: result.message
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "từ chối hàng loạt" })
+    },
+  })
+}
+
+/**
+ * Bulk Assign Hook
+ * Manager/Admin action - assign multiple profiles to an officer
+ */
+export function useBulkAssignAdmissions() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: BulkAssignRequest) =>
+      admissionsApi.bulkAssignAdmissions(data),
+    onSuccess: (result) => {
+      if (result.success_count > 0) {
+        toast.success(`Đã phân công ${result.success_count} hồ sơ`, {
+          description: result.failed_count > 0
+            ? `${result.failed_count} hồ sơ thất bại`
+            : undefined
+        })
+      } else {
+        toast.error("Không thể phân công hồ sơ nào", {
+          description: result.message
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "phân công hàng loạt" })
+    },
+  })
+}
+
+/**
+ * Export Admissions Hook
+ * Download admissions as CSV file
+ */
+export function useExportAdmissions() {
+  return useMutation({
+    mutationFn: (params?: Omit<AdmissionListParams, 'page' | 'page_size'>) =>
+      admissionsApi.exportAdmissionsCsv(params),
+    onSuccess: (blob) => {
+      // Create download link
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `admissions_export_${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast.success("Xuất file CSV thành công")
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "xuất file CSV" })
     },
   })
 }

@@ -57,11 +57,9 @@ class OfferingAcademicInfo(Base):
         index=True,
         comment="Soft delete flag - NEVER hard delete academic info (financial/historical data)"
     )
-    admission_criteria = Column(
-        JSON,
-        nullable=True,
-        comment="Tiêu chí tuyển sinh (JSON)"
-    )
+    # NOTE: admission_criteria JSONB column has been DROPPED
+    # Use relational AdmissionPath.criteria_id for admission criteria data
+
 
     # Tuition discount policies
     applied_discount_policy_ids = Column(
@@ -128,6 +126,13 @@ class OfferingAcademicInfo(Base):
     # ✅ Phase 1: Relational admission config (replaces admission_criteria JSON)
     admission_configs = relationship(
         "OfferingAdmissionConfig",
+        back_populates="academic_info",
+        cascade="all, delete-orphan"
+    )
+    
+    # ✅ Phase 2: Admission Paths for Configuration Console
+    admission_paths = relationship(
+        "AdmissionPath",
         back_populates="academic_info",
         cascade="all, delete-orphan"
     )

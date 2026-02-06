@@ -19,7 +19,7 @@ export default function Error({
     <div className="flex h-[50vh] w-full flex-col items-center justify-center gap-4">
       <div className="flex flex-col items-center gap-2 text-center">
         <AlertTriangle className="h-10 w-10 text-destructive" />
-        <h2 className="text-xl font-semibold">Đã xảy ra lỗi!</h2>
+        <h2 className="text-xl font-semibold font-display">Đã xảy ra lỗi!</h2>
         <p className="text-muted-foreground">
           Không thể tải thông tin hồ sơ tuyển sinh.
         </p>

@@ -78,7 +78,17 @@ const FormItem = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivEl
 
     return (
       <FormItemContext.Provider value={{ id }}>
-        <div ref={ref} className={cn("space-y-2", className)} {...props} />
+        <div
+          ref={ref}
+          className={cn(
+            "space-y-2",
+            // min-w-0 allows item to shrink in grid/flex containers
+            // Prevents content overflow in responsive layouts
+            "min-w-0",
+            className
+          )}
+          {...props}
+        />
       </FormItemContext.Provider>
     );
   }

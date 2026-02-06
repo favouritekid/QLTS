@@ -1,6 +1,6 @@
 # app/config.py
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 from pydantic import ConfigDict, Field  # Thêm Field
 
@@ -53,7 +53,10 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
 
     # JWT Settings với default
-    JWT_ALGORITHM: str = Field(default="HS256", validation_alias="JWT_ALGORITHM")
+    # ✅ SECURITY: Only allow safe JWT algorithms (reject "none" algorithm)
+    JWT_ALGORITHM: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512"] = Field(
+        default="HS256", validation_alias="JWT_ALGORITHM"
+    )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
         default=15, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES"
     )
@@ -132,6 +135,18 @@ class Settings(BaseSettings):
         default=30, validation_alias="ACCOUNT_LOCKOUT_WINDOW_MINUTES"
     )  # Reset counter after N minutes of no attempts
 
+    # -- Security: CSRF Protection --
+    # Double-submit cookie pattern for state-changing requests
+    CSRF_PROTECTION_ENABLED: bool = Field(
+        default=True, validation_alias="CSRF_PROTECTION_ENABLED"
+    )  # Enable CSRF middleware (disabled in test by default)
+    CSRF_PROTECTION_IN_TEST: bool = Field(
+        default=False, validation_alias="CSRF_PROTECTION_IN_TEST"
+    )  # Force enable CSRF in test mode
+    CSRF_ORIGIN_CHECK_ENABLED: bool = Field(
+        default=False, validation_alias="CSRF_ORIGIN_CHECK_ENABLED"
+    )  # Additional Origin/Referer validation (optional layer)
+
     # -- Security: Anomaly Detection --
     # These settings control suspicious activity detection on login
     ANOMALY_MAX_FAILED_LOGINS_PER_HOUR: int = Field(
@@ -163,6 +178,38 @@ class Settings(BaseSettings):
         default="CHANGE_ME_IN_PRODUCTION",
         validation_alias="DEVICE_FINGERPRINT_SALT"
     )
+
+    def _validate_production_secrets(self):
+        """Fail-fast validation for production environment secrets."""
+        if self.APP_ENV != "production":
+            return
+
+        weak_secrets = [
+            "a-very-hard-to-guess-string-for-fastapi",
+            "another-super-secret-key-for-fastapi",
+            "your-secret-key-here-change-in-production",
+            "your-jwt-secret-key-here-change-in-production",
+        ]
+
+        if self.SECRET_KEY in weak_secrets or len(self.SECRET_KEY) < 32:
+            raise RuntimeError(
+                "CRITICAL: SECRET_KEY is weak or default. "
+                "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+            )
+        if self.JWT_SECRET_KEY in weak_secrets or len(self.JWT_SECRET_KEY) < 32:
+            raise RuntimeError(
+                "CRITICAL: JWT_SECRET_KEY is weak or default. "
+                "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+            )
+        if self.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
+            raise RuntimeError(
+                "CRITICAL: DEVICE_FINGERPRINT_SALT is still the default value. "
+                "Generate with: openssl rand -base64 32"
+            )
+        if self.LOG_LEVEL == "DEBUG":
+            raise RuntimeError(
+                "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."
+            )
 
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
@@ -204,6 +251,78 @@ class Settings(BaseSettings):
         default=None, validation_alias="DEV_GEOIP_TEST_IP"
     )
 
+    # -- Casbin Auto-Sync Templates --
+    # If True, automatically sync casbin policies from templates on startup
+    # Only applies in development mode; production always requires manual sync for safety
+    AUTO_SYNC_TEMPLATES: bool = Field(
+        default=False, validation_alias="AUTO_SYNC_TEMPLATES"
+    )
+
+    # -- Admission Confirmation Settings --
+    # Magic link token expiration and CCCD verification
+    ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS: int = Field(
+        default=7, validation_alias="ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS"
+    )  # Token expires after N days
+    ADMISSION_CONFIRM_MAX_ATTEMPTS: int = Field(
+        default=5, validation_alias="ADMISSION_CONFIRM_MAX_ATTEMPTS"
+    )  # Lock token after N failed CCCD attempts
+    ADMISSION_CONFIRM_CCCD_DIGITS: int = Field(
+        default=4, validation_alias="ADMISSION_CONFIRM_CCCD_DIGITS"
+    )  # Last N digits to verify
+
+    # -- Finance Module Feature Flags (Phase 0+1) --
+    # Controls gradual rollout of Finance Module functionality
+    FINANCE_MODULE_ENABLED: bool = Field(
+        default=False, validation_alias="FINANCE_MODULE_ENABLED"
+    )  # Master switch for finance module
+    USE_NEW_FEE_TABLE: bool = Field(
+        default=False, validation_alias="USE_NEW_FEE_TABLE"
+    )  # Read fees from new table vs JSONB fallback
+    FINANCE_PAYMENT_GATEWAY_ENABLED: bool = Field(
+        default=False, validation_alias="FINANCE_PAYMENT_GATEWAY_ENABLED"
+    )  # Enable online payment gateways (VNPay, etc.)
+    FINANCE_MAKER_CHECKER_ENABLED: bool = Field(
+        default=True, validation_alias="FINANCE_MAKER_CHECKER_ENABLED"
+    )  # Require two-person verification for manual payments
+    ENABLE_FEE_VERIFICATION: bool = Field(
+        default=False, validation_alias="ENABLE_FEE_VERIFICATION"
+    )  # Block enrollment if tuition fee not paid/waived (Phase 6)
+
+    # -- VNPay Payment Gateway Settings --
+    # Get credentials from VNPay merchant portal
+    # Sandbox docs: https://sandbox.vnpayment.vn/apis/
+    VNPAY_TMN_CODE: str = Field(
+        default="", validation_alias="VNPAY_TMN_CODE"
+    )  # Merchant terminal code
+    VNPAY_HASH_SECRET: str = Field(
+        default="", validation_alias="VNPAY_HASH_SECRET"
+    )  # Secret key for HMAC-SHA512
+    VNPAY_PAYMENT_URL: str = Field(
+        default="https://sandbox.vnpayment.vn/paymentv2/vpcpay.html",
+        validation_alias="VNPAY_PAYMENT_URL"
+    )  # Sandbox or production URL
+    VNPAY_API_URL: str = Field(
+        default="https://sandbox.vnpayment.vn/merchant_webapi/api/transaction",
+        validation_alias="VNPAY_API_URL"
+    )  # Query API URL
+
+    # -- MoMo Payment Gateway Settings --
+    # Get credentials from MoMo merchant portal
+    # Docs: https://developers.momo.vn/v3/docs/payment/api/collection-link/
+    MOMO_PARTNER_CODE: str = Field(
+        default="", validation_alias="MOMO_PARTNER_CODE"
+    )  # Partner code from MoMo
+    MOMO_ACCESS_KEY: str = Field(
+        default="", validation_alias="MOMO_ACCESS_KEY"
+    )  # API access key
+    MOMO_SECRET_KEY: str = Field(
+        default="", validation_alias="MOMO_SECRET_KEY"
+    )  # Secret for HMAC-SHA256
+    MOMO_ENDPOINT: str = Field(
+        default="https://test-payment.momo.vn/v2/gateway/api/create",
+        validation_alias="MOMO_ENDPOINT"
+    )  # Sandbox or production endpoint
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)
@@ -223,6 +342,8 @@ class Settings(BaseSettings):
 # --- Khởi tạo Settings ---
 try:
     settings = Settings()
+    # ✅ SECURITY: Fail-fast validation for production secrets
+    settings._validate_production_secrets()
     print(
         f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}, DB_URL={settings.DATABASE_URL[:30]}..."
     )  # Log một phần DB_URL

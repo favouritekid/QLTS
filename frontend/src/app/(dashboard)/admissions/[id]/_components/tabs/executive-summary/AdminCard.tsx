@@ -1,0 +1,129 @@
+/**
+ * AdminCard Component
+ *
+ * Health Check Grid - Khối 3: Thủ Tục & Tài Chính
+ * Displays: Document Summary + Step 5 (Documents) + Step 6 (Tuition)
+ */
+
+"use client"
+
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
+import { FileText, CheckCircle2, Clock, AlertTriangle } from "lucide-react"
+import { HealthCheckItem } from "./HealthCheckItem"
+
+import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+
+interface AdminCardProps {
+  profile: AdmissionProfileResponse
+}
+
+export function AdminCard({ profile }: AdminCardProps) {
+  const step5Status = profile.step_status?.["5"] ?? "locked"
+  const step6Status = profile.step_status?.["6"] ?? "locked"
+
+  // Check if admin section is complete
+  const isComplete = step5Status === "success" && step6Status === "success"
+  const hasPending = step5Status === "warning" || step6Status === "warning"
+
+  // Get error counts from grouped validation errors
+  const documentsErrorCount = profile.grouped_validation_errors?.documents?.count ?? 0
+
+  // Document counts
+  // Fix: Show "Submitted" instead of "Verified" for main counter to avoid "0/12" panic
+  // ✅ FIX: Use backend-computed stats (Thin Client)
+  const submittedCount = profile.document_stats?.submitted_count ?? 0
+  const verifiedCount = profile.document_stats?.verified_count ?? 0
+  const mandatoryCount = profile.document_stats?.mandatory_count ?? 0
+  const missingCount = profile.document_stats?.missing_count ?? 0
+
+  // Status icon for the whole card
+  const StatusIcon = isComplete
+    ? CheckCircle2
+    : hasPending
+    ? Clock
+    : AlertTriangle
+
+  const statusColor = isComplete
+    ? "text-success-600"
+    : hasPending
+    ? "text-warning-600"
+    : "text-error-600"
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-muted-foreground" />
+            <CardTitle className="text-lg">Thủ Tục & Tài Chính</CardTitle>
+          </div>
+          <StatusIcon className={`w-6 h-6 ${statusColor}`} />
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-3">
+        {/* Documents Summary */}
+        <div
+          className={`rounded-lg p-3.5 border ${
+            verifiedCount === mandatoryCount && mandatoryCount > 0
+              ? "bg-gradient-to-br from-success-50 to-success-100 border-success-200"
+              : "bg-gradient-to-br from-warning-50 to-warning-100 border-warning-200"
+          }`}
+        >
+          <div className="flex justify-between items-center text-sm mb-1">
+            <span
+              className={`font-medium ${
+                verifiedCount === mandatoryCount && mandatoryCount > 0
+                  ? "text-success-900"
+                  : "text-warning-900"
+              }`}
+            >
+              Tài liệu đã nộp / Bắt buộc
+            </span>
+            <span
+              className={`font-bold text-lg ${
+                verifiedCount === mandatoryCount && mandatoryCount > 0
+                  ? "text-success-700"
+                  : "text-warning-700"
+              }`}
+            >
+              {submittedCount} / {mandatoryCount}
+            </span>
+          </div>
+
+          {missingCount > 0 && (
+            <div className="text-xs text-error-600 font-medium">
+              Còn thiếu: {missingCount} tài liệu
+            </div>
+          )}
+
+          {missingCount === 0 && verifiedCount < mandatoryCount && (
+            <div className="text-xs text-warning-700 font-medium">
+              Đã nộp đủ, chờ xác nhận ({verifiedCount}/{mandatoryCount} đã duyệt)
+            </div>
+          )}
+
+          {verifiedCount === mandatoryCount && mandatoryCount > 0 && (
+            <div className="text-xs text-success-700 font-medium flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" />
+              Đã xác nhận đầy đủ
+            </div>
+          )}
+        </div>
+
+        {/* Step 5: Documents */}
+        <HealthCheckItem
+          label="Tài liệu pháp lý"
+          status={step5Status}
+          errorCount={documentsErrorCount}
+        />
+
+        {/* Step 6: Tuition */}
+        <HealthCheckItem
+          label="Học phí"
+          status={step6Status}
+        />
+      </CardContent>
+    </Card>
+  )
+}

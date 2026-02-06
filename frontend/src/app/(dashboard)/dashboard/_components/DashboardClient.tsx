@@ -1,4 +1,16 @@
 // src/app/(dashboard)/dashboard/_components/DashboardClient.tsx
+/**
+ * Admin Dashboard Client Component
+ *
+ * ✅ This dashboard is for Admin/Manager roles only.
+ * Officers are redirected to /dashboard/officer at the page level.
+ *
+ * Shows:
+ * - User statistics (total, active, pending, banned)
+ * - Recent user management activities
+ * - Quick admin actions
+ * - Real-time system health status
+ */
 "use client";
 
 import React from "react";
@@ -11,7 +23,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageContainer } from "@/components/layouts/PageContainer";
-import { Users, TrendingUp, DollarSign, Activity, UserCheck, UserX, UserPlus, Shield } from "lucide-react";
+import { PageHeader } from "@/components/layouts/PageHeader";
+import { Users, Activity, UserCheck, UserX, UserPlus, Shield, LayoutDashboard } from "lucide-react";
+import { SystemStatusCard } from "./SystemStatusCard";
 import type { User, UserStatistics } from "@/types/api.types";
 
 interface DashboardClientProps {
@@ -22,104 +36,71 @@ interface DashboardClientProps {
 export function DashboardClient({ initialUser, initialStats }: DashboardClientProps) {
   const { user, logout } = useAuth({ initialData: initialUser });
 
-  const isAdmin = user?.role === "admin" || user?.role === "manager";
-
-  // Only fetch statistics if user is admin or manager
+  // ✅ Admin dashboard - statistics are always fetched (non-admins are redirected at page level)
   const { data: stats, isLoading: isLoadingStats } = useUserStatistics({
-    enabled: isAdmin, // Only enable query for admin/manager
-    initialData: isAdmin ? initialStats : undefined,
+    enabled: true,
+    initialData: initialStats,
   });
 
-  // User statistics for admin/manager
+  // User statistics cards
   const userStats = stats ? [
     {
       title: "Tổng Người Dùng",
       value: stats.total_users.toString(),
       change: `+${stats.new_users_last_7_days} tuần này`,
       icon: Users,
-      trend: "up" as const,
     },
     {
       title: "Người Dùng Hoạt Động",
       value: stats.active_users.toString(),
-      change: `${((stats.active_users / stats.total_users) * 100).toFixed(1)}%`,
+      change: stats.total_users > 0
+        ? `${((stats.active_users / stats.total_users) * 100).toFixed(1)}% tổng số`
+        : "0%",
       icon: UserCheck,
-      trend: "up" as const,
     },
     {
       title: "Chờ Duyệt",
       value: stats.pending_users.toString(),
+      change: stats.pending_users > 0 ? "Cần xử lý" : "Không có",
       icon: UserPlus,
-      trend: "neutral" as const,
+      highlight: stats.pending_users > 0,
     },
     {
       title: "Bị Cấm",
       value: stats.banned_users.toString(),
       icon: UserX,
-      trend: "down" as const,
     },
   ] : [];
-
-  // Default placeholder stats for non-admin users
-  const defaultStats = [
-    {
-      title: "Tổng Doanh Thu",
-      value: "$45,231.89",
-      change: "+20.1%",
-      icon: DollarSign,
-      trend: "up" as const,
-    },
-    {
-      title: "Người Dùng",
-      value: "2,350",
-      change: "+180.1%",
-      icon: Users,
-      trend: "up" as const,
-    },
-    {
-      title: "Doanh Số",
-      value: "+12,234",
-      change: "+19%",
-      icon: TrendingUp,
-      trend: "up" as const,
-    },
-    {
-      title: "Đang Hoạt Động",
-      value: "573",
-      change: "+201",
-      icon: Activity,
-      trend: "up" as const,
-    },
-  ];
-
-  const displayStats = isAdmin && stats ? userStats : defaultStats;
 
   return (
     <PageContainer className="animate-fade-in">
       {/* Page Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Bảng Điều Khiển</h1>
-          <p className="text-muted-foreground text-sm">
+      <PageHeader
+        title="Bảng Điều Khiển Quản Trị"
+        description={
+          <>
             Chào mừng trở lại,{" "}
-            <span className="text-foreground font-medium">{user?.username || "Khách"}</span>!
-          </p>
-        </div>
-
-        {/* Buttons */}
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            Tải Báo Cáo
-          </Button>
-          <Button onClick={() => logout()} variant="destructive" size="sm">
-            Đăng Xuất
-          </Button>
-        </div>
-      </div>
+            <span className="text-foreground font-medium">{user?.full_name || user?.username || "Admin"}</span>!
+          </>
+        }
+        actions={
+          <>
+            <Link href="/dashboard/officer">
+              <Button variant="outline" size="sm">
+                <LayoutDashboard className="mr-2 h-4 w-4" />
+                Officer Dashboard
+              </Button>
+            </Link>
+            <Button onClick={() => logout()} variant="destructive" size="sm">
+              Đăng Xuất
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats Grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {isLoadingStats && isAdmin ? (
+        {isLoadingStats ? (
           <>
             {[1, 2, 3, 4].map((i) => (
               <Card key={i}>
@@ -133,15 +114,20 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
             ))}
           </>
         ) : (
-          displayStats.map((stat, index) => (
-            <Card key={index} className="transition-all hover:shadow-md">
+          userStats.map((stat, index) => (
+            <Card
+              key={index}
+              className={`transition-shadow hover:shadow-md ${
+                "highlight" in stat && stat.highlight ? "border-warning-500 bg-warning-50/30 dark:bg-warning-950/20" : ""
+              }`}
+            >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
                 <stat.icon className="text-muted-foreground h-4 w-4" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{stat.value}</div>
-                {stat.change && (
+                <div className="text-2xl font-bold tabular-nums">{stat.value}</div>
+                {"change" in stat && stat.change && (
                   <p className="text-muted-foreground mt-1 text-xs">
                     {stat.change}
                   </p>
@@ -154,145 +140,87 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
 
       {/* Content Grid */}
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Recent Activity - Show for admin/manager */}
-        {isAdmin && (
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle>Hoạt Động Người Dùng Gần Đây</CardTitle>
-              <CardDescription>Các thao tác quản lý người dùng mới nhất</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {isLoadingStats || !stats?.recent_activities ? (
-                <div className="space-y-3">
-                  {[1, 2, 3, 4].map((i) => (
-                    <Skeleton key={i} className="h-12 w-full" />
-                  ))}
-                </div>
-              ) : stats.recent_activities.length > 0 ? (
-                <div className="space-y-3">
-                  {stats.recent_activities.map((activity) => (
-                    <div
-                      key={activity.id}
-                      className="hover:bg-muted/50 flex items-center gap-3 rounded-lg p-2"
-                    >
-                      <div className="bg-primary/10 flex h-9 w-9 items-center justify-center rounded-full">
-                        <Activity className="text-primary h-4 w-4" />
-                      </div>
-                      <div className="flex-1 space-y-0.5">
-                        <p className="text-sm leading-none font-medium">
-                          {activity.description || activity.action}
-                        </p>
-                        <p className="text-muted-foreground text-xs">
-                          by {activity.actor_username || "System"} •{" "}
-                          {format(new Date(activity.created_at), "MMM d, HH:mm")}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-muted-foreground text-center text-sm py-8">
-                  Chưa có hoạt động gần đây
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Recent Activity - Default for non-admin */}
-        {!isAdmin && (
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle>Hoạt Động Gần Đây</CardTitle>
-              <CardDescription>Cập nhật và thao tác mới nhất của bạn</CardDescription>
-            </CardHeader>
-            <CardContent>
+        {/* Recent Activity */}
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Hoạt Động Người Dùng Gần Đây</CardTitle>
+            <CardDescription>Các thao tác quản lý người dùng mới nhất</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoadingStats || !stats?.recent_activities ? (
               <div className="space-y-3">
-                {[1, 2, 3, 4].map((item) => (
+                {[1, 2, 3, 4].map((i) => (
+                  <Skeleton key={i} className="h-12 w-full" />
+                ))}
+              </div>
+            ) : stats.recent_activities.length > 0 ? (
+              <div className="space-y-3">
+                {stats.recent_activities.map((activity) => (
                   <div
-                    key={item}
+                    key={activity.id}
                     className="hover:bg-muted/50 flex items-center gap-3 rounded-lg p-2"
                   >
                     <div className="bg-primary/10 flex h-9 w-9 items-center justify-center rounded-full">
                       <Activity className="text-primary h-4 w-4" />
                     </div>
                     <div className="flex-1 space-y-0.5">
-                      <p className="text-sm leading-none font-medium">Hoạt động {item}</p>
-                      <p className="text-muted-foreground text-xs">2 giờ trước</p>
+                      <p className="text-sm leading-none font-medium">
+                        {activity.description || activity.action}
+                      </p>
+                      <p className="text-muted-foreground text-xs">
+                        bởi {activity.actor_username || "System"} •{" "}
+                        {format(new Date(activity.created_at), "dd/MM, HH:mm")}
+                      </p>
                     </div>
-                    <Button variant="ghost" size="sm">
-                      Xem
-                    </Button>
                   </div>
                 ))}
               </div>
-            </CardContent>
-          </Card>
-        )}
+            ) : (
+              <p className="text-muted-foreground text-center text-sm py-8">
+                Chưa có hoạt động gần đây
+              </p>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Quick Actions - Admin */}
-        {isAdmin && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Thao Tác Nhanh</CardTitle>
-              <CardDescription>Phím tắt quản lý người dùng</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Link href="/admin/users">
-                <Button className="w-full justify-start" variant="outline" size="sm">
-                  <Users className="mr-2 h-4 w-4" />
-                  Quản Lý Người Dùng
-                </Button>
-              </Link>
-              <Link href="/admin/policies">
-                <Button className="w-full justify-start" variant="outline" size="sm">
-                  <Shield className="mr-2 h-4 w-4" />
-                  Quản Lý Chính Sách
-                </Button>
-              </Link>
-              <Button className="w-full justify-start" variant="outline" size="sm" disabled>
-                <TrendingUp className="mr-2 h-4 w-4" />
-                Xem Báo Cáo
+        {/* Quick Actions */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Thao Tác Nhanh</CardTitle>
+            <CardDescription>Phím tắt quản lý hệ thống</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Link href="/admin/users">
+              <Button className="w-full justify-start" variant="outline" size="sm">
+                <Users className="mr-2 h-4 w-4" />
+                Quản Lý Người Dùng
               </Button>
-              <Button className="w-full justify-start" variant="outline" size="sm" disabled>
+            </Link>
+            <Link href="/admin/policies">
+              <Button className="w-full justify-start" variant="outline" size="sm">
+                <Shield className="mr-2 h-4 w-4" />
+                Quản Lý Chính Sách
+              </Button>
+            </Link>
+            <Link href="/admin/audit-logs">
+              <Button className="w-full justify-start" variant="outline" size="sm">
                 <Activity className="mr-2 h-4 w-4" />
                 Nhật Ký Hoạt Động
               </Button>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Quick Actions - Default */}
-        {!isAdmin && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Thao Tác Nhanh</CardTitle>
-              <CardDescription>Các nhiệm vụ và phím tắt thường dùng</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Button className="w-full justify-start" variant="outline" size="sm">
-                <Users className="mr-2 h-4 w-4" />
-                Thêm Người Dùng Mới
-              </Button>
-              <Button className="w-full justify-start" variant="outline" size="sm">
-                <TrendingUp className="mr-2 h-4 w-4" />
-                Tạo Báo Cáo
-              </Button>
-              <Button className="w-full justify-start" variant="outline" size="sm">
-                <DollarSign className="mr-2 h-4 w-4" />
-                Xem Doanh Thu
-              </Button>
+            </Link>
+            <Link href="/admin/monitoring">
               <Button className="w-full justify-start" variant="outline" size="sm">
                 <Activity className="mr-2 h-4 w-4" />
-                Theo Dõi Hoạt Động
+                Giám Sát Hệ Thống
               </Button>
-            </CardContent>
-          </Card>
-        )}
+            </Link>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Additional Content */}
       <div className="grid gap-4 md:grid-cols-2">
+        {/* User Info Card */}
         <Card>
           <CardHeader>
             <CardTitle>Thông Tin Người Dùng</CardTitle>
@@ -309,31 +237,19 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
             </div>
             <div className="flex justify-between text-sm">
               <span className="font-medium">Vai trò:</span>
-              <Badge variant="outline">{user?.role}</Badge>
+              <Badge variant="outline" className="capitalize">{user?.role}</Badge>
             </div>
             <div className="flex justify-between text-sm">
               <span className="font-medium">Trạng thái:</span>
               <Badge variant={user?.status === "active" ? "default" : "secondary"}>
-                {user?.status}
+                {user?.status === "active" ? "Hoạt động" : user?.status}
               </Badge>
             </div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Trạng Thái Hệ Thống</CardTitle>
-            <CardDescription>Tất cả hệ thống hoạt động bình thường</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2.5">
-            {["Máy chủ API", "Cơ sở dữ liệu", "Bộ nhớ đệm", "Lưu trữ"].map((service) => (
-              <div key={service} className="flex items-center justify-between text-sm">
-                <span className="font-medium">{service}</span>
-                <Badge className="bg-green-500 hover:bg-green-600">Hoạt động</Badge>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        {/* ✅ FIX: Real-time System Status Card (replaces static badges) */}
+        <SystemStatusCard />
       </div>
     </PageContainer>
   );

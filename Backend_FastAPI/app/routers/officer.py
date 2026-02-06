@@ -121,16 +121,46 @@ async def get_enhanced_dashboard(
 @router.get(
     "/leaderboard",
     response_model=schemas.WeeklyLeaderboard,
-    summary="Get weekly leaderboard for gamification"
+    summary="Get leaderboard for gamification"
 )
 async def get_leaderboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, CasbinAuth]
+    current_user: Annotated[models.User, CasbinAuth],
+    start_date: str = None,
+    end_date: str = None,
+    scope: str = None,
+    unit_id: int = None,
 ):
-    """Weekly leaderboard showing top officers by consultations."""
+    """
+    Leaderboard showing top officers by consultations.
+
+    Args:
+        start_date: Start date (YYYY-MM-DD). Defaults to this week's Monday.
+        end_date: End date (YYYY-MM-DD). Defaults to today.
+        scope: "personal" | "team" | "organization". Affects unit filtering.
+        unit_id: Filter by specific unit (for organization scope).
+    """
+    from datetime import date as date_type
+
+    # Parse dates
+    parsed_start = None
+    parsed_end = None
+    if start_date and end_date:
+        try:
+            parsed_start = date_type.fromisoformat(start_date)
+            parsed_end = date_type.fromisoformat(end_date)
+        except ValueError:
+            pass  # Use defaults
+
     leaderboard = await officer_service.get_weekly_leaderboard(
-        db=db, officer_id=current_user.id
+        db=db,
+        officer_id=current_user.id,
+        start_date=parsed_start,
+        end_date=parsed_end,
+        scope=scope,
+        unit_id=unit_id,
+        requesting_user=current_user,
     )
     return leaderboard
 

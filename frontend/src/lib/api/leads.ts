@@ -19,8 +19,16 @@ import type {
   ConsultationUpdate,
   TimelineItem,
   LeadInsights,
+
   LeadImportResult,
 } from '@/types/lead.types'
+
+export interface ReassignQuota {
+  remaining_today: number;
+  max_per_day: number;
+  used_today: number;
+  reset_time: string;
+}
 
 // ============================================
 // LEAD CRUD OPERATIONS
@@ -121,6 +129,14 @@ export async function assignLead(
   data: AssignLead
 ): Promise<Lead> {
   const response = await api.post<Lead>(`/api/leads/${leadId}/assign`, data)
+  return response.data
+}
+
+/**
+ * Get reassign quota for current user
+ */
+export async function getReassignQuota(): Promise<ReassignQuota> {
+  const response = await api.get<ReassignQuota>('/api/leads/reassign-quota')
   return response.data
 }
 
@@ -268,7 +284,7 @@ export async function addConsultation(
 }
 
 /**
- * Update consultation (admin: any, officer: most recent only)
+ * Update consultation (admin: all, officer: most recent only)
  *
  * @throws {AxiosError} 404 if not found, 403 if no permission
  */
@@ -285,7 +301,7 @@ export async function updateConsultation(
 }
 
 /**
- * Delete consultation (admin: any, officer: most recent only)
+ * Delete consultation (admin: all, officer: most recent only)
  *
  * @throws {AxiosError} 404 if not found, 403 if no permission
  */
@@ -294,6 +310,21 @@ export async function deleteConsultation(
   consultationId: number
 ): Promise<void> {
   await api.delete(`/api/leads/${leadId}/consultations/${consultationId}`)
+}
+
+/**
+ * Restore a soft-deleted consultation
+ *
+ * @throws {AxiosError} 404 if not found, 403 if no permission
+ */
+export async function restoreConsultation(
+  leadId: number,
+  consultationId: number
+): Promise<Consultation> {
+  const response = await api.post<Consultation>(
+    `/api/leads/${leadId}/consultations/${consultationId}/restore`
+  )
+  return response.data
 }
 
 // ============================================
@@ -331,6 +362,35 @@ export async function getLeadInsights(leadId: number): Promise<LeadInsights> {
   const response = await api.get<LeadInsights>(`/api/leads/${leadId}/insights`)
   return response.data
 }
+
+// ============================================
+// WORKFLOW CONTEXT (Phase-Based Workflow)
+// ============================================
+
+import type { WorkflowContext } from '@/types/lead.types'
+
+/**
+ * Get workflow context for a lead - Phase-Based Workflow
+ * 
+ * Provides frontend with:
+ * - Current phase (consultation, admission, fee, enrolled)
+ * - Allowed statuses user can select
+ * - Phase constraints and locked states
+ * 
+ * @throws {AxiosError} 404 if lead not found, 403 if no permission
+ * 
+ * @example
+ * ```ts
+ * const context = await leadsApi.getWorkflowContext(123)
+ * // Filter status dropdown based on context.allowed_statuses
+ * // Disable UI if context.is_terminal_phase
+ * ```
+ */
+export async function getWorkflowContext(leadId: number): Promise<WorkflowContext> {
+  const response = await api.get<WorkflowContext>(`/api/leads/${leadId}/workflow-context`)
+  return response.data
+}
+
 
 // ============================================
 // IMPORT/EXPORT OPERATIONS
@@ -438,6 +498,43 @@ export async function getDistributionPreview(offeringId: number): Promise<Distri
 }
 
 // ============================================
+// REAL-TIME VALIDATION
+// ============================================
+
+export interface DuplicateCheckParams {
+  phone?: string
+  email?: string
+  unit_id?: number
+  exclude_id?: number  // For edit mode
+}
+
+export interface DuplicateCheckResult {
+  phone_available: boolean
+  email_available: boolean
+  phone_conflict: string | null
+  email_conflict: string | null
+}
+
+/**
+ * Real-time duplicate check for phone/email
+ *
+ * - Phone: Checked globally (must be unique across ALL units)
+ * - Email: Checked within same unit only
+ *
+ * @example
+ * ```ts
+ * const result = await leadsApi.checkDuplicate({ phone: '0901234567' })
+ * if (!result.phone_available) {
+ *   console.log(result.phone_conflict)  // "SĐT đã tồn tại: Nguyen Van A..."
+ * }
+ * ```
+ */
+export async function checkDuplicate(params: DuplicateCheckParams): Promise<DuplicateCheckResult> {
+  const response = await api.get<DuplicateCheckResult>('/api/leads/check-duplicate', { params })
+  return response.data
+}
+
+// ============================================
 // AGGREGATED EXPORTS
 // ============================================
 
@@ -456,6 +553,7 @@ export const leadsApi = {
   // Assignment
   assignLead,
   bulkAssignLeads,
+  getReassignQuota,
   bulkUpdateLeadsStage,
   bulkDeleteLeads,
 
@@ -466,17 +564,21 @@ export const leadsApi = {
   addConsultation,
   updateConsultation,
   deleteConsultation,
+  restoreConsultation,
 
   // Data Access
   getLeadTimeline,
   getLeadInsights,
+  getWorkflowContext,
 
-  // Import/Export
   importLeads,
   exportLeads,
 
   // Distribution
   getDistributionPreview,
+
+  // Validation
+  checkDuplicate,
 }
 
 // Default export for convenience

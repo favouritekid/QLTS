@@ -39,41 +39,41 @@ const INSIGHT_HELPERS = {
     label: "Mức độ tương tác",
     icon: Users,
     tooltip: "Điểm cao = lead đã được tư vấn nhiều, phản hồi tốt",
-    color: "text-blue-600",
-    bgColor: "bg-blue-100",
-    borderColor: "border-blue-200",
+    color: "text-info-600",
+    bgColor: "bg-info-100",
+    borderColor: "border-info-200",
   },
   fit: {
     label: "Phù hợp",
     icon: Target,
     tooltip: "Điểm cao = phù hợp với chương trình",
-    color: "text-green-600",
-    bgColor: "bg-green-100",
-    borderColor: "border-green-200",
+    color: "text-success-600",
+    bgColor: "bg-success-100",
+    borderColor: "border-success-200",
   },
   urgency: {
     label: "Khẩn cấp",
     icon: Clock,
     tooltip: "Điểm cao = cần liên hệ ngay!",
-    color: "text-orange-600",
-    bgColor: "bg-orange-100",
-    borderColor: "border-orange-200",
+    color: "text-warning-600",
+    bgColor: "bg-warning-100",
+    borderColor: "border-warning-200",
   },
 };
 
 const getScoreStatus = (score: number) => {
-  if (score >= 70) return { label: "Xuất sắc", color: "text-green-600", bg: "bg-green-500" };
-  if (score >= 50) return { label: "Tốt", color: "text-blue-600", bg: "bg-blue-500" };
-  if (score >= 30) return { label: "Trung bình", color: "text-yellow-600", bg: "bg-yellow-500" };
-  return { label: "Thấp", color: "text-gray-500", bg: "bg-gray-400" };
+  if (score >= 70) return { label: "Xuất sắc", color: "text-success-600", bg: "bg-success-500" };
+  if (score >= 50) return { label: "Tốt", color: "text-info-600", bg: "bg-info-500" };
+  if (score >= 30) return { label: "Trung bình", color: "text-warning-600", bg: "bg-warning-500" };
+  return { label: "Thấp", color: "text-muted-foreground", bg: "bg-muted-foreground" };
 };
 
 // Urgency có logic màu ngược lại: cao = cảnh báo đỏ, thấp = an toàn xanh
 const getUrgencyStatus = (score: number) => {
-  if (score >= 70) return { label: "Rất gấp!", color: "text-red-600", bg: "bg-red-500" };
-  if (score >= 50) return { label: "Cần sớm", color: "text-orange-600", bg: "bg-orange-500" };
-  if (score >= 30) return { label: "Bình thường", color: "text-yellow-600", bg: "bg-yellow-500" };
-  return { label: "Không gấp", color: "text-green-600", bg: "bg-green-500" };
+  if (score >= 70) return { label: "Rất gấp!", color: "text-error-600", bg: "bg-error-500" };
+  if (score >= 50) return { label: "Cần sớm", color: "text-warning-600", bg: "bg-warning-500" };
+  if (score >= 30) return { label: "Bình thường", color: "text-warning-600", bg: "bg-warning-500" };
+  return { label: "Không gấp", color: "text-success-600", bg: "bg-success-500" };
 };
 
 interface MetricCardProps {
@@ -90,10 +90,10 @@ function MetricCard({ metricKey, value, isMain }: MetricCardProps) {
 
   return (
     <div className={cn(
-      "rounded-lg border p-3 transition-all",
+      "rounded-lg border p-3 transition-colors",
       isMain 
         ? "bg-gradient-to-br from-violet-50 to-purple-50 border-violet-200 shadow-sm" 
-        : "bg-white/50 hover:bg-white hover:shadow-sm",
+        : "bg-card/50 hover:bg-card hover:shadow-sm dark:bg-card/30",
       config.borderColor
     )}>
       <div className="flex items-start justify-between mb-2">
@@ -204,7 +204,7 @@ export function LeadInsightsTab({ insights, lead }: LeadInsightsTabProps) {
                     key={i}
                     className={cn(
                       "text-sm",
-                      i < insights.officer_rating! ? "text-amber-400" : "text-gray-300"
+                      i < insights.officer_rating! ? "text-amber-400" : "text-muted-foreground/50"
                     )}
                   >
                     ★

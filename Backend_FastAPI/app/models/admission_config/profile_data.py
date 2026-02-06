@@ -7,8 +7,9 @@ Replaces JSON fields in AdmissionProfile:
 - documents_checklist → ProfileDocument
 """
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
 
 from app.models.base import Base
@@ -103,7 +104,7 @@ class ProfileDocument(Base):
         nullable=False,
         default="missing",
         index=True,
-        comment="missing | uploaded | verified | rejected"
+        comment="missing | uploaded | verified | rejected | paper_submitted"
     )
     file_path = Column(
         String(500),
@@ -123,6 +124,53 @@ class ProfileDocument(Base):
         DateTime(timezone=True),
         nullable=True
     )
+    verified_by = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Officer who verified the document"
+    )
+    # Paper submission tracking (for documents that don't require upload)
+    paper_submitted_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When officer confirmed paper was received"
+    )
+    paper_submitted_by = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Officer who confirmed paper receipt"
+    )
+    # Rejection tracking
+    rejected_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When document was rejected"
+    )
+    rejected_by = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Officer who rejected"
+    )
+
+    # ✅ Submission Format Tracking
+    # User declares what type of document they are submitting
+    actual_submission_format = Column(
+        String(50),
+        nullable=True,
+        comment="Declared by user/officer at submission: original | certified_copy | photo"
+    )
+
+    # ✅ Finding 2.3: Document Internal Verification
+    # Officer verifies the actual physical format (may differ from declared)
+    verified_format = Column(
+        String(50),
+        nullable=True,
+        comment="Verified by officer after inspection: original | certified_copy | photo"
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -148,3 +196,141 @@ class ProfileDocument(Base):
 
     def __repr__(self):
         return f"<ProfileDocument profile={self.profile_id} type={self.document_type_id} status={self.status}>"
+
+
+class DocumentAuditLog(Base):
+    """
+    Audit log for all document operations.
+
+    Tracks:
+    - Upload: who uploaded, original filename, file size
+    - Verify: who verified, format confirmed
+    - Reject: who rejected, reason
+    - Reset: who reset, old status
+    - Re-upload: old file path preserved
+
+    Compliance: Maintains full history for regulatory requirements.
+    """
+    __tablename__ = "document_audit_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Link to document
+    profile_document_id = Column(
+        Integer,
+        ForeignKey("profile_document.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    # Action details
+    action = Column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="uploaded | verified | rejected | reset | paper_submitted | deleted"
+    )
+
+    # Actor
+    actor_user_id = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="User who performed the action"
+    )
+
+    # Status change
+    old_status = Column(
+        String(20),
+        nullable=True,
+        comment="Status before action"
+    )
+    new_status = Column(
+        String(20),
+        nullable=True,
+        comment="Status after action"
+    )
+
+    # File tracking
+    old_file_path = Column(
+        String(500),
+        nullable=True,
+        comment="Previous file path (for re-uploads)"
+    )
+    new_file_path = Column(
+        String(500),
+        nullable=True,
+        comment="New file path (for uploads)"
+    )
+
+    # Upload metadata
+    original_filename = Column(
+        String(255),
+        nullable=True,
+        comment="Original filename from user"
+    )
+    file_size_bytes = Column(
+        BigInteger,
+        nullable=True,
+        comment="File size in bytes"
+    )
+    content_type = Column(
+        String(100),
+        nullable=True,
+        comment="MIME type of uploaded file"
+    )
+
+    # Action details
+    reason = Column(
+        Text,
+        nullable=True,
+        comment="Reason for rejection/reset"
+    )
+
+    # Format tracking
+    declared_format = Column(
+        String(50),
+        nullable=True,
+        comment="User declared: original | certified_copy | photo"
+    )
+    verified_format = Column(
+        String(50),
+        nullable=True,
+        comment="Officer verified: original | certified_copy | photo"
+    )
+
+    # Extra data (JSON)
+    extra_data = Column(
+        JSONB,
+        nullable=True,
+        default=dict,
+        comment="Additional context data"
+    )
+
+    # Timestamp
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True
+    )
+
+    # Client context (for security audit)
+    ip_address = Column(
+        String(45),
+        nullable=True,
+        comment="Client IP address"
+    )
+    user_agent = Column(
+        String(500),
+        nullable=True,
+        comment="Client user agent"
+    )
+
+    # Relationships
+    profile_document = relationship("ProfileDocument", backref="audit_logs")
+    actor = relationship("User", foreign_keys=[actor_user_id])
+
+    def __repr__(self):
+        return f"<DocumentAuditLog doc={self.profile_document_id} action={self.action} at={self.created_at}>"

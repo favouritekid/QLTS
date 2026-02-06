@@ -1,0 +1,111 @@
+/* dark.css - Dark theme
+ * Reference: Notion warmth + Linear efficiency
+ * Palette: Warm stone grays (dark mode)
+ * Updated: 2025-01-27
+ */
+
+.dark {
+  /* =========================================================================
+   * WARM GRAY RAW PALETTE (Stone - Dark Mode)
+   * Darker variants for dark theme
+   * ========================================================================= */
+  --gray-50:  #fafaf9;
+  --gray-100: #f5f5f4;
+  --gray-200: #e7e5e4;
+  --gray-300: #d6d3d1;
+  --gray-400: #a8a29e;
+  --gray-500: #78716c;
+  --gray-600: #57534e;
+  --gray-700: #44403c;
+  --gray-800: #292524;
+  --gray-900: #1c1917;
+  --gray-950: #0c0a09;
+
+  /* =========================================================================
+   * SEMANTIC COLORS - Adjusted for dark backgrounds
+   * ========================================================================= */
+  /* Warning (Amber) - lighter for visibility on dark backgrounds */
+  --warning-50:  #451a03;   /* Inverted - dark bg */
+  --warning-100: #78350f;   /* Inverted - dark bg */
+  --warning-200: #92400e;
+  --warning-300: #b45309;
+  --warning-400: #d97706;
+  --warning-500: #f59e0b;
+  --warning-600: #fbbf24;   /* Lighter for dark mode */
+  --warning-700: #fcd34d;   /* Lighter for dark mode */
+  --warning-800: #fde68a;   /* Lighter for dark mode */
+
+  /* Purple - adjusted for dark backgrounds */
+  --purple-50:  #3b0764;    /* Inverted - dark bg */
+  --purple-100: #581c87;    /* Inverted - dark bg */
+  --purple-200: #7e22ce;
+  --purple-500: #a855f7;
+  --purple-600: #c084fc;    /* Lighter for dark mode */
+  --purple-700: #d8b4fe;    /* Lighter for dark mode */
+  --purple-800: #e9d5ff;    /* Lighter for dark mode */
+
+  /* Cyan - adjusted for dark backgrounds */
+  --cyan-50:  #083344;      /* Inverted - dark bg */
+  --cyan-100: #164e63;      /* Inverted - dark bg */
+  --cyan-200: #155e75;
+  --cyan-500: #06b6d4;
+  --cyan-600: #22d3ee;      /* Lighter for dark mode */
+  --cyan-700: #67e8f9;      /* Lighter for dark mode */
+  --cyan-800: #a5f3fc;      /* Lighter for dark mode */
+/* Indigo - adjusted for dark backgrounds */  --indigo-50:  #1e1b4b;  --indigo-100: #312e81;  --indigo-600: #818cf8;  --indigo-700: #a5b4fc;  /* Violet - adjusted for dark backgrounds */  --violet-100: #2e1065;  --violet-200: #4c1d95;  --violet-600: #a78bfa;  /* Zinc - adjusted for dark backgrounds */  --zinc-600: #a1a1aa;  --zinc-950: #fafafa;  /* Amber/Orange inherit from warning which is already dark-mode aware */
+/* Yellow - adjusted for dark backgrounds */  --yellow-50:  #422006;  --yellow-500: #facc15;  --yellow-200: #854d0e;  /* Pink - adjusted for dark backgrounds */  --pink-100: #831843;  --pink-800: #fbcfe8;  /* Teal - adjusted for dark backgrounds */  --teal-100: #134e4a;  --teal-300: #2dd4bf;
+
+  /* =========================================================================
+   * THEME COLORS - Dark mode with warm grays
+   * ========================================================================= */
+  --background: var(--gray-900);
+  --foreground: var(--gray-50);
+
+  --card: var(--gray-800);
+  --card-foreground: var(--gray-50);
+
+  --popover: var(--gray-800);
+  --popover-foreground: var(--gray-50);
+
+  --primary: var(--primary-500);
+  --primary-foreground: #ffffff;
+
+  --secondary: var(--gray-700);
+  --secondary-foreground: var(--gray-100);
+
+  --muted: var(--gray-800);
+  --muted-foreground: var(--gray-400);
+
+  --accent: var(--gray-700);
+  --accent-foreground: var(--gray-50);
+
+  --destructive: var(--error-600);
+  --destructive-foreground: #ffffff;
+
+  --success: var(--success-500);
+  --success-foreground: #ffffff;
+
+  --warning: var(--warning-500);
+  --warning-foreground: var(--gray-900);
+
+  --border: var(--gray-700);
+  --input: var(--gray-700);
+  --ring: var(--primary-400);
+
+  /* Charts */
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+
+  /* Sidebar */
+  --sidebar: var(--gray-800);
+  --sidebar-foreground: var(--gray-50);
+  --sidebar-primary: var(--primary-500);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--gray-700);
+  --sidebar-accent-foreground: var(--gray-50);
+  --sidebar-border: var(--gray-700);
+  --sidebar-ring: var(--primary-400);
+}

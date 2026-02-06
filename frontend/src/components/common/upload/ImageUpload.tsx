@@ -299,6 +299,7 @@ export function ImageUpload({
           )}
           onClick={handleClick}
           disabled={disabled || isLoading}
+          aria-label="Chọn ảnh"
         >
           <Camera className="h-4 w-4" />
         </Button>
@@ -312,6 +313,7 @@ export function ImageUpload({
             className="absolute -top-1 -right-1 h-6 w-6 rounded-full shadow-md"
             onClick={handleRemove}
             disabled={isLoading}
+            aria-label="Xóa ảnh"
           >
             <X className="h-3 w-3" />
           </Button>

@@ -49,13 +49,13 @@ export function NotificationDropdown() {
     const iconClass = "h-4 w-4";
     switch (type) {
       case "success":
-        return <Check className={cn(iconClass, "text-green-500")} />;
+        return <Check className={cn(iconClass, "text-success-500")} />;
       case "error":
-        return <X className={cn(iconClass, "text-red-500")} />;
+        return <X className={cn(iconClass, "text-error-500")} />;
       case "warning":
-        return <Bell className={cn(iconClass, "text-yellow-500")} />;
+        return <Bell className={cn(iconClass, "text-warning-500")} />;
       case "admin_update":
-        return <Bell className={cn(iconClass, "text-blue-500")} />;
+        return <Bell className={cn(iconClass, "text-info-500")} />;
       default:
         return <Bell className={cn(iconClass, "text-muted-foreground")} />;
     }
@@ -67,7 +67,8 @@ export function NotificationDropdown() {
         <Button
           variant="ghost"
           size="icon"
-          className="relative h-9 w-9 rounded-full"
+          className="relative h-11 w-11 md:h-9 md:w-9 rounded-full"
+          aria-label="Thông báo"
         >
           <Bell className="h-5 w-5" />
           {unreadCount > 0 && (
@@ -99,7 +100,7 @@ export function NotificationDropdown() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 text-xs"
+              className="h-9 md:h-7 text-xs"
               onClick={handleMarkAllAsRead}
               disabled={markAllAsRead.isPending}
             >
@@ -110,7 +111,8 @@ export function NotificationDropdown() {
         </div>
 
         {/* Notifications List */}
-        <ScrollArea className="h-[400px]">
+        {/* ✅ PERFORMANCE: virtual-list enables content-visibility for off-screen items */}
+        <ScrollArea className="h-[400px] virtual-list">
           {isLoading ? (
             <div className="space-y-2 p-2">
               {[1, 2, 3].map((i) => (
@@ -132,7 +134,8 @@ export function NotificationDropdown() {
             <div className="divide-y">
               {notifications.map((notification) => {
                 const wrapperClassName = cn(
-                  "block transition-colors hover:bg-muted/50",
+                  // ✅ PERFORMANCE: virtual-notification for content-visibility
+                  "block transition-colors hover:bg-muted/50 virtual-notification",
                   !notification.is_read && "bg-muted/30"
                 );
 
@@ -175,7 +178,7 @@ export function NotificationDropdown() {
                         </p>
                         {/* ✅ Show "Tự động" badge for automatic assignments */}
                         {Boolean((notification.data as Record<string, unknown>)?.is_automatic) && (
-                          <Badge variant="outline" className="text-[10px] h-4 px-1.5 bg-blue-50 text-blue-600 border-blue-200">
+                          <Badge variant="outline" className="text-[10px] h-4 px-1.5 bg-info-50 text-info-600 border-info-200">
                             Tự động
                           </Badge>
                         )}
@@ -216,7 +219,7 @@ export function NotificationDropdown() {
               <Link href="/notifications" onClick={() => setIsOpen(false)}>
                 <Button
                   variant="ghost"
-                  className="h-8 w-full text-xs font-medium"
+                  className="h-10 md:h-8 w-full text-xs font-medium"
                 >
                   Xem tất cả thông báo
                 </Button>

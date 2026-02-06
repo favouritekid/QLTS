@@ -4,7 +4,8 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Save, Trash } from "lucide-react";
+import { useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,18 +27,44 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
-import { useUpdateApplication } from "@/hooks/useApplication";
-import { useMajorPrograms, useOfferingAcademicInfoList } from "@/hooks/useOrganization";
+import { useUpdateApplication, useDeleteApplication } from "@/hooks/useApplication";
+import { useMajorPrograms } from "@/hooks/useOrganization";
+import { useAdmissionPathsForOffering } from "@/hooks/admissions/useAdmissionPaths";
 import { DocumentChecklist } from "./DocumentChecklist";
 import type { Lead, Application, ApplicationUpdate, ChecklistItem } from "@/types/lead.types";
+import type { AdmissionPathResponse } from "@/lib/zod/admission-path";
 
 // Validation schema
 const applicationSchema = z.object({
   major_program_id: z.number().nullable(),
   program_offering_id: z.number().nullable(),
   criterion_id: z.string().nullable(),
-  status: z.enum(["pending", "missing_documents", "completed", "passed", "failed"]),
+  status: z.enum([
+    "draft",
+    "pending",
+    "missing_documents",
+    "completed",
+    "passed",
+    "failed",
+    "submitted",
+    "approved",
+    "rejected",
+    "resubmitted",
+    "confirmed",
+    "overridden",
+    "enrolled"
+  ]),
   documents: z.object({
     scores: z.record(z.string(), z.number().nullable()).nullable().optional(),
     checklist: z.array(
@@ -61,6 +88,17 @@ interface LeadApplicationFormProps {
 
 export function LeadApplicationForm({ lead, application }: LeadApplicationFormProps) {
   const updateApplication = useUpdateApplication(application.id);
+  const deleteApplication = useDeleteApplication();
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+
+  const handleDelete = () => {
+    deleteApplication.mutate(
+      { id: application.id, leadId: lead.id },
+      {
+        onSuccess: () => setDeleteDialogOpen(false),
+      }
+    );
+  };
 
   // Fetch major programs for the unit
   const { data: majorPrograms = [], isLoading: majorProgramsLoading } = useMajorPrograms(lead.unit_id);
@@ -85,18 +123,14 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
   // Find selected objects
   const selectedMajorProgram = majorPrograms.find((p) => p.id === selectedMajorProgramId);
 
-  // Fetch academic info for selected offering
+  // Fetch admission paths for selected offering (uses new relational API)
   const {
-    data: academicInfoList = [],
-    isLoading: academicInfoLoading,
-  } = useOfferingAcademicInfoList(selectedOfferingId || 0, true);
+    data: admissionPaths = [],
+    isLoading: pathsLoading,
+  } = useAdmissionPathsForOffering(selectedOfferingId || undefined);
 
-  // Get first published academic info
-  const academicInfo = academicInfoList.length > 0 ? academicInfoList[0] : null;
-  const admissionCriteria = academicInfo?.admission_criteria || [];
-
-  // Find selected criterion
-  const selectedCriterion = admissionCriteria.find((c) => c.id === selectedCriterionId);
+  // Find selected path (criterion_id now stores path ID)
+  const selectedPath = admissionPaths.find((p) => p.id.toString() === selectedCriterionId);
 
   // Handle form submission
   const onSubmit = async (data: ApplicationFormValues) => {
@@ -220,49 +254,38 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
                 )}
               />
 
-              {/* Dropdown 3: Admission Criterion */}
+              {/* Dropdown 3: Admission Path (formerly Criterion) */}
               <FormField
                 control={form.control}
                 name="criterion_id"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Phương thức xét tuyển *</FormLabel>
-                    {academicInfoLoading ? (
+                    {pathsLoading ? (
                       <Skeleton className="h-10 w-full" />
                     ) : (
                       <Select
                         onValueChange={(value) => {
                           field.onChange(value || null);
-                          // Reset and initialize scores & checklist
-                          const criterion = admissionCriteria.find((c) => c.id === value);
-                          if (criterion) {
-                            // Initialize scores
+                          // Reset and initialize scores & checklist from path criteria
+                          const path = admissionPaths.find((p) => p.id.toString() === value);
+                          if (path && path.criteria) {
+                            // Initialize scores from criteria subject_groups
                             const scores: Record<string, number | null> = {};
-                            if (criterion.subject_groups) {
-                              criterion.subject_groups.forEach((subject) => {
-                                scores[subject] = null;
+                            if (path.criteria.subject_groups) {
+                              path.criteria.subject_groups.forEach((group) => {
+                                scores[group.code] = null;
                               });
                             }
                             form.setValue("documents.scores", scores);
 
-                            // Initialize checklist
+                            // Initialize checklist (TODO: fetch from documents API)
                             const checklist: ChecklistItem[] = [];
-                            if (criterion.required_documents) {
-                              criterion.required_documents.forEach((doc) => {
-                                checklist.push({
-                                  code: doc.code,
-                                  label: doc.label,
-                                  status: "missing",
-                                  submission_type: "N/A",
-                                  notes: "",
-                                });
-                              });
-                            }
                             form.setValue("documents.checklist", checklist);
                           }
                         }}
                         value={field.value || ""}
-                        disabled={!selectedOfferingId || !admissionCriteria.length}
+                        disabled={!selectedOfferingId || !admissionPaths.length}
                       >
                         <FormControl>
                           <SelectTrigger>
@@ -270,14 +293,14 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {!admissionCriteria.length ? (
+                          {!admissionPaths.length ? (
                             <div className="p-2 text-sm text-muted-foreground">
                               Không có phương thức xét tuyển
                             </div>
                           ) : (
-                            admissionCriteria.map((criterion) => (
-                              <SelectItem key={criterion.id} value={criterion.id}>
-                                {criterion.method_name}
+                            admissionPaths.map((path) => (
+                              <SelectItem key={path.id} value={path.id.toString()}>
+                                {path.admission_method?.name || path.display_name}
                               </SelectItem>
                             ))
                           )}
@@ -295,7 +318,7 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
           </Card>
 
           {/* Card 2: Điểm xét tuyển */}
-          {selectedCriterion && selectedCriterion.subject_groups && (
+          {selectedPath?.criteria?.subject_groups && selectedPath.criteria.subject_groups.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle>Điểm xét tuyển</CardTitle>
@@ -305,15 +328,15 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
               </CardHeader>
               <CardContent>
                 <div className="grid gap-4 md:grid-cols-3">
-                  {selectedCriterion.subject_groups.map((subject) => (
+                  {selectedPath.criteria.subject_groups.map((group) => (
                     <FormField
-                      key={subject}
+                      key={group.code}
                       control={form.control}
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      name={`documents.scores.${subject}` as any}
+                      name={`documents.scores.${group.code}` as any}
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>{subject}</FormLabel>
+                          <FormLabel>{group.name} ({group.code})</FormLabel>
                           <FormControl>
                             <Input
                               type="number"
@@ -340,7 +363,7 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
           )}
 
           {/* Card 3: Checklist Hồ sơ */}
-          {selectedCriterion && (
+          {selectedPath && (
             <Card>
               <CardHeader>
                 <CardTitle>Checklist Hồ sơ</CardTitle>
@@ -351,7 +374,7 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
               <CardContent>
                 <DocumentChecklist
                   control={form.control}
-                  admissionMethod={selectedCriterion}
+                  admissionMethod={selectedPath.admission_method}
                 />
               </CardContent>
             </Card>
@@ -397,8 +420,28 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
           </Card>
 
           {/* Submit Button */}
-          <div className="flex justify-end">
-            <Button type="submit" disabled={updateApplication.isPending}>
+          {/* Actions */}
+          <div className="flex justify-end gap-2">
+            {application.status === "draft" && (
+              <Button
+                type="button" // Prevent form submission
+                variant="destructive"
+                onClick={() => setDeleteDialogOpen(true)}
+                disabled={updateApplication.isPending || deleteApplication.isPending}
+              >
+                {deleteApplication.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash className="mr-2 h-4 w-4" />
+                )}
+                Xóa Hồ sơ
+              </Button>
+            )}
+
+            <Button
+              type="submit"
+              disabled={updateApplication.isPending || deleteApplication.isPending}
+            >
               {updateApplication.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
@@ -408,6 +451,32 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
           </div>
         </form>
       </Form>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Bạn có chắc chắn muốn xóa hồ sơ này?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hành động này không thể hoàn tác. Hồ sơ tuyển sinh sẽ bị xóa vĩnh viễn và trạng thái Lead sẽ quay về chưa có hồ sơ.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteApplication.isPending}>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleDelete();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteApplication.isPending}
+            >
+              {deleteApplication.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Xóa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 }

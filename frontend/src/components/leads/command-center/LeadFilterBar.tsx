@@ -11,7 +11,7 @@
 
 "use client";
 
-import React, { useState, useCallback, useTransition } from "react";
+import React, { useState, useCallback, useTransition, useEffect, useRef } from "react";
 import {
   Search,
   X,
@@ -31,7 +31,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import type { LeadStatus } from "@/types/lead.types";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
@@ -39,6 +40,7 @@ import { useAllProgramOfferings } from "@/hooks/useOrganization";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { useAuth } from "@/hooks/useAuth";
+import { isAdmin as checkIsAdmin, canFilterByOfficer as checkCanFilterByOfficer } from "@/lib/utils/permissions";
 import { MultiOfferingSelector } from "@/components/common/selectors";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -107,7 +109,7 @@ function FilterDropdown({ label, count, children }: FilterDropdownProps) {
           variant="outline"
           size="sm"
           className={cn(
-            "h-8 gap-1 transition-all duration-200",
+            "h-9 md:h-8 gap-1 transition-colors duration-200",
             count > 0 && "border-primary bg-primary/5"
           )}
         >
@@ -143,12 +145,13 @@ function FilterPill({ label, onRemove }: FilterPillProps) {
   return (
     <Badge
       variant="secondary"
-      className="animate-in fade-in-0 zoom-in-95 h-6 gap-1 pr-1 text-xs transition-all duration-200"
+      className="motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 h-6 gap-1 pr-1 text-xs transition-colors duration-200"
     >
       {label}
       <button
         onClick={onRemove}
         className="hover:bg-muted ml-0.5 rounded-full p-0.5 transition-colors"
+        aria-label={`Xóa bộ lọc ${label}`}
       >
         <X className="h-3 w-3" />
       </button>
@@ -196,9 +199,43 @@ export function LeadFilterBar({
   const [isMounted, setIsMounted] = React.useState(false);
   React.useEffect(() => { setIsMounted(true); }, []);
 
-  const isAdmin = isMounted && user?.role === "admin";
-  const isManager = isMounted && user?.role === "manager";
-  const canFilterByOfficer = isAdmin || isManager;
+  // ✅ FIX Critical: Debounced search to prevent excessive API calls
+  const [localSearch, setLocalSearch] = useState(search);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const DEBOUNCE_DELAY = 300; // 300ms debounce
+
+  // Sync local search with external search prop (e.g., when reset is clicked)
+  useEffect(() => {
+    setLocalSearch(search);
+  }, [search]);
+
+  // Debounce the search callback
+  const handleSearchInputChange = useCallback((value: string) => {
+    setLocalSearch(value);
+
+    // Clear previous timeout
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    // Set new timeout
+    debounceRef.current = setTimeout(() => {
+      onSearchChange(value);
+    }, DEBOUNCE_DELAY);
+  }, [onSearchChange]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
+
+  // ✅ SECURITY: Use centralized permission utility (UX only - backend enforces)
+  const isAdminFlag = isMounted && checkIsAdmin(user);
+  const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user);
 
   // Collapsible filter pills state
   const [isFiltersExpanded, setIsFiltersExpanded] = React.useState(false);
@@ -285,36 +322,76 @@ export function LeadFilterBar({
     return `${programName} - ${type}`;
   };
 
+  // Mobile filter sheet state
+  const [mobileFiltersOpen, setMobileFiltersOpen] = React.useState(false);
+
+  // Count active filters for badge
+  const activeFilterCount =
+    statusFilters.length +
+    sourceFilters.length +
+    stageFilters.length +
+    offeringFilters.length +
+    officerFilters.length +
+    (hasScoreFilter ? 1 : 0) +
+    (dateFrom || dateTo ? 1 : 0);
+
   return (
     <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 border-b backdrop-blur">
       {/* Main Filter Row */}
-      <div className="flex items-center gap-3 px-4 py-3">
-        {/* Search */}
-        <div className="relative w-64">
+      <div className="flex items-center gap-2 px-3 py-2 md:gap-3 md:px-4 md:py-3">
+        {/* Search - Responsive width with debounce */}
+        <div className="relative min-w-0 flex-1 md:w-64 md:flex-none">
           <Search className="text-muted-foreground absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
           <Input
-            placeholder="Tìm kiếm tên, SĐT, email..."
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="h-8 pl-9 pr-8 text-sm"
+            placeholder="Tìm kiếm..."
+            value={localSearch}
+            onChange={(e) => handleSearchInputChange(e.target.value)}
+            className="h-9 pl-9 pr-8 text-sm md:h-8"
           />
-          {search && (
+          {localSearch && (
             <button
-              onClick={() => onSearchChange("")}
+              onClick={() => {
+                setLocalSearch("");
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                onSearchChange("");
+              }}
               className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2"
+              aria-label="Xóa tìm kiếm"
             >
               <X className="h-4 w-4" />
             </button>
           )}
         </div>
 
-        {/* Divider */}
-        <div className="bg-border h-6 w-px" />
+        {/* Mobile: Filter toggle button */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 gap-1.5 md:hidden"
+          onClick={() => setMobileFiltersOpen(!mobileFiltersOpen)}
+        >
+          <ChevronDown className={cn("h-4 w-4 transition-transform", mobileFiltersOpen && "rotate-180")} />
+          Lọc
+          {activeFilterCount > 0 && (
+            <Badge variant="secondary" className="bg-primary text-primary-foreground ml-1 h-5 min-w-[20px] px-1.5 text-xs">
+              {activeFilterCount}
+            </Badge>
+          )}
+        </Button>
 
-        {/* Filter Dropdowns */}
-        <div className="flex items-center gap-2">
+        {/* Mobile: Add Lead button */}
+        <Button size="sm" onClick={onAddLead} className="h-9 gap-1.5 md:hidden">
+          <Plus className="h-4 w-4" />
+          <span className="sr-only sm:not-sr-only">Thêm</span>
+        </Button>
+
+        {/* Desktop: Divider */}
+        <div className="bg-border hidden h-6 w-px md:block" />
+
+        {/* Desktop: Filter Dropdowns */}
+        <div className="hidden items-center gap-2 md:flex">
           {/* Status Filter - Admin only */}
-          {isAdmin && (
+          {isAdminFlag && (
             <FilterDropdown label="Trạng thái" count={statusFilters.length}>
               <div className="space-y-2">
                 {LEAD_STATUS_OPTIONS.map((option) => (
@@ -372,10 +449,7 @@ export function LeadFilterBar({
                     htmlFor={`bar-stage-${stage.id}`}
                     className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                   >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
-                    />
+                    <ColorDot color={sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id]} size="sm" />
                     {stage.name}
                   </Label>
                 </div>
@@ -392,7 +466,7 @@ export function LeadFilterBar({
           </FilterDropdown>
 
           {/* Officer Filter - Admin/Manager only */}
-          {canFilterByOfficer && (
+          {canFilterByOfficerFlag && (
             <FilterDropdown label="Cán bộ" count={officerFilters.length}>
               <div className="max-h-48 space-y-2 overflow-y-auto">
                 {officers.map((officer) => (
@@ -501,11 +575,11 @@ export function LeadFilterBar({
           </Popover>
         </div>
 
-        {/* Spacer */}
-        <div className="flex-1" />
+        {/* Desktop: Spacer */}
+        <div className="hidden flex-1 md:block" />
 
-        {/* Actions */}
-        <div className="flex items-center gap-2">
+        {/* Desktop: Actions */}
+        <div className="hidden items-center gap-2 md:flex">
           {hasActiveFilters && (
             <Button
               variant="ghost"
@@ -527,6 +601,130 @@ export function LeadFilterBar({
           </Button>
         </div>
       </div>
+
+      {/* Mobile: Collapsible Filters */}
+      {mobileFiltersOpen && (
+        <div className="motion-safe:animate-in motion-safe:slide-in-from-top-2 border-t px-3 py-3 md:hidden">
+          <div className="flex flex-wrap gap-2">
+            {/* Status Filter - Admin only */}
+            {isAdminFlag && (
+              <FilterDropdown label="Trạng thái" count={statusFilters.length}>
+                <div className="space-y-2">
+                  {LEAD_STATUS_OPTIONS.map((option) => (
+                    <div key={option.value} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`mobile-status-${option.value}`}
+                        checked={statusFilters.includes(option.value)}
+                        onCheckedChange={() => handleStatusToggle(option.value)}
+                      />
+                      <Label
+                        htmlFor={`mobile-status-${option.value}`}
+                        className="flex cursor-pointer items-center gap-2 text-sm font-normal"
+                      >
+                        <span className={`h-2 w-2 rounded-full ${option.color}`} />
+                        {option.label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </FilterDropdown>
+            )}
+
+            {/* Source Filter */}
+            <FilterDropdown label="Nguồn" count={sourceFilters.length}>
+              <div className="space-y-2">
+                {LEAD_SOURCE_OPTIONS.map((option) => (
+                  <div key={option.value} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`mobile-source-${option.value}`}
+                      checked={sourceFilters.includes(option.value)}
+                      onCheckedChange={() => handleSourceToggle(option.value)}
+                    />
+                    <Label
+                      htmlFor={`mobile-source-${option.value}`}
+                      className="cursor-pointer text-sm font-normal"
+                    >
+                      {option.label}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </FilterDropdown>
+
+            {/* Stage Filter */}
+            <FilterDropdown label="Giai đoạn" count={stageFilters.length}>
+              <div className="space-y-2">
+                {pipelineStages.map((stage) => (
+                  <div key={stage.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`mobile-stage-${stage.id}`}
+                      checked={stageFilters.includes(stage.id)}
+                      onCheckedChange={() => handleStageToggle(stage.id)}
+                    />
+                    <Label
+                      htmlFor={`mobile-stage-${stage.id}`}
+                      className="flex cursor-pointer items-center gap-2 text-sm font-normal"
+                    >
+                      <ColorDot color={sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id]} size="sm" />
+                      {stage.name}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </FilterDropdown>
+
+            {/* Offering Filter */}
+            <FilterDropdown label="Chương trình" count={offeringFilters.length}>
+              <MultiOfferingSelector
+                values={offeringFilters}
+                onChange={onOfferingChange}
+              />
+            </FilterDropdown>
+
+            {/* Officer Filter - Admin/Manager only */}
+            {canFilterByOfficerFlag && (
+              <FilterDropdown label="Cán bộ" count={officerFilters.length}>
+                <div className="max-h-48 space-y-2 overflow-y-auto">
+                  {officers.map((officer) => (
+                    <div key={officer.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`mobile-officer-${officer.id}`}
+                        checked={officerFilters.includes(officer.id.toString())}
+                        onCheckedChange={() => handleOfficerToggle(officer.id.toString())}
+                      />
+                      <Label
+                        htmlFor={`mobile-officer-${officer.id}`}
+                        className="cursor-pointer text-sm font-normal"
+                      >
+                        {officer.full_name}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </FilterDropdown>
+            )}
+          </div>
+
+          {/* Mobile: Action buttons */}
+          <div className="mt-3 flex items-center gap-2 border-t pt-3">
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onReset}
+                className="h-9 text-xs"
+              >
+                <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                Đặt lại
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={onExport} className="h-9">
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              Xuất
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Active Filter Pills - Collapsible */}
       {hasActiveFilters && (() => {

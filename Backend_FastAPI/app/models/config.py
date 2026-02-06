@@ -516,6 +516,18 @@ class ConfigSystemCategory(Base):
 
 class ConfigSubjectGroup(Base):
     """
+    DEPRECATED: This table is scheduled for removal.
+    
+    Use the relational model instead:
+    - Subject (app/models/admission_config/subject.py)
+    - SubjectGroup (app/models/admission_config/subject.py)
+    - SubjectGroupSubject (app/models/admission_config/subject.py)
+    
+    Migration script: scripts/seeds/migrate_to_relational_subject_groups.py
+    Drop migration: alembic/versions/drop_config_subject_group.py
+    
+    ---
+    
     Cấu hình Tổ hợp môn xét tuyển (Subject Group Combinations).
     
     Stores standardized subject groups for admission scoring:

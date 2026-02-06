@@ -31,8 +31,19 @@ import {
   History,
   ExternalLink,
   RefreshCcw,
+  MoreVertical,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn, sanitizeColorCode } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useMediaQuery";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
+import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
@@ -53,15 +64,15 @@ interface LeadDetailPanelProps {
 const getAssignmentStatusColor = (status: string) => {
   switch (status) {
     case "pending":
-      return "bg-yellow-100 text-yellow-700 border-yellow-200";
+      return "bg-warning-100 text-warning-700 border-warning-200";
     case "assigned":
-      return "bg-green-100 text-green-700 border-green-200";
+      return "bg-success-100 text-success-700 border-success-200";
     case "failed":
-      return "bg-red-100 text-red-700 border-red-200";
+      return "bg-error-100 text-error-700 border-error-200";
     case "reassign_pending":
-      return "bg-orange-100 text-orange-700 border-orange-200";
+      return "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/50 dark:text-orange-300 dark:border-orange-800";
     default:
-      return "bg-gray-100 text-gray-700 border-gray-200";
+      return "bg-muted text-muted-foreground border-border";
   }
 };
 
@@ -82,9 +93,9 @@ const getAssignmentStatusLabel = (status: string) => {
 
 // ✅ TECHNICAL DEBT FIX: Score display color helper
 const getScoreColor = (score: number) => {
-  if (score >= 80) return "text-red-600 bg-red-50 border-red-200";
-  if (score >= 50) return "text-yellow-600 bg-yellow-50 border-yellow-200";
-  return "text-gray-600 bg-gray-50 border-gray-200";
+  if (score >= 80) return "text-error-600 bg-error-50 border-error-200";
+  if (score >= 50) return "text-warning-600 bg-warning-50 border-warning-200";
+  return "text-muted-foreground bg-muted border-border";
 };
 
 const getInitials = (name: string) => {
@@ -112,16 +123,25 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [reassignOpen, setReassignOpen] = useState(false);
-  const [daysSinceContact, setDaysSinceContact] = useState<number | null>(null);
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+  const isMobile = useIsMobile();
 
-  // Calculate days since last contact on client side only to avoid hydration mismatch
+  // ✅ FIX: Calculate days since contact in useEffect to avoid impure Date.now() in render
+  // Also prevents hydration mismatch (useState defaults to null, matching SSR)
+  const [daysSinceContact, setDaysSinceContact] = useState<number | null>(null);
   useEffect(() => {
-    if (lead?.last_consultation_at) {
-      const days = Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24));
-      setDaysSinceContact(days);
-    } else {
+    // Intentional setState: synchronizing display value with system time
+    // This is a valid use case per React docs for external system synchronization
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (!lead?.last_consultation_at) {
       setDaysSinceContact(null);
+      return;
     }
+    const days = Math.floor(
+      (Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24)
+    );
+    setDaysSinceContact(days);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [lead?.last_consultation_at]);
 
   // Auto-scroll to top when leadId changes
@@ -166,191 +186,238 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   }
 
   return (
-    <AnimatePresence mode="wait">
-      <motion.div
-        key={leadId}
-        initial={{ opacity: 0, x: 20 }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: -20 }}
-        transition={{ duration: 0.15, ease: "easeOut" }}
-        className="flex h-full flex-col"
-      >
-      {/* Header */}
-      <div className="bg-background shrink-0 border-b p-4">
-        <div className="flex items-start gap-4">
-          <Avatar className="h-14 w-14">
-            <AvatarFallback className="bg-primary/10 text-primary text-base font-semibold">
-              {getInitials(lead.full_name)}
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1 space-y-1">
-            <h2 className="truncate text-lg font-semibold">{lead.full_name}</h2>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {/* Pipeline Stage Badge */}
-              {lead.pipeline_stage &&
-                (() => {
-                  const stageColor =
-                    lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
-                  return (
-                    <Badge
-                      variant="outline"
-                      className={cn("border-0 font-medium", stageColor && "text-white")}
-                      style={{
-                        backgroundColor: stageColor || undefined,
-                      }}
-                    >
-                      {lead.pipeline_stage.name}
-                    </Badge>
-                  );
-                })()}
-              
-              {/* ✅ TECHNICAL DEBT FIX: Assignment Status Badge */}
-              {lead.assignment_status && (
-                <Badge
-                  variant="outline"
-                  className={cn("text-xs", getAssignmentStatusColor(lead.assignment_status))}
-                >
-                  {getAssignmentStatusLabel(lead.assignment_status)}
-                </Badge>
-              )}
-              
-              {/* ✅ TECHNICAL DEBT FIX: Overdue Indicator */}
-              {lead.is_overdue && (
-                <Badge variant="destructive" className="text-xs">
-                  Quá hạn
-                </Badge>
-              )}
-            </div>
+    <div
+      key={leadId}
+      className="flex h-full flex-col"
+    >
+      {/* Header - Mobile Optimized, Full Width Rows */}
+      {/* Note: pr-10 to avoid Sheet close button overlap */}
+      <div className="bg-background shrink-0 border-b p-3 pr-10 space-y-2">
+        {/* Row 1: Avatar + Name + Assignment Status */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Avatar className="h-9 w-9 shrink-0">
+              <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                {getInitials(lead.full_name)}
+              </AvatarFallback>
+            </Avatar>
+            <h2 className="truncate text-sm font-semibold font-display">
+              {lead.full_name}
+            </h2>
+          </div>
+          {lead.assignment_status && (
+            <Badge
+              variant="outline"
+              className={cn("text-[10px] shrink-0", getAssignmentStatusColor(lead.assignment_status))}
+            >
+              {getAssignmentStatusLabel(lead.assignment_status)}
+            </Badge>
+          )}
+        </div>
+
+        {/* Row 2: Status Badges - space between */}
+        <div className="flex items-center justify-between gap-2">
+          {/* Pipeline Stage Badge */}
+          {lead.pipeline_stage ? (() => {
+            const stageColor =
+              sanitizeColorCode(lead.pipeline_stage.color_code) || STAGE_COLORS[lead.pipeline_stage.id];
+            return (
+              <Badge
+                variant="outline"
+                className={cn("border-0 font-medium text-[10px]", stageColor && "text-white")}
+                style={{ backgroundColor: stageColor || undefined }}
+              >
+                {lead.pipeline_stage.name}
+              </Badge>
+            );
+          })() : <span />}
+
+          {/* Consultation Status Badge */}
+          {lead.consultation_status ? (
+            <DynamicColorBadge
+              color={lead.consultation_status.color_code}
+              variant="subtle"
+              size="sm"
+            >
+              {lead.consultation_status.name}
+            </DynamicColorBadge>
+          ) : <span />}
+        </div>
+
+        {/* Row 3: Action Buttons - space between */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" asChild>
+              <Link href={`/leads/${lead.id}`}>
+                <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                Xem
+              </Link>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+            >
+              <Phone className="h-3.5 w-3.5 mr-1" />
+              Gọi
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
+            >
+              <span className="font-bold mr-1">Z</span>
+              Zalo
+            </Button>
           </div>
 
-          {/* Action Buttons with Tooltips */}
-          <TooltipProvider delayDuration={200}>
-            <div className="flex shrink-0 items-center gap-1">
-              {/* Link: Xem đầy đủ */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" asChild className="h-8 w-8">
-                    <Link href={`/leads/${lead.id}`}>
-                      <ExternalLink className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Xem đầy đủ</TooltipContent>
-              </Tooltip>
-
-              {/* Action: Sửa */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" onClick={() => onEdit(lead)} className="h-8 w-8">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Chỉnh sửa lead</TooltipContent>
-              </Tooltip>
-
-              {/* Action: Gán (chỉ hiển thị khi chưa được gán) */}
-              {!lead.assigned_officer && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" onClick={() => onAssign(lead)} className="h-8 w-8">
-                      <UserPlus className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Gán cho cán bộ</TooltipContent>
-                </Tooltip>
-              )}
-
-              {/* Action: Phân công lại (chỉ hiển thị khi đã được gán) */}
-              {lead.assigned_officer && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button 
-                      variant="ghost" 
-                      size="icon"
-                      onClick={() => setReassignOpen(true)} 
-                      className="h-8 w-8"
-                    >
-                      <RefreshCcw className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Yêu cầu phân công lại</TooltipContent>
-                </Tooltip>
-              )}
-
-              {/* Destructive Action: Xóa */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => onDelete(lead)}
-                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+          {/* More Actions - Mobile: ActionSheet, Desktop: Dropdown */}
+          {isMobile ? (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => setActionSheetOpen(true)}
+                aria-label="Mở menu thao tác"
+              >
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+              <MobileActionSheet
+                open={actionSheetOpen}
+                onOpenChange={setActionSheetOpen}
+                title="Thao tác"
+              >
+                <MobileActionSheet.Item
+                  icon={Edit}
+                  onClick={() => {
+                    setActionSheetOpen(false);
+                    onEdit(lead);
+                  }}
+                >
+                  Chỉnh sửa
+                </MobileActionSheet.Item>
+                {lead.email && (
+                  <MobileActionSheet.Item
+                    icon={Mail}
+                    onClick={() => {
+                      setActionSheetOpen(false);
+                      window.open(`mailto:${lead.email}`, "_blank");
+                    }}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent className="bg-destructive text-destructive-foreground">Xóa lead</TooltipContent>
-              </Tooltip>
-            </div>
-          </TooltipProvider>
+                    Gửi email
+                  </MobileActionSheet.Item>
+                )}
+                <MobileActionSheet.Divider />
+                {!lead.assigned_officer && (
+                  <MobileActionSheet.Item
+                    icon={UserPlus}
+                    onClick={() => {
+                      setActionSheetOpen(false);
+                      onAssign(lead);
+                    }}
+                  >
+                    Gán cho cán bộ
+                  </MobileActionSheet.Item>
+                )}
+                {lead.assigned_officer && (
+                  <MobileActionSheet.Item
+                    icon={RefreshCcw}
+                    onClick={() => {
+                      setActionSheetOpen(false);
+                      setReassignOpen(true);
+                    }}
+                  >
+                    Phân công lại
+                  </MobileActionSheet.Item>
+                )}
+                <MobileActionSheet.Divider />
+                <MobileActionSheet.Item
+                  icon={Trash2}
+                  variant="destructive"
+                  onClick={() => {
+                    setActionSheetOpen(false);
+                    onDelete(lead);
+                  }}
+                >
+                  Xóa lead
+                </MobileActionSheet.Item>
+                <MobileActionSheet.Cancel onClick={() => setActionSheetOpen(false)} />
+              </MobileActionSheet>
+            </>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label="Mở menu thao tác">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={() => onEdit(lead)}>
+                  <Edit className="mr-2 h-4 w-4" />
+                  Chỉnh sửa
+                </DropdownMenuItem>
+                {lead.email && (
+                  <DropdownMenuItem onClick={() => window.open(`mailto:${lead.email}`, "_blank")}>
+                    <Mail className="mr-2 h-4 w-4" />
+                    Gửi email
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                {!lead.assigned_officer && (
+                  <DropdownMenuItem onClick={() => onAssign(lead)}>
+                    <UserPlus className="mr-2 h-4 w-4" />
+                    Gán cho cán bộ
+                  </DropdownMenuItem>
+                )}
+                {lead.assigned_officer && (
+                  <DropdownMenuItem onClick={() => setReassignOpen(true)}>
+                    <RefreshCcw className="mr-2 h-4 w-4" />
+                    Phân công lại
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => onDelete(lead)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Xóa lead
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
       {/* Scrollable Content */}
       <ScrollArea className="flex-1" ref={scrollAreaRef}>
-        <div className="space-y-4 p-4">
+        <div className="space-y-3 p-3 sm:space-y-4 sm:p-4">
           {/* ================================================== */}
           {/* SECTION 1: Thông tin học viên (Combined) */}
           {/* ================================================== */}
           <Card>
-            <CardHeader className="px-4 py-2.5">
-              <CardTitle className="flex items-center justify-between text-sm font-medium">
-                <span className="flex items-center gap-2">
-                  <User className="h-4 w-4 text-primary" />
-                  Thông tin học viên
-                </span>
-                {/* Quick Action Buttons in Header */}
-                <div className="flex items-center gap-1">
-                  {lead.is_hot_lead && (
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200">
-                      🔥 Hot
-                    </Badge>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
-                    onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
-                  >
-                    <Phone className="h-3 w-3 mr-1" />
-                    Gọi
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
-                    onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
-                  >
-                    <span className="font-bold mr-1">Z</span>
-                    Zalo
-                  </Button>
-                  {lead.email && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
-                      onClick={() => window.open(`mailto:${lead.email}`, "_blank")}
-                    >
-                      <Mail className="h-3 w-3 mr-1" />
-                      Email
-                    </Button>
-                  )}
-                </div>
+            <CardHeader className="px-3 py-2 sm:px-4 sm:py-2.5">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <User className="h-4 w-4 text-primary shrink-0" />
+                <span>Thông tin</span>
+                {lead.is_hot_lead && (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/50 dark:text-orange-400 dark:border-orange-800">
+                    🔥 Hot
+                  </Badge>
+                )}
+                {lead.is_overdue && (
+                  <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-5">
+                    Quá hạn
+                  </Badge>
+                )}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 px-4 pt-0 pb-4">
+            <CardContent className="space-y-3 px-3 pt-0 pb-3 sm:px-4 sm:pb-4">
               {/* Score Indicators */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Điểm Lead</span>
@@ -359,8 +426,8 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                     <div 
                       className={cn(
-                        "h-full rounded-full transition-all duration-500",
-                        lead.lead_score >= 70 ? "bg-emerald-500" : lead.lead_score >= 40 ? "bg-blue-500" : "bg-slate-400"
+                        "h-full rounded-full transition-[width] duration-500",
+                        lead.lead_score >= 70 ? "bg-success-500" : lead.lead_score >= 40 ? "bg-info-500" : "bg-muted-foreground/50"
                       )}
                       style={{ width: `${Math.min(lead.lead_score, 100)}%` }}
                     />
@@ -369,15 +436,15 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Độ khẩn cấp</span>
-                    <span className={cn("font-bold", lead.cached_urgency_score >= 70 && "text-red-600")}>
+                    <span className={cn("font-bold", lead.cached_urgency_score >= 70 && "text-error-600")}>
                       {lead.cached_urgency_score}%
                     </span>
                   </div>
                   <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                     <div 
                       className={cn(
-                        "h-full rounded-full transition-all duration-500",
-                        lead.cached_urgency_score >= 70 ? "bg-red-500" : lead.cached_urgency_score >= 40 ? "bg-amber-400" : "bg-green-500"
+                        "h-full rounded-full transition-[width] duration-500",
+                        lead.cached_urgency_score >= 70 ? "bg-error-500" : lead.cached_urgency_score >= 40 ? "bg-warning-400" : "bg-success-500"
                       )}
                       style={{ width: `${Math.min(lead.cached_urgency_score, 100)}%` }}
                     />
@@ -405,10 +472,10 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </div>
               )}
 
-              {/* 2-Column Info Layout */}
-              <div className="flex gap-4 pt-2 border-t text-xs">
+              {/* 2-Column Info Layout - Stack on mobile */}
+              <div className="flex flex-col gap-3 pt-2 border-t text-xs sm:flex-row sm:gap-4">
                 {/* Left Column: Contact & Personal Info */}
-                <div className="flex-1 space-y-1.5">
+                <div className="flex-1 space-y-1.5 min-w-0">
                   {/* Phone - Always Visible */}
                   <div className="flex items-center gap-2 h-5">
                     <Phone className="text-muted-foreground h-3 w-3 shrink-0" />
@@ -450,7 +517,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </div>
 
                 {/* Right Column: Stats & Program */}
-                <div className="flex-1 space-y-1.5">
+                <div className="flex-1 space-y-1.5 min-w-0">
                   {/* Consultation Count */}
                   <div className="flex items-center justify-between h-5">
                     <span className="text-muted-foreground">Số lần tư vấn:</span>
@@ -487,11 +554,11 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               </div>
 
               {/* Footer: Phụ trách + Rating (Merged) */}
-              <div className="flex items-center justify-between pt-2 border-t">
-                <div className="flex items-center gap-2 text-xs">
+              <div className="flex flex-col gap-2 pt-2 border-t sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2 text-xs min-w-0">
                   <UserPlus className="h-3 w-3 text-muted-foreground shrink-0" />
-                  <span className="text-muted-foreground">Phụ trách:</span>
-                  <span className="font-medium">
+                  <span className="text-muted-foreground shrink-0">Phụ trách:</span>
+                  <span className="font-medium truncate">
                     {lead.assigned_officer?.full_name || "Chưa phân công"}
                   </span>
                 </div>
@@ -500,6 +567,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   leadId={lead.id}
                   currentRating={lead.officer_rating ?? null}
                   currentLeadScore={lead.lead_score}
+                  version={lead.version}
                   compact
                 />
               </div>
@@ -509,14 +577,14 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {/* ================================================== */}
           {/* SECTION 2: Ghi nhận tư vấn (Keep as-is) */}
           {/* ================================================== */}
-          <Card className="border-slate-200 bg-slate-50">
-            <CardHeader className="px-4 py-3">
+          <Card>
+            <CardHeader className="px-3 py-2.5 sm:px-4 sm:py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                <Zap className="h-4 w-4 text-amber-500" />
+                <Zap className="h-4 w-4 text-amber-500 shrink-0" />
                 Ghi nhận tư vấn
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pt-0 pb-4">
+            <CardContent className="px-3 pt-0 pb-3 sm:px-4 sm:pb-4">
               <QuickConsultationSection leadId={lead.id} />
             </CardContent>
           </Card>
@@ -525,13 +593,13 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {/* SECTION 3: Lịch sử tư vấn (with maxItems) */}
           {/* ================================================== */}
           <Card>
-            <CardHeader className="px-4 py-3">
+            <CardHeader className="px-3 py-2.5 sm:px-4 sm:py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                <History className="text-muted-foreground h-4 w-4" />
+                <History className="text-muted-foreground h-4 w-4 shrink-0" />
                 Lịch sử tư vấn
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pt-0 pb-4">
+            <CardContent className="px-3 pt-0 pb-3 sm:px-4 sm:pb-4">
               <LeadTimelineTab leadId={lead.id} maxItems={3} />
             </CardContent>
           </Card>
@@ -544,8 +612,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
         onOpenChange={setReassignOpen}
         lead={lead}
       />
-      </motion.div>
-    </AnimatePresence>
+    </div>
   );
 }
 

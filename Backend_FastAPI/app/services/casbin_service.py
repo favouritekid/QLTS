@@ -12,9 +12,10 @@ This service provides high-level operations for managing Casbin policies with:
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from datetime import datetime, timezone
 
 import casbin
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..casbin_config.policy_templates import (
@@ -131,6 +132,52 @@ class CasbinPolicyService:
             if p[0] == role
         ]
         return role_policies
+
+    # =========================================================================
+    # USER ROLE ASSIGNMENT (g-rules)
+    # =========================================================================
+
+    async def assign_role_to_user(self, user_id: int, role: str) -> bool:
+        """
+        Assign a role to a user (create g-rule mapping user:ID -> role:NAME).
+
+        Args:
+            user_id: User ID
+            role: Role name (e.g., "officer", "manager") - WITHOUT "role:" prefix
+
+        Returns:
+            True if assignment was created, False if already exists
+        """
+        user_subject = f"user:{user_id}"
+        role_subject = f"role:{role}"
+        return await self.enforcer.add_grouping_policy(user_subject, role_subject)
+
+    async def remove_user_roles(self, user_id: int) -> int:
+        """
+        Remove ALL role assignments for a user.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            Number of role assignments removed
+        """
+        user_subject = f"user:{user_id}"
+        removed_count = 0
+
+        # Get all grouping policies (g-rules)
+        # We filter manually because get_roles_for_user() might return inherited roles
+        all_grouping = self.enforcer.get_grouping_policy()
+        user_rules = [p for p in all_grouping if p[0] == user_subject]
+
+        for rule in user_rules:
+            # rule is (user_subject, role_subject)
+            role_subject = rule[1]
+            success = await self.enforcer.remove_grouping_policy(user_subject, role_subject)
+            if success:
+                removed_count += 1
+
+        return removed_count
 
     # =========================================================================
     # POLICY VALIDATION
@@ -288,14 +335,18 @@ class CasbinPolicyService:
     async def add_policies_batch(
         self,
         policies: List[Tuple[str, str, str]],
-        validate: bool = True
+        validate: bool = True,
+        template_id: Optional[str] = None,
+        applied_by: Optional[int] = None
     ) -> dict:
         """
-        Add multiple policies in a batch with validation.
+        Add multiple policies in a batch with validation and template tracking.
 
         Args:
             policies: List of (subject, object, action) tuples
             validate: Whether to validate before adding
+            template_id: Template ID for tracking (optional)
+            applied_by: User ID who applied this (optional)
 
         Returns:
             Dictionary with:
@@ -308,6 +359,7 @@ class CasbinPolicyService:
         skipped = 0
         errors = []
         warnings = []
+        added_policies = []  # Track which policies were added for template tracking
 
         for subject, obj, action in policies:
             # Validate if requested
@@ -325,11 +377,16 @@ class CasbinPolicyService:
                 success = await self.enforcer.add_policy(subject, obj, action)
                 if success:
                     added += 1
+                    added_policies.append((subject, obj, action))
                 else:
                     skipped += 1
                     warnings.append(f"Policy already exists: {subject} {obj} {action}")
             except Exception as e:
                 errors.append(f"Failed to add policy {subject} {obj} {action}: {str(e)}")
+
+        # Update template tracking for added policies
+        if added_policies and template_id:
+            await self._update_template_tracking(added_policies, template_id, applied_by)
 
         return {
             "added": added,
@@ -337,6 +394,71 @@ class CasbinPolicyService:
             "errors": errors,
             "warnings": warnings,
         }
+
+    async def _update_template_tracking(
+        self,
+        policies: List[Tuple[str, str, str]],
+        template_id: str,
+        applied_by: Optional[int] = None
+    ) -> None:
+        """
+        Update template tracking columns for policies.
+
+        This is called after policies are added via enforcer to set:
+        - template_id: Which template this policy came from
+        - applied_at: When this policy was applied
+        - applied_by: User ID who applied this policy
+
+        IMPORTANT: We use AsyncSessionLocal instead of self.db because:
+        - Casbin enforcer.add_policy() uses its own adapter with its own session
+        - The DI session (self.db) is in a different transaction and can't see
+          the row that enforcer committed
+        - We need a fresh session that starts AFTER enforcer's commit
+
+        Args:
+            policies: List of (subject, object, action) tuples
+            template_id: Template identifier
+            applied_by: User ID (optional)
+        """
+        from app.database import AsyncSessionLocal
+        import logging
+        log = logging.getLogger(__name__)
+        
+        try:
+            # Use a fresh session to see the rows committed by enforcer
+            async with AsyncSessionLocal() as fresh_session:
+                for subject, obj, action in policies:
+                    result = await fresh_session.execute(
+                        text("""
+                            UPDATE casbin_rule
+                            SET template_id = :template_id,
+                                applied_at = :applied_at,
+                                applied_by = :applied_by
+                            WHERE ptype = 'p'
+                              AND v0 = :subject
+                              AND v1 = :obj
+                              AND v2 = :action
+                              AND template_id IS NULL
+                        """),
+                        {
+                            "template_id": template_id,
+                            "applied_at": datetime.utcnow(),  # Must be offset-naive for asyncpg
+                            "applied_by": applied_by,
+                            "subject": subject,
+                            "obj": obj,
+                            "action": action,
+                        }
+                    )
+                    log.info(f"Tracking UPDATE for {subject} {obj} {action}: rowcount={result.rowcount}")
+                
+                # Commit the tracking update
+                await fresh_session.commit()
+                log.info(f"✅ Tracking columns committed for {len(policies)} policies")
+        except Exception as e:
+            # Non-critical: don't fail if tracking update fails
+            # This can happen if tracking columns don't exist (e.g., migration not applied)
+            # Just log and continue - the policy was already added by enforcer
+            log.warning(f"⚠️ Failed to update tracking columns: {e}")
 
     async def remove_policies_batch(
         self,
@@ -397,7 +519,8 @@ class CasbinPolicyService:
         self,
         template_id: str,
         role: str,
-        validate: bool = True
+        validate: bool = True,
+        applied_by: Optional[int] = None
     ) -> dict:
         """
         Apply a policy template to a role.
@@ -406,6 +529,7 @@ class CasbinPolicyService:
             template_id: Template identifier (e.g., "officer")
             role: Role name (e.g., "role:custom")
             validate: Whether to validate before applying
+            applied_by: User ID who applied this template (for audit trail)
 
         Returns:
             Dictionary with application results
@@ -420,8 +544,13 @@ class CasbinPolicyService:
                 for p in template_policies
             ]
 
-            # Apply batch
-            result = await self.add_policies_batch(policies_tuples, validate=validate)
+            # Apply batch with template tracking
+            result = await self.add_policies_batch(
+                policies_tuples,
+                validate=validate,
+                template_id=template_id,
+                applied_by=applied_by
+            )
 
             return {
                 **result,
@@ -508,3 +637,279 @@ class CasbinPolicyService:
                 allowed_subjects.append(role)
 
         return sorted(list(set(allowed_subjects)))
+
+    # =========================================================================
+    # TEMPLATE DRIFT DETECTION & SYNC (Phase 4 Fix)
+    # Reference: AUTHORIZATION_DECISIONS.md Decision 14
+    # =========================================================================
+
+    async def detect_template_drift(self, role: str, template_id: str) -> dict:
+        """
+        Detect drift between template definition and actual DB policies.
+
+        This is critical for audit and production maintenance.
+        Drift can occur when:
+        - Policies are added via UI without template
+        - Policies are deleted manually
+        - Template is updated but DB not synced
+
+        Args:
+            role: Role name (e.g., "role:officer")
+            template_id: Template identifier (e.g., "officer")
+
+        Returns:
+            Dictionary with:
+            - has_drift: True if template != DB
+            - missing_in_db: Policies in template but not in DB
+            - extra_in_db: Policies in DB but not in template
+            - drift_percentage: How much drift (0-100%)
+            - template_count: Number of policies in template
+            - db_count: Number of policies in DB for this role
+        """
+        try:
+            # Get template policies
+            template_policies = apply_template(template_id, role)
+            template_set = set(
+                (p["subject"], p["object"], p["action"])
+                for p in template_policies
+            )
+
+            # Get DB policies for this role
+            all_policies = self.enforcer.get_policy()
+            db_policies_for_role = [
+                (p[0], p[1], p[2])
+                for p in all_policies
+                if p[0] == role
+            ]
+            db_set = set(db_policies_for_role)
+
+            # Calculate drift
+            missing_in_db = template_set - db_set
+            extra_in_db = db_set - template_set
+
+            total_unique = len(template_set | db_set)
+            drift_count = len(missing_in_db) + len(extra_in_db)
+            drift_percentage = (drift_count / total_unique * 100) if total_unique > 0 else 0
+
+            return {
+                "has_drift": bool(missing_in_db or extra_in_db),
+                "missing_in_db": [
+                    {"subject": s, "object": o, "action": a}
+                    for s, o, a in missing_in_db
+                ],
+                "extra_in_db": [
+                    {"subject": s, "object": o, "action": a}
+                    for s, o, a in extra_in_db
+                ],
+                "drift_percentage": round(drift_percentage, 2),
+                "template_count": len(template_set),
+                "db_count": len(db_set),
+                "role": role,
+                "template_id": template_id,
+            }
+
+        except KeyError:
+            # Handle special template IDs gracefully
+            if template_id == "_legacy":
+                # Legacy policies have no template to compare - not an error
+                return {
+                    "has_drift": False,
+                    "info": "Legacy policies - no template to compare. Consider migrating to a proper template.",
+                    "missing_in_db": [],
+                    "extra_in_db": [],
+                    "drift_percentage": 0,
+                    "template_count": 0,
+                    "db_count": 0,
+                    "role": role,
+                    "template_id": template_id,
+                }
+            elif template_id == "_manual":
+                # Manual policies are intentionally outside templates
+                return {
+                    "has_drift": False,
+                    "info": "Manual policies - added via UI, not linked to any template.",
+                    "missing_in_db": [],
+                    "extra_in_db": [],
+                    "drift_percentage": 0,
+                    "template_count": 0,
+                    "db_count": 0,
+                    "role": role,
+                    "template_id": template_id,
+                }
+            # Unknown template - actual error
+            return {
+                "has_drift": True,
+                "error": f"Template not found: {template_id}",
+                "missing_in_db": [],
+                "extra_in_db": [],
+                "drift_percentage": 100.0,
+                "template_count": 0,
+                "db_count": 0,
+                "role": role,
+                "template_id": template_id,
+            }
+
+    async def detect_all_drift(self) -> dict:
+        """
+        Detect drift for all system roles.
+
+        Returns:
+            Dictionary with drift status for each role and overall health.
+        """
+        results = {}
+        total_drift = 0
+        roles_with_drift = 0
+
+        for system_role in SYSTEM_ROLES:
+            role_name = system_role["name"]
+            template_id = system_role.get("template_id")
+
+            if template_id:
+                drift = await self.detect_template_drift(role_name, template_id)
+                results[role_name] = drift
+
+                if drift["has_drift"]:
+                    roles_with_drift += 1
+                    total_drift += drift["drift_percentage"]
+
+        return {
+            "roles": results,
+            "summary": {
+                "total_roles_checked": len(results),
+                "roles_with_drift": roles_with_drift,
+                "average_drift_percentage": round(total_drift / len(results), 2) if results else 0,
+                "health_status": "HEALTHY" if roles_with_drift == 0 else "DRIFT_DETECTED",
+            }
+        }
+
+    async def refresh_role_from_template(
+        self,
+        role: str,
+        template_id: str,
+        force: bool = False,
+        applied_by: Optional[int] = None
+    ) -> dict:
+        """
+        Force reset role to match template exactly.
+
+        WARNING: This will:
+        - Remove ALL current policies for the role
+        - Apply fresh policies from template
+        - Any manual additions will be LOST
+
+        Args:
+            role: Role name (e.g., "role:officer")
+            template_id: Template identifier (e.g., "officer")
+            force: Must be True to execute (safety check)
+            applied_by: User ID who triggered this refresh (for audit trail)
+
+        Returns:
+            Dictionary with operation results
+        """
+        if not force:
+            return {
+                "success": False,
+                "error": "Safety check: Set force=True to confirm destructive operation",
+                "hint": "This will remove ALL current policies for the role and apply template fresh",
+            }
+
+        # Prevent refresh of admin role without extra safety
+        if role == "role:admin" and not is_system_role(role):
+            return {
+                "success": False,
+                "error": "Cannot refresh admin role - too dangerous",
+            }
+
+        try:
+            # Get current policies before delete (for audit log)
+            all_policies = self.enforcer.get_policy()
+            current_policies = [p for p in all_policies if p[0] == role]
+            current_count = len(current_policies)
+
+            # Remove all policies for this role
+            removed = 0
+            for policy in current_policies:
+                subject, obj, action = policy[0], policy[1], policy[2]
+
+                # Skip critical policies
+                if is_critical_policy(subject, obj, action):
+                    continue
+
+                success = await self.enforcer.remove_policy(subject, obj, action)
+                if success:
+                    removed += 1
+
+            # Apply template fresh (with template tracking)
+            result = await self.apply_template_to_role(
+                template_id, role, validate=False, applied_by=applied_by
+            )
+
+            return {
+                "success": True,
+                "role": role,
+                "template_id": template_id,
+                "policies_removed": removed,
+                "policies_before": current_count,
+                "policies_added": result.get("added", 0),
+                "policies_after": result.get("added", 0),
+                "warnings": result.get("warnings", []),
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "role": role,
+                "template_id": template_id,
+            }
+
+    async def sync_all_roles_from_templates(self, dry_run: bool = True) -> dict:
+        """
+        Sync all system roles to match their templates.
+
+        Args:
+            dry_run: If True, only report what would change (default: True)
+
+        Returns:
+            Dictionary with sync results for each role
+        """
+        results = {}
+
+        for system_role in SYSTEM_ROLES:
+            role_name = system_role["name"]
+            template_id = system_role.get("template_id")
+
+            if not template_id:
+                results[role_name] = {"skipped": True, "reason": "No template defined"}
+                continue
+
+            # Skip admin to prevent lockout
+            if role_name == "role:admin":
+                results[role_name] = {"skipped": True, "reason": "Admin role not synced for safety"}
+                continue
+
+            # Detect drift first
+            drift = await self.detect_template_drift(role_name, template_id)
+
+            if not drift["has_drift"]:
+                results[role_name] = {"skipped": True, "reason": "No drift detected"}
+                continue
+
+            if dry_run:
+                results[role_name] = {
+                    "dry_run": True,
+                    "would_remove": len(drift["extra_in_db"]),
+                    "would_add": len(drift["missing_in_db"]),
+                    "drift": drift,
+                }
+            else:
+                sync_result = await self.refresh_role_from_template(
+                    role_name, template_id, force=True
+                )
+                results[role_name] = sync_result
+
+        return {
+            "dry_run": dry_run,
+            "results": results,
+            "hint": "Set dry_run=False to apply changes" if dry_run else "Changes applied",
+        }

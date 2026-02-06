@@ -30,8 +30,11 @@ export const pipelineKeys = {
   fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
-  allowedNextStatuses: (currentStatusId?: string | null) =>
-    [...pipelineKeys.all, "allowedNextStatuses", currentStatusId] as const,
+  // ✅ FSM v3.2: Cache by (currentStatusId, leadId)
+  // leadId is required because phase is derived from lead's admission_profile
+  // Different leads can be in different phases (consultation vs admission vs fee)
+  allowedNextStatuses: (currentStatusId?: string | null, leadId?: number) =>
+    [...pipelineKeys.all, "allowedNextStatuses", currentStatusId, leadId] as const,
   allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
   stats: (params?: PipelineQueryParams) => [...pipelineKeys.all, "stats", params] as const,
 };
@@ -179,28 +182,44 @@ export function useConsultationStatuses(options?: { initialData?: ConsultationSt
 }
 
 /**
- * Get allowed next statuses from current status (state machine)
- * Returns only valid transitions based on workflow configuration
+ * Get allowed next statuses from current status (FSM v3.1)
+ * Returns only valid transitions based on:
+ * - Workflow transitions (allowed_transitions table)
+ * - Phase guards (user/role cannot cross phases)
+ * - Trigger type (hide system-only statuses)
+ * - Lead phase (derived from admission_profile)
  *
  * @param currentStatusId - Current consultation status ID (null/undefined for new leads)
+ * @param leadId - Lead ID to derive phase from admission_profile (optional, not used in cache key)
  *
  * @example
  * ```tsx
- * // Get next allowed statuses for a lead with status 'sts01'
- * const { data: nextStatuses } = useAllowedNextStatuses('sts01');
+ * // Get next allowed statuses for a specific lead
+ * const { data: nextStatuses } = useAllowedNextStatuses('sts01', 123);
  *
- * // Get all statuses for new lead (no current status)
- * const { data: allStatuses } = useAllowedNextStatuses(null);
+ * // Get initial status for new lead (NULL → NOT_CONTACTED only)
+ * const { data: initialStatuses } = useAllowedNextStatuses(null);
  * ```
+ *
+ * @note v3.2: Cache key includes leadId because phase is derived from admission_profile.
+ * Different leads can be in different phases (consultation/admission/fee/enrolled).
  */
-export function useAllowedNextStatuses(currentStatusId?: string | null) {
+export function useAllowedNextStatuses(currentStatusId?: string | null, leadId?: number) {
   return useQuery<ConsultationStatus[], AxiosError<ApiErrorResponse>>({
-    queryKey: pipelineKeys.allowedNextStatuses(currentStatusId),
+    // ✅ v3.2: Cache by (status, leadId) - phase varies per lead
+    queryKey: pipelineKeys.allowedNextStatuses(currentStatusId, leadId),
     queryFn: async () => {
-      return await pipelineApi.getAllowedNextStatuses(currentStatusId || null);
+      return await pipelineApi.getAllowedNextStatuses(currentStatusId || null, leadId);
     },
+    // ✅ Only fetch when currentStatusId is explicitly provided (not undefined)
+    // This prevents unnecessary API calls when the hook is mounted but not yet needed
+    enabled: currentStatusId !== undefined,
     staleTime: 1000 * 60 * 5, // 5 minutes (workflow rules don't change frequently)
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
+    // ✅ v3.1: Prevent refetch on mount if data already in cache
+    refetchOnMount: false,
+    // ✅ v3.1: Don't refetch when window regains focus
+    refetchOnWindowFocus: false,
   });
 }
 

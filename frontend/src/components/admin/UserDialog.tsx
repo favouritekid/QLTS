@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Camera, Loader2 } from "lucide-react";
@@ -90,6 +90,17 @@ const editUserSchema = z.object({
 type CreateUserFormValues = z.infer<typeof createUserSchema>;
 type EditUserFormValues = z.infer<typeof editUserSchema>;
 
+type UserFormValues = {
+  username?: string;
+  email: string;
+  password?: string;
+  full_name?: string;
+  phone_number?: string;
+  role: string;
+  status: "active" | "pending" | "banned";
+  avatar?: File;
+};
+
 interface UserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -118,17 +129,15 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
       .sort(); // Sort alphabetically
   }, [rolesData]);
 
-  // Form setup - use conditional type based on mode
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const form = useForm<any>({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: zodResolver(isCreate ? createUserSchema : editUserSchema) as any,
+  // Form setup - use unified types to avoid union type issues with react-hook-form
+  const form = useForm<UserFormValues>({
+    resolver: zodResolver(isCreate ? createUserSchema : editUserSchema) as Resolver<UserFormValues>,
     defaultValues: isEdit && user
       ? {
           full_name: user.full_name || "",
           email: user.email,
           phone_number: user.phone_number || "",
-          role: user.role,
+          role: user.role, // architecture-allow serialization
           status: user.status,
         }
       : {
@@ -155,7 +164,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         full_name: user.full_name || "",
         email: user.email,
         phone_number: user.phone_number || "",
-        role: user.role,
+        role: user.role, // architecture-allow serialization
         status: user.status,
       });
       // Clear preview to show current user's avatar from server
@@ -218,8 +227,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
 
   // Handle form submission
   // ✅ UX FIX (v17): Only close dialog on success, keep open on error
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function onSubmit(values: any) {
+  function onSubmit(values: UserFormValues) {
     // Define success callback - only close dialog when mutation succeeds
     const onSuccessCallback = () => {
       handleDialogOpenChange(false);
@@ -276,6 +284,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   onClick={() => fileInputRef.current?.click()}
                   className="bg-primary text-primary-foreground hover:bg-primary/90 absolute bottom-0 right-0 rounded-full p-1.5 shadow-md transition-colors"
                   disabled={isPending}
+                  aria-label="Thay đổi ảnh đại diện"
                 >
                   <Camera className="h-3 w-3" />
                 </button>
@@ -311,7 +320,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   <FormItem>
                     <FormLabel>Tên đăng nhập *</FormLabel>
                     <FormControl>
-                      <Input placeholder="nguyenvana" disabled={isPending} {...field} />
+                      <Input placeholder="nguyenvana" autoComplete="username" disabled={isPending} {...field} />
                     </FormControl>
                     <FormDescription>
                       Phải duy nhất. Chỉ chứa chữ cái, số, dấu gạch ngang và gạch dưới.
@@ -330,7 +339,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 <FormItem>
                   <FormLabel>Họ và tên</FormLabel>
                   <FormControl>
-                    <Input placeholder="Nguyễn Văn A" disabled={isPending} {...field} />
+                    <Input placeholder="Nguyễn Văn A" autoComplete="name" disabled={isPending} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -348,6 +357,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                     <Input
                       type="email"
                       placeholder="john.doe@example.com"
+                      autoComplete="email"
                       disabled={isPending}
                       {...field}
                     />
@@ -369,6 +379,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                       <Input
                         type="tel"
                         placeholder="+1 (555) 123-4567"
+                        autoComplete="tel"
                         disabled={isPending}
                         {...field}
                       />
@@ -391,6 +402,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                       <Input
                         type="password"
                         placeholder="••••••••"
+                        autoComplete="new-password"
                         disabled={isPending}
                         {...field}
                         onChange={(e) => {
@@ -420,13 +432,13 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder={rolesLoading ? "Đang tải vai trò..." : "Chọn vai trò"} />
+                        <SelectValue placeholder={rolesLoading ? "Đang tải vai trò…" : "Chọn vai trò"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {rolesLoading ? (
                         <SelectItem value="" disabled>
-                          Đang tải vai trò...
+                          Đang tải vai trò…
                         </SelectItem>
                       ) : availableRoles.length === 0 ? (
                         <SelectItem value="" disabled>
@@ -496,7 +508,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 {isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {isCreate ? "Đang tạo..." : "Đang lưu..."}
+                    {isCreate ? "Đang tạo…" : "Đang lưu…"}
                   </>
                 ) : (
                   <>{isCreate ? "Tạo Người dùng" : "Lưu thay đổi"}</>

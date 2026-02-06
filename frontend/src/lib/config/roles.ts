@@ -20,6 +20,14 @@
 export const ADMIN_ROLES = ["admin", "manager"] as const;
 
 /**
+ * Roles that have access to finance routes
+ *
+ * These roles can access routes under /finance/*
+ * Backend Casbin will perform the final authorization check.
+ */
+export const FINANCE_ROLES = ["accountant", "manager", "admin"] as const;
+
+/**
  * Check if a role has admin access
  *
  * @param role - User role from JWT payload
@@ -28,6 +36,17 @@ export const ADMIN_ROLES = ["admin", "manager"] as const;
 export function hasAdminAccess(role: string | undefined): boolean {
   if (!role) return false;
   return (ADMIN_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Check if a role has finance access
+ *
+ * @param role - User role from JWT payload
+ * @returns true if role has finance access
+ */
+export function hasFinanceAccess(role: string | undefined): boolean {
+  if (!role) return false;
+  return (FINANCE_ROLES as readonly string[]).includes(role);
 }
 
 /**

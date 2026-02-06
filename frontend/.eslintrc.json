@@ -1,18 +1,106 @@
-// .eslintrc.json
+// // .eslintrc.json
+// {
+//   "extends": [
+//     "next/core-web-vitals",
+//     "plugin:@typescript-eslint/recommended",
+//     "plugin:jsx-a11y/recommended",
+//     "prettier" // Ensures Prettier rules take precedence
+//   ],
+//   "plugins": ["@typescript-eslint", "jsx-a11y"],
+//   "rules": {
+//     "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }], // Allow unused vars starting with _
+//     "@typescript-eslint/no-explicit-any": "warn",
+//     "react-hooks/rules-of-hooks": "error",
+//     "react-hooks/exhaustive-deps": "warn",
+//     "jsx-a11y/anchor-is-valid": "off", // Next.js <Link> handles this
+//     "no-console": ["warn", { "allow": ["warn", "error"] }] // Allow console.warn and .error
+//   }
+// }
 {
   "extends": [
     "next/core-web-vitals",
     "plugin:@typescript-eslint/recommended",
     "plugin:jsx-a11y/recommended",
-    "prettier" // Ensures Prettier rules take precedence
+    "prettier"
   ],
   "plugins": ["@typescript-eslint", "jsx-a11y"],
   "rules": {
-    "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }], // Allow unused vars starting with _
-    "@typescript-eslint/no-explicit-any": "warn",
+    /* --- GENERAL CODE QUALITY --- */
+    "no-console": ["warn", { "allow": ["warn", "error"] }],
     "react-hooks/rules-of-hooks": "error",
     "react-hooks/exhaustive-deps": "warn",
-    "jsx-a11y/anchor-is-valid": "off", // Next.js <Link> handles this
-    "no-console": ["warn", { "allow": ["warn", "error"] }] // Allow console.warn and .error
-  }
+
+    /* --- V3.1 ARCHITECTURE COMPLIANCE --- */
+
+    // Rule 2.6.12: Strict Types - Chặn hoàn toàn 'any'
+    "@typescript-eslint/no-explicit-any": "error",
+    
+    // Rule 2.6.13: Domain Boundaries - Chặn ép kiểu không an toàn
+    "@typescript-eslint/consistent-type-assertions": [
+      "error", 
+      { 
+        "assertionStyle": "as", 
+        "objectLiteralTypeAssertions": "never" 
+      }
+    ],
+
+    // Rule 2.2 & 2.6.14: Anti-Patterns Syntax Block
+    "no-restricted-syntax": [
+      "error",
+      {
+        // Chặn check role trực tiếp
+        "selector": "MemberExpression[object.name='user'][property.name='role']",
+        "message": "ARCH VIOLATION (Rule 2.2): Forbidden direct 'user.role' check. Use backend permissions (e.g., 'can_approve') instead."
+      },
+      {
+        // Chặn God Object BaseFormData
+        "selector": "TSTypeReference[typeName.name='BaseFormData']",
+        "message": "ARCH VIOLATION (Rule 2.6.14): 'BaseFormData' is forbidden. Define strict 1:1 Domain Form Types."
+      },
+      {
+        // Chặn ép kiểu 'as unknown'
+        "selector": "TSAsExpression[typeAnnotation.typeAnnotation.typeName.name='unknown']",
+        "message": "ARCH VIOLATION (Rule 2.6.13): Casting 'as unknown' is strictly forbidden. Fix the types properly."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      /* --- LAYER VALIDATION (Rule 2.6.2) --- */
+      
+      /* 1. MỤC TIÊU: Quét TẤT CẢ các file code trong src (không chỉ components) */
+      "files": ["src/**/*.tsx", "src/**/*.ts"],
+
+      /* 2. NGOẠI TRỪ: Các folder ĐƯỢC PHÉP gọi API theo kiến trúc */
+      "excludedFiles": [
+        "src/hooks/**/*",       // ViewModel/Service Layer (Nơi duy nhất được gọi API)
+        "src/lib/**/*",         // Nơi định nghĩa API Client
+        "src/utils/**/*",       // Các hàm tiện ích
+        "src/api/**/*",         // Folder api (nếu có)
+        "**/*.test.ts",         // File test
+        "**/*.test.tsx"
+      ],
+
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                /* 3. CHẶN: Mọi import trỏ tới thư mục chứa logic API */
+                "group": [
+                  "@/lib/api/*", 
+                  "src/lib/api/*", 
+                  "**/api/*",       // Bắt mọi folder tên là api
+                  "../api/*",       // Bắt import tương đối
+                  "@/api/*"
+                ],
+                "message": "ARCH VIOLATION (Rule 2.6.2): UI Components/Pages MUST NOT import API directly. Use a Domain ViewModel Hook."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

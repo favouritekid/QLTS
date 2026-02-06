@@ -25,12 +25,32 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
-import { GraduationCap, Layers, FileText, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { GraduationCap, Layers, FileText, Plus, Pencil, Trash2, Loader2, List, MoreVertical } from "lucide-react";
+import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardField,
+  CardMeta,
+  CardActions,
+} from "@/components/ui/base-card";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
+import { SystemCategoryManager } from "./SystemCategoryManager";
 
 // ============================================
 // TYPES
@@ -60,6 +80,83 @@ interface ConfigItemUpdate {
 }
 
 // ============================================
+// MOBILE CONFIG CARD COMPONENT
+// ============================================
+
+interface MobileConfigCardProps {
+  item: ConfigItem;
+  onEdit: (item: ConfigItem) => void;
+  onDelete: (id: number) => void;
+  isDeleting: boolean;
+}
+
+function MobileConfigCard({ item, onEdit, onDelete, isDeleting }: MobileConfigCardProps) {
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+
+  return (
+    <BaseCard showCheckbox={false}>
+      <BaseCardHeader
+        title={item.name}
+        subtitle={<code className="bg-muted rounded px-1.5 py-0.5 text-xs">{item.code}</code>}
+        badge={
+          <Badge variant={item.is_active ? "default" : "secondary"}>
+            {item.is_active ? "Active" : "Inactive"}
+          </Badge>
+        }
+      />
+      {item.description && (
+        <CardBody>
+          <p className="text-sm text-muted-foreground">{item.description}</p>
+        </CardBody>
+      )}
+      <CardMeta>
+        <span className="text-xs text-muted-foreground">
+          Thứ tự: {item.display_order}
+        </span>
+      </CardMeta>
+      <CardActions>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setActionSheetOpen(true)}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </Button>
+      </CardActions>
+
+      {/* Mobile Action Sheet */}
+      <MobileActionSheet
+        open={actionSheetOpen}
+        onOpenChange={setActionSheetOpen}
+        title={item.name}
+      >
+        <MobileActionSheet.Item
+          icon={Pencil}
+          onClick={() => {
+            setActionSheetOpen(false);
+            onEdit(item);
+          }}
+        >
+          Chỉnh sửa
+        </MobileActionSheet.Item>
+        <MobileActionSheet.Item
+          icon={Trash2}
+          variant="destructive"
+          disabled={isDeleting}
+          onClick={() => {
+            setActionSheetOpen(false);
+            onDelete(item.id);
+          }}
+        >
+          Xóa
+        </MobileActionSheet.Item>
+      </MobileActionSheet>
+    </BaseCard>
+  );
+}
+
+// ============================================
 // CONFIG TABLE COMPONENT
 // ============================================
 
@@ -76,6 +173,8 @@ function ConfigTable({ title, description, icon, endpoint, queryKey, initialData
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editItem, setEditItem] = useState<ConfigItem | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [formData, setFormData] = useState<ConfigItemCreate>({
     code: "",
     name: "",
@@ -157,9 +256,16 @@ function ConfigTable({ title, description, icon, endpoint, queryKey, initialData
   };
 
   const handleDelete = (id: number) => {
-    if (confirm(`Are you sure you want to delete this ${title.toLowerCase()}?`)) {
-      deleteMutation.mutate(id);
+    setPendingDeleteId(id);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (pendingDeleteId !== null) {
+      deleteMutation.mutate(pendingDeleteId);
     }
+    setDeleteConfirmOpen(false);
+    setPendingDeleteId(null);
   };
 
   const handleCloseDialog = () => {
@@ -214,52 +320,71 @@ function ConfigTable({ title, description, icon, endpoint, queryKey, initialData
             No items configured. Click &quot;Add New&quot; to create one.
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[100px]">Code</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead className="w-[80px]">Order</TableHead>
-                <TableHead className="w-[100px]">Status</TableHead>
-                <TableHead className="w-[120px] text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+          <>
+            {/* Desktop: Table */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[100px]">Code</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead className="w-[80px]">Order</TableHead>
+                    <TableHead className="w-[100px]">Status</TableHead>
+                    <TableHead className="w-[120px] text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        <code className="bg-muted rounded px-2 py-1 text-xs">{item.code}</code>
+                      </TableCell>
+                      <TableCell className="font-medium">{item.name}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {item.description || "—"}
+                      </TableCell>
+                      <TableCell>{item.display_order}</TableCell>
+                      <TableCell>
+                        <Badge variant={item.is_active ? "default" : "secondary"}>
+                          {item.is_active ? "Active" : "Inactive"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(item)} aria-label="Chỉnh sửa">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(item.id)}
+                            disabled={deleteMutation.isPending}
+                            aria-label="Xóa"
+                          >
+                            <Trash2 className="text-destructive h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* Mobile: Cards */}
+            <div className="md:hidden space-y-2">
               {items.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>
-                    <code className="bg-muted rounded px-2 py-1 text-xs">{item.code}</code>
-                  </TableCell>
-                  <TableCell className="font-medium">{item.name}</TableCell>
-                  <TableCell className="text-muted-foreground text-sm">
-                    {item.description || "—"}
-                  </TableCell>
-                  <TableCell>{item.display_order}</TableCell>
-                  <TableCell>
-                    <Badge variant={item.is_active ? "default" : "secondary"}>
-                      {item.is_active ? "Active" : "Inactive"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(item)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(item.id)}
-                        disabled={deleteMutation.isPending}
-                      >
-                        <Trash2 className="text-destructive h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <MobileConfigCard
+                  key={item.id}
+                  item={item}
+                  onEdit={handleOpenEdit}
+                  onDelete={handleDelete}
+                  isDeleting={deleteMutation.isPending}
+                />
               ))}
-            </TableBody>
-          </Table>
+            </div>
+          </>
         )}
       </CardContent>
 
@@ -343,6 +468,27 @@ function ConfigTable({ title, description, icon, endpoint, queryKey, initialData
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Delete</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this {title.toLowerCase()}?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleConfirmDelete}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
@@ -383,6 +529,10 @@ export function ConfigClient({ initialData }: ConfigClientProps) {
             <FileText className="h-4 w-4" />
             Document Types
           </TabsTrigger>
+          <TabsTrigger value="system-categories" className="gap-2">
+            <List className="h-4 w-4" />
+            System Categories
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="degree-levels">
@@ -416,6 +566,10 @@ export function ConfigClient({ initialData }: ConfigClientProps) {
             queryKey="document-types"
             initialData={initialData?.documentTypes}
           />
+        </TabsContent>
+
+        <TabsContent value="system-categories">
+          <SystemCategoryManager />
         </TabsContent>
       </Tabs>
     </PageContainer>

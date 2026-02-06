@@ -25,7 +25,8 @@ import { Combobox } from "@/components/ui/combobox";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Search, Shield, Info } from "lucide-react";
-import { api } from "@/lib/api/client";
+// api and policiesApi removed
+import { usePermissionLookup, type LookupResult } from "@/hooks/policies/usePermissionTools";
 import { usePolicySuggestions } from "@/hooks/usePolicySuggestions";
 import { toast } from "sonner";
 
@@ -36,16 +37,11 @@ const lookupSchema = z.object({
 
 type LookupFormValues = z.infer<typeof lookupSchema>;
 
-interface LookupResult {
-  object: string;
-  action: string;
-  allowed_subjects: string[];
-  total_count: number;
-}
+// LookupResult imported from policies.ts
 
 export function PermissionLookupTab() {
   const [result, setResult] = useState<LookupResult | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const { mutate: lookup, isPending: isLoading } = usePermissionLookup();
   const { data: suggestions } = usePolicySuggestions();
 
   const form = useForm<LookupFormValues>({
@@ -56,27 +52,16 @@ export function PermissionLookupTab() {
     },
   });
 
-  const onSubmit = async (values: LookupFormValues) => {
-    setIsLoading(true);
-    try {
-      const response = await api.get<LookupResult>(
-        "/api/admin/policies/who-can-access",
-        {
-          params: {
-            object: values.object,
-            action: values.action,
-          },
-        }
-      );
-
-      setResult(response.data);
-      toast.success("Permission lookup completed");
-    } catch (error: unknown) {
-      toast.error("Failed to perform lookup");
-      console.error(error);
-    } finally {
-      setIsLoading(false);
-    }
+  const onSubmit = (values: LookupFormValues) => {
+    lookup(values, {
+      onSuccess: (data) => {
+        setResult(data);
+        toast.success("Permission lookup completed");
+      },
+      onError: () => {
+        toast.error("Failed to perform lookup");
+      },
+    });
   };
 
   const getRoleBadgeVariant = (subject: string): "default" | "secondary" | "outline" => {
@@ -152,7 +137,7 @@ export function PermissionLookupTab() {
 
             <Button type="submit" disabled={isLoading}>
               <Search className="mr-2 h-4 w-4" />
-              {isLoading ? "Searching..." : "Find Who Can Access"}
+              {isLoading ? "Searching…" : "Find Who Can Access"}
             </Button>
           </form>
         </Form>

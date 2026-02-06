@@ -8,7 +8,8 @@
 
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+// useQuery removed
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,27 +21,13 @@ import {
   User,
   Calendar
 } from "lucide-react";
-import { api } from "@/lib/api/client";
+import { useOfficerSchedule, type ScheduleActivity } from "@/hooks/officer/useOfficerSchedule";
 
 // =============================================================================
 // TYPES
 // =============================================================================
 
-interface ScheduleActivity {
-  id: number;
-  lead_id: number;
-  lead_name: string;
-  time: string;
-  date: string;
-  day: number;
-}
-
-interface UpcomingActivitiesResponse {
-  activities: ScheduleActivity[];
-  dates_with_activities: number[];
-  month: number;
-  year: number;
-}
+// Types are now imported from officer.ts
 
 interface TodayScheduleProps {
   className?: string;
@@ -139,22 +126,24 @@ function MiniCalendar({
     <div className="space-y-2">
       {/* Month Navigation */}
       <div className="flex items-center justify-between">
-        <Button 
-          variant="ghost" 
-          size="icon" 
+        <Button
+          variant="ghost"
+          size="icon"
           className="h-6 w-6"
           onClick={goToPrevMonth}
+          aria-label="Tháng trước"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
         <span className="text-sm font-medium">
           {viewDate.toLocaleDateString("vi-VN", { month: "long", year: "numeric" })}
         </span>
-        <Button 
-          variant="ghost" 
-          size="icon" 
+        <Button
+          variant="ghost"
+          size="icon"
           className="h-6 w-6"
           onClick={goToNextMonth}
+          aria-label="Tháng sau"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
@@ -178,7 +167,7 @@ function MiniCalendar({
             onClick={() => day !== null && onDateSelect(new Date(year, month, day))}
             className={cn(
               "relative h-7 w-7 text-xs rounded-full transition-colors disabled:invisible",
-              "hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20",
+              "hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
               // Fix: Safe null checks instead of non-null assertions
               day !== null && isToday(day) && !isSelected(day) && "bg-primary/10 text-primary font-semibold",
               day !== null && isSelected(day) && "bg-primary text-primary-foreground font-semibold",
@@ -188,7 +177,7 @@ function MiniCalendar({
             {day}
             {/* Red dot indicator for days with activities */}
             {day !== null && hasActivity(day) && (
-              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-red-500 rounded-full" />
+              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-error-500 rounded-full" />
             )}
           </button>
         ))}
@@ -207,19 +196,7 @@ export function TodaySchedule({ className }: TodayScheduleProps) {
   const [viewDate, setViewDate] = useState(new Date());
   
   // Fetch upcoming activities for current view month
-  const { data, isLoading } = useQuery<UpcomingActivitiesResponse>({
-    queryKey: ["officer", "upcoming-activities", viewDate.getMonth() + 1, viewDate.getFullYear()],
-    queryFn: async () => {
-      const response = await api.get("/api/officer/upcoming-activities", {
-        params: {
-          month: viewDate.getMonth() + 1, // JS months are 0-indexed
-          year: viewDate.getFullYear(),
-        }
-      });
-      return response.data;
-    },
-    staleTime: 1000 * 60 * 5, // 5 minutes
-  });
+  const { data, isLoading } = useOfficerSchedule(viewDate.getMonth() + 1, viewDate.getFullYear());
   
   // Filter activities for selected date
   // Fix: Compare date strings directly to avoid timezone shift issues
@@ -259,7 +236,7 @@ export function TodaySchedule({ className }: TodayScheduleProps) {
           <CardTitle className="text-sm font-medium">
             Lịch hẹn
           </CardTitle>
-          <Button variant="ghost" size="icon" className="h-6 w-6">
+          <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Tùy chọn">
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </div>

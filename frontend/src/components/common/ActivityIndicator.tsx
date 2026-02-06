@@ -45,34 +45,34 @@ interface ActivityIndicatorProps {
 // CONSTANTS
 // =============================================================================
 
-const ACTIVITY_CONFIG: Record<ActivityLevel, { 
-  textColor: string; 
+const ACTIVITY_CONFIG: Record<ActivityLevel, {
+  textColor: string;
   dotColor: string;
   label: string;
 }> = {
   hot: {
-    textColor: "text-red-600 dark:text-red-400",
-    dotColor: "bg-red-500",
+    textColor: "text-error-600 dark:text-error-500",
+    dotColor: "bg-error-500",
     label: "Nóng",
   },
   active: {
-    textColor: "text-green-600 dark:text-green-400",
-    dotColor: "bg-green-500",
+    textColor: "text-success-600 dark:text-success-500",
+    dotColor: "bg-success-500",
     label: "Hoạt động",
   },
   warm: {
-    textColor: "text-blue-600 dark:text-blue-400",
-    dotColor: "bg-blue-500",
+    textColor: "text-info-600 dark:text-info-500",
+    dotColor: "bg-info-500",
     label: "Ấm",
   },
   cold: {
-    textColor: "text-yellow-600 dark:text-yellow-400",
-    dotColor: "bg-yellow-500",
+    textColor: "text-warning-600 dark:text-warning-500",
+    dotColor: "bg-warning-500",
     label: "Lạnh",
   },
   frozen: {
     textColor: "text-muted-foreground",
-    dotColor: "bg-gray-400",
+    dotColor: "bg-muted-foreground/50",
     label: "Đóng băng",
   },
 };
@@ -197,9 +197,9 @@ export function ActivityIndicator({
           {followUpInfo && (
             <div className={cn(
               "pt-1 border-t mt-1",
-              followUpInfo.isPastDue ? "text-red-500" : 
-              followUpInfo.isDueToday ? "text-orange-500" : 
-              "text-blue-500"
+              followUpInfo.isPastDue ? "text-error-500" :
+              followUpInfo.isDueToday ? "text-warning-500" :
+              "text-info-500"
             )}>
               📅 {followUpInfo.status}: {followUpInfo.exactDate}
             </div>

@@ -161,9 +161,9 @@ export function SecurityBanner() {
   }
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-amber-950 px-4 py-2.5 flex items-center justify-between gap-4 shadow-md">
+    <div className="fixed top-0 left-0 right-0 z-50 bg-warning-500 text-warning-950 px-4 py-2.5 flex items-center justify-between gap-4 shadow-md">
       <div className="flex items-center gap-3">
-        <Shield className="h-5 w-5 flex-shrink-0" />
+        <Shield aria-hidden="true" className="h-5 w-5 flex-shrink-0" />
         <span className="text-sm font-medium">
           Vì lý do bảo mật, bạn nên đổi mật khẩu ngay bây giờ.
         </span>
@@ -172,7 +172,7 @@ export function SecurityBanner() {
         <Button
           size="sm"
           variant="secondary"
-          className="bg-amber-600 hover:bg-amber-700 text-white border-0 h-7 text-xs"
+          className="bg-warning-600 hover:bg-warning-700 text-white border-0 h-7 text-xs"
           onClick={handleChangeNow}
         >
           Đổi ngay
@@ -180,7 +180,7 @@ export function SecurityBanner() {
         <Button
           size="sm"
           variant="ghost"
-          className="text-amber-950 hover:bg-amber-400/50 h-7 text-xs"
+          className="text-warning-950 hover:bg-warning-400/50 h-7 text-xs"
           onClick={handleRemindLater}
         >
           Nhắc sau
@@ -188,7 +188,7 @@ export function SecurityBanner() {
         <Button
           size="icon"
           variant="ghost"
-          className="text-amber-950 hover:bg-amber-400/50 h-7 w-7"
+          className="text-warning-950 hover:bg-warning-400/50 h-7 w-7"
           onClick={handleRemindLater}
           aria-label="Đóng"
         >

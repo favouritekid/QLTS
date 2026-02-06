@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl bash -c \"cd /mnt/d/QLTS/Backend_FastAPI && wc -l app/core/deps.py\")",
+      "Bash(wsl bash:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run lint)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls:*)",
+      "Bash(python3:*)",
+      "Bash(awk:*)",
+      "Bash(tail:*)",
+      "Bash(alembic revision:*)",
+      "Bash(wslpath:*)",
+      "Bash(sort:*)",
+      "Bash(xargs file:*)",
+      "WebSearch",
+      "Bash(DEBUG=*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(cd:*)",
+      "Bash(node scripts/scan-ui-violations.js:*)",
+      "Bash(node:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npx playwright test:*)",
+      "Bash(npx eslint:*)",
+      "Bash(git diff:*)",
+      "Bash(npm run lint:fix:*)",
+      "Bash(findstr:*)",
+      "Bash(npm run test:*)",
+      "Bash(git -C \"D:/QLTS\" status --short)",
+      "Bash(cat:*)",
+      "Bash(pushd:*)",
+      "Bash(source:*)",
+      "Bash(git status:*)"
+    ]
+  }
+}

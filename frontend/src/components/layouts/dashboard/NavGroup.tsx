@@ -61,7 +61,7 @@ export function NavGroup({ links, isCollapsed, title }: NavGroupProps) {
                 "text-muted-foreground hover:text-foreground flex items-center justify-between",
                 "mt-3 mb-1 px-4 py-1.5 rounded-md transition-colors",
                 "hover:bg-muted/50 group w-full text-left",
-                "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               )}
               aria-expanded={!groupCollapsed}
               aria-label={`Toggle ${title} group`}

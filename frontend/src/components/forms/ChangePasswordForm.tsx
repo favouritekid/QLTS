@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
-import { getActiveSessions } from "@/lib/api/sessions";
+import { getActiveSessions } from "@/lib/api/sessions"; // architecture-allow legacy
 import type { ChangePasswordSchema } from "@/types/api.types";
 
 // Schema validation
@@ -122,14 +122,14 @@ export function ChangePasswordForm() {
 
   return (
     <div className="w-full max-w-xl space-y-4">
-      <h2 className="text-xl font-semibold">Đổi Mật Khẩu</h2>
+      <h2 className="text-xl font-semibold font-display">Đổi Mật Khẩu</h2>
 
       {/* C2 SECURITY FIX: Forced password change warning */}
       {isForced && (
-        <Alert className="border-red-500 bg-red-50">
-          <ShieldAlert className="h-5 w-5 text-red-600" />
-          <AlertTitle className="text-red-800">Yêu cầu Đổi Mật Khẩu</AlertTitle>
-          <AlertDescription className="text-red-700">
+        <Alert className="border-error-500 bg-error-50">
+          <ShieldAlert className="h-5 w-5 text-error-600" />
+          <AlertTitle className="text-error-800">Yêu cầu Đổi Mật Khẩu</AlertTitle>
+          <AlertDescription className="text-error-700">
             <p>
               Tài khoản của bạn đã được đánh dấu cần <strong>đổi mật khẩu ngay lập tức</strong>.
               Điều này có thể do bạn đã báo cáo một đăng nhập đáng ngờ.
@@ -181,6 +181,7 @@ export function ChangePasswordForm() {
                   <Input
                     type="password"
                     placeholder="••••••••"
+                    autoComplete="current-password"
                     disabled={isChangingPassword}
                     {...field}
                   />
@@ -199,6 +200,7 @@ export function ChangePasswordForm() {
                   <Input
                     type="password"
                     placeholder="••••••••"
+                    autoComplete="new-password"
                     disabled={isChangingPassword}
                     {...field}
                   />
@@ -219,6 +221,7 @@ export function ChangePasswordForm() {
                   <Input
                     type="password"
                     placeholder="••••••••"
+                    autoComplete="new-password"
                     disabled={isChangingPassword}
                     {...field}
                   />
@@ -228,7 +231,7 @@ export function ChangePasswordForm() {
             )}
           />
           <Button type="submit" disabled={isChangingPassword} className="mt-4">
-            {isChangingPassword ? "Đang đổi..." : "Đổi Mật Khẩu"}
+            {isChangingPassword ? "Đang đổi…" : "Đổi Mật Khẩu"}
           </Button>
         </form>
       </Form>
@@ -253,7 +256,7 @@ export function ChangePasswordForm() {
               disabled={isChangingPassword}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isChangingPassword ? "Đang đổi..." : "Có, Đổi Mật Khẩu"}
+              {isChangingPassword ? "Đang đổi…" : "Có, Đổi Mật Khẩu"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

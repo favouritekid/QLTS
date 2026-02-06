@@ -12,6 +12,7 @@ Benefits:
 - Separates SQL from business logic
 """
 
+import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -72,7 +73,8 @@ class LeadRepository(BaseRepository[models.Lead]):
             .options(
                 # Direct 1-1 relationships
                 selectinload(models.Lead.offering).options(
-                    selectinload(models.ProgramOffering.program)
+                    selectinload(models.ProgramOffering.program),
+                    selectinload(models.ProgramOffering.academic_info_history),
                 ),
                 selectinload(models.Lead.unit).options(
                     selectinload(models.OrganizationUnit.parent),
@@ -85,8 +87,15 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.application).options(
                     selectinload(models.Application.officer)
                 ),
+                # NEW: AdmissionProfile for admission module
+                selectinload(models.Lead.admission_profile),
                 # Collection relationships for timeline/insights
-                selectinload(models.Lead.consultations).options(
+                # ✅ FIX: Filter out soft-deleted consultations
+                selectinload(
+                    models.Lead.consultations.and_(
+                        models.Consultation.deleted_at.is_(None)
+                    )
+                ).options(
                     joinedload(models.Consultation.officer),
                     joinedload(models.Consultation.consultation_status).joinedload(models.ConsultationStatus.stage),
                 ),
@@ -131,7 +140,8 @@ class LeadRepository(BaseRepository[models.Lead]):
             select(self.model)
             .options(
                 selectinload(models.Lead.offering).options(
-                    selectinload(models.ProgramOffering.program)
+                    selectinload(models.ProgramOffering.program),
+                    selectinload(models.ProgramOffering.academic_info_history),
                 ),
                 selectinload(models.Lead.unit),
                 selectinload(models.Lead.assigned_officer),
@@ -140,6 +150,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.application).options(
                     selectinload(models.Application.officer)
                 ),
+                # NEW: AdmissionProfile for admission module
+                selectinload(models.Lead.admission_profile),
             )
             .where(self.model.id == lead_id)
         )
@@ -238,8 +250,12 @@ class LeadRepository(BaseRepository[models.Lead]):
                 filters.append(models.Lead.source.in_(sources))
 
         # Apply search
+        # ✅ FIX: Normalize Unicode to NFC format for Vietnamese diacritics
+        # Windows/browsers may send NFD (decomposed) but DB stores NFC (composed)
+        # Example: "Hùng" NFD = "Hu" + combining accent vs NFC = single char "ù"
         if search:
-            search_term = f"%{search.strip()}%"
+            normalized_search = unicodedata.normalize('NFC', search.strip())
+            search_term = f"%{normalized_search}%"
             search_conditions = or_(
                 models.Lead.full_name.ilike(search_term),
                 models.Lead.email.ilike(search_term),
@@ -316,7 +332,8 @@ class LeadRepository(BaseRepository[models.Lead]):
         leads_query = (
             leads_query.options(
                 selectinload(models.Lead.offering).options(
-                    selectinload(models.ProgramOffering.program)
+                    selectinload(models.ProgramOffering.program),
+                    selectinload(models.ProgramOffering.academic_info_history),
                 ),
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.unit),
@@ -324,6 +341,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.pipeline_stage),
                 # ✅ FIX: Add missing eager load for application to prevent MissingGreenlet error
                 selectinload(models.Lead.application),
+                # NEW: AdmissionProfile for admission module
+                selectinload(models.Lead.admission_profile),
             )
             .offset(skip)
             .limit(limit)
@@ -408,6 +427,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                     models.Consultation.lead_id == lead_id,
                     models.Consultation.scheduled_at.isnot(None),
                     models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
+                    models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
                 )
             )
         )
@@ -534,26 +554,44 @@ class LeadRepository(BaseRepository[models.Lead]):
             Dict with: last_consultation_at, consultation_count, 
                        pending_next_activity (earliest pending task)
         """
-        # Query 1: Get consultation stats
+        # Query 1: Get consultation stats (exclude soft-deleted)
         stats_query = select(
             func.max(models.Consultation.consultation_date).label("last_consultation_at"),
             func.count(models.Consultation.id).label("consultation_count"),
-        ).where(models.Consultation.lead_id == lead_id)
-        
-        stats_result = await self.db.execute(stats_query)
-        stats = stats_result.one()
-        
-        # Query 2: Get earliest pending activity (not completed)
-        PENDING_STATUS_IDS = ["sts01", "sts03"]  # Lên lịch, Cần theo dõi
-        
-        pending_query = select(
-            func.min(models.Consultation.scheduled_at)
         ).where(
             models.Consultation.lead_id == lead_id,
-            models.Consultation.scheduled_at.isnot(None),
-            models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
         )
-        
+
+        stats_result = await self.db.execute(stats_query)
+        stats = stats_result.one()
+
+        # Query 2: Get scheduled_at from the LATEST consultation only
+        # ✅ FIX: Return scheduled_at regardless of past/future
+        # If there's a newer consultation without scheduled_at, it means the follow-up was done
+        # LeadCacheService will determine if it's overdue (past) or pending (future)
+
+        # Subquery: Get the latest consultation for this lead
+        latest_consult_subq = (
+            select(models.Consultation.id)
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None),
+            )
+            .order_by(models.Consultation.consultation_date.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        # Get scheduled_at from the latest consultation (if it exists)
+        # Don't filter by time - let LeadCacheService handle past/future logic
+        pending_query = select(
+            models.Consultation.scheduled_at
+        ).where(
+            models.Consultation.id == latest_consult_subq,
+            models.Consultation.scheduled_at.isnot(None),
+        )
+
         pending_result = await self.db.execute(pending_query)
         pending_next_activity = pending_result.scalar_one_or_none()
         
@@ -893,16 +931,19 @@ class LeadRepository(BaseRepository[models.Lead]):
     ) -> Optional[models.Consultation]:
         """
         Get the most recent consultation for a lead.
-        
+
         Args:
             lead_id: Lead ID
-            
+
         Returns:
-            Most recent Consultation or None
+            Most recent Consultation or None (excludes soft-deleted)
         """
         query = (
             select(models.Consultation)
-            .where(models.Consultation.lead_id == lead_id)
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+            )
             .order_by(
                 models.Consultation.consultation_date.desc(),
                 models.Consultation.id.desc(),
@@ -919,17 +960,20 @@ class LeadRepository(BaseRepository[models.Lead]):
     ) -> List[models.Consultation]:
         """
         Get recent consultations for a lead.
-        
+
         Args:
             lead_id: Lead ID
             limit: Number of records to return
-            
+
         Returns:
-            List of Consultation objects
+            List of Consultation objects (excludes soft-deleted)
         """
         query = (
             select(models.Consultation)
-            .where(models.Consultation.lead_id == lead_id)
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+            )
             .order_by(
                 models.Consultation.consultation_date.desc(),
                 models.Consultation.id.desc(),

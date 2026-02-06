@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .. import database, models, schemas
 from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
@@ -44,19 +45,50 @@ async def get_full_pipeline(
 async def get_allowed_next_statuses(
     request: Request,
     current_status_id: str | None = None,
+    lead_id: int | None = None,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
-    Lấy danh sách các trạng thái được phép chuyển đến từ trạng thái hiện tại.
+    Get allowed next statuses using Phase-Based FSM Engine (Spec v3.0 compliant).
 
-    Sử dụng state machine workflow để xác định các trạng thái hợp lệ tiếp theo.
-    Nếu current_status_id không được cung cấp, trả về tất cả statuses (dành cho lead mới).
+    Uses FSM engine with:
+    - 7-step validation logic
+    - Phase guards (user/role cannot cross phases)
+    - Trigger type enforcement (hide system statuses)
+    - NULL status rule (new lead → only NOT_CONTACTED)
 
     **Query Parameters:**
-    - current_status_id (optional): ID của consultation status hiện tại
+    - current_status_id (optional): Current consultation status ID
+    - lead_id (optional): Lead ID to derive phase from admission_profile
 
     **Returns:**
-    - Danh sách ConsultationStatus được phép chuyển đến
+    - List of allowed ConsultationStatus objects
+
+    **Architecture:**
+    - Dumb Router: Just coordinates FSM engine + returns result
+    - Smart FSM Engine: Contains all business logic
     """
-    return await pipeline_service.get_allowed_next_statuses(db, current_status_id)
+    from ..services.fsm_engine import get_next_statuses_for_lead
+    from ..services.phase_manager import derive_phase_from_admission
+
+    # Derive lead phase
+    lead_phase = "consultation"  # Default phase for new/consultation leads
+
+    if lead_id:
+        # Get lead to derive phase
+        lead = await db.get(
+            models.Lead,
+            lead_id,
+            options=[selectinload(models.Lead.admission_profile)]
+        )
+        if lead and lead.admission_profile:
+            lead_phase = derive_phase_from_admission(lead.admission_profile).value
+
+    # ✅ USE NEW FSM ENGINE (Spec v3.0 compliant)
+    return await get_next_statuses_for_lead(
+        db=db,
+        current_status_id=current_status_id,
+        lead_phase=lead_phase,
+        user_role=current_user.role
+    )

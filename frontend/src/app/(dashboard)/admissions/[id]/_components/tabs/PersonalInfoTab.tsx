@@ -1,19 +1,21 @@
 "use client"
 
-import { UseFormReturn, FieldValues } from "react-hook-form"
+import { UseFormReturn, useWatch } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Combobox } from "@/components/ui/combobox"
 import { Separator } from "@/components/ui/separator"
-import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
+import type { AdmissionProfileResponse, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
 import { format } from "date-fns" // Optional if needed for display, but input date handles ISO
 
 interface PersonalInfoTabProps {
   profile: AdmissionProfileResponse
-  form: UseFormReturn<FieldValues>
+  form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
 }
 
@@ -23,6 +25,12 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const { data: religions } = useConfigData("religion")
   const { data: nationalities } = useConfigData("nationality")
   const { data: disabilities } = useConfigData("disability_type")
+  const { data: provinces } = useConfigData("province")
+
+  // Watch address fields for reactivity (useWatch triggers re-render on change)
+  const permanentProvince = useWatch({ control: form.control, name: "permanent_province" }) || ""
+  const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
+  const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
 
   return (
     <div className="space-y-6">
@@ -84,7 +92,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                   <Input 
                     type="date" 
                     {...field}
-                    value={field.value ? new Date(field.value).toISOString().split('T')[0] : ""}
+                    value={field.value ? format(new Date(field.value), 'yyyy-MM-dd') : ""}
                     onChange={(e) => field.onChange(e.target.value)} 
                     disabled={!isEditable} 
                   />
@@ -132,7 +140,15 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem>
                 <FormLabel>Nơi sinh</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Tỉnh/Thành phố nơi sinh" />
+                  <Combobox
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    suggestions={provinces?.map(p => p.name) || []}
+                    placeholder="Chọn tỉnh/thành phố"
+                    searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
+                    emptyText="Không tìm thấy"
+                    disabled={!isEditable}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -147,7 +163,15 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem>
                 <FormLabel>Quê quán</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Quê quán" />
+                  <Combobox
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    suggestions={provinces?.map(p => p.name) || []}
+                    placeholder="Chọn tỉnh/thành phố"
+                    searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
+                    emptyText="Không tìm thấy"
+                    disabled={!isEditable}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -189,47 +213,16 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               )}
             />
             
-            <div className="col-span-2">
-              <Label className="mb-2 block">Hộ khẩu thường trú</Label>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormField
-                  control={form.control}
-                  name="permanent_province"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Tỉnh/Thành phố" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                 <FormField
-                  control={form.control}
-                  name="permanent_district"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Quận/Huyện" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                 <FormField
-                  control={form.control}
-                  name="permanent_ward"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Phường/Xã" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            </div>
+            <AdaptiveAddressSelect
+              label="Hộ khẩu thường trú"
+              provinceValue={permanentProvince}
+              districtValue={permanentDistrict}
+              wardValue={permanentWard}
+              onProvinceChange={(value) => form.setValue("permanent_province", value)}
+              onDistrictChange={(value) => form.setValue("permanent_district", value || "")}
+              onWardChange={(value) => form.setValue("permanent_ward", value)}
+              disabled={!isEditable}
+            />
         </CardContent>
       </Card>
 
@@ -246,19 +239,17 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Quốc tịch</FormLabel>
-                <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Chọn quốc tịch" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {nationalities?.map(item => (
-                        <SelectItem key={item.id} value={item.code}>{item.name}</SelectItem>
-                    ))}
-                    {!nationalities?.length && <SelectItem value="VN" disabled>Đang tải...</SelectItem>}
-                  </SelectContent>
-                </Select>
+                <FormControl>
+                  <Combobox
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    options={nationalities?.map(n => ({ value: n.code, label: n.name })) || []}
+                    placeholder="Chọn quốc tịch"
+                    searchPlaceholder="Tìm kiếm quốc tịch..."
+                    emptyText="Không tìm thấy"
+                    disabled={!isEditable}
+                  />
+                </FormControl>
                 <FormMessage />
               </FormItem>
             )}
@@ -271,18 +262,17 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Dân tộc</FormLabel>
-                <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Chọn dân tộc" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {ethnicities?.map(item => (
-                        <SelectItem key={item.id} value={item.code}>{item.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <FormControl>
+                  <Combobox
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    options={ethnicities?.map(e => ({ value: e.code, label: e.name })) || []}
+                    placeholder="Chọn dân tộc"
+                    searchPlaceholder="Tìm kiếm dân tộc..."
+                    emptyText="Không tìm thấy"
+                    disabled={!isEditable}
+                  />
+                </FormControl>
                 <FormMessage />
               </FormItem>
             )}
@@ -295,18 +285,17 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Tôn giáo</FormLabel>
-                <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Chọn tôn giáo" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                     {religions?.map(item => (
-                        <SelectItem key={item.id} value={item.code}>{item.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <FormControl>
+                  <Combobox
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    options={religions?.map(r => ({ value: r.code, label: r.name })) || []}
+                    placeholder="Chọn tôn giáo"
+                    searchPlaceholder="Tìm kiếm tôn giáo..."
+                    emptyText="Không tìm thấy"
+                    disabled={!isEditable}
+                  />
+                </FormControl>
                 <FormMessage />
               </FormItem>
             )}
@@ -319,23 +308,17 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Loại khuyết tật (nếu có)</FormLabel>
-                <Select 
-                  onValueChange={(val) => field.onChange(val === "no_disability" ? "" : val)} 
-                  value={field.value || "no_disability"} 
-                  disabled={!isEditable}
-                >
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Không / Chọn loại" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    <SelectItem value="no_disability">Không</SelectItem>
-                     {disabilities?.map(item => (
-                        <SelectItem key={item.id} value={item.code}>{item.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <FormControl>
+                  <Combobox
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    options={disabilities?.map(d => ({ value: d.code, label: d.name })) || []}
+                    placeholder="Chọn loại khuyết tật"
+                    searchPlaceholder="Tìm kiếm..."
+                    emptyText="Không tìm thấy"
+                    disabled={!isEditable}
+                  />
+                </FormControl>
                 <FormMessage />
               </FormItem>
             )}
@@ -359,7 +342,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                   <Input 
                     type="date" 
                     {...field} 
-                    value={field.value ? new Date(field.value).toISOString().split('T')[0] : ""}
+                    value={field.value ? format(new Date(field.value), 'yyyy-MM-dd') : ""}
                     onChange={(e) => field.onChange(e.target.value)} 
                     disabled={!isEditable} 
                   />
@@ -378,7 +361,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                   <Input 
                     type="date" 
                     {...field} 
-                    value={field.value ? new Date(field.value).toISOString().split('T')[0] : ""}
+                    value={field.value ? format(new Date(field.value), 'yyyy-MM-dd') : ""}
                     onChange={(e) => field.onChange(e.target.value)} 
                     disabled={!isEditable} 
                   />
@@ -397,7 +380,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                   <Input 
                     type="date" 
                     {...field} 
-                    value={field.value ? new Date(field.value).toISOString().split('T')[0] : ""}
+                    value={field.value ? format(new Date(field.value), 'yyyy-MM-dd') : ""}
                     onChange={(e) => field.onChange(e.target.value)} 
                     disabled={!isEditable} 
                   />

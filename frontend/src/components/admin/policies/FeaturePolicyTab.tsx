@@ -1,8 +1,8 @@
 // src/components/admin/policies/FeaturePolicyTab.tsx
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+// useQueryClient removed
 import {
   Card,
   CardContent,
@@ -24,22 +24,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Info, CheckCircle2 } from "lucide-react";
-import { api } from "@/lib/api/client";
-import { toast } from "sonner";
-import { policyKeys } from "@/hooks/usePolicies";
-import { activityLogsKeys } from "@/hooks/useActivityLogs";
+import { useRoleFeatures, useToggleFeature } from "@/hooks/policies/usePolicyFeatures";
+// toast removed
+// policyKeys and activityLogsKeys removed as they are handled by hooks now
 
-interface FeatureStatus {
-  feature_id: string;
-  display_name: string;
-  enabled: boolean;
-  policy_count: number;
-}
-
-interface RoleFeaturesResponse {
-  role: string;
-  features: FeatureStatus[];
-}
+// Interfaces imported from policies.ts
 
 const AVAILABLE_ROLES = [
   { value: "role:admin", label: "Administrator" },
@@ -58,84 +47,30 @@ interface FeaturePolicyTabProps {
 }
 
 export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabProps = {}) {
-  const queryClient = useQueryClient();
+  // queryClient removed
   const [selectedRole, setSelectedRole] = useState<string>("role:manager");
-  const [features, setFeatures] = useState<FeatureStatus[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [togglingFeature, setTogglingFeature] = useState<string | null>(null);
 
   // Use prop if provided, otherwise use internal state
   const effectiveRole = propRoleName || selectedRole;
 
-  const fetchRoleFeatures = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const response = await api.get<RoleFeaturesResponse>(
-        `/api/admin/roles/${effectiveRole}/features`
-      );
-      setFeatures(response.data.features);
-    } catch (error: unknown) {
-      toast.error("Failed to load features");
-      console.error(error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [effectiveRole]);
+  const { data, isLoading, refetch } = useRoleFeatures(effectiveRole);
+  const features = data?.features || [];
 
-  // Fetch features when role changes
-  useEffect(() => {
-    if (effectiveRole) {
-      fetchRoleFeatures();
-    }
-  }, [effectiveRole, fetchRoleFeatures]);
+  const toggleMutation = useToggleFeature();
 
   const toggleFeature = async (featureId: string, enabled: boolean) => {
     setTogglingFeature(featureId);
-    try {
-      await api.post(`/api/admin/roles/${effectiveRole}/features/toggle`, {
-        feature_id: featureId,
-        enabled,
-      });
-
-      // Update local state
-      setFeatures((prev) =>
-        prev.map((f) =>
-          f.feature_id === featureId ? { ...f, enabled } : f
-        )
-      );
-
-      // Invalidate all policy-related queries to refresh data across all components
-      await queryClient.invalidateQueries({ queryKey: policyKeys.all });
-
-      // Invalidate role-specific explain query
-      await queryClient.invalidateQueries({
-        queryKey: ["admin", "roles", effectiveRole, "explain"]
-      });
-
-      // Invalidate policy suggestions for autocomplete
-      await queryClient.invalidateQueries({
-        queryKey: ["admin", "policies", "suggestions"]
-      });
-
-      // Invalidate activity logs to show new activity
-      await queryClient.invalidateQueries({
-        queryKey: activityLogsKeys.all
-      });
-
-      toast.success(
-        enabled
-          ? "Feature enabled successfully"
-          : "Feature disabled successfully"
-      );
-    } catch (error: unknown) {
-      toast.error("Failed to toggle feature");
-      console.error(error);
-      // Revert the change on error by refetching
-      await fetchRoleFeatures();
-    } finally {
-      setTogglingFeature(null);
-    }
+    toggleMutation.mutate(
+      { role: effectiveRole, featureId, enabled },
+      {
+        onSettled: () => setTogglingFeature(null),
+      }
+    );
   };
+
+  // Function to manually refetch role features removed
+
 
   return (
     <Card>
@@ -203,7 +138,7 @@ export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabPro
                       {feature.display_name}
                     </Label>
                     {feature.enabled && (
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
+                      <CheckCircle2 className="h-4 w-4 text-success-600" />
                     )}
                   </div>
                   <p className="text-sm text-muted-foreground">
@@ -238,7 +173,7 @@ export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabPro
             <Button
               variant="ghost"
               size="sm"
-              onClick={fetchRoleFeatures}
+              onClick={() => refetch()}
               disabled={isLoading}
             >
               Refresh

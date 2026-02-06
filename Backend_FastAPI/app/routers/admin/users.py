@@ -52,7 +52,9 @@ from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
 from app.services import activity_service, lead_service, user_service
 from app.tasks import process_automatic_lead_assignment_task
+from app.core.constants import UserRole
 from app.utils.exceptions import (
+    BusinessRuleViolation,
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
@@ -133,6 +135,23 @@ async def create_new_user(
         role=role,
         status=status,
     )
+
+    # ✅ SECURITY: Prevent privilege escalation - users can only create roles below their own
+    _role_hierarchy = {
+        UserRole.ADMIN: 4,
+        UserRole.MANAGER: 3,
+        UserRole.ACCOUNTANT: 2,
+        UserRole.OFFICER: 1,
+        UserRole.USER: 0,
+    }
+    creator_level = _role_hierarchy.get(current_admin.role, -1)
+    target_level = _role_hierarchy.get(user_in.role, -1)
+    if target_level < 0:
+        raise BusinessRuleViolation(detail=f"Invalid role: {user_in.role}")
+    if target_level >= creator_level:
+        raise BusinessRuleViolation(
+            detail="Cannot create a user with equal or higher role than your own"
+        )
 
     if await user_service.get_user_by_username(db, user_in.username):
         raise DuplicateResourceError(detail="Username already exists")

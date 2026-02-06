@@ -212,7 +212,7 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Tên đơn vị <span className="text-red-500">*</span>
+                    Tên đơn vị <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input
@@ -233,7 +233,7 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Loại đơn vị <span className="text-red-500">*</span>
+                    Loại đơn vị <span className="text-error-500">*</span>
                   </FormLabel>
                   <Select
                     onValueChange={field.onChange}
@@ -248,7 +248,7 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
                     <SelectContent>
                       {typesLoading ? (
                         <SelectItem value="loading" disabled>
-                          Đang tải...
+                          Đang tải…
                         </SelectItem>
                       ) : unitTypes.length === 0 ? (
                         <SelectItem value="empty" disabled>

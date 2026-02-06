@@ -75,6 +75,16 @@ class AdmissionMethod(Base):
         cascade="all, delete-orphan",
         order_by="AdmissionCriteria.id"
     )
+    # NEW: Document groups that are method-specific
+    document_groups = relationship(
+        "DocumentGroup",
+        back_populates="admission_method"
+    )
+    # NEW: Admission paths using this method
+    admission_paths = relationship(
+        "AdmissionPath",
+        back_populates="admission_method"
+    )
 
     def __repr__(self):
         return f"<AdmissionMethod {self.code}: {self.name}>"

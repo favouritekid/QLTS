@@ -24,7 +24,7 @@ from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 
 # Admission models (NEW: Replacement for Application)
-from .admission import AdmissionProfile
+from .admission import AdmissionProfile, AdmissionConfirmationToken
 from .student import Student, StudentDocument
 
 # Admission Config Domain (Phase 1: Relational admission system)
@@ -40,6 +40,8 @@ from .admission_config import (
     DocumentGroupItem,
     ProfileSubjectScore,
     ProfileDocument,
+    DocumentAuditLog,  # Audit trail for document operations
+    AdmissionPath,  # Phase 1: Admission Configuration Console
 )
 
 # Notification models
@@ -71,6 +73,38 @@ from .user_activity import UserActivityLog
 from .user_session import UserSession
 from .login_history import LoginHistory  # Security: Login audit trail
 from .trusted_device import TrustedDevice  # Security: Trusted devices for login
+from .entity_audit_log import EntityAuditLog  # Generic audit trail for any entity
+
+# Administrative Geography (Temporal Versioning)
+from .administrative_node import AdministrativeNode, AdministrativeLevel
+
+# Finance Module (Phase 0+1: Foundation)
+from .finance import (
+    # Enums
+    FeeTypeEnum,
+    FeeStatusEnum,
+    InvoiceStatusEnum,
+    PaymentIntentStatusEnum,
+    GatewayStatusEnum,
+    PaymentStatusEnum,
+    TransactionTypeEnum,
+    RefundStatusEnum,
+    OverpaymentStatusEnum,
+    ResolutionTypeEnum,
+    # Models
+    InstallmentPlan,
+    PaymentMethod,
+    AccountingPeriod,
+    ProcessedEvent,
+    Fee,
+    FeeAppliedDiscount,
+    Invoice,
+    PaymentIntent,
+    Payment,
+    PaymentTransaction,
+    RefundRequest,
+    OverpaymentRecord,
+)
 
 # Import tất cả các model để chúng được đăng ký với Base
 # và để chúng có thể được truy cập qua package 'models' (vd: models.User)
@@ -98,8 +132,13 @@ __all__ = [
     "LeadStatusHistory",
     # Admission (NEW)
     "AdmissionProfile",
+    "AdmissionConfirmationToken",
     "Student",
     "StudentDocument",
+    "ProfileSubjectScore",
+    "ProfileDocument",
+    "DocumentAuditLog",  # Audit trail for document operations
+    "AdmissionPath",  # Phase 1: Admission Configuration Console
     # Notification
     "Notification",
     "NotificationRule",
@@ -129,4 +168,33 @@ __all__ = [
     "UserSession",
     "LoginHistory",
     "TrustedDevice",
+    "EntityAuditLog",
+    # Administrative Geography
+    "AdministrativeNode",
+    "AdministrativeLevel",
+    # Finance Module (Phase 0+1: Foundation)
+    # Enums
+    "FeeTypeEnum",
+    "FeeStatusEnum",
+    "InvoiceStatusEnum",
+    "PaymentIntentStatusEnum",
+    "GatewayStatusEnum",
+    "PaymentStatusEnum",
+    "TransactionTypeEnum",
+    "RefundStatusEnum",
+    "OverpaymentStatusEnum",
+    "ResolutionTypeEnum",
+    # Models
+    "InstallmentPlan",
+    "PaymentMethod",
+    "AccountingPeriod",
+    "ProcessedEvent",
+    "Fee",
+    "FeeAppliedDiscount",
+    "Invoice",
+    "PaymentIntent",
+    "Payment",
+    "PaymentTransaction",
+    "RefundRequest",
+    "OverpaymentRecord",
 ]

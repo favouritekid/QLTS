@@ -3,6 +3,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { RefreshCw, Filter, Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
 
-import { PipelineBoard } from "@/components/leads/PipelineBoard";
+// ✅ PERFORMANCE: Dynamic import for heavy @dnd-kit components (~50KB)
+// This defers loading until the component is actually rendered
+const PipelineBoard = dynamic(
+  () => import("@/components/leads/PipelineBoard").then((m) => m.PipelineBoard),
+  {
+    ssr: false, // @dnd-kit doesn't support SSR
+    loading: () => <Skeleton className="h-[400px] md:h-[600px] w-full rounded-lg" />,
+  }
+);
 import { useFullPipeline } from "@/hooks/usePipeline";
 import { useExportLeads } from "@/hooks/useLeads";
 import type { PipelineQueryParams, FullPipeline } from "@/types/pipeline.types";
@@ -44,13 +53,13 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
   if (isLoading) {
     return (
       <PageContainer>
-        <Skeleton className="h-10 w-64" />
-        <div className="grid gap-4 md:grid-cols-4">
+        <Skeleton className="h-10 w-48 sm:w-64" />
+        <div className="grid grid-cols-2 gap-3 md:gap-4 md:grid-cols-4">
           {[...Array(4)].map((_, i) => (
             <Skeleton key={i} className="h-24" />
           ))}
         </div>
-        <Skeleton className="h-[600px]" />
+        <Skeleton className="h-[400px] md:h-[600px]" />
       </PageContainer>
     );
   }
@@ -58,12 +67,12 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
   if (isError || !pipeline) {
     return (
       <PageContainer>
-        <Card className="border-red-200 bg-red-50">
+        <Card className="border-error-200 bg-error-50">
           <CardHeader>
-            <CardTitle className="text-red-900">Error Loading Pipeline</CardTitle>
+            <CardTitle className="text-error-900">Error Loading Pipeline</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-red-700 mb-4">
+            <p className="text-error-700 mb-4">
               {error?.message || "Failed to load pipeline data"}
             </p>
             <Button onClick={() => refetch()}>
@@ -234,7 +243,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
       )}
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Leads</CardTitle>

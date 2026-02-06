@@ -9,13 +9,13 @@ import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog";
 import {
   Form,
   FormControl,
@@ -132,24 +132,24 @@ export function AssignLeadDialog({
 
   // Filter users to get only officers/admins
   const officers = usersData?.users?.filter(
-    (user) => user.role === "officer" || user.role === "admin"
+    (user) => user.role === "officer" || user.role === "admin" // architecture-allow legacy
   ) || [];
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
-        <DialogHeader>
-          <DialogTitle>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="sm:max-w-[500px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
             {isBulk
               ? `Phân công ${leadIds?.length} Lead`
               : `Phân công Lead: ${lead?.full_name}`}
-          </DialogTitle>
-          <DialogDescription>
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             {isBulk
               ? `Phân công ${leadIds?.length} lead đã chọn cho tư vấn viên.`
               : "Phân công lead này cho tư vấn viên để theo dõi."}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -218,7 +218,7 @@ export function AssignLeadDialog({
               )}
             />
 
-            <DialogFooter>
+            <ResponsiveDialogFooter>
               <Button
                 type="button"
                 variant="outline"
@@ -231,10 +231,10 @@ export function AssignLeadDialog({
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isBulk ? `Phân công ${leadIds?.length} Lead` : "Phân công Lead"}
               </Button>
-            </DialogFooter>
+            </ResponsiveDialogFooter>
           </form>
         </Form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

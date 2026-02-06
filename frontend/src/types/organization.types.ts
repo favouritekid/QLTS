@@ -4,25 +4,9 @@
 // 3-TIER ARCHITECTURE TYPES (NEW)
 // =============================================================================
 
-/**
- * AdmissionCriterion - JSON Schema validation cho admission_criteria
- * Validation cho tiêu chí tuyển sinh trong OfferingAcademicInfo
- */
-export interface AdmissionCriterion {
-  id: string; // vd: "hocba_2025"
-  method_name: string; // Tên phương thức (vd: "Xét học bạ")
-  program_type: string; // Loại hình (vd: "Chính quy")
-  subject_groups?: string[] | null; // Khối thi (vd: ["A00", "D07"]) - DÙNG ĐỂ RENDER Ô NHẬP ĐIỂM
-  min_score?: number | null; // Điểm tối thiểu
-  conditions?: string | null; // Điều kiện bổ sung
-  profile_requirements?: string | null; // Yêu cầu hồ sơ
-
-  // ⬇️ TRƯỜNG MỚI - Danh sách hồ sơ bắt buộc
-  required_documents?: Array<{
-    code: string; // vd: "hoc_ba"
-    label: string; // vd: "Học bạ THPT (chứng thực)"
-  }> | null;
-}
+// NOTE: AdmissionCriterion interface REMOVED
+// Use AdmissionPath API with useAdmissionPathsForOffering hook instead
+// See: frontend/src/hooks/admissions/useAdmissionPaths.ts
 
 /**
  * TIER 3: OfferingAcademicInfo (Thông tin tuyển sinh theo năm)
@@ -36,7 +20,7 @@ export interface OfferingAcademicInfo {
   annual_admission_quota?: number | null; // Chỉ tiêu tuyển sinh
   is_published: boolean; // Trạng thái công khai
   is_deleted: boolean; // Soft delete flag - NEVER hard delete financial/historical data
-  admission_criteria?: AdmissionCriterion[] | null; // Tiêu chí tuyển sinh (JSON)
+  // NOTE: admission_criteria removed - use AdmissionPath API instead
   target_audience?: string | null; // Đối tượng tuyển sinh
   cutoff_score_previous_year?: number | null; // Điểm chuẩn năm trước
   applied_discount_policy_ids?: number[] | null; // Danh sách ID chính sách ưu đãi áp dụng
@@ -57,7 +41,7 @@ export interface OfferingAcademicInfoCreate {
   tuition_fee_per_year?: number | null;
   annual_admission_quota?: number | null;
   is_published?: boolean;
-  admission_criteria?: AdmissionCriterion[] | null;
+  // NOTE: admission_criteria removed - use AdmissionPath API instead
   target_audience?: string | null;
   cutoff_score_previous_year?: number | null;
   applied_discount_policy_ids?: number[] | null;
@@ -71,7 +55,7 @@ export interface OfferingAcademicInfoUpdate {
   tuition_fee_per_year?: number | null;
   annual_admission_quota?: number | null;
   is_published?: boolean;
-  admission_criteria?: AdmissionCriterion[] | null;
+  // NOTE: admission_criteria removed - use AdmissionPath API instead
   target_audience?: string | null;
   cutoff_score_previous_year?: number | null;
   applied_discount_policy_ids?: number[] | null;

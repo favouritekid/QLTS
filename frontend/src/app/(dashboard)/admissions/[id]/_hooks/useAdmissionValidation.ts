@@ -1,8 +1,18 @@
 import { useMemo } from "react"
-import { UseFormReturn, useWatch } from "react-hook-form"
+import { UseFormReturn, useWatch, FieldValues } from "react-hook-form"
 import { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 export type StepStatus = "success" | "warning" | "error" | "locked"
+
+interface FamilyMember {
+  is_primary_guardian: boolean;
+}
+
+interface DocumentItem {
+  status: string;
+  file_path?: string;
+  code: string;
+}
 
 interface ValidationResult {
   stepsStatus: Record<number, StepStatus>
@@ -21,26 +31,26 @@ interface ValidationResult {
 }
 
 export function useAdmissionValidation(
-  form: UseFormReturn<any>,
+  form: UseFormReturn<FieldValues>,
   profile: AdmissionProfileResponse | null | undefined
 ): ValidationResult {
   // Watch all values to trigger re-validation
   const values = useWatch({ control: form.control })
 
   return useMemo(() => {
-    const w = form.getValues()
     const status: Record<number, StepStatus> = {}
     const missing: ValidationResult["missingItems"] = []
-    
+
     // --- RULES ---
-    const appliedRules = profile?.applied_rules || {}
-    const minGpa = appliedRules.min_gpa ?? 5.0
-    const mandatoryDocs: string[] = appliedRules.mandatory_docs || []
+    // --- RULES ---
+    const appliedRules = profile?.applied_rules
+    const minGpa = appliedRules?.min_gpa ?? 5.0
+    const mandatoryDocs: string[] = appliedRules?.mandatory_docs || []
 
     // 1. Personal Info
     // Required: full_name, dob, gender, citizen_id
-    const hasBasicInfo = !!(w.full_name && w.dob && w.gender)
-    const hasCitizenId = !!w.citizen_id
+    const hasBasicInfo = !!(values.full_name && values.dob && values.gender)
+    const hasCitizenId = !!values.citizen_id
     
     if (!hasCitizenId) {
         status[1] = "error"
@@ -53,7 +63,7 @@ export function useAdmissionValidation(
 
     // 2. Family
     // Required: At least one primary guardian
-    const hasPrimaryGuardian = w.family_info?.some((f: any) => f.is_primary_guardian)
+    const hasPrimaryGuardian = values.family_info?.some((f: FamilyMember) => f.is_primary_guardian)
     if (!hasPrimaryGuardian) {
         status[2] = "error"
         missing.push({ code: "GUARDIAN", label: "Phụ huynh", status: "error" })
@@ -63,18 +73,18 @@ export function useAdmissionValidation(
 
     // 3. Academic
     // Required: At least one record
-    const hasAcademic = (w.academic_history?.length || 0) > 0
+    const hasAcademic = (values.academic_history?.length || 0) > 0
     status[3] = hasAcademic ? "success" : "warning"
 
     // 4. Scores
     // Required: GPA >= minGpa and gpa is not null
-    const gpa = w.admission_scores?.gpa ?? 0
+    const gpa = values.admission_scores?.gpa ?? 0
     // Check if score object exists and gpa is provided (not 0 default if actually 0, but here 0 means likely empty or fail)
     // Actually we need to check if it's strictly defined. 
     // In our logic: null/undefined -> 0.
     
     // Check strict input presence:
-    const hasGpaInput = w.admission_scores?.gpa !== undefined && w.admission_scores?.gpa !== null
+    const hasGpaInput = values.admission_scores?.gpa !== undefined && values.admission_scores?.gpa !== null
     
     if (!hasGpaInput) {
         status[4] = "error"
@@ -87,9 +97,9 @@ export function useAdmissionValidation(
     }
 
     // 5. Documents
-    const uploadedDocs = (w.documents_checklist || [])
-        .filter((d: any) => d.status === "uploaded" && d.file_path)
-    const uploadedDocCodes = uploadedDocs.map((d: any) => d.code)
+    const uploadedDocs = (values.documents_checklist || [])
+        .filter((d: DocumentItem) => d.status === "uploaded" && d.file_path)
+    const uploadedDocCodes = uploadedDocs.map((d: DocumentItem) => d.code)
     
     const missingDocs = mandatoryDocs.filter((code: string) => !uploadedDocCodes.includes(code))
     

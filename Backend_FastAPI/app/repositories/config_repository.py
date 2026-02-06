@@ -301,13 +301,8 @@ class DocumentTypeRepository(BaseRepository[models.ConfigDocumentType]):
         result = await self.db.execute(query)
         return result.scalar_one_or_none() is not None
 
-    async def get_all_offerings_with_admission_rules(self) -> List[models.ProgramOffering]:
-        """Get all program offerings that have admission rules configured."""
-        result = await self.db.execute(
-            select(models.ProgramOffering)
-            .where(models.ProgramOffering.admission_rules.isnot(None))
-        )
-        return list(result.scalars().all())
+    # Note: get_all_offerings_with_admission_rules() removed.
+    # Documents now managed via relational DocumentGroup tables.
 
     async def get_filtered(
         self,

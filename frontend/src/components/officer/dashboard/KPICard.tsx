@@ -2,12 +2,15 @@
 /**
  * KPI Card Component for Officer Dashboard
  * Clean, minimalist design following shadcn/ui standards
- * 
+ *
  * Design: White background, subtle border, large numbers, semantic trend colors
+ *
+ * ✅ PERFORMANCE: React.memo prevents re-renders when parent updates unrelated state
  */
 
 "use client";
 
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { TrendingUp, TrendingDown, Minus, type LucideIcon } from "lucide-react";
@@ -29,7 +32,7 @@ interface KPICardProps {
   inverseTrend?: boolean;
 }
 
-export function KPICard({
+export const KPICard = memo(function KPICard({
   title,
   value,
   subtitle,
@@ -48,20 +51,20 @@ export function KPICard({
   // For inverseTrend (e.g., response time), down = green (improvement), up = red (worsening)
   const trendColor = inverseTrend
     ? (trend?.direction === "down"
-        ? "text-green-600 dark:text-green-400"
+        ? "text-success-600 dark:text-success-500"
         : trend?.direction === "up"
-        ? "text-red-600 dark:text-red-400"
+        ? "text-error-600 dark:text-error-500"
         : "text-muted-foreground")
     : (trend?.direction === "up"
-        ? "text-green-600 dark:text-green-400"
+        ? "text-success-600 dark:text-success-500"
         : trend?.direction === "down"
-        ? "text-red-600 dark:text-red-400"
+        ? "text-error-600 dark:text-error-500"
         : "text-muted-foreground");
 
   return (
     <Card
       className={cn(
-        "relative overflow-hidden transition-all duration-200",
+        "relative overflow-hidden transition-shadow duration-200",
         "bg-card border hover:border-primary/20",
         onClick && "cursor-pointer hover:shadow-sm"
       )}
@@ -110,4 +113,7 @@ export function KPICard({
       </CardContent>
     </Card>
   );
-}
+});
+
+// ✅ Display name for React DevTools debugging
+KPICard.displayName = "KPICard";

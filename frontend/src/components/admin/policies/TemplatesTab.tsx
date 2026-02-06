@@ -146,7 +146,7 @@ export function TemplatesTab() {
               Cancel
             </Button>
             <Button onClick={handleApplyTemplate} disabled={applyTemplateMutation.isPending}>
-              {applyTemplateMutation.isPending ? "Applying..." : "Apply"}
+              {applyTemplateMutation.isPending ? "Applying…" : "Apply"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,0 +1,506 @@
+                                                          
+                                                                                
+❯ Bạn hãy đóng vai trò là:                                                      
+                                                                                
+  - Chuyên gia nghiệp vụ tuyển sinh trường học                                  
+  - Senior Frontend Architect                                                   
+  - UX Reviewer cho hệ thống CRM / Admission System                             
+                                                                                
+  Bối cảnh:                                                                     
+  Tôi đang xây dựng hệ thống quản lý tuyển sinh cho trường học tại Việt         
+  Nam.                                                                          
+                                                                                
+  Quy trình nghiệp vụ tổng quát:                                                
+  Lead → Tư vấn → Nộp hồ sơ → Xét tuyển → Nhập học                              
+                                                                                
+  Hệ thống có các consultation status (19 trạng thái) và được backend kiểm      
+  soát bằng allowed_transition.                                                 
+  Frontend chỉ đóng vai trò hiển thị và thao tác theo rule backend.             
+                                                                                
+  Nhiệm vụ của bạn:                                                             
+  Hãy rà soát frontend design hiện tại dưới các góc độ sau:                     
+                                                                                
+  1. UX có phản ánh đúng nghiệp vụ tuyển sinh thực tế hay không?                
+  2. Có trạng thái nào dễ gây hiểu nhầm cho tư vấn viên không?                  
+  3. UI hiện tại có ép user làm sai quy trình không?                            
+  4. Có bước nào thiếu hoặc không có chỗ thao tác trên giao diện không?         
+  5. Các edge case thực tế trong tuyển sinh có bị bỏ sót không?                 
+  6. Frontend có đang làm thay backend logic không (vi phạm thin-client)?       
+  7. Có rủi ro dữ liệu hoặc sai trạng thái khi user thao tác nhanh không?       
+  8. Đề xuất cải tiến UX nhưng KHÔNG phá kiến trúc hiện tại.                    
+                                                                                
+  Nguyên tắc bắt buộc:                                                          
+  - Không đề xuất “tự do đổi status”                                            
+  - Không đưa logic nghiệp vụ sang frontend                                     
+  - Backend là single source of truth                                           
+  - Ưu tiên tính rõ ràng, an toàn và dễ đào tạo nhân sự                         
+                                                                                
+                                                                                
+  Hãy trả lời theo cấu trúc:                                                    
+  - Nhận định tổng quan                                                         
+  - Các vấn đề nghiêm trọng (nếu có)                                            
+  - Các vấn đề UX dễ gây sai nghiệp vụ                                          
+  - Edge case thực tế tuyển sinh                                                
+  - Đề xuất cải tiến khả thi                                                    
+                                                                                
+● Tôi sẽ rà soát toàn diện frontend từ góc độ nghiệp vụ tuyển sinh, kiến trúc và
+   UX.                                                                          
+                                                                                
+● 3 Explore agents finished (ctrl+o to expand)                                  
+   ├─ Review Lead management UI · 27 tool uses · 72.8k tokens                   
+   │  ⎿  Done                                                                   
+   ├─ Review Admission workflow UI · 21 tool uses · 58.1k tokens                
+   │  ⎿  Done                                                                   
+   └─ Check thin-client compliance · 42 tool uses · 72.2k tokens                
+      ⎿  Done                                                                   
+                                                                                
+● 📋 RÀ SOÁT FRONTEND DESIGN - GÓC NHÌN NGHIỆP VỤ TUYỂN SINH & UX               
+                                                                                
+  ---                                                                           
+  1. NHẬN ĐỊNH TỔNG QUAN                                                        
+                                                                                
+  Điểm Mạnh Kiến Trúc                                                           
+  ┌────────────────────┬────────────┬──────────────────────────────────────────┐
+  │     Khía cạnh      │  Đánh giá  │                 Ghi chú                  │
+  ├────────────────────┼────────────┼──────────────────────────────────────────┤
+  │ Thin-Client        │ ✅ 95%     │ Chỉ 1 vi phạm về score calculation       │
+  │ Compliance         │            │                                          │
+  ├────────────────────┼────────────┼──────────────────────────────────────────┤
+  │ Permission System  │ ✅         │ Dùng usePermissions() hook, không check  │
+  │                    │ Excellent  │ role trực tiếp                           │
+  ├────────────────────┼────────────┼──────────────────────────────────────────┤
+  │ Admission Workflow │ ✅         │ 7-step sidebar với error counts,         │
+  │                    │ Excellent  │ completion %, locked indicators          │
+  ├────────────────────┼────────────┼──────────────────────────────────────────┤
+  │ Backend as Source  │ ✅         │ Status, eligibility, validation từ       │
+  │ of Truth           │ Excellent  │ backend                                  │
+  ├────────────────────┼────────────┼──────────────────────────────────────────┤
+  │ Lead Status        │ ⚠️ Good    │ FSM + phase filtering hoạt động tốt,     │
+  │ Management         │            │ nhưng thiếu hướng dẫn                    │
+  └────────────────────┴────────────┴──────────────────────────────────────────┘
+  Điểm Yếu Chính                                                                
+                                                                                
+  ┌─────────────────────────────────────────────────────────────────────────────
+  ┐                                                                             
+  │                    TOP 3 VẤN ĐỀ NGHIÊM TRỌNG NHẤT                           
+  │                                                                             
+  ├─────────────────────────────────────────────────────────────────────────────
+  ┤                                                                             
+  │ 1. Tư vấn viên KHÔNG HIỂU ngữ nghĩa status → Chọn sai, sai quy trình       │
+  │ 2. Score calculation ở frontend → Vi phạm thin-client, 2 nguồn truth       │
+  │ 3. Timeline hiển thị Status ID thay vì Status Name → Khó đọc audit trail   │
+  └─────────────────────────────────────────────────────────────────────────────
+  ┘                                                                             
+                                                                                
+  ---                                                                           
+  2. CÁC VẤN ĐỀ NGHIÊM TRỌNG                                                    
+                                                                                
+  🔴 CRITICAL #1: Score Calculation ở Frontend (Vi phạm Thin-Client)            
+                                                                                
+  File: admissions/[id]/_components/tabs/executive-summary/ScoreSnapshot.tsx    
+                                                                                
+  Vấn đề:                                                                       
+  // Line 115: Frontend TỰ TÍNH pass/fail                                       
+  const isPassing = isSubjectPassing(score, minSubjectScore)                    
+                                                                                
+  // Line 152: Frontend TỰ TÍNH eligibility                                     
+  isTotalScorePassing(totalScore, minScore) ? (                                 
+    <Badge className="bg-green-600">Đạt chuẩn</Badge>                           
+  ) : (                                                                         
+    <Badge variant="destructive">Chưa đạt</Badge>                               
+  )                                                                             
+                                                                                
+  Tác động nghiệp vụ:                                                           
+  - User có thể thấy "Đạt chuẩn" trên UI nhưng backend reject                   
+  - Nếu rule thay đổi (VD: minScore 20 → 22), frontend không cập nhật           
+  - 2 sources of truth → mâu thuẫn dữ liệu                                      
+                                                                                
+  Giải pháp:                                                                    
+  // Backend PHẢI return:                                                       
+  {                                                                             
+    total_score: 25.5,                                                          
+    score_status: "passing",      // ✅ Backend tính                            
+    eligibility_status: "eligible" // ✅ Backend tính                           
+  }                                                                             
+                                                                                
+  // Frontend CHỈ hiển thị:                                                     
+  <Badge>{profile.score_status === "passing" ? "Đạt chuẩn" : "Chưa đạt"}</Badge>
+                                                                                
+  ---                                                                           
+  🔴 CRITICAL #2: Timeline Hiển Thị Status ID Thay Vì Name                      
+                                                                                
+  File: LeadConsultationsTab.tsx (line 114)                                     
+                                                                                
+  Vấn đề:                                                                       
+  <Badge variant="outline">                                                     
+    Status #{consultation.consultation_status_id}  // ❌ Hiển thị "Status       
+  #sts06"                                                                       
+  </Badge>                                                                      
+                                                                                
+  Tác động nghiệp vụ:                                                           
+  - Tư vấn viên không đọc được lịch sử hoạt động                                
+  - Manager không thể review timeline hiệu quả                                  
+  - Audit trail vô nghĩa với user                                               
+                                                                                
+  Giải pháp:                                                                    
+  <Badge variant="outline">                                                     
+    {consultation.consultation_status?.name}  // ✅ Hiển thị "Đồng ý tư vấn"    
+  </Badge>                                                                      
+                                                                                
+  ---                                                                           
+  3. CÁC VẤN ĐỀ UX DỄ GÂY SAI NGHIỆP VỤ                                         
+                                                                                
+  ⚠️ UX Issue #1: Không Phân Biệt Được Universal vs Result Status               
+                                                                                
+  Hiện trạng:                                                                   
+  ┌─────────────────────────────────────────────────────────────────────────────
+  ┐                                                                             
+  │ [Không nghe máy] [Nhắn tin không phản hồi]  ← Amber badge "không đổi TT"   │
+  │                                                                             
+  │                                                                             
+  │ [Đã kết nối] [Có nhu cầu] [Đồng ý tư vấn]  ← Blue/Green badges             │
+  └─────────────────────────────────────────────────────────────────────────────
+  ┘                                                                             
+                                                                                
+  Vấn đề:                                                                       
+  - Badge "không đổi trạng thái" quá ngắn, không giải thích                     
+  - Tư vấn viên mới không biết: "Khi nào dùng Universal? Khi nào dùng Result?"  
+  - Không có ví dụ hoặc scenario hướng dẫn                                      
+                                                                                
+  Giải pháp đề xuất:                                                            
+  // Thêm tooltip cho Universal section                                         
+  <TooltipProvider>                                                             
+    <Tooltip>                                                                   
+      <TooltipTrigger>                                                          
+        <Badge className="bg-amber-100">Ghi nhận hoạt động</Badge>              
+      </TooltipTrigger>                                                         
+      <TooltipContent className="max-w-xs">                                     
+        <p className="font-semibold">Trạng thái hoạt động</p>                   
+        <p className="text-sm text-muted-foreground">                           
+          Dùng để ghi nhận cuộc gọi/tin nhắn mà KHÔNG thay đổi tiến trình lead. 
+          VD: Gọi không nghe máy 3 lần → Vẫn giữ nguyên "Chưa tiếp cận"         
+        </p>                                                                    
+      </TooltipContent>                                                         
+    </Tooltip>                                                                  
+  </TooltipProvider>                                                            
+                                                                                
+  ---                                                                           
+  ⚠️ UX Issue #2: Outcome Type Không Rõ Ngữ Nghĩa                               
+                                                                                
+  Hiện trạng:                                                                   
+  - Selector hiện: [Positive] [Neutral] [Negative] (tiếng Anh)                  
+  - Không giải thích: "Positive nghĩa là gì trong tuyển sinh?"                  
+                                                                                
+  Câu hỏi của tư vấn viên:                                                      
+  "Lead nói 'để em suy nghĩ' → Positive hay Neutral?"                           
+  "Lead không nghe máy → Neutral hay Negative?"                                 
+                                                                                
+  Giải pháp:                                                                    
+  const OUTCOME_GUIDANCE = {                                                    
+    positive: {                                                                 
+      label: "Tích cực",                                                        
+      description: "Lead có ý định tiếp tục (đồng ý tư vấn, đặt lịch hẹn, quan  
+  tâm)",                                                                        
+      examples: ["Đồng ý tư vấn", "Đủ điều kiện", "Đã nộp hồ sơ"]               
+    },                                                                          
+    neutral: {                                                                  
+      label: "Trung lập",                                                       
+      description: "Chưa xác định được ý định (cần follow-up, hẹn gọi lại)",    
+      examples: ["Hẹn liên hệ lại", "Đang cân nhắc", "Cần thêm thông tin"]      
+    },                                                                          
+    negative: {                                                                 
+      label: "Tiêu cực",                                                        
+      description: "Lead từ chối hoặc không phù hợp",                           
+      examples: ["Từ chối tư vấn", "Không quan tâm", "Hồ sơ không đạt"]         
+    }                                                                           
+  }                                                                             
+                                                                                
+  ---                                                                           
+  ⚠️ UX Issue #3: Không Hiển Thị Consultation Status Hiện Tại                   
+                                                                                
+  Hiện trạng (LeadSidebar):                                                     
+  ┌─────────────────────────┐                                                   
+  │ Nguyễn Văn A            │                                                   
+  │ �� 0901234567           │                                                   
+  │ ✉️ email@example.com    │                                                   
+  │                         │                                                   
+  │ Stage: [Tư vấn]   ← Có  │                                                   
+  │ Status: ???       ← THIẾU│                                                  
+  │ Score: 75/100           │                                                   
+  └─────────────────────────┘                                                   
+                                                                                
+  Vấn đề:                                                                       
+  - Tư vấn viên không biết lead đang ở consultation status nào                  
+  - Phải scroll xuống Quick Consultation mới thấy current status                
+  - Pipeline Stage ≠ Consultation Status → Gây nhầm lẫn                         
+                                                                                
+  Giải pháp:                                                                    
+  // Thêm vào LeadSidebar.tsx                                                   
+  <div className="space-y-2">                                                   
+    <div className="flex items-center gap-2">                                   
+      <span className="text-sm text-muted-foreground">Giai đoạn:</span>         
+      <Badge style={{ backgroundColor: lead.pipeline_stage?.color_code }}>      
+        {lead.pipeline_stage?.name}                                             
+      </Badge>                                                                  
+    </div>                                                                      
+    <div className="flex items-center gap-2">                                   
+      <span className="text-sm text-muted-foreground">Trạng thái:</span>        
+      <Badge style={{ backgroundColor: lead.consultation_status?.color_code }}> 
+        {lead.consultation_status?.name}  {/* ✅ THÊM MỚI */}                   
+      </Badge>                                                                  
+    </div>                                                                      
+  </div>                                                                        
+                                                                                
+  ---                                                                           
+  ⚠️ UX Issue #4: Officer ID Thay Vì Name                                       
+                                                                                
+  Nhiều nơi hiển thị ID thay vì tên:                                            
+  - AdmissionHeader.tsx line 42: Phụ trách: {profile?.lead?.assigned_officer_id}
+  - Timeline entries: Changed by user #123                                      
+                                                                                
+  Giải pháp: Eager load assigned_officer relationship và hiển thị full_name     
+                                                                                
+  ---                                                                           
+  ⚠️ UX Issue #5: Thiếu Workflow Progression Breadcrumb                         
+                                                                                
+  Hiện trạng Admission:                                                         
+  - Có 7-step sidebar ✅                                                        
+  - NHƯNG không có visual flow: Draft → Submitted → Approved → Enrolled         
+                                                                                
+  Lead thiếu tương tự:                                                          
+  - Không có visual progression: Chưa tiếp cận → Đã kết nối → Có nhu cầu → Đồng 
+  ý tư vấn                                                                      
+                                                                                
+  Giải pháp:                                                                    
+  // Thêm workflow breadcrumb ở top của detail page                             
+  <div className="flex items-center gap-2 text-sm">                             
+    <span className={cn(                                                        
+      "px-2 py-1 rounded",                                                      
+      currentPhase === "consultation" ? "bg-blue-100 font-medium" :             
+  "text-muted-foreground"                                                       
+    )}>                                                                         
+      Tư vấn                                                                    
+    </span>                                                                     
+    <ChevronRight className="h-4 w-4" />                                        
+    <span className={cn(                                                        
+      "px-2 py-1 rounded",                                                      
+      currentPhase === "admission" ? "bg-blue-100 font-medium" :                
+  "text-muted-foreground"                                                       
+    )}>                                                                         
+      Hồ sơ                                                                     
+    </span>                                                                     
+    <ChevronRight className="h-4 w-4" />                                        
+    <span className={cn(                                                        
+      "px-2 py-1 rounded",                                                      
+      currentPhase === "enrolled" ? "bg-green-100 font-medium" :                
+  "text-muted-foreground"                                                       
+    )}>                                                                         
+      Nhập học                                                                  
+    </span>                                                                     
+  </div>                                                                        
+                                                                                
+  ---                                                                           
+  4. EDGE CASE THỰC TẾ TUYỂN SINH                                               
+                                                                                
+  Các Scenario Chưa Được Cover Tốt                                              
+  ┌─────────────────┬──────────────────┬───────────┬──────────────────────────┐ 
+  │    Edge Case    │    Hiện trạng    │  Rủi ro   │         Đề xuất          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Lead gọi lại 10 │ ✅ Có thể tạo    │           │                          │ 
+  │  lần/ngày       │ nhiều            │ OK        │ -                        │ 
+  │                 │ consultation     │           │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ 2 tư vấn viên   │ ✅ Optimistic    │           │                          │ 
+  │ cùng edit 1     │ locking          │ OK        │ -                        │ 
+  │ lead            │                  │           │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Lead đổi SĐT    │                  │ Data      │                          │ 
+  │ sau khi tạo hồ  │ ⚠️ Không sync    │ drift     │ Cần sync-on-update       │ 
+  │ sơ              │                  │           │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Lead từ chối    │                  │           │                          │ 
+  │ sau khi được    │ ✅ sts08 cover   │ OK        │ -                        │ 
+  │ approve         │                  │           │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Hồ sơ bị        │                  │           │                          │ 
+  │ reject, cần     │ ✅ Có flow       │ OK        │ -                        │ 
+  │ resubmit        │                  │           │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Lead đúng đối   │ ⚠️ Không có      │           │ Cần status mới hoặc      │ 
+  │ tượng nhưng     │ "pending         │ Gây nhầm  │ field                    │ 
+  │ chưa đủ giấy tờ │ documents"       │           │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Phụ huynh gọi   │ ⚠️ Không track   │ Mất       │ Thêm field               │ 
+  │ thay học sinh   │ caller info      │ context   │ "contact_person"         │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Lead hỏi về     │ ⚠️ 1 lead = 1    │ Phải tạo  │ Có thể cần               │ 
+  │ nhiều ngành     │ offering         │ nhiều     │ "interested_offerings"   │ 
+  │                 │                  │ lead      │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Tư vấn viên     │                  │           │                          │ 
+  │ nghỉ việc, bàn  │ ✅ Reassign có   │ OK        │ -                        │ 
+  │ giao lead       │                  │           │                          │ 
+  ├─────────────────┼──────────────────┼───────────┼──────────────────────────┤ 
+  │ Magic link hết  │ ✅ Resend logic  │           │                          │ 
+  │ hạn, lead quên  │ có               │ OK        │ -                        │ 
+  │ xác nhận        │                  │           │                          │ 
+  └─────────────────┴──────────────────┴───────────┴──────────────────────────┘ 
+  Scenario Cần Xem Xét Thêm                                                     
+                                                                                
+  Scenario A: "Lead đang chờ bổ sung giấy tờ"                                   
+                                                                                
+  Flow hiện tại:                                                                
+  1. Lead nộp hồ sơ (submitted)                                                 
+  2. Thiếu giấy tờ → Reject                                                     
+  3. Lead bổ sung → Resubmit                                                    
+  4. Duyệt lại                                                                  
+                                                                                
+  Vấn đề: "Reject" nghe như từ chối hoàn toàn                                   
+  Thực tế: Chỉ cần bổ sung, không phải từ chối                                  
+                                                                                
+  Đề xuất: Có thể dùng sts17 (Yêu cầu bổ sung) rõ ràng hơn                      
+                                                                                
+  Scenario B: "Lead quan tâm nhưng đợi đến kỳ sau"                              
+                                                                                
+  Hiện tại: Không có status "Deferred"                                          
+  Workaround: sts05 (Hẹn liên hệ lại) + Note                                    
+                                                                                
+  Đề xuất: Nếu trường có nhiều kỳ, thêm field deferred_to_semester              
+                                                                                
+  ---                                                                           
+  5. ĐỀ XUẤT CẢI TIẾN KHẢ THI                                                   
+                                                                                
+  Ưu Tiên Cao (Không Phá Kiến Trúc)                                             
+  #: 1                                                                          
+  Cải tiến: Fix Score Calculation                                               
+  Effort: 2h                                                                    
+  Impact: Critical                                                              
+  Làm sao: Backend return score_status, frontend chỉ display                    
+  ────────────────────────────────────────                                      
+  #: 2                                                                          
+  Cải tiến: Fix Timeline Status ID                                              
+  Effort: 30m                                                                   
+  Impact: High                                                                  
+  Làm sao: Thay status_id bằng status?.name                                     
+  ────────────────────────────────────────                                      
+  #: 3                                                                          
+  Cải tiến: Thêm Consultation Status vào Sidebar                                
+  Effort: 1h                                                                    
+  Impact: High                                                                  
+  Làm sao: Hiển thị lead.consultation_status?.name                              
+  ────────────────────────────────────────                                      
+  #: 4                                                                          
+  Cải tiến: Tooltip cho Universal Status                                        
+  Effort: 1h                                                                    
+  Impact: Medium                                                                
+  Làm sao: Giải thích khi nào dùng                                              
+  ────────────────────────────────────────                                      
+  #: 5                                                                          
+  Cải tiến: Fix Officer ID → Name                                               
+  Effort: 30m                                                                   
+  Impact: Medium                                                                
+  Làm sao: Eager load relationship                                              
+  Ưu Tiên Trung Bình (Enhancement)                                              
+  #: 6                                                                          
+  Cải tiến: Workflow Breadcrumb                                                 
+  Effort: 2h                                                                    
+  Impact: Medium                                                                
+  Làm sao: Thêm visual phase progression                                        
+  ────────────────────────────────────────                                      
+  #: 7                                                                          
+  Cải tiến: Outcome Type Guidance                                               
+  Effort: 1h                                                                    
+  Impact: Medium                                                                
+  Làm sao: Tooltip với ví dụ cụ thể                                             
+  ────────────────────────────────────────                                      
+  #: 8                                                                          
+  Cải tiến: Status Definition Popover                                           
+  Effort: 3h                                                                    
+  Impact: Medium                                                                
+  Làm sao: Hover status → Xem definition từ backend                             
+  ────────────────────────────────────────                                      
+  #: 9                                                                          
+  Cải tiến: Step Unlock Hint                                                    
+  Effort: 1h                                                                    
+  Impact: Low                                                                   
+  Làm sao: Tooltip nói rõ "Hoàn thành bước X trước"                             
+  ────────────────────────────────────────                                      
+  #: 10                                                                         
+  Cải tiến: Delayed Commit Feedback                                             
+  Effort: 30m                                                                   
+  Impact: Low                                                                   
+  Làm sao: Toast sau khi save thành công                                        
+  ---                                                                           
+  6. MẪU IMPLEMENTATION CHO ĐỀ XUẤT #1 (Score Calculation)                      
+                                                                                
+  Backend Change                                                                
+                                                                                
+  # app/schemas/admission.py                                                    
+  class AdmissionProfileResponse(BaseModel):                                    
+      # ... existing fields ...                                                 
+                                                                                
+      # ✅ NEW: Backend-calculated status                                       
+      score_status: Literal["passing", "failing", "pending"] = "pending"        
+      score_passing_details: dict = {}  # { "total": True, "subjects": {"math": 
+  True, "physics": False} }                                                     
+                                                                                
+  # app/services/admission_service.py                                           
+  def _compute_frontend_fields(profile):                                        
+      # ... existing logic ...                                                  
+                                                                                
+      # ✅ Calculate score status on backend                                    
+      profile.score_status = "passing" if profile.total_score >= min_score else 
+  "failing"                                                                     
+      profile.score_passing_details = {                                         
+          "total": profile.total_score >= min_score,                            
+          "subjects": {                                                         
+              score.subject_id: score.value >= min_subject_score                
+              for score in profile.subject_scores                               
+          }                                                                     
+      }                                                                         
+                                                                                
+  Frontend Change                                                               
+                                                                                
+  // ScoreSnapshot.tsx - BEFORE                                                 
+  const isPassing = isSubjectPassing(score, minSubjectScore)  // ❌ Local calc  
+                                                                                
+  // ScoreSnapshot.tsx - AFTER                                                  
+  const isPassing = profile.score_passing_details?.subjects?.[score.subject_id] 
+   // ✅ From backend                                                           
+                                                                                
+  ---                                                                           
+  7. TÓM TẮT                                                                    
+                                                                                
+  Điểm Cần Fix Ngay                                                             
+  ┌─────────────────────────────┬─────────────┬─────────────────────┐           
+  │           Vấn đề            │   Mức độ    │      Hành động      │           
+  ├─────────────────────────────┼─────────────┼─────────────────────┤           
+  │ Score calculation frontend  │ 🔴 Critical │ Chuyển sang backend │           
+  ├─────────────────────────────┼─────────────┼─────────────────────┤           
+  │ Timeline status ID          │ 🔴 Critical │ Hiển thị name       │           
+  ├─────────────────────────────┼─────────────┼─────────────────────┤           
+  │ Missing consultation status │ 🟡 High     │ Thêm vào sidebar    │           
+  └─────────────────────────────┴─────────────┴─────────────────────┘           
+  Điểm Đã Làm Tốt                                                               
+  ┌────────────────────────────────────┬──────────────┐                         
+  │             Khía cạnh              │   Đánh giá   │                         
+  ├────────────────────────────────────┼──────────────┤                         
+  │ Permission system (usePermissions) │ ✅ Excellent │                         
+  ├────────────────────────────────────┼──────────────┤                         
+  │ Backend as source of truth         │ ✅ Excellent │                         
+  ├────────────────────────────────────┼──────────────┤                         
+  │ 7-step admission workflow          │ ✅ Excellent │                         
+  ├────────────────────────────────────┼──────────────┤                         
+  │ FSM status transitions             │ ✅ Excellent │                         
+  ├────────────────────────────────────┼──────────────┤                         
+  │ Document management                │ ✅ Excellent │                         
+  └────────────────────────────────────┴──────────────┘                         
+  Kết Luận                                                                      
+                                                                                
+  Hệ thống frontend được thiết kế TỐT theo thin-client architecture, với chỉ 1  
+  vi phạm nghiêm trọng (score calculation). Các vấn đề UX chủ yếu liên quan đến 
+  thiếu hướng dẫn ngữ nghĩa cho tư vấn viên, không phải lỗi kiến trúc.          
+                                                                                
+  Ưu tiên fix: Score calculation → Timeline display → Consultation status       
+  visibility                                                                    
+                                                                                

@@ -78,7 +78,8 @@ export interface Lead {
   updated_at: string; // ISO datetime
   assigned_at?: string | null; // ISO datetime
   next_activity_at?: string | null; // ISO datetime - Quick Disposition bubble-up
-  
+  version: number; // Optimistic locking version
+
   // Fit Score fields
   birth_year?: number | null;
   location_proximity: number; // 0=Xa, 1=Lân cận, 2=Gần
@@ -112,6 +113,8 @@ export interface Lead {
   pipeline_stage?: PipelineStage | null;
   consultations?: Consultation[];
   application?: Application | null;
+  // NEW: AdmissionProfile (replacement for Application in admission module)
+  admission_profile?: AdmissionProfileShallow | null;
 }
 
 /**
@@ -166,6 +169,8 @@ export interface LeadUpdate {
   location_proximity?: number;
   occupation_relevance?: number;
   academic_performance?: number;
+  // Optimistic locking - optional, when provided will check for concurrent updates
+  version?: number;
 }
 
 /**
@@ -257,11 +262,19 @@ export interface ConsultationUpdate {
  * Application Status Enum
  */
 export type ApplicationStatus =
+  | "draft" // Nháp
   | "pending" // Chờ xử lý (mặc định)
   | "missing_documents" // Chờ bổ sung (do thiếu/lỗi checklist)
   | "completed" // Đã đủ hồ sơ
   | "passed" // Đạt
-  | "failed"; // Trượt
+  | "failed" // Trượt
+  | "submitted" // Đã nộp
+  | "approved" // Đã duyệt
+  | "rejected" // Từ chối
+  | "resubmitted" // Nộp lại
+  | "confirmed" // Đã xác nhận nhập học
+  | "overridden" // Ngoại lệ
+  | "enrolled"; // Đã nhập học
 
 /**
  * Checklist Item for Application Documents
@@ -323,6 +336,66 @@ export interface ApplicationUpdate {
   criterion_id?: string | null;
   documents?: ApplicationDocuments | null;
 }
+
+// ============================================
+// ADMISSION PROFILE TYPES (NEW)
+// ============================================
+
+/**
+ * AdmissionProfileShallow - Minimal info for Lead response
+ * Used by frontend to show "View Profile" vs "Create Profile" button
+ * Backend source: AdmissionProfile model
+ */
+export interface AdmissionProfileShallow {
+  id: number;
+  status: string; // draft, submitted, approved, rejected, enrolled, etc.
+  student_code?: string | null; // If enrolled
+  created_at: string; // ISO datetime
+}
+
+// ============================================
+// WORKFLOW CONTEXT TYPES (Phase-Based Workflow)
+// ============================================
+
+/**
+ * Lead Phase - Business lifecycle stage
+ */
+export type LeadPhase = "consultation" | "admission" | "fee" | "enrolled";
+
+/**
+ * Allowed status option in workflow context
+ */
+export interface WorkflowAllowedStatus {
+  id: string;
+  name: string;
+  phase: string;
+  color_code: string;
+  outcome_type: string;
+  is_universal: boolean;
+}
+
+/**
+ * Workflow context for a lead - Phase-Based Workflow
+ * Used by frontend to dynamically filter status dropdowns
+ */
+export interface WorkflowContext {
+  lead_id: number;
+  current_phase: LeadPhase;
+  current_status_id?: string | null;
+  current_stage_id?: string | null;
+  
+  // Allowed statuses for current phase
+  allowed_statuses: WorkflowAllowedStatus[];
+  
+  // Phase constraints
+  is_terminal_phase: boolean;
+  can_change_status: boolean;
+  
+  // Admission profile info
+  has_admission_profile: boolean;
+  admission_status?: string | null;
+}
+
 
 // ============================================
 // CRM INTERACTION TYPES

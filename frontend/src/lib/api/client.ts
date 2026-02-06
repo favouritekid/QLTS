@@ -5,15 +5,26 @@
  * ✅ FIX-4 ENHANCED: Mutex lock + queue + 100ms browser delay
  * Prevents race conditions and token reuse detection triggers
  *
+ * ✅ CSRF Protection: Double-Submit Cookie pattern
+ * Automatically sends X-CSRF-Token header for state-changing requests
+ *
  * Features:
  * - Auto-refresh access token on 401 errors
  * - Mutex lock prevents duplicate refresh requests
  * - Queue concurrent requests during refresh
  * - 100ms delay for browser cookie persistence
+ * - CSRF token injection for POST/PUT/DELETE/PATCH
  * - Prevent infinite loops
  * - Graceful error handling
  */
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
+
+import {
+  getCSRFToken,
+  requiresCSRFToken,
+  isCSRFError,
+  CSRF_HEADER_NAME,
+} from "./csrf";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -67,6 +78,17 @@ api.interceptors.request.use(
     // ✅ SECURITY FIX: No longer need to manually set Authorization header
     // Tokens are sent automatically via httpOnly cookies by browser
     // withCredentials: true ensures cookies are included in requests
+
+    // ✅ CSRF Protection: Add X-CSRF-Token header for state-changing requests
+    // The csrf_token cookie is set by backend on login/refresh (httpOnly=false)
+    if (requiresCSRFToken(config.method)) {
+      const csrfToken = getCSRFToken();
+      if (csrfToken) {
+        config.headers[CSRF_HEADER_NAME] = csrfToken;
+      }
+      // Note: If token is missing, request will proceed but backend may reject
+      // This handles edge cases like first login before cookie is set
+    }
 
     // ✅ OPTIONAL ENHANCEMENT: Auto-detect FormData
     if (config.data instanceof FormData) {
@@ -203,13 +225,44 @@ api.interceptors.response.use(
       error.response.data.detail.code === "PASSWORD_CHANGE_REQUIRED"
     ) {
       console.log("[API Client] 🔐 Password change required - redirecting...");
-      
+
       if (typeof window !== "undefined") {
         // Redirect to change-password page with a flag
         window.location.href = "/settings/change-password?forced=true";
       }
-      
+
       return Promise.reject(error);
+    }
+
+    // ========================================
+    // CSRF ERROR HANDLING
+    // ========================================
+    // Handle CSRF token errors (403 with CSRF error codes)
+    // This can happen if:
+    // 1. User's session expired and cookie was cleared
+    // 2. Cookie was deleted manually
+    // 3. Cross-site request attempt (attack scenario)
+    if (error.response?.status === 403) {
+      const errorData = error.response?.data as { error_code?: string; detail?: string } | undefined;
+      const errorCode = errorData?.error_code;
+
+      if (isCSRFError(errorCode)) {
+        console.warn("[API Client] 🛡️ CSRF error detected:", errorCode);
+
+        // For CSRF errors, the user likely needs to re-authenticate
+        // because the csrf_token cookie is tied to their session
+        if (typeof window !== "undefined") {
+          const currentPath = window.location.pathname;
+          const publicPages = ["/login", "/register", "/forgot-password", "/reset-password"];
+
+          if (!publicPages.includes(currentPath)) {
+            console.log("[API Client] 🚪 CSRF token invalid - redirecting to login...");
+            window.location.href = "/login?reason=session_expired";
+          }
+        }
+
+        return Promise.reject(error);
+      }
     }
 
     // For non-401 errors, just reject

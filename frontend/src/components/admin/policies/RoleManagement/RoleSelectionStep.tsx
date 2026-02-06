@@ -61,7 +61,7 @@ export function RoleSelectionStep({
               {rolesData?.roles.map((role) => (
                 <Card
                   key={role.name}
-                  className={`cursor-pointer transition-all hover:shadow-md hover:border-primary ${
+                  className={`cursor-pointer transition-shadow hover:shadow-md hover:border-primary ${
                     role.is_system_role ? "border-primary/50" : ""
                   }`}
                   onClick={() => onRoleSelect(role.name, role.display_name)}

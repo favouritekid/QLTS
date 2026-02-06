@@ -9,9 +9,14 @@
  * - Faster initial load with authenticated user context
  * - Maintains interactive features (logout button)
  * - Better UX with immediate data display
+ *
+ * ✅ FIX: Officers are redirected to /dashboard/officer
+ * This dashboard is for Admin/Manager only (system administration)
  */
 
 import { Suspense } from 'react';
+import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import { serverApi } from '@/lib/api/server';
 import { getCachedUserStatistics } from '@/lib/api/cached-data';
 import { DashboardClient } from './_components/DashboardClient';
@@ -32,16 +37,26 @@ function DashboardLoading() {
 
 /**
  * Server Component - Fetches initial user and statistics data
- * 
+ *
  * ✅ Statistics now use `use cache` for faster subsequent loads
+ * ✅ FIX: Redirects non-admin users to Officer Dashboard
  */
 async function DashboardPageContent() {
   // ✅ Fetch current user on server (user-specific, not cached)
   const initialUser = await serverApi.users.getCurrentUser();
 
-  // ✅ Conditionally fetch statistics for admin/manager (CACHED)
-  const isAdmin = initialUser?.role === "admin" || initialUser?.role === "manager";
-  const initialStats = isAdmin ? await getCachedUserStatistics() : undefined;
+  // ✅ FIX: Redirect officers to their specialized dashboard
+  // This admin dashboard is only for admin/manager roles
+  const isAdminOrManager = initialUser?.role === "admin" || initialUser?.role === "manager";
+  if (!isAdminOrManager) {
+    redirect('/dashboard/officer');
+  }
+
+  const cookieStore = await cookies();
+  const cookieHeader = cookieStore.toString();
+
+  // ✅ Fetch statistics for admin/manager (CACHED)
+  const initialStats = await getCachedUserStatistics(cookieHeader);
 
   return (
     <DashboardClient

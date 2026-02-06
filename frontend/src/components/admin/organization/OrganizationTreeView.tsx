@@ -65,15 +65,15 @@ function getTypeIcon(type: string) {
 function getTypeColor(type: string) {
   switch (type) {
     case "Khoa":
-      return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+      return "bg-info-100 text-info-800 dark:bg-info-900 dark:text-info-200";
     case "Bộ môn":
-      return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+      return "bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200";
     case "Phòng ban":
       return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
     case "Trung tâm":
       return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
     default:
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
+      return "bg-muted text-muted-foreground";
   }
 }
 
@@ -119,7 +119,12 @@ const TreeNode = memo(function TreeNode({ node, level, onNodeClick }: TreeNodePr
           {/* Expand/Collapse Button */}
           {hasChildren ? (
             <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-6 w-6 p-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 p-0"
+                aria-label={isExpanded ? "Thu gọn" : "Mở rộng"}
+              >
                 {isExpanded ? (
                   <ChevronDown className="h-4 w-4" />
                 ) : (
@@ -375,31 +380,31 @@ export function OrganizationTreeView({
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Tổng đơn vị</div>
-                <div className="text-2xl font-bold">{overallStats.totalUnits}</div>
+                <div className="text-2xl font-bold tabular-nums">{overallStats.totalUnits}</div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Tổng ngành học</div>
-                <div className="text-2xl font-bold">{overallStats.totalMajors}</div>
+                <div className="text-2xl font-bold tabular-nums">{overallStats.totalMajors}</div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Tổng chỉ tiêu</div>
-                <div className="text-2xl font-bold">{overallStats.totalQuota}</div>
+                <div className="text-2xl font-bold tabular-nums">{overallStats.totalQuota}</div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí TB</div>
-                <div className="text-sm font-semibold">
+                <div className="text-sm font-semibold tabular-nums">
                   {formatCurrency(overallStats.avgTuition)}
                 </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí thấp nhất</div>
-                <div className="text-sm font-semibold text-green-600">
+                <div className="text-sm font-semibold text-success-600 tabular-nums">
                   {formatCurrency(overallStats.minTuition)}
                 </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí cao nhất</div>
-                <div className="text-sm font-semibold text-red-600">
+                <div className="text-sm font-semibold text-error-600 tabular-nums">
                   {formatCurrency(overallStats.maxTuition)}
                 </div>
               </div>

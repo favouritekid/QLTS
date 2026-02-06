@@ -112,7 +112,7 @@ export function CommandPalette() {
         onSelect={() => executeCommand(item)}
         className={cn(
           "flex items-center gap-3 px-4 py-3 cursor-pointer",
-          "transition-all duration-200 ease-in-out",
+          "transition-colors duration-200 ease-in-out",
           "hover:scale-[1.02] active:scale-[0.98]",
           isSelected && "bg-accent shadow-sm"
         )}
@@ -120,22 +120,22 @@ export function CommandPalette() {
         {/* Icon */}
         <div className={cn(
           "flex items-center justify-center w-8 h-8 rounded-md bg-muted flex-shrink-0",
-          "transition-all duration-200",
+          "transition-colors duration-200",
           isSelected && "bg-accent-foreground/10 scale-110"
         )}>
           {Icon ? (
             <Icon className={cn(
-              "h-4 w-4 text-muted-foreground transition-all duration-200",
+              "h-4 w-4 text-muted-foreground transition-colors duration-200",
               isSelected && "text-foreground"
             )} />
           ) : item.category === "recent" ? (
             <Clock className={cn(
-              "h-4 w-4 text-muted-foreground transition-all duration-200",
+              "h-4 w-4 text-muted-foreground transition-colors duration-200",
               isSelected && "text-foreground"
             )} />
           ) : (
             <Hash className={cn(
-              "h-4 w-4 text-muted-foreground transition-all duration-200",
+              "h-4 w-4 text-muted-foreground transition-colors duration-200",
               isSelected && "text-foreground"
             )} />
           )}
@@ -155,7 +155,7 @@ export function CommandPalette() {
             <Badge
               variant="secondary"
               className={cn(
-                "flex-shrink-0 transition-all duration-200",
+                "flex-shrink-0 transition-colors duration-200",
                 isSelected && "scale-105"
               )}
             >
@@ -189,7 +189,7 @@ export function CommandPalette() {
           placeholder="Tìm kiếm trang, thao tác, hoặc nhập lệnh..."
           value={query}
           onValueChange={setQuery}
-          className="h-14 border-none focus:ring-0 transition-all duration-200"
+          className="h-14 border-none focus-visible:ring-0 transition-colors duration-200"
         />
 
         {/* Results List */}

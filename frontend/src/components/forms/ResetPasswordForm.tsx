@@ -93,7 +93,7 @@ export function ResetPasswordForm() {
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
-        <h1 className="text-2xl font-bold">Đặt Lại Mật Khẩu</h1>
+        <h1 className="text-2xl font-bold font-display">Đặt Lại Mật Khẩu</h1>
         <p className="text-muted-foreground">Nhập mật khẩu mới của bạn dưới đây.</p>
       </div>
       <Form {...form}>
@@ -105,7 +105,7 @@ export function ResetPasswordForm() {
               <FormItem>
                 <FormLabel>Mật khẩu mới</FormLabel>
                 <FormControl>
-                  <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
+                  <Input type="password" placeholder="••••••••" autoComplete="new-password" disabled={isLoading} {...field} />
                 </FormControl>
                 {/* ✅ UX FIX: Show password strength indicator */}
                 {newPassword && <PasswordStrengthIndicator password={newPassword} />}
@@ -120,14 +120,14 @@ export function ResetPasswordForm() {
               <FormItem>
                 <FormLabel>Xác nhận mật khẩu mới</FormLabel>
                 <FormControl>
-                  <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
+                  <Input type="password" placeholder="••••••••" autoComplete="new-password" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
             )}
           />
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Đang đặt lại..." : "Đặt Lại Mật Khẩu"}
+            {isLoading ? "Đang đặt lại…" : "Đặt Lại Mật Khẩu"}
           </Button>
         </form>
       </Form>

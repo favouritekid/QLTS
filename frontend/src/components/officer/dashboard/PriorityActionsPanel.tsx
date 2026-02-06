@@ -6,7 +6,7 @@
 
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,10 +24,10 @@ type FilterType = "all" | "hot_lead" | "overdue" | "scheduled" | "new_lead";
 
 const filterConfig: Record<FilterType, { label: string; icon?: typeof Flame; color?: string }> = {
   all: { label: "Tất cả" },
-  hot_lead: { label: "Hot", icon: Flame, color: "text-red-500" },
+  hot_lead: { label: "Hot", icon: Flame, color: "text-error-500" },
   overdue: { label: "Quá hạn", icon: AlertTriangle, color: "text-amber-500" },
-  scheduled: { label: "Lịch hẹn", icon: Calendar, color: "text-blue-500" },
-  new_lead: { label: "Mới", icon: Sparkles, color: "text-green-500" },
+  scheduled: { label: "Lịch hẹn", icon: Calendar, color: "text-info-500" },
+  new_lead: { label: "Mới", icon: Sparkles, color: "text-success-500" },
 };
 
 export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
@@ -50,14 +50,15 @@ export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
     new_lead: actions.filter(a => a.type === "new_lead").length,
   }), [actions]);
 
+  // ✅ PERFORMANCE: useCallback prevents PriorityActionCard re-renders
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleCall = (_leadId: number) => {
+  const handleCall = useCallback((_leadId: number) => {
     // In real implementation, this would trigger a call modal or redirect
     toast.info("Tính năng gọi điện đang phát triển");
-  };
+  }, []);
 
-   
-  const handleZalo = (_leadId: number, phone?: string) => {
+  // ✅ PERFORMANCE: useCallback with stable reference
+  const handleZalo = useCallback((_leadId: number, phone?: string) => {
     if (phone) {
       // Clean phone number and open Zalo
       const cleanPhone = phone.replace(/\D/g, '');
@@ -66,7 +67,7 @@ export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
     } else {
       toast.warning("Lead này chưa có số điện thoại");
     }
-  };
+  }, []);
 
   return (
     <Card className="border bg-card h-full">
@@ -138,7 +139,8 @@ export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
             )}
           </div>
         ) : (
-          <ScrollArea className="h-[350px]">
+          /* ✅ PERFORMANCE: virtual-list for content-visibility optimization */
+          <ScrollArea className="h-[350px] virtual-list">
             <div className="space-y-2 pr-3">
               {filteredActions.map((action) => (
                 <PriorityActionCard

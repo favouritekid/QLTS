@@ -98,7 +98,7 @@ export function AuditLogTab() {
                     <TableRow key={log.id}>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <UserIcon className="text-muted-foreground h-4 w-4" />
+                          <UserIcon aria-hidden="true" className="text-muted-foreground h-4 w-4" />
                           <span className="font-medium">
                             {log.actor_full_name || log.actor_username || `User #${log.actor_id}`}
                           </span>
@@ -114,7 +114,7 @@ export function AuditLogTab() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                          <Clock className="h-3 w-3" />
+                          <Clock aria-hidden="true" className="h-3 w-3" />
                           {formatDate(log.created_at)}
                         </div>
                       </TableCell>

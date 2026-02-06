@@ -3,13 +3,13 @@
 
 import { useState, useMemo } from "react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,9 +25,8 @@ import {
   Users as UsersIcon,
   CheckCircle2,
 } from "lucide-react";
-import { useAdminUsersList } from "@/hooks/useAdminUsers";
-import { api } from "@/lib/api/client";
-import { API_ENDPOINTS } from "@/lib/api/endpoints";
+import { useAdminUsersList, useAssignUserToUnit, useUnassignUserFromUnit } from "@/hooks/useAdminUsers";
+// API_ENDPOINTS removed as it is internal to masterDataApi now
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { adminUsersKeys } from "@/hooks/useAdminUsers";
@@ -124,6 +123,9 @@ export function UserAssignmentDialog({
     });
   };
 
+  const { mutateAsync: assignUser } = useAssignUserToUnit();
+  const { mutateAsync: unassignUser } = useUnassignUserFromUnit();
+
   // Handle save - assign/unassign users
   const handleSave = async () => {
     setIsAssigning(true);
@@ -148,29 +150,17 @@ export function UserAssignmentDialog({
         }
       });
 
-      // Perform updates using API client directly
+      // Perform updates using hooks
       const updatePromises: Promise<unknown>[] = [];
 
       // Assign users to this unit
       toAssign.forEach((userId) => {
-        const formData = new FormData();
-        formData.append("unit_id", unit.id.toString());
-        // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
-        // API client now auto-detects FormData and sets multipart/form-data headers
-        updatePromises.push(
-          api.put(API_ENDPOINTS.ADMIN.USERS.UPDATE(userId), formData)
-        );
+        updatePromises.push(assignUser({ userId, unitId: unit.id }));
       });
 
-      // Unassign users from this unit (set unit_id to null/0)
+      // Unassign users from this unit
       toUnassign.forEach((userId) => {
-        const formData = new FormData();
-        formData.append("unit_id", "0"); // 0 means unassign
-        // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
-        // API client now auto-detects FormData and sets multipart/form-data headers
-        updatePromises.push(
-          api.put(API_ENDPOINTS.ADMIN.USERS.UPDATE(userId), formData)
-        );
+        updatePromises.push(unassignUser({ userId, unitId: unit.id }));
       });
 
       await Promise.all(updatePromises);
@@ -234,21 +224,21 @@ export function UserAssignmentDialog({
           </Badge>
         )}
         <Badge variant="secondary" className="text-xs">
-          {user.role}
+          {user.role} {/* architecture-allow presentation */}
         </Badge>
       </div>
     );
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[600px] h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle>Quản lý người dùng</DialogTitle>
-          <DialogDescription>
+    <ResponsiveDialog open={open} onOpenChange={handleOpenChange}>
+      <ResponsiveDialogContent className="sm:max-w-[600px] h-[80vh] flex flex-col">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>Quản lý người dùng</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             Chọn người dùng để thêm vào đơn vị &quot;{unit.name}&quot;
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         {/* Search */}
         <div className="relative">
@@ -337,7 +327,7 @@ export function UserAssignmentDialog({
         </ScrollArea>
 
         {/* Footer */}
-        <DialogFooter className="flex items-center justify-between sm:justify-between">
+        <ResponsiveDialogFooter className="flex items-center justify-between sm:justify-between">
           <div className="text-sm text-muted-foreground">
             {selectedUserIds.size} người dùng đã chọn
           </div>
@@ -355,8 +345,8 @@ export function UserAssignmentDialog({
               Lưu thay đổi
             </Button>
           </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

@@ -42,28 +42,28 @@ interface LeadDetailSheetProps {
 const getStatusColor = (status: LeadStatus) => {
   switch (status) {
     case "new":
-      return "bg-blue-500";
+      return "bg-info-500";
     case "assigned":
       return "bg-purple-500";
     case "contacted":
       return "bg-cyan-500";
     case "qualified":
-      return "bg-emerald-500";
+      return "bg-success-500";
     case "unqualified":
-      return "bg-gray-500";
+      return "bg-muted-foreground";
     case "converted":
-      return "bg-green-500";
+      return "bg-success-500";
     case "rejected":
-      return "bg-red-500";
+      return "bg-error-500";
     default:
-      return "bg-gray-500";
+      return "bg-muted-foreground";
   }
 };
 
 const getScoreColor = (score: number) => {
-  if (score >= 80) return "text-red-600 bg-red-50";
-  if (score >= 50) return "text-yellow-600 bg-yellow-50";
-  return "text-gray-600 bg-gray-50";
+  if (score >= 80) return "text-error-600 bg-error-50";
+  if (score >= 50) return "text-warning-600 bg-warning-50";
+  return "text-muted-foreground bg-muted";
 };
 
 const getInitials = (name: string) => {
@@ -239,6 +239,7 @@ export function LeadDetailSheet({
                 variant="destructive"
                 size="icon"
                 onClick={() => onDelete(lead)}
+                aria-label="Xóa lead"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>

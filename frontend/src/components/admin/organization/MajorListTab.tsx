@@ -313,8 +313,8 @@ export function MajorListTab({ unit }: MajorListTabProps) {
             {activePrograms.length > 0 && (
               <div className="mb-6">
                 <div className="mb-3 flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-green-500" />
-                  <h4 className="font-semibold text-green-700">
+                  <CheckCircle className="h-4 w-4 text-success-500" />
+                  <h4 className="font-semibold text-success-700">
                     Đang hoạt động ({activePrograms.length})
                   </h4>
                 </div>
@@ -344,7 +344,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => toggleProgramExpand(program.id)}
-                                  className="h-7 w-7 p-0"
+                                  className="h-9 w-9 md:h-7 md:w-7 p-0"
                                   disabled={!hasOfferings}
                                 >
                                   {hasOfferings ? (
@@ -402,7 +402,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
                                         onClick={() => handleDeleteProgramClick(program)}
-                                        className="text-red-600"
+                                        className="text-error-600"
                                       >
                                         <Trash2 className="mr-2 h-4 w-4" />
                                         Xóa
@@ -421,7 +421,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                   <TableCell></TableCell>
                                   <TableCell colSpan={3}>
                                     <div className="flex items-center gap-2 pl-6">
-                                      <Layers className="h-4 w-4 text-blue-500" />
+                                      <Layers className="h-4 w-4 text-info-500" />
                                       <span className="text-sm">{offering.offering_type}</span>
                                       {!offering.is_active && (
                                         <Badge variant="destructive" className="text-xs">
@@ -466,7 +466,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                           </DropdownMenuItem>
                                           <DropdownMenuItem
                                             onClick={() => handleDeleteOfferingClick(offering)}
-                                            className="text-red-600"
+                                            className="text-error-600"
                                           >
                                             <Trash2 className="mr-2 h-4 w-4" />
                                             Xóa
@@ -490,15 +490,15 @@ export function MajorListTab({ unit }: MajorListTabProps) {
             {inactivePrograms.length > 0 && (
               <div>
                 <div className="mb-3 flex items-center gap-2">
-                  <XCircle className="h-4 w-4 text-red-500" />
-                  <h4 className="font-semibold text-red-700">
+                  <XCircle className="h-4 w-4 text-error-500" />
+                  <h4 className="font-semibold text-error-700">
                     Ngưng hoạt động ({inactivePrograms.length})
                   </h4>
                 </div>
-                <div className="rounded-lg border border-red-200">
+                <div className="rounded-lg border border-error-200">
                   <Table>
                     <TableHeader>
-                      <TableRow className="bg-red-50">
+                      <TableRow className="bg-error-50">
                         <TableHead className="w-[40px]"></TableHead>
                         <TableHead>Tên chương trình</TableHead>
                         <TableHead className="w-[100px]">Mã</TableHead>
@@ -515,13 +515,13 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                         return (
                           <React.Fragment key={`inactive-${program.id}`}>
                             {/* Program Row */}
-                            <TableRow className="hover:bg-red-50/50">
+                            <TableRow className="hover:bg-error-50/50">
                               <TableCell className="p-2">
                                 <Button
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => toggleProgramExpand(program.id)}
-                                  className="h-7 w-7 p-0"
+                                  className="h-9 w-9 md:h-7 md:w-7 p-0"
                                   disabled={!hasOfferings}
                                 >
                                   {hasOfferings ? (
@@ -537,7 +537,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                               </TableCell>
                               <TableCell>
                                 <div className="flex items-center gap-2">
-                                  <GraduationCap className="h-4 w-4 text-red-400" />
+                                  <GraduationCap className="h-4 w-4 text-error-400" />
                                   <span className="text-muted-foreground font-medium">
                                     {program.name}
                                   </span>
@@ -581,7 +581,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
                                         onClick={() => handleDeleteProgramClick(program)}
-                                        className="text-red-600"
+                                        className="text-error-600"
                                       >
                                         <Trash2 className="mr-2 h-4 w-4" />
                                         Xóa
@@ -596,11 +596,11 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                             {isExpanded &&
                               hasOfferings &&
                               program.offerings.map((offering) => (
-                                <TableRow key={`offering-${offering.id}`} className="bg-red-50/30">
+                                <TableRow key={`offering-${offering.id}`} className="bg-error-50/30">
                                   <TableCell></TableCell>
                                   <TableCell colSpan={3}>
                                     <div className="flex items-center gap-2 pl-6">
-                                      <Layers className="h-4 w-4 text-blue-500" />
+                                      <Layers className="h-4 w-4 text-info-500" />
                                       <span className="text-sm">{offering.offering_type}</span>
                                       {!offering.is_active && (
                                         <Badge variant="destructive" className="text-xs">
@@ -645,7 +645,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                           </DropdownMenuItem>
                                           <DropdownMenuItem
                                             onClick={() => handleDeleteOfferingClick(offering)}
-                                            className="text-red-600"
+                                            className="text-error-600"
                                           >
                                             <Trash2 className="mr-2 h-4 w-4" />
                                             Xóa
@@ -709,7 +709,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
               <strong>&quot;{programToDelete?.name}&quot;</strong>?
               <br />
               <br />
-              <span className="font-medium text-red-600">
+              <span className="font-medium text-error-600">
                 Cảnh báo: Tất cả loại hình đào tạo và thông tin tuyển sinh liên quan sẽ bị xóa theo!
               </span>
               <br />
@@ -720,7 +720,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDeleteProgram}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Xóa
             </AlertDialogAction>
@@ -738,7 +738,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
               <strong>&quot;{offeringToDelete?.offering_type}&quot;</strong>?
               <br />
               <br />
-              <span className="font-medium text-red-600">
+              <span className="font-medium text-error-600">
                 Cảnh báo: Tất cả thông tin tuyển sinh liên quan sẽ bị xóa theo!
               </span>
               <br />
@@ -749,7 +749,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDeleteOffering}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Xóa
             </AlertDialogAction>

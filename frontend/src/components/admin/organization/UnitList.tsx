@@ -181,7 +181,7 @@ export function UnitList({ units, isLoading, selectedUnitId, onSelectUnit }: Uni
       {/* Header */}
       <div className="space-y-3 border-b p-4">
         <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <h2 className="flex items-center gap-2 text-lg font-semibold font-display">
             <Building2 className="h-5 w-5" />
             Đơn vị tổ chức
           </h2>

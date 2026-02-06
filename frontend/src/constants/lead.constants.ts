@@ -3,7 +3,7 @@
  * Centralized Lead Constants
  *
  * Single source of truth for lead-related enums and options.
- * Used across LeadFilters, QuickDisposition, and other lead components.
+ * Used across LeadFilters and other lead components.
  */
 
 import type { LeadStatus, LeadSource } from "@/types/lead.types";
@@ -23,7 +23,7 @@ export const LEAD_STATUS_OPTIONS: LeadStatusOption[] = [
   {
     value: "new",
     label: "Mới",
-    color: "bg-blue-500",
+    color: "bg-info-500",
     description: "Lead mới chưa được xử lý",
   },
   {
@@ -41,40 +41,52 @@ export const LEAD_STATUS_OPTIONS: LeadStatusOption[] = [
   {
     value: "qualified",
     label: "Đủ điều kiện",
-    color: "bg-emerald-500",
+    color: "bg-success-500",
     description: "Lead đủ điều kiện chuyển đổi",
   },
   {
     value: "unqualified",
     label: "Không đủ điều kiện",
-    color: "bg-gray-500",
+    color: "bg-muted-foreground",
     description: "Lead không đủ điều kiện",
   },
   {
     value: "converted",
     label: "Đã chuyển đổi",
-    color: "bg-green-500",
+    color: "bg-success-500",
     description: "Đã chuyển đổi thành sinh viên",
   },
   {
     value: "rejected",
     label: "Đã từ chối",
-    color: "bg-red-500",
+    color: "bg-error-500",
     description: "Lead bị từ chối",
   },
 ];
 
-// Helper to get status by value
+// ✅ PERFORMANCE: O(1) lookup Maps (pre-computed at module load)
+// Replaces O(n) .find() calls with O(1) Map.get()
+const LEAD_STATUS_MAP = new Map(
+  LEAD_STATUS_OPTIONS.map((option) => [option.value, option])
+);
+const LEAD_STATUS_COLOR_MAP = new Map(
+  LEAD_STATUS_OPTIONS.map((option) => [option.value, option.color])
+);
+const LEAD_STATUS_LABEL_MAP = new Map(
+  LEAD_STATUS_OPTIONS.map((option) => [option.value, option.label])
+);
+
+// Helper to get status by value - O(1) lookup
 export const getLeadStatusOption = (value: LeadStatus): LeadStatusOption | undefined =>
-  LEAD_STATUS_OPTIONS.find((option) => option.value === value);
+  LEAD_STATUS_MAP.get(value);
 
-// Helper to get status color
+// Helper to get status color - O(1) lookup
 export const getLeadStatusColor = (value: LeadStatus): string =>
-  getLeadStatusOption(value)?.color ?? "bg-gray-400";
+  LEAD_STATUS_COLOR_MAP.get(value) ?? "bg-muted-foreground";
 
-// Helper to get status label
+// Helper to get status label - O(1) lookup
 export const getLeadStatusLabel = (value: LeadStatus): string =>
-  getLeadStatusOption(value)?.label ?? value;
+  LEAD_STATUS_LABEL_MAP.get(value) ?? value;
 
 // =============================================================================
 // LEAD SOURCE OPTIONS
@@ -97,21 +109,29 @@ export const LEAD_SOURCE_OPTIONS: LeadSourceOption[] = [
   { value: "other", label: "Khác" },
 ];
 
-// Helper to get source by value
-export const getLeadSourceOption = (value: LeadSource): LeadSourceOption | undefined =>
-  LEAD_SOURCE_OPTIONS.find((option) => option.value === value);
+// ✅ PERFORMANCE: O(1) lookup Maps for source options
+const LEAD_SOURCE_MAP = new Map(
+  LEAD_SOURCE_OPTIONS.map((option) => [option.value, option])
+);
+const LEAD_SOURCE_LABEL_MAP = new Map(
+  LEAD_SOURCE_OPTIONS.map((option) => [option.value, option.label])
+);
 
-// Helper to get source label
+// Helper to get source by value - O(1) lookup
+export const getLeadSourceOption = (value: LeadSource): LeadSourceOption | undefined =>
+  LEAD_SOURCE_MAP.get(value);
+
+// Helper to get source label - O(1) lookup
 export const getLeadSourceLabel = (value: LeadSource): string =>
-  getLeadSourceOption(value)?.label ?? value;
+  LEAD_SOURCE_LABEL_MAP.get(value) ?? value;
 
 // =============================================================================
-// STATUS WORKFLOW HELPERS (for QuickDisposition)
+// STATUS WORKFLOW HELPERS
 // =============================================================================
 
 /**
  * Status IDs that require additional information (complex disposition)
- * Used by QuickDisposition to determine which statuses need extra forms
+ * @deprecated These constants are no longer actively used
  */
 export const COMPLEX_STATUS_IDS: LeadStatus[] = [
   "qualified",
@@ -125,14 +145,18 @@ export const COMPLEX_STATUS_IDS: LeadStatus[] = [
  */
 export const SCHEDULABLE_STATUS_IDS: LeadStatus[] = ["contacted", "qualified"];
 
-/**
- * Check if a status is complex (requires additional info)
- */
-export const isComplexStatus = (status: LeadStatus): boolean =>
-  COMPLEX_STATUS_IDS.includes(status);
+// ✅ PERFORMANCE: O(1) lookup Sets for status checks
+const COMPLEX_STATUS_SET = new Set(COMPLEX_STATUS_IDS);
+const SCHEDULABLE_STATUS_SET = new Set(SCHEDULABLE_STATUS_IDS);
 
 /**
- * Check if a status is schedulable
+ * Check if a status is complex (requires additional info) - O(1) lookup
+ */
+export const isComplexStatus = (status: LeadStatus): boolean =>
+  COMPLEX_STATUS_SET.has(status);
+
+/**
+ * Check if a status is schedulable - O(1) lookup
  */
 export const isSchedulableStatus = (status: LeadStatus): boolean =>
-  SCHEDULABLE_STATUS_IDS.includes(status);
+  SCHEDULABLE_STATUS_SET.has(status);

@@ -25,6 +25,17 @@ class ConsultationCreate(ConsultationBase):
     status_id: str
     consultation_date: Optional[datetime] = None  # Optional, defaults to NOW
     scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
+    # Loss Reason - required for final negative status (validated in service)
+    loss_reason_code: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Structured loss reason code (e.g., PRICE_HIGH, NO_CONTACT)"
+    )
+    loss_reason_note: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Additional note for loss reason"
+    )
 
 
 class ConsultationUpdate(BaseModel):
@@ -37,6 +48,17 @@ class ConsultationUpdate(BaseModel):
     duration_minutes: Optional[int] = None
     status_id: Optional[str] = None
     scheduled_at: Optional[datetime] = None
+    # Loss Reason - required for final negative status (validated in service)
+    loss_reason_code: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Structured loss reason code (e.g., PRICE_HIGH, NO_CONTACT)"
+    )
+    loss_reason_note: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Additional note for loss reason"
+    )
 
 
 class Consultation(ConsultationBase):
@@ -85,6 +107,25 @@ class LeadAction(BaseModel):
     action: Literal["reject", "reassign"]
     # ✅ SỬA: Thêm strip_whitespace
     reason: str = Field(..., strip_whitespace=True)
+
+
+# -----------------
+# ADMISSION PROFILE SHALLOW (for Lead response)
+# -----------------
+
+
+class AdmissionProfileShallow(BaseModel):
+    """Shallow schema for AdmissionProfile when nested in Lead response.
+    
+    Provides essential info for UI navigation without full profile details.
+    Frontend uses this to show 'View Profile' vs 'Create Profile' button.
+    """
+    id: int
+    status: str  # draft, submitted, approved, rejected, etc.
+    student_code: Optional[str] = None  # If enrolled
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -----------------
@@ -210,6 +251,8 @@ class LeadUpdate(BaseModel):
     location_proximity: Optional[int] = Field(None, ge=0, le=2)
     occupation_relevance: Optional[int] = Field(None, ge=0, le=2)
     academic_performance: Optional[int] = Field(None, ge=0, le=3)
+    # Optimistic locking - optional, when provided will check for concurrent updates
+    version: Optional[int] = Field(None, description="Optimistic locking version")
 
     @field_validator("email", mode="before")
     @classmethod
@@ -251,6 +294,21 @@ class LeadUpdate(BaseModel):
         return normalized
 
 
+class LeadStatusUpdate(BaseModel):
+    """
+    Schema for updating lead consultation status (FSM v3.0 compliant).
+
+    Used by PATCH /api/leads/{lead_id}/status endpoint.
+    This schema is validated by the FSM engine before being applied.
+    """
+    consultation_status_id: str = Field(
+        ...,
+        description="Target consultation status ID (validated by FSM engine)"
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class Lead(LeadBase):
     id: int
     status: str
@@ -264,6 +322,8 @@ class Lead(LeadBase):
     consultation_status_id: Optional[str] = None
     pipeline_stage_id: Optional[str] = None
     next_activity_at: Optional[datetime] = None  # Quick Disposition: bubble-up sorting
+    # Optimistic locking version
+    version: int = 1
     # Fit Score fields
     birth_year: Optional[int] = None
     location_proximity: int = 0
@@ -296,6 +356,8 @@ class Lead(LeadBase):
     consultation_status: Optional[ConsultationStatus] = None
     # Sử dụng ApplicationShallow để tránh cyclic reference (Lead -> Application -> Lead)
     application: Optional["ApplicationShallow"] = None
+    # NEW: AdmissionProfile (replacement for Application in admission module)
+    admission_profile: Optional[AdmissionProfileShallow] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -414,6 +476,58 @@ class Application(ApplicationBase):
     officer: Optional[User] = None
     lead: Optional["Lead"] = None  # Forward reference
 
+    model_config = ConfigDict(from_attributes=True)
+
+
+# -----------------
+# WORKFLOW CONTEXT SCHEMA (Phase-Based Workflow)
+# -----------------
+
+
+class WorkflowAllowedStatus(BaseModel):
+    """Status option in workflow context."""
+    id: str
+    name: str
+    phase: str
+    color_code: str
+    outcome_type: str
+    is_universal: bool
+
+
+class WorkflowContext(BaseModel):
+    """
+    Workflow context for a lead - provides frontend with allowed actions.
+    
+    Used by frontend to:
+    - Filter status dropdown options
+    - Show/hide phase-specific UI elements
+    - Validate user actions before API call
+    """
+    lead_id: int
+    current_phase: str = Field(..., description="Current workflow phase: consultation, admission, fee, enrolled")
+    current_status_id: Optional[str] = None
+    current_stage_id: Optional[str] = None
+    
+    # Allowed statuses for current phase
+    allowed_statuses: List[WorkflowAllowedStatus] = Field(
+        default_factory=list,
+        description="Statuses user can select based on current phase and role"
+    )
+    
+    # Locked actions (for UI to disable buttons)
+    is_terminal_phase: bool = Field(
+        default=False,
+        description="True if lead is in enrolled phase (no further transitions)"
+    )
+    can_change_status: bool = Field(
+        default=True,
+        description="False if status changes are locked"
+    )
+    
+    # Admission profile info (for phase derivation)
+    has_admission_profile: bool = False
+    admission_status: Optional[str] = None
+    
     model_config = ConfigDict(from_attributes=True)
 
 

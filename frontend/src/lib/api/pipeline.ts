@@ -15,6 +15,8 @@ import type {
   FullPipeline,
   PipelineQueryParams,
   MoveLeadPayload,
+  AllowedTransition as AllowedTransitionType,
+  AllowedTransitionCreate as AllowedTransitionCreateType,
 } from '@/types/pipeline.types'
 import type { Lead, SuccessResponse } from '@/types/lead.types'
 
@@ -64,28 +66,41 @@ export async function getFullPipeline(
 }
 
 /**
- * Get allowed next statuses from current status (state machine)
- * Returns only valid next statuses based on workflow transitions
+ * Get allowed next statuses from current status (FSM v3.0)
+ * Returns only valid next statuses based on:
+ * - Workflow transitions (allowed_transitions table)
+ * - Phase guards (user/role cannot cross phases)
+ * - Trigger type (hide system-only statuses)
+ * - Lead phase (derived from admission_profile)
  *
  * @param currentStatusId - Current consultation status ID (null for new leads)
+ * @param leadId - Lead ID to derive phase from admission_profile (optional)
  *
  * @example
  * ```ts
- * // Get allowed next statuses from current status
- * const nextStatuses = await pipelineApi.getAllowedNextStatuses('sts01')
+ * // Get allowed next statuses for a lead
+ * const nextStatuses = await pipelineApi.getAllowedNextStatuses('sts01', 123)
  *
- * // Get all statuses for new lead (no current status)
- * const allStatuses = await pipelineApi.getAllowedNextStatuses(null)
+ * // Get initial status for new lead (NULL → NOT_CONTACTED only)
+ * const initialStatuses = await pipelineApi.getAllowedNextStatuses(null)
  * ```
  */
 export async function getAllowedNextStatuses(
-  currentStatusId: string | null
+  currentStatusId: string | null,
+  leadId?: number
 ): Promise<ConsultationStatus[]> {
+  const params: Record<string, string | number> = {}
+
+  if (currentStatusId) {
+    params.current_status_id = currentStatusId
+  }
+  if (leadId) {
+    params.lead_id = leadId
+  }
+
   const response = await api.get<ConsultationStatus[]>(
     '/api/pipeline/allowed-next-statuses',
-    {
-      params: currentStatusId ? { current_status_id: currentStatusId } : {},
-    }
+    { params }
   )
   return response.data
 }
@@ -371,20 +386,9 @@ export async function getPipelineStats(
 // ALLOWED TRANSITIONS OPERATIONS (Admin Only)
 // ============================================
 
-export interface AllowedTransition {
-  id: number
-  from_status_id: string
-  to_status_id: string
-  created_at: string
-  updated_at: string
-  from_status?: ConsultationStatus
-  to_status?: ConsultationStatus
-}
-
-export interface AllowedTransitionCreate {
-  from_status_id: string
-  to_status_id: string
-}
+// Re-export types for convenience
+export type AllowedTransition = AllowedTransitionType
+export type AllowedTransitionCreate = AllowedTransitionCreateType
 
 /**
  * Get all allowed transitions
@@ -400,7 +404,7 @@ export async function getAllowedTransitions(): Promise<AllowedTransition[]> {
 }
 
 /**
- * Create new allowed transition
+ * Create new allowed transition (FSM v3.0)
  * Admin only
  *
  * @throws {AxiosError} 403 if not admin, 422 for validation errors
@@ -408,8 +412,11 @@ export async function getAllowedTransitions(): Promise<AllowedTransition[]> {
  * @example
  * ```ts
  * const transition = await pipelineApi.createAllowedTransition({
- *   from_status_id: 'contacted',
- *   to_status_id: 'qualified'
+ *   from_status_id: 'sts00',
+ *   to_status_id: 'sts02',
+ *   trigger_type: 'user',
+ *   required_phase: 'consultation',
+ *   description: 'Contact lead'
  * })
  * ```
  */

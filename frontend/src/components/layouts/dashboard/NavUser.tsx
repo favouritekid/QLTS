@@ -39,6 +39,7 @@ export function NavUser({ isCollapsed }: { isCollapsed: boolean }) {
             "flex w-full items-center justify-between px-3 py-2 text-left",
             isCollapsed && "h-10 w-10 justify-center p-0"
           )}
+          {...(isCollapsed ? { "aria-label": "Menu người dùng" } : {})}
         >
           {/* Phần nội dung button */}
           <div className="flex items-center gap-2">
@@ -52,7 +53,7 @@ export function NavUser({ isCollapsed }: { isCollapsed: boolean }) {
             </div>
           </div>
           {/* Icon expand/collapse (chỉ hiển thị khi mở rộng) */}
-          {!isCollapsed && <ChevronsUpDown className="text-muted-foreground h-4 w-4" />}
+          {!isCollapsed && <ChevronsUpDown aria-hidden="true" className="text-muted-foreground h-4 w-4" />}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-56" align="end" forceMount>

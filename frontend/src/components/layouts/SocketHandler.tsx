@@ -1,7 +1,7 @@
 // components/layouts/SocketHandler.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { socketService } from "@/lib/socket/client";
 import { toast } from "sonner";
@@ -11,6 +11,23 @@ import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
+
+// =============================================================================
+// DEBOUNCED INVALIDATION HELPER
+// =============================================================================
+// ✅ PERFORMANCE FIX: Debounce cache invalidations to prevent browser freeze
+// When multiple socket events fire rapidly, we batch the invalidations
+// and only execute once after a delay, preventing excessive refetches.
+
+interface PendingInvalidations {
+  leadsLists: boolean;
+  leadDetails: Set<number>;
+  leadTimelines: Set<number>;
+  pipeline: boolean;
+  dashboard: boolean;
+}
+
+const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
 
 /**
  * Component "vô hình" (không render)
@@ -22,6 +39,115 @@ export function SocketHandler() {
   const markAsRead = useMarkAsRead();  // ✅ For marking as read when user clicks toast action
   const { data: preferences } = useNotificationPreferences();
   const queryClient = useQueryClient();
+
+  // ==========================================================================
+  // DEBOUNCED INVALIDATION SYSTEM
+  // ==========================================================================
+  // ✅ PERFORMANCE FIX: Batch rapid socket events into single invalidation
+
+  const pendingInvalidationsRef = useRef<PendingInvalidations>({
+    leadsLists: false,
+    leadDetails: new Set(),
+    leadTimelines: new Set(),
+    pipeline: false,
+    dashboard: false,
+  });
+  const invalidationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const flushInvalidations = useCallback(() => {
+    const pending = pendingInvalidationsRef.current;
+
+    // Only log if there's something to flush
+    const hasWork = pending.leadsLists ||
+                    pending.leadDetails.size > 0 ||
+                    pending.leadTimelines.size > 0 ||
+                    pending.pipeline ||
+                    pending.dashboard;
+
+    if (!hasWork) return;
+
+    console.log("[SocketHandler] Flushing batched invalidations:", {
+      leadsLists: pending.leadsLists,
+      leadDetailsCount: pending.leadDetails.size,
+      leadTimelinesCount: pending.leadTimelines.size,
+      pipeline: pending.pipeline,
+      dashboard: pending.dashboard,
+    });
+
+    // Invalidate leads list (only once, not per-lead)
+    if (pending.leadsLists) {
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+    }
+
+    // Invalidate specific lead details
+    for (const leadId of pending.leadDetails) {
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
+    }
+
+    // Invalidate specific lead timelines
+    for (const leadId of pending.leadTimelines) {
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+    }
+
+    // Invalidate pipeline
+    if (pending.pipeline) {
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    }
+
+    // Invalidate dashboard
+    if (pending.dashboard) {
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+
+    // Reset pending state
+    pendingInvalidationsRef.current = {
+      leadsLists: false,
+      leadDetails: new Set(),
+      leadTimelines: new Set(),
+      pipeline: false,
+      dashboard: false,
+    };
+  }, [queryClient]);
+
+  const scheduleInvalidation = useCallback((updates: {
+    leadsLists?: boolean;
+    leadDetail?: number;
+    leadTimeline?: number;
+    pipeline?: boolean;
+    dashboard?: boolean;
+  }) => {
+    // Accumulate the requested invalidations
+    if (updates.leadsLists) {
+      pendingInvalidationsRef.current.leadsLists = true;
+    }
+    if (updates.leadDetail !== undefined) {
+      pendingInvalidationsRef.current.leadDetails.add(updates.leadDetail);
+    }
+    if (updates.leadTimeline !== undefined) {
+      pendingInvalidationsRef.current.leadTimelines.add(updates.leadTimeline);
+    }
+    if (updates.pipeline) {
+      pendingInvalidationsRef.current.pipeline = true;
+    }
+    if (updates.dashboard) {
+      pendingInvalidationsRef.current.dashboard = true;
+    }
+
+    // Clear existing timeout and schedule new one
+    if (invalidationTimeoutRef.current) {
+      clearTimeout(invalidationTimeoutRef.current);
+    }
+    invalidationTimeoutRef.current = setTimeout(flushInvalidations, INVALIDATION_DEBOUNCE_MS);
+  }, [flushInvalidations]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (invalidationTimeoutRef.current) {
+        clearTimeout(invalidationTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // ✅ CẢI TIẾN: Dùng ref cho hàm logout để tránh "stale closure"
   const logoutRef = useRef(logout);
@@ -244,7 +370,8 @@ export function SocketHandler() {
           break;
 
         case "lead":
-          queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+          // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+          scheduleInvalidation({ leadsLists: true });
           break;
 
         case "organization":
@@ -361,11 +488,14 @@ export function SocketHandler() {
       priority: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] lead_assigned → invalidating queries (silent sync)");
+      console.log("[SocketHandler] lead_assigned → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh officer's lead list
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+      });
+      // Also invalidate insights immediately (not in debounce as it's not heavy)
       queryClient.invalidateQueries({ queryKey: leadsKeys.insights(data.lead_id) });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
@@ -463,13 +593,15 @@ export function SocketHandler() {
       created_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] consultation_created → invalidating queries (silent sync)");
+      console.log("[SocketHandler] consultation_created → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh timeline and status
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+        leadTimeline: data.lead_id,
+        pipeline: true,
+      });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -482,13 +614,15 @@ export function SocketHandler() {
       deleted_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] consultation_deleted → invalidating queries (silent sync)");
+      console.log("[SocketHandler] consultation_deleted → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh timeline and status
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+        leadTimeline: data.lead_id,
+        pipeline: true,
+      });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -501,13 +635,15 @@ export function SocketHandler() {
       updated_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] consultation_updated → invalidating queries (silent sync)");
+      console.log("[SocketHandler] consultation_updated → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh timeline and status
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+        leadTimeline: data.lead_id,
+        pipeline: true,
+      });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -520,32 +656,16 @@ export function SocketHandler() {
       updated_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received lead_updated event:", data);
+      console.log("[SocketHandler] lead_updated → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh all views
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
-
-      // If status changed, also invalidate pipeline queries
-      if (data.status_changed) {
-        queryClient.invalidateQueries({ queryKey: ["pipeline"] });
-      }
-
-      // ✅ FIX: Only show toast for human updates, not system updates
-      // System updates (like Celery updating next_activity_at) should be silent
-      // if (data.updated_by !== "system") {
-      //   const fieldsText = data.updated_fields.slice(0, 3).join(", ");
-      //   const moreFields =
-      //     data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
-      //   toast.info("📝 Lead updated", {
-      //     description: `${fieldsText}${moreFields} by ${data.updated_by}`,
-      //     duration: 4000,
-      //   });
-      // }
-      // ✅ REFACTOR: Removed frontend-generated toast. 
-      // We now rely on the 'notification' event from backend (handleNewNotification)
-      // which allows for template customization and unified logic.
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+        leadTimeline: data.lead_id,
+        pipeline: data.status_changed ? true : undefined,
+      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME LEAD DELETION: Lắng nghe sự kiện lead_deleted
@@ -556,14 +676,18 @@ export function SocketHandler() {
       officer_id: number;
       actor_id: number;
     }) => {
-      console.log("[SocketHandler] lead_deleted → invalidating queries (silent sync)");
+      console.log("[SocketHandler] lead_deleted → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh all views
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      // Remove specific lead queries immediately (no debounce needed for removal)
       queryClient.removeQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.removeQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+
+      // ✅ PERFORMANCE FIX: Use debounced invalidation for list queries
+      scheduleInvalidation({
+        leadsLists: true,
+        pipeline: true,
+        dashboard: true,
+      });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
     const handleLeadCreated = (data: {
@@ -579,11 +703,13 @@ export function SocketHandler() {
       assignment_status: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] lead_created → invalidating queries (silent sync)");
+      console.log("[SocketHandler] lead_created → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh dashboard
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        dashboard: true,
+      });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -598,11 +724,13 @@ export function SocketHandler() {
       assignment_status: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] lead_assignment_failed → invalidating queries (silent sync)");
+      console.log("[SocketHandler] lead_assignment_failed → scheduling batched invalidation");
 
-      // Invalidate lead-related queries to refresh dashboard
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+      });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -632,18 +760,16 @@ export function SocketHandler() {
       old_status: string;
       new_status: string;
     }) => {
-      console.log("[SocketHandler] Received lead_status_changed event:", data);
+      console.log("[SocketHandler] lead_status_changed → scheduling batched invalidation");
 
-      // Invalidate lead-related queries
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
-
-      // Show toast notification
-      toast.info("📊 Lead Status Changed", {
-        description: `Lead #${data.lead_id}: ${data.old_status || "N/A"} → ${data.new_status || "N/A"}`,
-        duration: 4000,
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+        pipeline: true,
       });
+      // ✅ NO TOAST - This event is often triggered along with other events
+      // Per-user notification will show toast via "new_notification" event if needed
     };
 
     // ✅ REAL-TIME USER ROLE: Lắng nghe sự kiện user_role_changed
@@ -736,12 +862,14 @@ export function SocketHandler() {
       actor_id: number;
       reason: string;
     }) => {
-      console.log("[SocketHandler] lead_reassigned → invalidating queries (silent sync)");
+      console.log("[SocketHandler] lead_reassigned → scheduling batched invalidation");
 
-      // Invalidate lead-related queries for both old and new assignments
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
+      scheduleInvalidation({
+        leadsLists: true,
+        leadDetail: data.lead_id,
+        dashboard: true,
+      });
       // ✅ NO TOAST - Per-user notification will show toast via "notification" event
     };
 
@@ -908,7 +1036,8 @@ export function SocketHandler() {
       socket.offAny(handleAnyEvent);
     };
     // ✅ FIX: Added isSocketConnected to dependencies to trigger listener setup when socket connects
-  }, [isAuthenticated, isSocketConnected, addNotification, markAsRead, preferences, queryClient]);
+    // ✅ PERFORMANCE FIX: Added scheduleInvalidation for debounced cache updates
+  }, [isAuthenticated, isSocketConnected, addNotification, markAsRead, preferences, queryClient, scheduleInvalidation, user]);
 
   return null; // Không render gì cả
 }

@@ -57,6 +57,44 @@ export interface TrendPoint {
   converted: number;
 }
 
+/** Phase 2: Loss reason breakdown item */
+export interface LossBreakdownItem {
+  reason_code: string;
+  count: number;
+  percentage: number;
+}
+
+/** Phase 2: Stage velocity statistics */
+export interface VelocityStats {
+  avg_days: number;
+  min_days: number;
+  max_days: number;
+  sample_size: number;
+}
+
+/** Phase 2: Estimated lost revenue */
+export interface EstimatedLostRevenue {
+  lost_leads_count: number;
+  avg_tuition: number;
+  total_lost_revenue: number;
+  leads_with_tuition: number;
+}
+
+/** Phase 2: AI-powered funnel suggestion */
+export interface FunnelSuggestion {
+  id: string;
+  type: "bottleneck" | "slow_stage" | "high_loss" | "loss_reason";
+  priority: "critical" | "high" | "medium" | "low";
+  stage_id?: string | null;
+  stage_name?: string | null;
+  title: string;
+  description: string;
+  metric_value?: number | null;
+  metric_label?: string | null;
+  action_label?: string | null;
+  action_url?: string | null;
+}
+
 export interface FunnelStage {
   stage_id: string;
   stage_name: string;
@@ -70,6 +108,13 @@ export interface FunnelStage {
     negative: number;
     neutral: number;
   };
+  // SPEC 2026-02-04: Early Exit metrics
+  early_exit_count?: number;  // FINAL leads (negative) at this stage
+  move_forward?: number;      // lead_count - early_exit_count
+  // Phase 2: Advanced funnel analytics
+  loss_breakdown?: LossBreakdownItem[] | null;
+  velocity?: VelocityStats | null;
+  estimated_lost_revenue?: EstimatedLostRevenue | null;
 }
 
 export interface LeadPreview {
@@ -103,6 +148,8 @@ export interface EnhancedOfficerStats {
   performance_trends: TrendPoint[];
   sales_funnel: FunnelStage[];
   actionable_lists: ActionableLists;
+  // Phase 2: AI-powered funnel suggestions
+  funnel_suggestions?: FunnelSuggestion[];
   // Phase 6: Annual progress (rolling targets)
   annual_progress?: AnnualProgressInfo | null;
 }
@@ -147,16 +194,45 @@ export interface DashboardFilters {
 
 async function fetchDashboard(filters: DashboardFilters): Promise<EnhancedOfficerStats> {
   const params = new URLSearchParams();
-  
+
   if (filters.startDate) params.append("start_date", filters.startDate);
   if (filters.endDate) params.append("end_date", filters.endDate);
   if (filters.scope) params.append("scope", filters.scope);
   if (filters.officerId) params.append("officer_id", filters.officerId.toString());
   if (filters.unitId) params.append("unit_id", filters.unitId.toString());
-  
+
   const url = `/api/officer/dashboard${params.toString() ? `?${params.toString()}` : ""}`;
-  const response = await api.get(url);
-  return response.data;
+
+  try {
+    const response = await api.get<EnhancedOfficerStats>(url);
+
+    // Ensure we never return undefined (React Query requirement)
+    if (!response.data) {
+      console.error("[fetchDashboard] API returned empty response for:", url, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        data: response.data,
+        dataType: typeof response.data,
+      });
+      throw new Error(`Dashboard API returned empty response (status: ${response.status})`);
+    }
+
+    // Validate response has required fields
+    if (!response.data.kpis || !response.data.status_overview) {
+      console.error("[fetchDashboard] API returned incomplete response for:", url, {
+        hasKpis: !!response.data.kpis,
+        hasStatusOverview: !!response.data.status_overview,
+        keys: Object.keys(response.data),
+      });
+      throw new Error("Dashboard API returned incomplete response");
+    }
+
+    return response.data;
+  } catch (error) {
+    console.error("[fetchDashboard] API error for:", url, error);
+    throw error;
+  }
 }
 
 async function fetchTeamStats(startDate?: string, endDate?: string): Promise<TeamStats> {

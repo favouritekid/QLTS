@@ -27,6 +27,7 @@ interface OfficerRatingInputProps {
   currentLeadScore?: number;
   className?: string;
   compact?: boolean;
+  version?: number; // Optimistic locking - prevents concurrent update conflicts
 }
 
 const RATING_LABELS: Record<number, { label: string; description: string }> = {
@@ -43,6 +44,7 @@ export function OfficerRatingInput({
   currentLeadScore = 0,
   className,
   compact = false,
+  version,
 }: OfficerRatingInputProps) {
   const [hoverRating, setHoverRating] = useState<number | null>(null);
   // Local state để UI update ngay lập tức khi click
@@ -72,7 +74,7 @@ export function OfficerRatingInput({
     updateLead.mutate(
       {
         id: leadId,
-        data: { officer_rating: rating },
+        data: { officer_rating: rating, version },
       },
       {
         onSuccess: () => {
@@ -100,8 +102,9 @@ export function OfficerRatingInput({
                   onMouseEnter={() => setHoverRating(star)}
                   onMouseLeave={() => setHoverRating(null)}
                   disabled={updateLead.isPending}
+                  aria-label={`Đánh giá ${star} trên 5`}
                   className={cn(
-                    "p-0.5 transition-colors focus:outline-none focus:ring-1 focus:ring-amber-400 rounded",
+                    "p-0.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400 rounded",
                     updateLead.isPending && "opacity-50 cursor-not-allowed"
                   )}
                 >
@@ -111,7 +114,7 @@ export function OfficerRatingInput({
                       compact ? "h-4 w-4" : "h-5 w-5",
                       star <= displayRating
                         ? "fill-amber-400 text-amber-400"
-                        : "fill-transparent text-gray-300 hover:text-amber-200"
+                        : "fill-transparent text-border hover:text-amber-200"
                     )}
                   />
                 </button>

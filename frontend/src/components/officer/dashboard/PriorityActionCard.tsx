@@ -2,10 +2,13 @@
 /**
  * Priority Action Card - Enhanced version
  * Compact action item with Zalo, Phone, and navigation buttons
+ *
+ * ✅ PERFORMANCE: React.memo prevents re-renders when sibling actions update
  */
 
 "use client";
 
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +33,7 @@ export interface PriorityAction {
   priority: "urgent" | "high" | "medium";
   lead_id: number;
   lead_name: string;
-  lead_score: number;
+  lead_score?: number | null; // Can be null/undefined from backend
   reason: string;
   phone?: string;
   days_since_contact?: number;
@@ -46,17 +49,17 @@ interface PriorityActionCardProps {
 const typeConfig = {
   hot_lead: {
     icon: Flame,
-    color: "text-red-500",
+    color: "text-error-500",
     label: "Hot",
   },
   overdue: {
     icon: AlertTriangle,
-    color: "text-amber-500",
+    color: "text-warning-500",
     label: "Quá hạn",
   },
   scheduled: {
     icon: Calendar,
-    color: "text-blue-500",
+    color: "text-info-500",
     label: "Đã hẹn",
   },
   follow_up: {
@@ -66,19 +69,20 @@ const typeConfig = {
   },
   new_lead: {
     icon: Sparkles,
-    color: "text-green-500",
+    color: "text-success-500",
     label: "Mới",
   },
 };
 
-// Lead score badge color based on score
-const getScoreBadgeClass = (score: number) => {
-  if (score >= 80) return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
-  if (score >= 60) return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
-  return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400";
+// Lead score badge color based on score (handles null/undefined)
+const getScoreBadgeClass = (score?: number | null) => {
+  if (score == null) return "bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground";
+  if (score >= 80) return "bg-error-100 text-error-700 dark:bg-error-900/30 dark:text-error-400";
+  if (score >= 60) return "bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-400";
+  return "bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground";
 };
 
-export function PriorityActionCard({
+export const PriorityActionCard = memo(function PriorityActionCard({
   action,
   onCall,
   onZalo,
@@ -96,9 +100,9 @@ export function PriorityActionCard({
   return (
     <div
       className={cn(
-        "group p-3 rounded-lg border bg-card transition-all duration-200",
+        "group p-3 rounded-lg border bg-card transition-colors duration-200",
         "hover:border-primary/30 hover:bg-muted/50",
-        action.priority === "urgent" && "border-l-2 border-l-red-500"
+        action.priority === "urgent" && "border-l-2 border-l-error-500"
       )}
     >
       <div className="flex items-center gap-3">
@@ -116,12 +120,12 @@ export function PriorityActionCard({
             >
               {action.lead_name}
             </Link>
-            {/* Enhanced lead score badge */}
-            <Badge 
-              variant="secondary" 
+            {/* Enhanced lead score badge (handles null/undefined) */}
+            <Badge
+              variant="secondary"
               className={cn("text-[10px] h-4 px-1.5 font-mono", getScoreBadgeClass(action.lead_score))}
             >
-              {action.lead_score}
+              {action.lead_score ?? "–"}
             </Badge>
           </div>
           <div className="flex items-center gap-2 mt-0.5">
@@ -145,7 +149,7 @@ export function PriorityActionCard({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            title="Gọi điện"
+            aria-label="Gọi điện"
             onClick={(e) => {
               e.preventDefault();
               onCall?.(action.lead_id);
@@ -157,8 +161,8 @@ export function PriorityActionCard({
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7 text-blue-500 hover:text-blue-600 hover:bg-blue-50"
-            title="Chat Zalo"
+            className="h-7 w-7 text-info-500 hover:text-info-600 hover:bg-info-50"
+            aria-label="Chat Zalo"
             onClick={(e) => {
               e.preventDefault();
               onZalo?.(action.lead_id, action.phone);
@@ -171,7 +175,7 @@ export function PriorityActionCard({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            title="Xem chi tiết"
+            aria-label="Xem chi tiết"
             asChild
           >
             <Link href={`/leads/${action.lead_id}`}>
@@ -182,4 +186,7 @@ export function PriorityActionCard({
       </div>
     </div>
   );
-}
+});
+
+// ✅ Display name for React DevTools debugging
+PriorityActionCard.displayName = "PriorityActionCard";

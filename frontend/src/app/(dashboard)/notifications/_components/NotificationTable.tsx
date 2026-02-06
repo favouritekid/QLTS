@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Check, MoreHorizontal, Trash2 } from "lucide-react";
+import { Check, MoreVertical, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -21,9 +21,143 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { cn } from "@/lib/utils";
 import type { Notification } from "@/types/api.types";
+
+// =============================================================================
+// MOBILE NOTIFICATION CARD
+// =============================================================================
+
+interface MobileNotificationCardProps {
+  notification: Notification;
+  isSelected: boolean;
+  onSelect: (checked: boolean) => void;
+  onMarkAsRead: () => void;
+  onDelete: () => void;
+  getNotificationIcon: (type: Notification["type"]) => React.ReactNode;
+}
+
+function MobileNotificationCard({
+  notification,
+  isSelected,
+  onSelect,
+  onMarkAsRead,
+  onDelete,
+  getNotificationIcon,
+}: MobileNotificationCardProps) {
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+
+  return (
+    <div
+      className={cn(
+        "p-3 rounded-lg border bg-card",
+        !notification.is_read && "border-l-4 border-l-primary bg-muted/30"
+      )}
+    >
+      <div className="flex gap-3">
+        {/* Checkbox */}
+        <div className="pt-0.5">
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={(checked) => onSelect(checked === true)}
+            aria-label={`Chọn ${notification.title}`}
+          />
+        </div>
+
+        {/* Icon */}
+        <div className="flex-shrink-0 pt-0.5">
+          {getNotificationIcon(notification.type)}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0 space-y-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {notification.link ? (
+                <Link
+                  href={notification.link}
+                  className={cn(
+                    "text-sm hover:underline line-clamp-2",
+                    !notification.is_read && "font-semibold"
+                  )}
+                >
+                  {notification.title}
+                </Link>
+              ) : (
+                <p
+                  className={cn(
+                    "text-sm line-clamp-2",
+                    !notification.is_read && "font-semibold"
+                  )}
+                >
+                  {notification.title}
+                </p>
+              )}
+            </div>
+
+            {/* Actions button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 flex-shrink-0"
+              onClick={() => setActionSheetOpen(true)}
+            >
+              <MoreVertical className="h-4 w-4" />
+              <span className="sr-only">Mở menu</span>
+            </Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground line-clamp-1">
+            {notification.message}
+          </p>
+
+          <p
+            className="text-xs text-muted-foreground"
+            suppressHydrationWarning
+          >
+            {formatDistanceToNow(new Date(notification.created_at), {
+              addSuffix: true,
+            })}
+          </p>
+        </div>
+      </div>
+
+      {/* Mobile Action Sheet */}
+      <MobileActionSheet
+        open={actionSheetOpen}
+        onOpenChange={setActionSheetOpen}
+        title={notification.title}
+      >
+        {!notification.is_read && (
+          <MobileActionSheet.Item
+            icon={Check}
+            onClick={() => {
+              setActionSheetOpen(false);
+              onMarkAsRead();
+            }}
+          >
+            Đánh dấu đã đọc
+          </MobileActionSheet.Item>
+        )}
+        <MobileActionSheet.Item
+          icon={Trash2}
+          variant="destructive"
+          onClick={() => {
+            setActionSheetOpen(false);
+            onDelete();
+          }}
+        >
+          Xóa
+        </MobileActionSheet.Item>
+      </MobileActionSheet>
+    </div>
+  );
+}
+
+// =============================================================================
+// NOTIFICATION TABLE
+// =============================================================================
 
 interface NotificationTableProps {
   notifications: Notification[];
@@ -44,46 +178,75 @@ export function NotificationTable({
   onMarkAsRead,
   onDelete,
   getNotificationIcon,
-  getNotificationTypeBadge,
 }: NotificationTableProps) {
   const allSelected =
     notifications.length > 0 &&
     notifications.every((n) => selectedIds.includes(n.id));
-  
+
   const someSelected =
     notifications.some((n) => selectedIds.includes(n.id)) && !allSelected;
 
+  // Empty state
+  if (notifications.length === 0) {
+    return (
+      <div className="rounded-md border p-8 text-center text-muted-foreground">
+        Không có thông báo nào.
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-md border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[40px]">
-              <Checkbox
-                checked={allSelected || (someSelected ? "indeterminate" : false)}
-                onCheckedChange={(checked) => onSelectAll(checked === true)}
-                aria-label="Select all"
-              />
-            </TableHead>
-            <TableHead className="w-[50px]">Type</TableHead>
-            <TableHead className="min-w-[200px]">Thông báo</TableHead>
-            <TableHead className="w-[150px]">Thời gian</TableHead>
-            <TableHead className="w-[100px] text-right">Thao tác</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {notifications.length === 0 ? (
+    <>
+      {/* ===== MOBILE VIEW: Card-based layout ===== */}
+      <div className="space-y-2 md:hidden">
+        {/* Select All header for mobile */}
+        <div className="flex items-center gap-2 px-1 py-2">
+          <Checkbox
+            checked={allSelected || (someSelected ? "indeterminate" : false)}
+            onCheckedChange={(checked) => onSelectAll(checked === true)}
+            aria-label="Chọn tất cả"
+          />
+          <span className="text-sm text-muted-foreground">Chọn tất cả</span>
+        </div>
+
+        {/* Notification Cards */}
+        {notifications.map((notification) => (
+          <MobileNotificationCard
+            key={notification.id}
+            notification={notification}
+            isSelected={selectedIds.includes(notification.id)}
+            onSelect={(checked) => onSelect(notification.id, checked)}
+            onMarkAsRead={() => onMarkAsRead(notification.id)}
+            onDelete={() => onDelete(notification.id)}
+            getNotificationIcon={getNotificationIcon}
+          />
+        ))}
+      </div>
+
+      {/* ===== DESKTOP VIEW: Table layout ===== */}
+      <div className="hidden md:block rounded-md border">
+        <Table>
+          <TableHeader>
             <TableRow>
-              <TableCell colSpan={5} className="h-24 text-center">
-                Không có thông báo nào.
-              </TableCell>
+              <TableHead className="w-[40px]">
+                <Checkbox
+                  checked={allSelected || (someSelected ? "indeterminate" : false)}
+                  onCheckedChange={(checked) => onSelectAll(checked === true)}
+                  aria-label="Chọn tất cả"
+                />
+              </TableHead>
+              <TableHead className="w-[50px]">Type</TableHead>
+              <TableHead>Thông báo</TableHead>
+              <TableHead className="w-[140px]">Thời gian</TableHead>
+              <TableHead className="w-[80px] text-right">Thao tác</TableHead>
             </TableRow>
-          ) : (
-            notifications.map((notification) => (
+          </TableHeader>
+          <TableBody>
+            {notifications.map((notification) => (
               <TableRow
                 key={notification.id}
                 className={cn(
-                  !notification.is_read && "bg-muted/30 font-medium"
+                  !notification.is_read && "bg-muted/30"
                 )}
               >
                 <TableCell>
@@ -92,36 +255,50 @@ export function NotificationTable({
                     onCheckedChange={(checked) =>
                       onSelect(notification.id, checked === true)
                     }
-                    aria-label={`Select notification ${notification.title}`}
+                    aria-label={`Chọn ${notification.title}`}
                   />
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                     {!notification.is_read && (
+                    {!notification.is_read && (
                       <div className="bg-primary h-2 w-2 rounded-full" title="Chưa đọc" />
                     )}
                     <div title={notification.type}>
-                        {getNotificationIcon(notification.type)}
+                      {getNotificationIcon(notification.type)}
                     </div>
                   </div>
                 </TableCell>
                 <TableCell>
-                  <div className="flex flex-col gap-1">
-                    <span className={cn("text-sm", !notification.is_read && "font-bold")}>
-                      {notification.link ? (
-                        <Link href={notification.link} className="hover:underline">
-                          {notification.title}
-                        </Link>
-                      ) : (
-                        notification.title
-                      )}
-                    </span>
-                    <span className="text-muted-foreground line-clamp-1 text-xs">
+                  <div className="space-y-1">
+                    {notification.link ? (
+                      <Link
+                        href={notification.link}
+                        className={cn(
+                          "text-sm hover:underline",
+                          !notification.is_read && "font-semibold"
+                        )}
+                      >
+                        {notification.title}
+                      </Link>
+                    ) : (
+                      <span
+                        className={cn(
+                          "text-sm",
+                          !notification.is_read && "font-semibold"
+                        )}
+                      >
+                        {notification.title}
+                      </span>
+                    )}
+                    <p className="text-xs text-muted-foreground line-clamp-1">
                       {notification.message}
-                    </span>
+                    </p>
                   </div>
                 </TableCell>
-                <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                <TableCell
+                  className="text-muted-foreground text-xs"
+                  suppressHydrationWarning
+                >
                   {formatDistanceToNow(new Date(notification.created_at), {
                     addSuffix: true,
                   })}
@@ -130,8 +307,8 @@ export function NotificationTable({
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" className="h-8 w-8 p-0">
-                        <span className="sr-only">Open menu</span>
-                        <MoreHorizontal className="h-4 w-4" />
+                        <MoreVertical className="h-4 w-4" />
+                        <span className="sr-only">Mở menu</span>
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
@@ -146,16 +323,16 @@ export function NotificationTable({
                         className="text-destructive focus:text-destructive"
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
-                        Xóa thông báo
+                        Xóa
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
               </TableRow>
-            ))
-          )}
-        </TableBody>
-      </Table>
-    </div>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </>
   );
 }

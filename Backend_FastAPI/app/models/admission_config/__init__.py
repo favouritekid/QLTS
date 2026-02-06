@@ -21,11 +21,12 @@ from .method import AdmissionMethod
 from .criteria import AdmissionCriteria, CriteriaSubjectGroup
 from .offering_config import OfferingAdmissionConfig
 from .document_group import DocumentGroup, DocumentGroupItem
-from .profile_data import ProfileSubjectScore, ProfileDocument
+from .profile_data import ProfileSubjectScore, ProfileDocument, DocumentAuditLog
+from .admission_path import AdmissionPath
 
 __all__ = [
     "Subject",
-    "SubjectGroup", 
+    "SubjectGroup",
     "SubjectGroupSubject",
     "AdmissionMethod",
     "AdmissionCriteria",
@@ -35,4 +36,6 @@ __all__ = [
     "DocumentGroupItem",
     "ProfileSubjectScore",
     "ProfileDocument",
+    "DocumentAuditLog",  # Audit trail for document operations
+    "AdmissionPath",
 ]

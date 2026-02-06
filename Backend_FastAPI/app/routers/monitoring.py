@@ -90,7 +90,7 @@ async def get_celery_workers(
         log.error("Failed to get Celery workers info", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to connect to Celery: {str(e)}"
+            detail="Celery service unavailable"
         )
 
 
@@ -158,7 +158,7 @@ async def get_celery_tasks(
         log.error("Failed to get Celery tasks info", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to connect to Celery: {str(e)}"
+            detail="Celery service unavailable"
         )
 
 
@@ -213,7 +213,7 @@ async def get_celery_stats(
         log.error("Failed to get Celery stats", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to get Celery stats: {str(e)}"
+            detail="Celery service unavailable"
         )
 
 
@@ -291,7 +291,7 @@ async def get_redis_info(
         log.error("Failed to get Redis info", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to connect to Redis: {str(e)}"
+            detail="Redis service unavailable"
         )
 
 
@@ -342,7 +342,7 @@ async def get_socket_connections(
         log.error("Failed to get Socket.IO connections", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get Socket.IO connections: {str(e)}"
+            detail="Socket.IO service unavailable"
         )
 
 
@@ -526,7 +526,7 @@ async def get_notification_metrics(
         log.error("Failed to get notification metrics", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get notification metrics: {str(e)}"
+            detail="Notification metrics unavailable"
         )
 
 

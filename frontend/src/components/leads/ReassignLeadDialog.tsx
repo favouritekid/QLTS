@@ -1,14 +1,16 @@
 "use client";
 
+import type { Lead } from "@/types/lead.types";
+
 import { useState } from "react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -21,11 +23,9 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, RefreshCcw, Loader2 } from "lucide-react";
-import { usePerformLeadAction } from "@/hooks/useLeads";
+import { usePerformLeadAction, useReassignQuota } from "@/hooks/useLeads";
 import { useAuth } from "@/hooks/useAuth";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api/client";
-import type { Lead } from "@/types/lead.types";
+import { isManagerOrAbove } from "@/lib/utils/permissions";
 
 // ============================================================================
 // CONSTANTS
@@ -59,28 +59,13 @@ interface ReassignLeadDialogProps {
   onSuccess?: () => void;
 }
 
-interface ReassignQuota {
-  allowed: boolean;
-  used: number;
-  limit: number;
-  remaining: number;
-}
+
 
 // ============================================================================
 // HOOKS
 // ============================================================================
 
-function useReassignQuota(enabled: boolean = true) {
-  return useQuery<ReassignQuota>({
-    queryKey: ["reassign-quota"],
-    queryFn: async () => {
-      const response = await api.get<ReassignQuota>("/api/leads/my/reassign-quota");
-      return response.data;
-    },
-    staleTime: 1000 * 60, // 1 minute
-    enabled, // Only fetch when enabled (for officers only)
-  });
-}
+// Local hook removed, using imported one
 
 // ============================================================================
 // COMPONENT
@@ -93,15 +78,16 @@ export function ReassignLeadDialog({
   onSuccess,
 }: ReassignLeadDialogProps) {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin" || user?.role === "manager";
+  // ✅ SECURITY: Use centralized permission utility (UX only - backend enforces)
+  const hasManagerAccess = isManagerOrAbove(user);
   
   const [selectedReason, setSelectedReason] = useState<string>("");
   const [customReason, setCustomReason] = useState("");
   
-  const { data: quota, isLoading: quotaLoading } = useReassignQuota(!isAdmin);
+  const { data: quota, isLoading: quotaLoading } = useReassignQuota(!hasManagerAccess);
   const performAction = usePerformLeadAction();
   
-  const reasons = isAdmin ? ADMIN_REASONS : OFFICER_REASONS;
+  const reasons = hasManagerAccess ? ADMIN_REASONS : OFFICER_REASONS;
   
   const handleSubmit = async () => {
     const reason = selectedReason === "other" 
@@ -130,22 +116,22 @@ export function ReassignLeadDialog({
   };
   
   const canSubmit = selectedReason && (selectedReason !== "other" || customReason.trim());
-  const quotaExceeded = !isAdmin && quota && !quota.allowed;
+  const quotaExceeded = !hasManagerAccess && quota && quota.remaining_today <= 0;
   
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="sm:max-w-[425px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle className="flex items-center gap-2">
             <RefreshCcw className="h-5 w-5" />
             Phân công lại Lead
-          </DialogTitle>
-          <DialogDescription>
-            {isAdmin 
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {hasManagerAccess 
               ? "Chọn nhân viên mới và lý do phân công lại."
               : "Gửi yêu cầu phân công lại lead này cho nhân viên khác."}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         
         <div className="space-y-4 py-4">
           {/* Lead Info */}
@@ -155,14 +141,14 @@ export function ReassignLeadDialog({
           </div>
           
           {/* Quota Warning (Officers only) */}
-          {!isAdmin && (
+          {!hasManagerAccess && (
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Số lượt còn lại tuần này:</span>
               {quotaLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : quota ? (
-                <Badge variant={quota.remaining > 0 ? "secondary" : "destructive"}>
-                  {quota.remaining}/{quota.limit}
+                <Badge variant={quota.remaining_today > 0 ? "secondary" : "destructive"}>
+                  {quota.remaining_today}/{quota.max_per_day}
                 </Badge>
               ) : null}
             </div>
@@ -215,7 +201,7 @@ export function ReassignLeadDialog({
           )}
         </div>
         
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Hủy
           </Button>
@@ -226,11 +212,11 @@ export function ReassignLeadDialog({
             {performAction.isPending && (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             )}
-            {isAdmin ? "Phân công lại" : "Gửi yêu cầu"}
+            {hasManagerAccess ? "Phân công lại" : "Gửi yêu cầu"}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 

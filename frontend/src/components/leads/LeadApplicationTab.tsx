@@ -23,7 +23,7 @@ export function LeadApplicationTab({ lead }: LeadApplicationTabProps) {
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
+              <FileText aria-hidden="true" className="h-5 w-5" />
               Hồ sơ Tuyển sinh
             </CardTitle>
             <CardDescription>
@@ -44,7 +44,7 @@ export function LeadApplicationTab({ lead }: LeadApplicationTabProps) {
               disabled={createApplication.isPending}
             >
               {createApplication.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />
               )}
               Tạo Hồ sơ Tuyển sinh
             </Button>

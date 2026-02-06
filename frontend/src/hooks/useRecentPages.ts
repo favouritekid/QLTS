@@ -10,6 +10,13 @@ import type { NavItem } from "@/types/navigation";
 
 const STORAGE_KEY = "recent-pages";
 const MAX_RECENT_ITEMS = 5;
+// ✅ VERSIONING: Increment when RecentPage schema changes
+const STORAGE_VERSION = 1;
+
+interface VersionedStorage {
+  version: number;
+  data: RecentPage[];
+}
 
 /**
  * Recent page item type
@@ -65,7 +72,7 @@ function pathToLabel(path: string): string {
 }
 
 /**
- * Load recent pages from localStorage
+ * Load recent pages from localStorage (with versioning)
  */
 function loadRecentPages(): RecentPage[] {
   if (typeof window === "undefined") return [];
@@ -74,23 +81,36 @@ function loadRecentPages(): RecentPage[] {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      return Array.isArray(parsed) ? parsed : [];
+
+      // ✅ VERSIONING: Check version and reset if mismatched
+      if (parsed?.version !== STORAGE_VERSION) {
+        localStorage.removeItem(STORAGE_KEY);
+        return [];
+      }
+
+      return Array.isArray(parsed.data) ? parsed.data : [];
     }
   } catch (error) {
     console.warn("Failed to load recent pages from localStorage:", error);
+    localStorage.removeItem(STORAGE_KEY);
   }
 
   return [];
 }
 
 /**
- * Save recent pages to localStorage
+ * Save recent pages to localStorage (with versioning)
  */
 function saveRecentPages(pages: RecentPage[]): void {
   if (typeof window === "undefined") return;
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(pages));
+    // ✅ VERSIONING: Store with version for schema compatibility
+    const versioned: VersionedStorage = {
+      version: STORAGE_VERSION,
+      data: pages,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(versioned));
   } catch (error) {
     console.warn("Failed to save recent pages to localStorage:", error);
   }

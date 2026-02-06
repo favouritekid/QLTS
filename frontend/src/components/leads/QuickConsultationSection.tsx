@@ -27,7 +27,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DateTimePicker } from "@/components/common/form";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import type { ConsultationStatus, ConsultationCreate, ConsultationMethod } from "@/types/lead.types";
@@ -90,6 +91,41 @@ const getSchedulePreviewText = (option: ScheduleOption, customDate?: Date): stri
   }
 };
 
+// ✅ Get color classes based on outcome_type
+const getOutcomeColorClasses = (
+  outcomeType: string | null | undefined,
+  isCurrentStatus: boolean = false
+): string => {
+  if (isCurrentStatus) {
+    // Current status always highlighted with ring
+    return "border-2 border-info-500 bg-info-100 font-medium text-info-700 hover:bg-info-100/80";
+  }
+
+  switch (outcomeType) {
+    case "positive":
+      return "border border-success-200 bg-success-50 text-success-700 hover:bg-success-100";
+    case "negative":
+      return "border border-error-200 bg-error-50 text-error-600 hover:bg-error-100";
+    case "neutral":
+    default:
+      return "border border-info-200 bg-info-50 text-info-700 hover:bg-info-100";
+  }
+};
+
+// ✅ Get sort order for outcome_type: Positive → Neutral → Negative
+const getOutcomeSortOrder = (outcomeType: string | null | undefined): number => {
+  switch (outcomeType) {
+    case "positive":
+      return 0;
+    case "neutral":
+      return 1;
+    case "negative":
+      return 2;
+    default:
+      return 1; // Default to neutral
+  }
+};
+
 
 
 export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultationSectionProps) {
@@ -98,12 +134,13 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const currentStatusId = lead?.consultation_status_id;
 
   // Get allowed next statuses based on state machine
+  // ✅ FIX: Pass leadId to derive correct phase from admission_profile
   const {
     data: statuses = [],
     isLoading: statusesLoading,
     error,
     isError,
-  } = useAllowedNextStatuses(currentStatusId);
+  } = useAllowedNextStatuses(currentStatusId, leadId);
   const addConsultation = useAddConsultation();
 
   // Form state
@@ -119,6 +156,32 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [pendingStatus, setPendingStatus] = useState<ConsultationStatus | null>(null);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  // ✅ FIX: Guard against concurrent saves
+  const isSavingRef = useRef(false);
+  // ✅ FIX: Store pending status in ref to avoid stale closure
+  const pendingStatusRef = useRef<ConsultationStatus | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    pendingStatusRef.current = pendingStatus;
+  }, [pendingStatus]);
+
+  // ✅ Ctrl+Enter keyboard shortcut to save immediately
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Enter (or Cmd+Enter on Mac) commits pending status immediately
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        const statusToSave = pendingStatusRef.current;
+        if (statusToSave && !isSavingRef.current) {
+          e.preventDefault();
+          commitSave(statusToSave);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []); // Empty deps - uses refs for current values
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -131,8 +194,13 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
   // Countdown logic - when countdown reaches 0, commit the save
   useEffect(() => {
-    if (pendingStatus && countdown === 0) {
-      commitSave(pendingStatus);
+    // ✅ FIX: Check isSavingRef to prevent concurrent saves
+    if (pendingStatus && countdown === 0 && !isSavingRef.current) {
+      // Use ref to get the latest pending status
+      const statusToSave = pendingStatusRef.current;
+      if (statusToSave) {
+        commitSave(statusToSave);
+      }
     }
   }, [countdown, pendingStatus]);
 
@@ -170,10 +238,16 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
   // Commit the save immediately
   const commitSave = async (status: ConsultationStatus) => {
+    // ✅ FIX: Guard against concurrent saves
+    if (isSavingRef.current) {
+      return;
+    }
+    isSavingRef.current = true;
+
     if (countdownRef.current) {
       clearInterval(countdownRef.current);
     }
-    
+
     // Determine scheduled_at based on option
     let scheduledAt: string | null = null;
     if (scheduleOption === "custom" && customDateTime) {
@@ -193,7 +267,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       setSavingStatusId(status.id);
       setPendingStatus(null);
       setCountdown(COUNTDOWN_SECONDS);
-      
+
       await addConsultation.mutateAsync({ leadId, data: payload });
 
       // Reset form on success
@@ -206,30 +280,51 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       // Error is handled by the mutation
     } finally {
       setSavingStatusId(null);
+      isSavingRef.current = false;
     }
   };
 
   // Handle status badge click - start delayed commit
   const handleStatusClick = (status: ConsultationStatus) => {
+    // ✅ FIX: Don't start new countdown while saving
+    if (isSavingRef.current) return;
+
     // If clicking the same pending status, do nothing
     if (pendingStatus?.id === status.id) return;
-    
+
     // If there's a different pending status, switch to new one
     startCountdown(status);
   };
 
-  // ✅ Drag-to-scroll using callback refs
+  // ✅ Drag-to-scroll using callback refs with proper cleanup
   // Callback refs are called when element mounts, guaranteeing element exists
   const resultHasDraggedRef = useRef(false);
   const universalHasDraggedRef = useRef(false);
-  
+
+  // ✅ FIX: Store cleanup functions to prevent memory leaks
+  const cleanupFunctionsRef = useRef<Map<HTMLDivElement, () => void>>(new Map());
+
+  // Cleanup all listeners on unmount
+  useEffect(() => {
+    return () => {
+      cleanupFunctionsRef.current.forEach((cleanup) => cleanup());
+      cleanupFunctionsRef.current.clear();
+    };
+  }, []);
+
   const setupDragToScroll = (element: HTMLDivElement | null, hasDraggedRef: React.MutableRefObject<boolean>) => {
+    // Clean up previous listeners for this element if any
+    if (element && cleanupFunctionsRef.current.has(element)) {
+      cleanupFunctionsRef.current.get(element)?.();
+      cleanupFunctionsRef.current.delete(element);
+    }
+
     if (!element) return;
-    
+
     const isDragging = { current: false };
     const startX = { current: 0 };
     const scrollLeftStart = { current: 0 };
-    
+
     // Wheel scroll handler
     const handleWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return;
@@ -285,6 +380,16 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
     element.addEventListener("mouseleave", handleMouseLeave);
+
+    // ✅ FIX: Store cleanup function
+    const cleanup = () => {
+      element.removeEventListener("wheel", handleWheel);
+      element.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      element.removeEventListener("mouseleave", handleMouseLeave);
+    };
+    cleanupFunctionsRef.current.set(element, cleanup);
   };
   
   // Callback refs that setup listeners when elements mount
@@ -305,17 +410,16 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const groupedStatuses = useMemo(() => {
     // 1. Universal (Toàn cục - Row 1)
     const universal: ConsultationStatus[] = [];
-    
+
     // 2. Result Groups (Kết quả - Row 2)
     const previousStage: ConsultationStatus[] = [];
     const sameStage: ConsultationStatus[] = [];
     const nextStage: ConsultationStatus[] = [];
 
-    // Find current status to determine current stage order
-    // We try to find it in the fetched statuses first (since backend includes current status now)
-    const currentStatusObj = statuses.find(s => s.id === currentStatusId);
-    const currentStageOrder = currentStatusObj?.stage?.order ?? -1;
-    const currentStageId = currentStatusObj?.stage_id;
+    // ✅ FIX: Get current stage from LEAD object (not from allowed next statuses)
+    // The current status is NOT in the "allowed next statuses" list
+    const currentStageOrder = lead?.pipeline_stage?.order ?? -1;
+    const currentStageId = lead?.pipeline_stage_id;
 
     const displayStatuses = statuses.filter(s => {
       if (s.is_universal) {
@@ -327,8 +431,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
     displayStatuses.forEach((status) => {
       // Logic: Previous vs Same vs Next
-      // We rely on stage.order. If stage info is missing, fallback to 'next' or 'same'?
-      // Since we updated schema, status.stage should be available.
+      // We rely on stage.order from the status's associated stage
       const statusStageOrder = status.stage?.order ?? -1;
 
       // Grouping logic
@@ -344,21 +447,40 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       }
     });
 
-    // Sort Previous desc (closest to current first? or asc?) -> Let's do Ascending order
-    previousStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
-    
-    // Sort Next asc
-    nextStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
+    // ✅ Sort each group by: outcome_type (Positive → Neutral → Negative), then display_order
+    const sortByOutcomeThenOrder = (a: ConsultationStatus, b: ConsultationStatus) => {
+      const outcomeA = getOutcomeSortOrder(a.outcome_type);
+      const outcomeB = getOutcomeSortOrder(b.outcome_type);
+      if (outcomeA !== outcomeB) return outcomeA - outcomeB;
+      // Secondary sort by display_order
+      return (a.display_order ?? 999) - (b.display_order ?? 999);
+    };
 
-    // Sort Same Stage: Current status first, then others by name
-    sameStage.sort((a, b) => {
-      if (a.id === currentStatusId) return -1;
-      if (b.id === currentStatusId) return 1;
-      return a.name.localeCompare(b.name);
+    // Sort Previous: outcome_type first, then by stage order (closest to current)
+    previousStage.sort((a, b) => {
+      const outcomeA = getOutcomeSortOrder(a.outcome_type);
+      const outcomeB = getOutcomeSortOrder(b.outcome_type);
+      if (outcomeA !== outcomeB) return outcomeA - outcomeB;
+      // Within same outcome, sort by stage order desc (closest to current first)
+      return (b.stage?.order ?? 0) - (a.stage?.order ?? 0);
     });
 
+    // Sort Same Stage: outcome_type first, current status within its group, then display_order
+    sameStage.sort((a, b) => {
+      const outcomeA = getOutcomeSortOrder(a.outcome_type);
+      const outcomeB = getOutcomeSortOrder(b.outcome_type);
+      if (outcomeA !== outcomeB) return outcomeA - outcomeB;
+      // Current status first within its outcome group
+      if (a.id === currentStatusId) return -1;
+      if (b.id === currentStatusId) return 1;
+      return (a.display_order ?? 999) - (b.display_order ?? 999);
+    });
+
+    // Sort Next: outcome_type first, then by stage order (furthest first = most progress)
+    nextStage.sort(sortByOutcomeThenOrder);
+
     return { universal, previousStage, sameStage, nextStage };
-  }, [statuses, currentStatusId]);
+  }, [statuses, currentStatusId, lead?.pipeline_stage?.order, lead?.pipeline_stage_id]);
 
   // Loading state
   if (statusesLoading) {
@@ -372,7 +494,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   // Error state
   if (isError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-600">
+      <div className="rounded-md bg-error-50 p-4 text-sm text-error-600">
         <p className="font-medium">Không thể tải trạng thái</p>
         <p className="mt-1 text-xs">{error?.message || "Lỗi không xác định"}</p>
       </div>
@@ -519,9 +641,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
         {/* Enhanced Schedule Preview */}
         {scheduleOption !== "none" && (
-          <div className="flex items-center gap-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
-            <CalendarClock className="h-4 w-4 flex-shrink-0 text-blue-600" />
-            <span className="text-sm font-medium text-blue-700">
+          <div className="flex items-center gap-2 rounded-md border border-info-100 bg-info-50 px-3 py-2">
+            <CalendarClock className="h-4 w-4 flex-shrink-0 text-info-600" />
+            <span className="text-sm font-medium text-info-700">
               {getSchedulePreviewText(scheduleOption, customDateTime)}
             </span>
           </div>
@@ -538,7 +660,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               <span className="font-medium">Trạng thái liên hệ</span>
               <Badge
                 variant="secondary"
-                className="ml-1 h-4 bg-amber-100 px-1.5 text-[10px] text-amber-700"
+                className="ml-1 h-4 bg-warning-100 px-1.5 text-[10px] text-warning-700"
               >
                 không đổi trạng thái
               </Badge>
@@ -555,10 +677,10 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   size="sm"
                   className={cn(
                     "h-7 flex-shrink-0 px-2.5 text-xs",
-                    "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
-                    "transition-all hover:scale-[1.02]",
+                    "border border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100",
+                    "transition hover:scale-[1.02]",
                     // Pending highlight
-                    pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                    pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                   )}
                   onClick={() => {
                     if (universalHasDraggedRef.current) {
@@ -572,10 +694,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   {savingStatusId === status.id ? (
                     <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                   ) : (
-                    <span
-                      className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                      style={{ backgroundColor: status.color_code }}
-                    />
+                    <ColorDot color={status.color_code} size="sm" className="mr-1.5" />
                   )}
                   {status.name}
                 </Button>
@@ -610,7 +729,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                 ref={scrollContainerRef}
                 className="flex flex-nowrap items-center gap-2.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
               >
-                  {/* GROUP 1: PREVIOUS STAGE (Revert) */}
+                  {/* GROUP 1: PREVIOUS STAGE (Revert) - Color by outcome_type */}
                   {groupedStatuses.previousStage.length > 0 && (
                     <>
                       {groupedStatuses.previousStage.map((status) => (
@@ -620,11 +739,12 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           size="sm"
                           className={cn(
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                            // Previous Stage: Slate (neutral/revert)
-                            "border border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200",
-                            "transition-all hover:scale-[1.02]",
+                            // ✅ Use outcome_type-based colors (with slate tint for previous stage)
+                            getOutcomeColorClasses(status.outcome_type),
+                            "opacity-80", // Slightly dimmed to indicate it's a revert
+                            "transition hover:scale-[1.02]",
                             // Pending highlight
-                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                            pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105 opacity-100"
                           )}
                           onClick={() => {
                             if (resultHasDraggedRef.current) {
@@ -640,7 +760,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           ) : (
                             <span
                               className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                              style={{ backgroundColor: status.color_code }}
+                              style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                             />
                           )}
                           {status.name}
@@ -651,10 +771,11 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                     </>
                   )}
 
-                  {/* GROUP 2: SAME STAGE (Current & Siblings) */}
+                  {/* GROUP 2: SAME STAGE (Current & Siblings) - Color by outcome_type */}
                   {groupedStatuses.sameStage.length > 0 && (
                     <>
                       {groupedStatuses.sameStage.map((status) => {
+                        const isCurrentStatus = status.id === currentStatusId;
                         return (
                           <Button
                             key={status.id}
@@ -662,13 +783,11 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             size="sm"
                             className={cn(
                               "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                              // Same Stage: Blue (current focus)
-                              status.id === currentStatusId
-                                ? "border-2 border-blue-500 bg-blue-100 font-medium text-blue-800 hover:bg-blue-150"
-                                : "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
-                              "transition-all hover:scale-[1.02]",
+                              // ✅ Use outcome_type-based colors
+                              getOutcomeColorClasses(status.outcome_type, isCurrentStatus),
+                              "transition hover:scale-[1.02]",
                               // Pending highlight
-                              pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                              pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                             )}
                             onClick={() => {
                               if (resultHasDraggedRef.current) {
@@ -684,7 +803,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             ) : (
                               <span
                                 className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                                style={{ backgroundColor: status.color_code }}
+                                style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                               />
                             )}
                             {status.name}
@@ -699,7 +818,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                     <ArrowRight className="text-muted-foreground/50 mx-1 h-4 w-4 flex-shrink-0" />
                   )}
 
-                  {/* GROUP 3: NEXT STAGE (Progress) */}
+                  {/* GROUP 3: NEXT STAGE (Progress) - Color by outcome_type */}
                   {groupedStatuses.nextStage.length > 0 && (
                     <>
                       {groupedStatuses.nextStage.map((status) => (
@@ -709,11 +828,11 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           size="sm"
                           className={cn(
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                            // Next Stage: Emerald (progress/forward)
-                            "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
-                            "transition-all hover:scale-[1.02]",
+                            // ✅ Use outcome_type-based colors
+                            getOutcomeColorClasses(status.outcome_type),
+                            "transition hover:scale-[1.02]",
                             // Pending highlight
-                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                            pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                           )}
                           onClick={() => {
                             if (resultHasDraggedRef.current) {
@@ -729,7 +848,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           ) : (
                             <span
                               className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                              style={{ backgroundColor: status.color_code }}
+                              style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                             />
                           )}
                           {status.name}
@@ -744,16 +863,18 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               {(() => {
                  // Calculate colors for gradient
                  // Fallbacks: Slate-200 (Gray), Primary (Blue/Brand), Emerald-200 (Green)
-                 const prevColor = groupedStatuses.previousStage.length > 0 
-                    ? groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code 
+                 const prevColor = groupedStatuses.previousStage.length > 0
+                    ? sanitizeColorCode(groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code, "#e2e8f0")
                     : "#e2e8f0";
-                 
-                 const currColor = groupedStatuses.sameStage.find(s => s.id === currentStatusId)?.color_code 
-                    || groupedStatuses.sameStage[0]?.color_code 
-                    || "#3b82f6";
-                 
-                 const nextColor = groupedStatuses.nextStage.length > 0 
-                    ? groupedStatuses.nextStage[0].color_code 
+
+                 const currColor = sanitizeColorCode(
+                    groupedStatuses.sameStage.find(s => s.id === currentStatusId)?.color_code
+                    || groupedStatuses.sameStage[0]?.color_code,
+                    "#3b82f6"
+                 );
+
+                 const nextColor = groupedStatuses.nextStage.length > 0
+                    ? sanitizeColorCode(groupedStatuses.nextStage[0].color_code, "#a7f3d0")
                     : "#a7f3d0";
 
                  return (
@@ -768,23 +889,23 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
               {/* ✅ INLINE DELAYED COMMIT CONFIRMATION BAR */}
               {pendingStatus && (
-                <div className="mt-3 overflow-hidden rounded-lg border border-blue-200 bg-blue-50">
+                <div className="mt-3 overflow-hidden rounded-lg border border-info-200 bg-info-50">
                   {/* Progress bar (shrinks from right to left) */}
-                  <div 
-                    className="h-1 bg-blue-500 transition-all duration-1000 ease-linear"
+                  <div
+                    className="h-1 bg-info-500 transition-[width] duration-1000 ease-linear"
                     style={{ width: `${(countdown / 3) * 100}%` }}
                   />
-                  
+
                   {/* Content */}
                   <div className="flex items-center justify-between gap-2 px-3 py-2">
                     {/* Left: Status info */}
                     <div className="flex items-center gap-2 min-w-0">
-                      <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-blue-600" />
-                      <span className="text-sm text-blue-700 truncate">
+                      <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-info-600" />
+                      <span className="text-sm text-info-700 truncate">
                         Sẽ lưu: <strong>{pendingStatus.name}</strong>
                       </span>
                     </div>
-                    
+
                     {/* Right: Actions + Timer */}
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {/* Undo button */}
@@ -792,30 +913,36 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100"
+                        className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
                         onClick={cancelPending}
                       >
                         Hoàn tác
                       </Button>
-                      
-                      {/* Save now button */}
+
+                      {/* Save now button with keyboard hint */}
                       <Button
                         type="button"
                         variant="default"
                         size="sm"
-                        className="h-7 px-3 text-xs bg-blue-600 hover:bg-blue-700"
+                        className="h-7 px-3 text-xs bg-info-600 hover:bg-info-700"
                         onClick={() => commitSave(pendingStatus)}
                         disabled={addConsultation.isPending}
+                        title="Ctrl+Enter để lưu nhanh"
                       >
                         {addConsultation.isPending ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
                         ) : (
-                          "Lưu ngay"
+                          <>
+                            Lưu ngay
+                            <kbd className="ml-1.5 hidden sm:inline-flex items-center px-1 py-0.5 text-[9px] font-mono bg-info-700 rounded">
+                              ⌘↵
+                            </kbd>
+                          </>
                         )}
                       </Button>
-                      
+
                       {/* Countdown timer */}
-                      <span className="text-xs font-medium text-blue-600 w-4 text-center">
+                      <span className="text-xs font-medium text-info-600 w-4 text-center">
                         {countdown}s
                       </span>
                     </div>

@@ -24,17 +24,18 @@ Security Features:
 
 import random
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-
+from typing import List, Optional, Dict, Any, Tuple, Callable
+from decimal import Decimal
 import structlog
-from sqlalchemy import select
+from sqlalchemy import or_, and_, select, func
+from sqlalchemy.exc import IntegrityError
 
 from app.utils.redis_lock import acquire_redis_lock
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 
 from .. import models
+from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole
 from ..utils.exceptions import (
     ResourceNotFoundError,
@@ -42,6 +43,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ConflictError,
 )
+from ..utils.masking import mask_citizen_id
 
 log = structlog.get_logger(__name__)
 
@@ -80,38 +82,814 @@ def _check_admin_or_unit_access(
         )
 
 
-def _generate_documents_checklist(mandatory_docs: List[str]) -> List[Dict[str, Any]]:
+async def check_enrollment_fee_eligibility(
+    db: AsyncSession,
+    profile_id: int,
+) -> None:
     """
-    Generate documents_checklist from mandatory_docs list.
+    Fee Gate: Verify tuition fee is paid/waived before enrollment.
+
+    Per FINANCE_MODULE_DESIGN.md Section 5.3 (Gate 2):
+    - Enrollment MUST be blocked if tuition fee not cleared
+    - Fee is "cleared" if status == 'paid' OR status == 'waived'
+    - This check is ONLY enforced when ENABLE_FEE_VERIFICATION=True
 
     Args:
-        mandatory_docs: List of document codes (e.g., ["HOC_BA", "CCCD", "BANG_TN"])
+        db: Database session
+        profile_id: AdmissionProfile ID
 
-    Returns:
-        List of document items with status='missing'
+    Raises:
+        BadRequest: If tuition fee not paid/waived
+
+    Note:
+        - Feature flag check should be done by caller
+        - This function ONLY checks tuition fee, not application fee
+          (application fee is Gate 1, enforced in approve_profile)
     """
-    # Document label mapping (can be moved to config later)
-    doc_labels = {
-        "HOC_BA": "Học bạ THPT",
-        "CCCD": "Căn cước công dân",
-        "BANG_TN": "Bằng tốt nghiệp THPT",
-        "CMND": "Chứng minh nhân dân",
-        "GIAY_KHAI_SINH": "Giấy khai sinh",
-        "ANH_3X4": "Ảnh 3x4 (6 tấm)",
-        "GIAY_KHAM_SUC_KHOE": "Giấy khám sức khỏe",
+    from app.config import settings
+    from app.repositories.fee_repository import FeeRepository
+    from app.models.finance.fee import FeeTypeEnum, FeeStatusEnum
+
+    fee_repo = FeeRepository(db)
+
+    # Get tuition fee for this profile
+    fees = await fee_repo.get_by_profile_id(
+        profile_id=profile_id,
+        fee_type=FeeTypeEnum.tuition.value
+    )
+
+    if not fees:
+        # No tuition fee record found - this could mean:
+        # 1. Fee hasn't been calculated yet
+        # 2. Fee module is not enabled for this profile
+        # For now, we block enrollment if no fee record exists
+        log.warning(
+            "Fee gate check failed: No tuition fee record found",
+            profile_id=profile_id,
+        )
+        raise BadRequest(
+            "Cannot enroll: Tuition fee has not been calculated. "
+            "Please calculate the fee before proceeding with enrollment."
+        )
+
+    # Check the most recent tuition fee (should only be one per year)
+    fee = fees[0]
+
+    # Fee must be paid or waived to proceed
+    if fee.status not in (FeeStatusEnum.paid.value, FeeStatusEnum.waived.value):
+        remaining = fee.remaining_amount
+        log.warning(
+            "Fee gate check failed: Tuition fee not cleared",
+            profile_id=profile_id,
+            fee_id=fee.id,
+            fee_status=fee.status,
+            remaining_amount=str(remaining),
+        )
+        raise BadRequest(
+            f"Cannot enroll: Tuition fee not cleared. "
+            f"Current status: {fee.status}, Remaining: {remaining:,.0f} VND. "
+            "Please complete payment or apply for fee waiver before enrollment."
+        )
+
+    log.info(
+        "Fee gate check passed: Tuition fee cleared",
+        profile_id=profile_id,
+        fee_id=fee.id,
+        fee_status=fee.status,
+    )
+
+
+def _validate_scores(
+    profile: models.AdmissionProfile,
+    applied_rules: dict,
+) -> tuple[bool, list[str], list[str]]:
+    """
+    Validate score requirements based on applied rules.
+    Returns: (has_gpa_error, validation_errors_list, gpa_errors_list)
+    """
+    min_gpa = float(applied_rules.get("min_gpa") or 0)
+    req_count_val = applied_rules.get("required_subject_count")
+    required_count = int(req_count_val) if req_count_val is not None else 3
+    
+    # Get current score count
+    scores_map = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
+    current_count = len(scores_map)
+    
+    method_type = applied_rules.get("method_type", "subject_based")
+    current_gpa = profile.average_score or 0
+    min_score = float(applied_rules.get("min_score") or 0)
+    current_total = profile.total_score or 0
+
+    validation_errors = []
+    gpa_errors = []
+    gpa_error = False
+
+    if method_type == "gpa_only":
+        # GPA-Only: Check average_score only
+        if min_gpa > 0 and current_gpa < min_gpa:
+            error_msg = f"GPA không đạt: {current_gpa:.2f} < {min_gpa}"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
+            gpa_error = True
+
+    elif method_type == "combined":
+        # Combined: Check BOTH total_score AND average_score
+        # First: Check subject count
+        if current_count < required_count:
+            error_msg = f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
+            gpa_error = True
+        else:
+            # Check total_score
+            if min_score > 0 and current_total < min_score:
+                error_msg = f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}"
+                validation_errors.append(error_msg)
+                gpa_errors.append(error_msg)
+                gpa_error = True
+            # Check GPA (even if total passed)
+            if min_gpa > 0 and current_gpa < min_gpa:
+                error_msg = f"GPA không đạt: {current_gpa:.2f} < {min_gpa}"
+                validation_errors.append(error_msg)
+                gpa_errors.append(error_msg)
+                gpa_error = True
+
+    else:
+        # subject_based, hoc_ba, tot_nghiep, etc.: Check total_score only
+        if current_count < required_count:
+            error_msg = f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
+            gpa_error = True
+        elif min_score > 0 and current_total < min_score:
+            error_msg = f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
+            gpa_error = True
+            
+    return gpa_error, validation_errors, gpa_errors
+
+
+def _validate_documents(
+    profile: models.AdmissionProfile,
+    documents: list | None,
+    applied_rules: dict,
+) -> tuple[list[str], list[str], set[str], list[str]]:
+    """
+    Validate document requirements.
+    Returns: (doc_errors_list, validation_errors_list, uploaded_doc_codes_set, upload_required_docs_list)
+    """
+    upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
+    doc_errors = []
+    validation_errors = []
+    uploaded_doc_codes = set()
+    
+    if documents is not None:
+        # Verified/paper_submitted documents are ALWAYS valid
+        # Only check file_path for "uploaded" status
+        uploaded_doc_codes = {
+            doc.document_type.code for doc in documents
+            if doc.status in ["verified", "paper_submitted"] or (doc.file_path and doc.status == "uploaded")
+        }
+        
+        # Log document validation details (preserved from original code)
+        log.debug(
+            "Document validation check",
+            profile_id=profile.id,
+            upload_required_docs=upload_required_docs,
+            uploaded_doc_codes=list(uploaded_doc_codes),
+            total_documents=len(documents),
+        )
+        
+        for doc_code in upload_required_docs:
+            if doc_code not in uploaded_doc_codes:
+                doc_errors.append(doc_code)
+                validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
+                
+    return doc_errors, validation_errors, uploaded_doc_codes, upload_required_docs
+
+
+def _validate_personal_info(
+    profile: models.AdmissionProfile,
+) -> tuple[list[str], list[str]]:
+    """
+    Validate mandatory personal fields.
+    Returns: (missing_fields_list, validation_errors_list)
+    """
+    missing_personal = []
+    validation_errors = []
+    
+    field_map = {
+        "full_name": "Họ tên",
+        "dob": "Ngày sinh",
+        "gender": "Giới tính",
+        "citizen_id": "Số CCCD/CMND",
+        "nationality": "Quốc tịch",
+        "ethnicity": "Dân tộc",
+        "phone": "Số điện thoại",
+        "place_of_birth": "Nơi sinh"
+    }
+    
+    for field, label in field_map.items():
+        if not getattr(profile, field, None):
+            missing_personal.append(label)
+            validation_errors.append(f"Thiếu thông tin cá nhân: {label}")
+            
+    return missing_personal, validation_errors
+
+
+def _compute_frontend_fields(
+    profile: models.AdmissionProfile,
+    current_user: models.User,
+    documents: list = None,
+) -> None:
+    """
+    Phase 7: Frontend Thin Client Compliance
+
+    Compute permissions, eligibility, validation_errors, available_actions,
+    and completion_percent for AdmissionProfileResponse.
+
+    These are transient fields (not stored in DB) computed at response time.
+
+    Args:
+        profile: AdmissionProfile object
+        current_user: Current authenticated user (for role-based permissions). None for debug.
+        documents: Optional list of ProfileDocument (to avoid re-fetching)
+    """
+    status = profile.status
+    user_role = current_user.role                                   
+    is_admin = user_role == UserRole.ADMIN                          
+    is_manager = user_role == UserRole.MANAGER                      
+    is_officer = user_role in [UserRole.OFFICER,UserRole.MANAGER, UserRole.ADMIN]  
+
+
+    # Check if user owns this profile (for applicant self-actions)
+    # Corrected: Lead uses assigned_officer_id, not user_id
+    is_owner = profile.lead and profile.lead.assigned_officer_id == current_user.id
+    
+    # =========================================================================
+    # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
+    # =========================================================================
+    permissions = {
+        "edit": status in ["draft", "rejected"] and (is_owner or is_officer),
+        "save": status in ["draft", "rejected"] and (is_owner or is_officer),
+        "submit": status == "draft" and (is_owner or is_officer),
+        "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        "resubmit": status == "rejected" and (is_owner or is_officer),
+        "enroll": status == "approved" and is_officer,
+        "delete": status == "draft" and is_admin,
+        "view": True,
+    }
+    profile.permissions = permissions
+    
+    # =========================================================================
+    # 2. AVAILABLE ACTIONS (list of action names that are currently allowed)
+    # =========================================================================
+    profile.available_actions = [action for action, allowed in permissions.items() if allowed]
+    
+    # =========================================================================
+    # 3. ELIGIBILITY STATUS & VALIDATION ERRORS
+    # =========================================================================
+    applied_rules = profile.applied_rules or {}
+    
+    # Set snapshot_score if available
+    if profile.admission_scores and "snapshot_score" in profile.admission_scores:
+        profile.snapshot_score = profile.admission_scores["snapshot_score"]
+    else:
+        profile.snapshot_score = None
+    
+    # --- Execute Validation Helpers ---
+    gpa_error, score_ve, gpa_errors = _validate_scores(profile, applied_rules)
+    doc_errors, doc_ve, uploaded_doc_codes, upload_required_docs = _validate_documents(profile, documents, applied_rules)
+    missing_personal, personal_ve = _validate_personal_info(profile)
+    
+    # Aggregate validation errors
+    validation_errors = score_ve + doc_ve + personal_ve
+    
+    # Track CCCD error for backward compatibility with step_status logic
+    cccd_error = not profile.citizen_id
+    
+    # Determine eligibility status
+    if len(validation_errors) == 0:
+        profile.eligibility_status = "eligible"
+    elif status in ["approved", "enrolled"]:
+        profile.eligibility_status = "eligible"
+    else:
+        profile.eligibility_status = "ineligible"
+    
+    # Ticket #2: Compute is_qualified
+    profile.is_qualified = not gpa_error
+    if status in ["approved", "enrolled"]:
+        profile.is_qualified = True
+    
+    profile.validation_errors = validation_errors
+
+    # =========================================================================
+    # 4. VALIDATION SUMMARY (Grouped Errors for UX)
+    # =========================================================================
+    # Calculate GPA label for summary
+    min_gpa = float(applied_rules.get("min_gpa") or 0)
+    current_gpa = profile.average_score or 0
+    personal_error_count = len(missing_personal)
+    
+    profile.validation_summary = {
+        "gpa": {
+            "has_error": len(gpa_errors) > 0,
+            "label": f"GPA: {current_gpa:.1f}/{min_gpa}" if min_gpa > 0 else "GPA: N/A",
+            "count": len(gpa_errors)
+        },
+        "documents": {
+            "has_error": len(doc_errors) > 0,
+            "label": f"Tài liệu: {len(uploaded_doc_codes)}/{len(upload_required_docs)}",
+            "count": len(doc_errors)
+        },
+        "personal": {
+            "has_error": personal_error_count > 0,
+            "label": f"Thiếu {personal_error_count} thông tin cá nhân" if personal_error_count > 0 else "Thông tin cá nhân: OK",
+            "count": personal_error_count
+        }
     }
 
-    checklist = []
-    for doc_code in mandatory_docs:
-        checklist.append({
-            "code": doc_code,
-            "label": doc_labels.get(doc_code, doc_code),
-            "status": "missing",
-            "file_path": None,
-            "uploaded_at": None,
-        })
+    # =========================================================================
+    # 4.1 GROUPED VALIDATION ERRORS (Enhanced UX - Categorized Display)
+    # =========================================================================
+    profile.grouped_validation_errors = {
+        "personal_info": {
+            "category": "Thông tin cá nhân",
+            "errors": personal_ve, # Use the computed list from helper
+            "count": len(personal_ve)
+        },
+        "documents": {
+            "category": "Tài liệu",
+            "errors": [f"Thiếu tài liệu bắt buộc: {doc_code}" for doc_code in doc_errors],
+            "count": len(doc_errors)
+        },
+        "scores": {
+            "category": "Điểm số",
+            "errors": gpa_errors,
+            "count": len(gpa_errors)
+        }
+    }
 
-    return checklist
+    # =========================================================================
+    # 4.2 SCORE SNAPSHOT STATUS (Thin Client Compliance - Ticket #5)
+    # Backend computes pass/fail for each subject and total score
+    # Frontend ONLY renders, never calculates
+    # =========================================================================
+    min_subject_score = float(applied_rules.get("min_subject_score") or 0)
+    min_score = float(applied_rules.get("min_score") or 0)
+    total_score = profile.total_score
+    subject_scores = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
+
+    # Compute subject pass/fail statuses
+    subject_statuses = {}
+    for code, score in subject_scores.items():
+        if score is not None:
+            # Pass if score >= min_subject_score (0 threshold means always pass)
+            subject_statuses[code] = "passing" if score >= min_subject_score else "failing"
+        else:
+            subject_statuses[code] = None  # No score yet
+
+    # Compute total score status
+    total_status = None
+    if total_score is not None:
+        # Pass if total >= min_score (0 threshold means always pass)
+        total_status = "passing" if total_score >= min_score else "failing"
+
+    profile.score_snapshot_status = {
+        "total_status": total_status,
+        "subject_statuses": subject_statuses,
+        "min_subject_score": min_subject_score,
+        "min_score": min_score,
+    }
+    
+    # =========================================================================
+    # 5. STEP STATUS (Architecture Compliant - Backend computes, FE renders)
+    # =========================================================================
+    # Required personal fields for step 1 check
+    personal_required = ["full_name", "phone", "citizen_id"]
+    personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
+    personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
+    personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
+    
+    # Family
+    has_family = profile.family_info and len(profile.family_info) > 0
+    
+    # Academic
+    has_academic = profile.academic_history and len(profile.academic_history) > 0
+    
+    has_any_scores = bool(profile.subject_scores) if hasattr(profile, 'subject_scores') else False
+
+    # ✅ FIX: Documents format confirmation check
+    # Check if all uploaded documents have been verified by manager or confirmed as paper submitted
+    docs_format_confirmed = True
+    if documents is not None:
+        for doc in documents:
+            # If document is uploaded but not yet verified/paper_submitted, format not confirmed
+            if doc.status == "uploaded" and doc.file_path:
+                docs_format_confirmed = False
+                break
+
+    step_status = {
+        # Step 1: Personal Info
+        1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
+        # Step 2: Family
+        2: "success" if has_family else "warning",
+        # Step 3: Academic History
+        3: "success" if has_academic else "warning",
+        # Step 4: Scores
+        4: "error" if gpa_error else ("success" if has_any_scores else "warning"),
+        # Step 5: Documents
+        5: "error" if len(doc_errors) > 0 else ("warning" if not docs_format_confirmed else "success"),
+        # Step 6: Tuition (display only)
+        6: "success",
+        # Step 7: Finalize
+        7: "locked" if profile.eligibility_status == "ineligible" else "success",
+    }
+    profile.step_status = step_status
+
+    # =========================================================================
+    # 6. COMPLETION PERCENT (Based on Step Status)
+    # =========================================================================
+    # ✅ REFACTORED: Sync with step_status for consistency with UI sidebar
+    # Each step contributes equally: 7 steps = ~14% each
+    # "success" = full points, "warning" = partial points, "error"/"locked" = 0 points
+
+    step_weights = {
+        1: 14,  # Personal Info
+        2: 14,  # Family
+        3: 14,  # Academic History
+        4: 15,  # Scores (slightly higher priority)
+        5: 15,  # Documents (slightly higher priority)
+        6: 14,  # Tuition
+        7: 14,  # Final Review
+    }
+
+    completion_percent = 0
+    for step_num, weight in step_weights.items():
+        step_state = step_status.get(step_num, "locked")
+
+        if step_state == "success":
+            completion_percent += weight  # Full points
+        elif step_state == "warning":
+            completion_percent += int(weight * 0.5)  # Half points for partial completion
+        # "error" and "locked" contribute 0
+
+    profile.completion_percent = min(100, completion_percent)
+    
+    # =========================================================================
+    # 7. DOCUMENTS CHECKLIST (for frontend display)
+    # Build from applied_rules + ProfileDocument data
+    # =========================================================================
+    all_mandatory_docs = applied_rules.get("mandatory_docs", [])
+    doc_configs = applied_rules.get("doc_configs", {})  # {code: {requires_upload, submission_format}}
+    
+    # Create lookup of uploaded documents by code
+    doc_by_code = {}
+    if documents:
+        for doc in documents:
+            if doc.document_type:
+                doc_by_code[doc.document_type.code] = {
+                    "status": doc.status,
+                    "file_path": doc.file_path,
+                    "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+                    "rejection_reason": doc.rejection_reason,
+                    # submission_format_confirmed: True if manager verified the format
+                    # Defaults to True for verified status, False otherwise
+                    "submission_format_confirmed": doc.status == "verified",
+                    "label_from_db": doc.document_type.name,
+                }
+    
+    # Build documents_checklist
+    documents_checklist = []
+    for i, doc_code in enumerate(all_mandatory_docs):
+        config = doc_configs.get(doc_code, {})
+        uploaded_doc = doc_by_code.get(doc_code, {})
+        
+        documents_checklist.append({
+            "code": doc_code,
+            "label": config.get("label") or uploaded_doc.get("label_from_db") or doc_code,
+            "is_mandatory": True,
+            "requires_upload": config.get("requires_upload", True),
+            "submission_format": config.get("submission_format"),
+            "status": uploaded_doc.get("status", "missing"),
+            "file_path": uploaded_doc.get("file_path"),
+            "uploaded_at": uploaded_doc.get("uploaded_at"),
+            "rejection_reason": uploaded_doc.get("rejection_reason"),
+            "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False)
+        })
+    
+    profile.documents_checklist = documents_checklist
+
+    # ✅ Ticket #3.1: Document Status Summary (Backend Computed)
+    # Calculate stats for Thin Client compliance
+    if documents is not None:
+         mandatory_docs = [doc for doc in documents if doc.document_type and doc.document_type.code in upload_required_docs]
+         
+         # Count based on status
+         submitted_count = len([d for d in mandatory_docs if d.status in ["uploaded", "verified", "paper_submitted"]])
+         verified_count = len([d for d in mandatory_docs if d.status == "verified"])
+         mandatory_count = len(upload_required_docs)
+         missing_count = len(doc_errors) # Already computed via validation helper
+         
+         profile.document_stats = {
+             "submitted_count": submitted_count,
+             "verified_count": verified_count, 
+             "mandatory_count": mandatory_count,
+             "missing_count": missing_count
+         }
+
+    # =========================================================================
+    # 8. EXECUTIVE SUMMARY (Dashboard Overview)
+    # =========================================================================
+    # Provides high-level status summary for dashboard display
+    # Frontend uses this to show overall progress and next actions
+
+    # Count steps by status
+    step_counts = {"success": 0, "warning": 0, "error": 0, "locked": 0}
+    for step_state in step_status.values():
+        step_counts[step_state] = step_counts.get(step_state, 0) + 1
+
+    # Determine overall status
+    has_errors = step_counts["error"] > 0
+    has_warnings = step_counts["warning"] > 0
+    has_locked = step_counts["locked"] > 0
+
+    if has_errors or has_locked:
+        overall_status = "incomplete"  # Blocking issues exist
+    elif has_warnings:
+        overall_status = "warning"  # Optional fields missing
+    else:
+        overall_status = "ready"  # All steps complete
+
+    # Identify critical blockers (errors that prevent submission)
+    critical_blockers = []
+    if personal_error_count > 0:
+        critical_blockers.append(f"Thiếu {personal_error_count} thông tin cá nhân bắt buộc")
+    if len(doc_errors) > 0:
+        critical_blockers.append(f"Thiếu {len(doc_errors)} tài liệu bắt buộc")
+    if gpa_error:
+        critical_blockers.append("Điểm số chưa đạt yêu cầu")
+
+    # Identify warnings (non-blocking issues)
+    warning_messages = []
+    if not has_family:
+        warning_messages.append("Chưa điền thông tin gia đình")
+    if not has_academic:
+        warning_messages.append("Chưa điền lịch sử học tập")
+    if not docs_format_confirmed:
+        warning_messages.append("Một số tài liệu chưa được xác nhận định dạng")
+
+    # Suggest next action
+    if step_status[1] == "error":
+        next_action = "Hoàn thiện thông tin cá nhân bắt buộc"
+    elif step_status[4] == "error":
+        next_action = "Nhập điểm số đạt yêu cầu"
+    elif step_status[5] == "error":
+        next_action = "Tải lên tài liệu bắt buộc"
+    elif has_warnings:
+        next_action = "Hoàn thiện thông tin còn thiếu (không bắt buộc)"
+    elif profile.eligibility_status == "eligible" and status == "draft":
+        next_action = "Kiểm tra và nộp hồ sơ"
+    else:
+        next_action = "Hồ sơ đã hoàn tất"
+
+    # Can submit only if eligible and in draft status
+    can_submit = profile.eligibility_status == "eligible" and status == "draft"
+
+    profile.executive_summary = {
+        "overall_status": overall_status,
+        "completion_percent": profile.completion_percent,
+        "step_summary": step_counts,
+        "critical_blockers": critical_blockers,
+        "warnings": warning_messages,
+        "next_action": next_action,
+        "can_submit": can_submit,
+    }
+
+    # =========================================================================
+    # 9. SENSITIVE DATA MASKING (Security & Privacy Compliance)
+    # =========================================================================
+    # Mask CCCD for display purposes - show only last 4 digits
+    # Full citizen_id is still available for form editing
+    profile.citizen_id_masked = mask_citizen_id(profile.citizen_id)
+
+
+async def _create_admission_milestone_consultation(
+    db: AsyncSession,
+    lead: models.Lead,
+    event: str,
+    actor: models.User,
+    profile_id: Optional[int] = None,
+    student_code: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """
+    Create system consultation record for admission milestone.
+
+    Following the Golden Rule:
+    🔒 No Admission Event may occur without:
+        1. Being tied to a Consultation Status
+        2. Being tied to a Pipeline Stage
+        3. Creating a Consultation record (even if SYSTEM-generated)
+
+    This function:
+    1. Looks up the event projection from ADMISSION_EVENT_PROJECTIONS
+    2. Creates a SYSTEM consultation record
+    3. Updates lead.pipeline_stage_id and lead.consultation_status_id
+    4. Syncs lead.status via sync_lead_status_from_consultation()
+    5. Logs state change to lead_status_history
+
+    Args:
+        db: Database session
+        lead: Lead object to update
+        event: Admission event identifier (e.g., "profile_submitted")
+        actor: User who triggered the event (for audit trail)
+        profile_id: Optional admission profile ID (for note template)
+        student_code: Optional student code (for enrollment event)
+        reason: Optional reason (for rejection/override events)
+
+    Raises:
+        ValueError: If event not found in ADMISSION_EVENT_PROJECTIONS
+
+    Note:
+        - This function does NOT commit - caller must commit
+        - Respects terminal state guard (won't overwrite "converted" unless allowed)
+        - Creates consultation with method="system" for filtering
+    """
+    from ..core.admission_event_mapping import validate_projection
+    from ..core.status_mapping import sync_lead_status_from_consultation
+    from .lead_service import _log_lead_state_change, _get_current_lead_state
+
+    # Get canonical projection for this event
+    projection = validate_projection(event)
+
+    # Terminal state guard: Skip if lead already converted (unless allowed)
+    if projection.skip_if_converted and lead.status == "converted":
+        log.warning(
+            "Skipping admission milestone consultation: lead already converted",
+            lead_id=lead.id,
+            event=event,
+            current_status="converted",
+            attempted_stage=projection.pipeline_stage_id,
+            attempted_status=projection.consultation_status_id,
+        )
+        return
+
+    # Capture old state for history logging
+    old_state = _get_current_lead_state(lead)
+
+    # Load consultation status object for sync
+    consultation_status = await db.get(models.ConsultationStatus, projection.consultation_status_id)
+    if not consultation_status:
+        log.error(
+            "ConsultationStatus not found for admission event",
+            event=event,
+            consultation_status_id=projection.consultation_status_id,
+        )
+        raise ResourceNotFoundError(
+            f"Consultation status {projection.consultation_status_id} not found. "
+            f"Please check consultation_status.csv seeding."
+        )
+
+    # Build consultation note from template
+    note_template = projection.system_note_template
+    note = note_template.format(
+        profile_id=profile_id or "N/A",
+        student_code=student_code or "N/A",
+        reason=reason or "N/A"
+    )
+
+    # Create SYSTEM consultation record
+    system_consultation = models.Consultation(
+        lead_id=lead.id,
+        officer_id=actor.id,
+        consultation_status_id=projection.consultation_status_id,
+        consultation_date=datetime.now(timezone.utc),
+        method="system",  # ✅ Special marker for auto-generated records
+        notes=note,
+        duration_minutes=0,  # System consultations have no duration
+    )
+    db.add(system_consultation)
+
+    # Update lead pipeline (stage + status)
+    lead.consultation_status_id = projection.consultation_status_id
+    lead.pipeline_stage_id = projection.pipeline_stage_id
+
+    # Sync lead.status from consultation_status (Hybrid Approach)
+    sync_lead_status_from_consultation(lead, consultation_status)
+
+    # Update lead timestamp
+    lead.updated_at = datetime.now(timezone.utc)
+
+    # Log state change to lead_status_history
+    new_state = _get_current_lead_state(lead)
+    await _log_lead_state_change(
+        db=db,
+        lead=lead,
+        old_state=old_state,
+        new_state=new_state,
+        changed_by=actor,
+        reason=f"Admission event: {event}",
+    )
+
+    log.info(
+        "Admission milestone consultation created",
+        lead_id=lead.id,
+        admission_event=event,
+        stage_id=projection.pipeline_stage_id,
+        stage_name=projection.stage_name,
+        status_id=projection.consultation_status_id,
+        status_name=projection.consultation_name,
+        profile_id=profile_id,
+        actor_id=actor.id,
+    )
+
+
+def _extract_allowed_subject_codes(admission_path) -> List[str]:
+    """
+    Extract flat list of all allowed subject codes from criteria's subject groups.
+
+    Critical for applied_rules snapshot to ensure deterministic scoring.
+    Returns sorted list of unique subject codes from ALL linked subject groups.
+
+    Args:
+        admission_path: AdmissionPath object with loaded criteria and subject_group_mappings
+
+    Returns:
+        Sorted list of subject codes (e.g., ["chemistry", "english", "math", "physics"])
+
+    Example:
+        >>> path = get_admission_path_with_relations(path_id=1)
+        >>> _extract_allowed_subject_codes(path)
+        ["chemistry", "english", "literature", "math", "physics"]
+    """
+    if not admission_path or not admission_path.criteria:
+        log.warning(
+            "Cannot extract subject codes: admission_path or criteria is None",
+            path_id=admission_path.id if admission_path else None,
+        )
+        return []
+
+    subject_codes = set()
+    for mapping in admission_path.criteria.subject_group_mappings:
+        if mapping.subject_group:
+            for group_mapping in mapping.subject_group.subject_mappings:
+                if group_mapping.subject:
+                    subject_codes.add(group_mapping.subject.code)
+
+    return sorted(list(subject_codes))
+
+
+def _serialize_subject_groups(admission_path) -> List[Dict[str, Any]]:
+    """
+    Serialize subject groups for audit trail in applied_rules.
+
+    Preserves the original group structure for compliance and debugging.
+
+    Args:
+        admission_path: AdmissionPath object with loaded criteria and subject_group_mappings
+
+    Returns:
+        List of subject group dictionaries with code, name, and subjects
+
+    Example:
+        >>> _serialize_subject_groups(path)
+        [
+            {
+                "code": "A00",
+                "name": "Toán - Lý - Hóa",
+                "subjects": ["math", "physics", "chemistry"]
+            },
+            {
+                "code": "D01",
+                "name": "Toán - Văn - Anh",
+                "subjects": ["math", "literature", "english"]
+            }
+        ]
+    """
+    if not admission_path or not admission_path.criteria:
+        log.warning(
+            "Cannot serialize subject groups: admission_path or criteria is None",
+            path_id=admission_path.id if admission_path else None,
+        )
+        return []
+
+    groups = []
+    for mapping in admission_path.criteria.subject_group_mappings:
+        if mapping.subject_group:
+            groups.append({
+                "code": mapping.subject_group.code,
+                "name": mapping.subject_group.name,
+                "subjects": [
+                    m.subject.code 
+                    for m in mapping.subject_group.subject_mappings 
+                    if m.subject
+                ]
+            })
+
+    return groups
 
 
 # ==============================================================================
@@ -121,41 +899,52 @@ def _generate_documents_checklist(mandatory_docs: List[str]) -> List[Dict[str, A
 async def create_profile(
     db: AsyncSession,
     lead_id: int,
+    admission_method_id: int,  # NEW: Required parameter for relational lookup
     current_user: models.User,
 ) -> models.AdmissionProfile:
     """
     Create new AdmissionProfile for a Lead.
 
+    REFACTORED (Phase 2): Now uses AdmissionPath (relational) instead of JSONB.
+
     Workflow:
     1. Validate Lead exists and user has access (IDOR check)
-    2. Check Lead has offering_id (required for admission_rules)
+    2. Check Lead has offering_id
     3. Check Lead doesn't already have admission_profile
-    4. Snapshot admission_rules from ProgramOffering
-    5. Auto-generate documents_checklist from mandatory_docs
-    6. Create AdmissionProfile with status='draft'
+    4. Find AdmissionPath for this offering + method
+    5. Resolve documents via DocumentGroup (relational override logic)
+    6. Build applied_rules snapshot from relational data
+    7. Create AdmissionProfile with status='draft'
 
     Security:
     - IDOR: Lead.unit_id must equal current_user.unit_id
-    - Business Rule: Lead.offering_id must not be null
+    - Business Rule: AdmissionPath must exist and be active
     - Uniqueness: Lead can only have one admission_profile
 
     Args:
         db: Database session
         lead_id: Lead ID
+        admission_method_id: Admission method ID (e.g., hoc_ba, thpt)
         current_user: Current authenticated user
 
     Returns:
         Created AdmissionProfile
 
     Raises:
-        ResourceNotFoundError: Lead or ProgramOffering not found
+        ResourceNotFoundError: Lead, ProgramOffering, or AdmissionPath not found
         PermissionDeniedError: User doesn't have access to this lead
-        BadRequest: Lead already has profile, or offering_id is null, or no admission_rules
+        BadRequest: Lead already has profile, or path not active
     """
     # ✅ SPRINT 6: Use Repository for lead lookup
-    from app.repositories import AdmissionRepository
-    admission_repo = AdmissionRepository(db)
+    from app.repositories import AdmissionRepository, OrganizationRepository
+    from app.repositories.admission_path_repository import AdmissionPathRepository
+    from app.services.admission_path_service import AdmissionPathService
     
+    admission_repo = AdmissionRepository(db)
+    org_repo = OrganizationRepository(db)
+    path_repo = AdmissionPathRepository(db)
+    path_service = AdmissionPathService(db)
+
     # Step 1: Get Lead with eager loading (prevent N+1)
     lead = await admission_repo.get_lead_with_offering(lead_id)
 
@@ -173,32 +962,115 @@ async def create_profile(
                 lead_id=lead_id,
                 lead_unit_id=lead.unit_id,
             )
-            raise PermissionDeniedError(
-                "You don't have permission to create admission profile for this lead"
+            # FAKE 404 for security (inference protection)
+            raise ResourceNotFoundError(f"Lead with ID {lead_id} not found")
+
+    # ✅ SPRINT 7 FIX: Concurrency Control
+    # Prevent race conditions where multiple requests create duplicate profiles
+    async with acquire_redis_lock(f"lock:create_profile:{lead_id}", timeout=5):
+        # Double-check inside lock (idempotency)
+        # We need to re-fetch or check relationship if session was refreshed, 
+        # but since we are in same session transaction, checking the validation below is fine 
+        # IF we trust the session sync. 
+        # Better: Re-query specifically for existence check to be safe.
+        
+        existing_profile = await admission_repo.get_profile_by_lead_id(lead_id)
+        if existing_profile:
+             raise ConflictError(f"Lead {lead_id} already has an admission profile")
+
+        # Step 3: Check Lead has offering_id
+        if not lead.offering_id:
+            log.warning(
+                "Lead has no offering_id (required for admission rules)",
+                lead_id=lead_id,
+            )
+            raise BadRequest(
+                "Lead must have a program offering assigned before creating admission profile"
             )
 
-    # Step 3: Check Lead has offering_id
-    if not lead.offering_id:
+        # Step 4: Check Lead check (Redundant with Step 2 re-check but kept for flow)
+        if lead.admission_profile:
+             raise ConflictError(f"Lead {lead_id} already has an admission profile")
+
+    # ✅ AUDIT FIX: Parent-child state guard - prevent profile creation for invalid lead states
+    from app.utils.exceptions import BusinessRuleViolation
+
+    INVALID_LEAD_STATUSES_FOR_ADMISSION = frozenset({
+        # "rejected",      # REMOVED: Allow re-engagement with rejected leads
+        # "unqualified",   # REMOVED: Allow re-engagement with unqualified leads
+        "converted",       # Already enrolled (shouldn't happen, but defensive)
+    })
+
+    if lead.status in INVALID_LEAD_STATUSES_FOR_ADMISSION:
         log.warning(
-            "Lead has no offering_id (required for admission rules)",
+            "Attempt to create admission profile for lead in invalid status",
             lead_id=lead_id,
+            lead_status=lead.status,
+            user_id=current_user.id,
         )
-        raise BadRequest(
-            "Lead must have a program offering assigned before creating admission profile"
+        raise BusinessRuleViolation(
+            f"Cannot create admission profile for lead with status '{lead.status}'. "
+            f"Lead must be in active pipeline (new, assigned, contacted, qualified) or be re-engaged."
         )
 
-    # Step 4: Check Lead doesn't already have admission_profile
-    if lead.admission_profile:
+    # Note: If lead is rejected/unqualified, proceeding here effectively re-opens them via admission process.
+
+
+    # =========================================================================
+    # ✅ EDGE CASE #9 FIX: Validate Consultation Completeness
+    # Enforces workflow: Lead → Consultation (with status) → Admission
+    # Uses ACTUAL consultation data, not just cached fields on Lead
+    # =========================================================================
+
+    # Step 4a: Get latest consultation (actual DB query for accuracy)
+    latest_consultation = await admission_repo.get_latest_consultation_for_lead(lead_id)
+
+    if not latest_consultation:
         log.warning(
-            "Lead already has admission profile",
+            "Attempt to create admission profile for lead without consultations",
             lead_id=lead_id,
-            existing_profile_id=lead.admission_profile.id,
+            consultation_count=lead.consultation_count,
+            user_id=current_user.id,
         )
-        raise BadRequest(
-            f"Lead already has an admission profile (ID: {lead.admission_profile.id})"
+        raise BusinessRuleViolation(
+            "Chưa thể tạo hồ sơ xét tuyển: Lead chưa có lịch sử tư vấn. "
+            "Vui lòng thêm ít nhất 1 lần tư vấn trước khi tạo hồ sơ."
         )
 
-    # Step 5: Snapshot admission_rules from ProgramOffering
+    # Step 4b: Validate consultation has a status assigned
+    if not latest_consultation.consultation_status_id:
+        log.warning(
+            "Attempt to create admission profile with incomplete consultation",
+            lead_id=lead_id,
+            consultation_id=latest_consultation.id,
+            has_status=False,
+            user_id=current_user.id,
+        )
+        raise BusinessRuleViolation(
+            "Chưa thể tạo hồ sơ xét tuyển: Lần tư vấn gần nhất chưa cập nhật kết quả. "
+            "Vui lòng chọn trạng thái tư vấn (VD: 'Có nhu cầu', 'Đồng ý tư vấn') trước khi tạo hồ sơ."
+        )
+
+    # Step 4c: Validate consultation status is not a "universal" activity-only status
+    # Universal statuses (e.g., "Không nghe máy", "Nhắn tin không phản hồi") are
+    # activity markers, not pipeline progression indicators
+    if latest_consultation.consultation_status and latest_consultation.consultation_status.is_universal:
+        status_name = latest_consultation.consultation_status.name
+        log.warning(
+            "Attempt to create admission profile with universal/activity-only status",
+            lead_id=lead_id,
+            consultation_id=latest_consultation.id,
+            status_id=latest_consultation.consultation_status_id,
+            status_name=status_name,
+            user_id=current_user.id,
+        )
+        raise BusinessRuleViolation(
+            f"Chưa thể tạo hồ sơ xét tuyển: Trạng thái hiện tại '{status_name}' chỉ là ghi nhận hoạt động, "
+            "chưa phải kết quả tư vấn. Vui lòng cập nhật trạng thái phản ánh kết quả tư vấn thực tế "
+            "(VD: 'Có nhu cầu tìm hiểu', 'Đồng ý tư vấn', 'Từ chối tư vấn')."
+        )
+
+    # Step 5: Validate offering exists
     if not lead.offering:
         log.error(
             "ProgramOffering not found (data integrity issue)",
@@ -209,70 +1081,230 @@ async def create_profile(
             f"Program offering {lead.offering_id} not found"
         )
 
-    admission_rules = lead.offering.admission_rules or {}
-    if not admission_rules:
-        log.warning(
-            "ProgramOffering has no admission_rules configured",
-            offering_id=lead.offering_id,
-        )
-        # Don't raise error - we can still create profile with empty rules
-        # This allows for profiles to be created before rules are fully configured
-        admission_rules = {}
-    
-    # Step 5.1: Phase 6 - Include admission_criteria from OfferingAcademicInfo
-    # OfferingAcademicInfo contains year-specific criteria (Level 3)
-    # ⚠️ Use repository method to avoid MissingGreenlet (lazy loading in async)
-    criteria = []
-    from app.repositories import OrganizationRepository
-    org_repo = OrganizationRepository(db)
+    # Step 6: Get published OfferingAcademicInfo for this offering
     academic_info_list = await org_repo.get_academic_info_history(
         lead.offering_id, 
         published_only=False
     )
     
-    if academic_info_list:
-        # Get the first published, or fallback to most recent
-        academic_info = next(
-            (info for info in academic_info_list if info.is_published),
-            academic_info_list[0] if academic_info_list else None
-        )
-        if academic_info and academic_info.admission_criteria:
-            criteria = academic_info.admission_criteria
-            log.info(
-                "Snapshotting admission_criteria from OfferingAcademicInfo",
-                offering_id=lead.offering_id,
-                academic_year=academic_info.academic_year,
-                criteria_count=len(criteria),
-            )
+    academic_info = next(
+        (info for info in academic_info_list if info.is_published),
+        academic_info_list[0] if academic_info_list else None
+    )
     
-    # Merge criteria into applied_rules for backward compatibility + new features
+    if not academic_info:
+        log.warning(
+            "No academic info found for offering",
+            offering_id=lead.offering_id,
+        )
+        raise BadRequest(
+            f"No published academic info found for offering {lead.offering_id}. "
+            "Please configure academic year info before creating profiles."
+        )
+
+    # Step 7: Find AdmissionPath for this offering + method (NEW: Relational)
+    admission_path = await path_repo.get_path_by_offering_and_method(
+        academic_info_id=academic_info.id,
+        admission_method_id=admission_method_id
+    )
+
+    if not admission_path:
+        log.warning(
+            "No admission path configured for offering + method",
+            academic_info_id=academic_info.id,
+            admission_method_id=admission_method_id,
+        )
+        raise BadRequest(
+            f"No admission path configured for this offering and method (method_id={admission_method_id}). "
+            "Please configure admission paths in the Config Console before creating profiles."
+        )
+
+    # ✅ FIX Finding 1.2: Check if Admission Method is Active
+    # We need to access the admission_method relation from the path
+    # Assuming path.admission_method is eager loaded in repository or exists
+    # If not loaded, we rely on the repository ensuring it returns valid paths,
+    # but explicit check is safer.
+    # Since get_path_by_offering_and_method likely joins admission_method, we check here.
+    if admission_path.admission_method and not admission_path.admission_method.is_active:
+         log.warning(
+            "Attempt to create profile with inactive admission method",
+            method_id=admission_method_id,
+            is_active=admission_path.admission_method.is_active
+        )
+         raise BadRequest(
+            f"Phương thức tuyển sinh '{admission_path.admission_method.name}' đang tạm dừng hoặc không hoạt động."
+        )
+
+    # ✅ FIX Finding 1.2 (Strict): Validate Academic Year consistency (Lead Match Logic)
+    # Ensure the profile created belongs to the same academic year as the Lead's recruitment cycle
+    # Lead -> Offering -> AcademicInfo (from lead.offering_id)
+    # Profile -> Path -> AcademicInfo
+    # In this function, we derived path FROM lead's offering academic_info, so by definition they match.
+    # However, if Lead has an explicit 'academic_year' field (denormalized), we shout compare.
+    # Currently Lead model doesn't show 'academic_year', it links to Offering.
+    # So the check `academic_info.id == lead.offering.current_academic_info_id` is implicit in Step 6 logic.
+    
+    # We add a guard to ensure we are not creating a profile for a PAST year if the lead is new
+    # But since we use get_academic_info_history(published_only=False), we might pick an old one?
+    # Step 6 logic: `info.is_published` -> likely the current active one.
+    
+    # Let's enforce that the selected academic_info is indeed the CURRENT one for the offering
+    # unless specific override logic exists.
+    if not academic_info.is_published:
+         # Warn if creating profile for unpublished/draft academic year
+         log.warning("Creating profile for unpublished academic year", academic_info_id=academic_info.id)
+    else:
+        # Check if year is closed? (Assuming 'is_active' or similar flag exists, or relying on published)
+        pass
+
+    if admission_path.status != "active":
+        log.warning(
+            "Admission path is not active",
+            path_id=admission_path.id,
+            path_status=admission_path.status,
+        )
+        raise BadRequest(
+            f"Admission path is not active (status: {admission_path.status}). "
+            "Only active paths can be used for profile creation."
+        )
+
+    # Step 8: Check offering_type_id for document resolution
+    offering_type_id = lead.offering.offering_type_id
+    if not offering_type_id:
+        log.warning(
+            "Program offering has no offering_type_id",
+            offering_id=lead.offering_id,
+        )
+        raise BadRequest(
+            f"Program offering {lead.offering_id} has no offering_type_id configured. "
+            "Please run backfill script or configure offering type."
+        )
+
+    # Step 9: Resolve documents using DocumentGroup (relational override logic)
+    resolved_docs, _ = await path_service.resolve_documents_for_path(
+        path=admission_path,
+        offering_type_id=offering_type_id
+    )
+
+    # Step 10: Build mandatory_docs from resolved documents
+    mandatory_docs = [
+        doc.document_type_code 
+        for doc in resolved_docs 
+        if doc.is_mandatory
+    ]
+
+    # Step 11: Load AdmissionPath with criteria (eager load)
+    full_path = await path_repo.get_by_id_with_relations(admission_path.id)
+    
+    # Step 12: Build applied_rules from relational data (SNAPSHOT)
+    # ✅ CRITICAL FIX: Complete snapshot with ALL scoring parameters
+    # Per ADMISSION_PROCESSING_FLOW_ANALYSIS.md Section 6.1
     applied_rules = {
-        **admission_rules,
-        "criteria": criteria,  # New: dynamic admission methods
+        # =========================================================================
+        # GROUP 1: Basic Criteria (from AdmissionCriteria)
+        # =========================================================================
+        "min_gpa": float(full_path.criteria.min_gpa) if full_path and full_path.criteria and full_path.criteria.min_gpa is not None else None,
+        "min_score": float(full_path.criteria.min_score) if full_path and full_path.criteria and full_path.criteria.min_score is not None else None,
+
+        # =========================================================================
+        # GROUP 2: Scoring Configuration (CRITICAL - was missing!)
+        # =========================================================================
+        # How to select subjects: "fixed" | "best_n" | "any_n"
+        "subject_selection_mode": full_path.criteria.subject_selection_mode if full_path and full_path.criteria else "fixed",
+
+        # How to calculate score: "sum" | "average" | "weighted"
+        "scoring_method": full_path.criteria.scoring_method if full_path and full_path.criteria else "sum",
+
+        # Number of subjects required (1, 2, 3, or None for flexible)
+        "required_subject_count": full_path.criteria.required_subject_count if full_path and full_path.criteria else None,
+
+        # Minimum score per subject (điểm liệt)
+        "min_subject_score": float(full_path.criteria.min_subject_score) if full_path and full_path.criteria and full_path.criteria.min_subject_score is not None else None,
+
+        # Maximum possible score (for display/normalization)
+        "max_possible_score": float(full_path.criteria.max_possible_score) if full_path and full_path.criteria and full_path.criteria.max_possible_score is not None else None,
+
+        # =========================================================================
+        # GROUP 3: Subject Validation (CRITICAL - was missing!)
+        # =========================================================================
+        # Flat list of ALL allowed subject codes (for input validation)
+        "allowed_subject_codes": _extract_allowed_subject_codes(full_path),
+
+        # Original subject groups (for audit trail and fixed mode)
+        "subject_groups": _serialize_subject_groups(full_path),
+        
+        # =========================================================================
+        # GROUP 4: Method Metadata (Updated Ticket #3)
+        # =========================================================================
+        "admission_method": admission_path.admission_method.code if admission_path.admission_method else None,
+        "admission_method_id": admission_method_id,
+        # Ticket #3: Explicit method type derivation
+        # If no subject groups mapped -> "gpa_only" (Hoc ba 3 years)
+        # If subject groups exist -> "subject_based" (Hoc ba 3 semesters / THPT / DGNL)
+        "method_type": "subject_based" if full_path.criteria and full_path.criteria.subject_group_mappings else "gpa_only",
+
+        # =========================================================================
+        # GROUP 5: Document Requirements (Updated Ticket #4)
+        # =========================================================================
+        "mandatory_docs": mandatory_docs,
+        "doc_configs": {
+            doc.document_type_code: {
+                "requires_upload": doc.requires_upload,
+                "submission_format": doc.submission_format,
+                "is_mandatory": doc.is_mandatory,
+                "label": doc.document_type_name,
+            }
+            for doc in resolved_docs
+        },
+        # Ticket #4: Upload Configuration
+        "upload_config": DEFAULT_UPLOAD_CONFIG,
+
+        # =========================================================================
+        # GROUP 6: Application Fee Configuration
+        # =========================================================================
+        "application_fee": float(admission_path.application_fee) if admission_path.application_fee else 0,
+        "requires_application_fee": admission_path.requires_application_fee,
+        "fee_status": "exempt" if not admission_path.requires_application_fee else "pending",
+        # fee_status values: "exempt" (miễn phí), "pending" (chờ thanh toán), "paid" (đã thanh toán)
+
+        # =========================================================================
+        # GROUP 7: Metadata
+        # =========================================================================
+        "snapshot_source": "relational",
+        "admission_path_id": admission_path.id,
+        "academic_info_id": academic_info.id,
     }
 
-    # Step 6: Auto-generate documents_checklist
-    mandatory_docs = applied_rules.get("mandatory_docs", [])
-    
-    # Also collect mandatory docs from criteria (if any)
-    for criterion in criteria:
-        required_docs = criterion.get("required_documents", [])
-        for doc in required_docs:
-            doc_code = doc.get("code") if isinstance(doc, dict) else doc
-            if doc_code and doc_code not in mandatory_docs:
-                mandatory_docs.append(doc_code)
-    
-    documents_checklist = _generate_documents_checklist(mandatory_docs)
 
-    # Step 7: Create AdmissionProfile
+
+    # Step 13: Validate applied_rules has content
+    if not mandatory_docs and not applied_rules.get("min_gpa") and not applied_rules.get("min_score"):
+        log.warning(
+            "Admission path has no criteria or documents configured",
+            path_id=admission_path.id,
+        )
+        # Allow profile creation but log warning (path might be minimal config)
+
+    # Step 14: Determine academic_year
+    academic_year = academic_info.academic_year
+    
+    log.info(
+        "Creating profile with relational AdmissionPath",
+        lead_id=lead_id,
+        academic_year=academic_year,
+        admission_path_id=admission_path.id,
+        admission_method_id=admission_method_id,
+        mandatory_docs_count=len(mandatory_docs),
+    )
+    
+    # Step 15: Create AdmissionProfile
     new_profile = models.AdmissionProfile(
         lead_id=lead_id,
+        academic_year=academic_year,
         status="draft",
-        applied_rules=applied_rules,  # Snapshot (immutable) with criteria
+        applied_rules=applied_rules,  # Snapshot from relational data
         family_info=[],
         academic_history=[],
-        admission_scores=None,
-        documents_checklist=documents_checklist,
         # Pre-fill from Lead
         full_name=lead.full_name,
         phone=lead.phone,
@@ -280,20 +1312,52 @@ async def create_profile(
     )
 
     db.add(new_profile)
-    await db.flush()  # Get ID without committing (router commits)
+    try:
+        await db.flush()  # Get ID without committing (router commits)
+    except IntegrityError as e:
+        log.error("IntegrityError during profile creation (race condition)", error=str(e))
+        raise ConflictError(f"Lead {lead_id} already has an admission profile (detected at DB layer)")
 
-    # ✅ SPRINT 6: Reload with relationships for response
+    # Step 16: Initialize ProfileDocument records
+    await admission_repo.initialize_documents_for_profile(
+        profile_id=new_profile.id,
+        document_type_codes=mandatory_docs
+    )
+
+    # Step 17: Reload with relationships for response
     new_profile = await admission_repo.reload_profile_with_lead(new_profile.id)
 
+    # Calculate totals for response
+    _calculate_and_update_totals(new_profile)
+
+    # ✅ SYNC: Update lead consultation status to match admission status
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=new_profile,
+        changed_by_user_id=current_user.id,
+        reason="Admission profile created",
+    )
+
     log.info(
-        "Admission profile created",
+        "Admission profile created (relational flow)",
         profile_id=new_profile.id,
         lead_id=lead_id,
         user_id=current_user.id,
-        snapshot_min_gpa=applied_rules.get("min_gpa"),
-        criteria_count=len(criteria),
+        snapshot_source="relational",
+        admission_path_id=admission_path.id,
         mandatory_docs_count=len(mandatory_docs),
     )
+
+    # ✅ PIPELINE SYNC: Create system consultation for admission milestone
+    if new_profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=new_profile.lead,
+            event="profile_created",
+            actor=current_user,
+            profile_id=new_profile.id,
+        )
 
     return new_profile
 
@@ -303,11 +1367,17 @@ async def get_profiles(
     db: AsyncSession,
     skip: int,
     limit: int,
-    status_filter: Optional[str],
     current_user: models.User,
-) -> List[models.AdmissionProfile]:
+    search: Optional[str] = None,
+    statuses: Optional[List[str]] = None,
+    major_ids: Optional[List[int]] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    sort_by: str = "created_at",
+    order: str = "desc",
+) -> Tuple[List[models.AdmissionProfile], int]:
     """
-    Get filtered list of admission profiles.
+    Get filtered list of admission profiles with total count.
 
     Security:
     - IDOR: Automatically filters by unit_id for non-admin users.
@@ -316,32 +1386,39 @@ async def get_profiles(
         db: Database session
         skip: Pagination offset
         limit: Page size
-        status_filter: Optional status filter
         current_user: Current authenticated user
+        search: Search term for name, email, citizen_id
+        statuses: List of statuses to filter (multi-select)
+        major_ids: List of major/program IDs to filter
+        date_from: Filter profiles created after this date
+        date_to: Filter profiles created before this date
+        sort_by: Field to sort by
+        order: Sort order (asc, desc)
 
     Returns:
-        List of AdmissionProfile
+        Tuple of (List of AdmissionProfile, total_count)
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    # Build filters
-    filters = {}
-    if status_filter:
-        filters["status"] = status_filter
-
     # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
     unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
-    # Get profiles using repository
-    profiles = await admission_repo.get_filtered(
+    # Get profiles using repository with count
+    profiles, total_count = await admission_repo.get_filtered_with_count(
         skip=skip,
         limit=min(limit, 100),
         unit_id=unit_filter,
-        **filters
+        search=search,
+        statuses=statuses,
+        major_ids=major_ids,
+        date_from=date_from,
+        date_to=date_to,
+        sort_by=sort_by,
+        order=order,
     )
 
-    return profiles
+    return profiles, total_count
 
 
 async def get_profile(
@@ -361,7 +1438,7 @@ async def get_profile(
         current_user: Current authenticated user
 
     Returns:
-        AdmissionProfile with relationships loaded
+        AdmissionProfile with relationships loaded + computed frontend fields
 
     Raises:
         ResourceNotFoundError: Profile not found
@@ -386,6 +1463,16 @@ async def get_profile(
         user_id=current_user.id,
         status=profile.status,
     )
+
+    # Calculate totals for response
+    _calculate_and_update_totals(profile)
+    
+    # =========================================================================
+    # Phase 7: Compute Frontend Thin Client Fields
+    # =========================================================================
+    # Fetch documents for completion calculation
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
 
     return profile
 
@@ -420,8 +1507,29 @@ async def update_profile(
         PermissionDeniedError: User doesn't have access
         BadRequest: Status is not 'draft'
     """
-    # Get profile with IDOR check
-    profile = await get_profile(db, profile_id, current_user)
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    # Prevent Race Condition (Lost Update) by locking the row
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) # Eager load lead for IDOR check
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, current_user)
+
+    # Initialize Repo
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
 
     # State Locking: Only draft or rejected profiles can be updated
     if profile.status not in ["draft", "rejected"]:
@@ -438,10 +1546,18 @@ async def update_profile(
     
     # If profile is rejected, reset to draft on update
     if profile.status == "rejected":
+        # ✅ CRITICAL FIX #1.3: Validate transition REJECTED -> DRAFT
+        from .admission_state_machine import validate_transition
+        try:
+            validate_transition("rejected", "draft")
+        except ValueError as e:
+            # Should not happen if state machine is correct
+            log.error("Invalid transition rejected->draft", error=str(e))
+            raise BadRequest(str(e))
         profile.status = "draft"
 
     # Optimistic Locking: Check version matches
-    if "version" in data and data["version"] != profile.version:
+    if data.get("version") is not None and data["version"] != profile.version:
         log.warning(
             "Version mismatch during update (concurrent modification)",
             profile_id=profile_id,
@@ -458,7 +1574,45 @@ async def update_profile(
     # Update fields (only non-None values from schema)
     # Update fields (only non-None values from schema)
     if "citizen_id" in data and data["citizen_id"] is not None:
-        profile.citizen_id = data["citizen_id"]
+        new_citizen_id = data["citizen_id"]
+
+        # ✅ Validate citizen_id uniqueness within same academic_year (if changed)
+        if new_citizen_id != profile.citizen_id:
+            # Check if new citizen_id already exists in same year
+            duplicate_profile = await admission_repo.check_citizen_id_exists(
+                citizen_id=new_citizen_id,
+                academic_year=profile.academic_year,
+                exclude_profile_id=profile.id
+            )
+
+            if duplicate_profile:
+                log.warning(
+                    "Cannot update citizen_id: Duplicate in same academic year",
+                    profile_id=profile.id,
+                    new_citizen_id=new_citizen_id,
+                    academic_year=profile.academic_year,
+                    duplicate_profile_id=duplicate_profile.id,
+                )
+                raise ConflictError(
+                    f"CCCD {new_citizen_id} đã được sử dụng bởi hồ sơ khác "
+                    f"trong năm {profile.academic_year} (ID: {duplicate_profile.id})"
+                )
+
+            # Check if already enrolled as student
+            existing_student = await admission_repo.check_citizen_id_enrolled(new_citizen_id)
+            if existing_student:
+                log.warning(
+                    "Cannot update citizen_id: Already enrolled as student",
+                    profile_id=profile.id,
+                    new_citizen_id=new_citizen_id,
+                    student_code=existing_student.student_code,
+                )
+                raise ConflictError(
+                    f"CCCD {new_citizen_id} đã được sử dụng bởi học viên "
+                    f"(Mã SV: {existing_student.student_code})"
+                )
+
+        profile.citizen_id = new_citizen_id
 
     # ✅ Sync with Lead: Full Name
     if "full_name" in data and data["full_name"] is not None:
@@ -507,17 +1661,69 @@ async def update_profile(
     if "academic_history" in data and data["academic_history"] is not None:
         profile.academic_history = data["academic_history"]
 
+    # ✅ Phase 6: Update Admission Scores
     if "admission_scores" in data and data["admission_scores"] is not None:
-        profile.admission_scores = data["admission_scores"]
+        # Extract subject scores map from Pydantic model dict
+        # data["admission_scores"] is a dict (from model_dump)
+        scores_data = data["admission_scores"]
+        
+        # Handle subject_scores
+        if "subject_scores" in scores_data and scores_data["subject_scores"]:
+            raw_scores = scores_data["subject_scores"]
+            
+            # Normalization (Business Logic): 
+            # Ensure subject codes are lowercase and stripped of whitespace
+            normalized_scores = {
+                k.lower().strip(): v 
+                for k, v in raw_scores.items() 
+                if k and v is not None
+            }
+            
+            await admission_repo.update_profile_scores(profile.id, normalized_scores)
+            
+            # Update snapshot rules/criteria if needed? 
+            # No, scores are data, rules are config.
+        
+        # Handle simple GPA (for hoc_ba w/o subjects) - Stored in JSONB 'applied_rules' or separate?
+        # Current requirement focuses on ProfileSubjectScore for Dynamic Scoring
+        # We can store raw GPA in applied_rules override or user data if needed, 
+        # but for now let's focus on Subject Scores.
 
-    if "documents_checklist" in data and data["documents_checklist"] is not None:
-        profile.documents_checklist = data["documents_checklist"]
 
     # Update timestamp and increment version
     profile.updated_at = datetime.now(timezone.utc)
     profile.version += 1
 
-    await db.flush()  # Router commits
+    # ✅ FIX #2.2: Handle Integrity Errors (Duplicate Citizen ID)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        await db.flush()  # Router commits
+    except IntegrityError as e:
+        # Rollback is optional here as router handles transaction, but good for clarity
+        # await db.rollback() 
+        error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+        
+        log.error(
+            "Update failed due to integrity error",
+            profile_id=profile.id,
+            error=error_msg
+        )
+
+        if "citizen_id" in error_msg.lower():
+            raise ConflictError(f"CCCD {profile.citizen_id} đã tồn tại trong hệ thống")
+        elif "unique constraint" in error_msg.lower():
+            raise ConflictError("Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)")
+        else:
+            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {error_msg}")
+    
+    # ✅ Fix: Fetch fresh scores but do NOT assign to profile.subject_scores (avoid SA error)
+    fresh_scores = await admission_repo.get_profile_scores(profile.id)
+    
+    # Calculate totals for response using fresh data
+    _calculate_and_update_totals(profile, scores=fresh_scores)
+
+    # ✅ Fix: Re-compute validation errors/status with new scores
+    _compute_frontend_fields(profile, current_user)
 
     log.info(
         "Admission profile updated",
@@ -527,6 +1733,113 @@ async def update_profile(
     )
 
     return profile
+
+
+def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list = None) -> None:
+    """
+    Calculate total_score and average_score from subject_scores.
+    
+    Args:
+        profile: AdmissionProfile object
+        scores: Optional explicit list of ProfileSubjectScore (overrides profile.subject_scores)
+    
+    Note: These fields are transient (not in DB) but required by Schema.
+    """
+    # Use provided scores OR fallback to profile relationship
+    # If scores arg is provided managed explicitly, use it.
+    # Otherwise check if profile.subject_scores is loaded and populated.
+    
+    target_scores = scores if scores is not None else profile.subject_scores
+    
+    # STRICT RULE: Check required subject count
+    applied_rules = profile.applied_rules or {}
+    required_count = applied_rules.get("required_subject_count", 3)
+    
+    current_count = len(target_scores) if target_scores else 0
+    
+    if current_count < required_count:
+        # Incomplete scores -> Treat as 0.0 (Invalid)
+        profile.total_score = 0.0
+        profile.average_score = 0.0
+        
+        # Build map of partial scores for display, but totals are 0
+        scores_map = {s.subject.code: float(s.score) for s in target_scores} if target_scores else {}
+        
+        profile.admission_scores = {
+            "subject_scores": scores_map,
+            "total_score": 0.0,
+            "average_score": 0.0,
+            "gpa": 0.0,
+            "snapshot_score": None
+        }
+        return
+
+    # Map scores to dict for service
+    from decimal import Decimal
+    target_scores_map = {s.subject.code: Decimal(str(s.score)) for s in target_scores}
+
+    # ---------------------------------------------------------
+    # IMPROVED LOGIC: Use AdmissionScoringService for calculation
+    # ---------------------------------------------------------
+    from .admission_scoring_service import AdmissionScoringService, ProfileStatus, SubjectSelectionMode, ScoringMethod
+    from app.models.admission_config import AdmissionCriteria
+    
+    # 1. Reconstruct Criteria from Snapshot
+    # Safe extraction of method code
+    method_data = applied_rules.get("admission_method")
+    if isinstance(method_data, dict):
+        method_code = method_data.get("code", "SNAPSHOT")
+    else:
+        # Fallback if stored as string literal or None
+        method_code = str(method_data) if method_data else "SNAPSHOT"
+
+    snapshot_criteria = models.AdmissionCriteria(
+        code=method_code,
+        min_gpa=float(applied_rules.get("min_gpa") or 0),
+        min_score=float(applied_rules.get("min_score") or 0),
+        min_subject_score=float(applied_rules.get("min_subject_score") or 0),
+        required_subject_count=applied_rules.get("required_subject_count"),
+        subject_selection_mode=applied_rules.get("subject_selection_mode", "fixed"),
+        scoring_method=applied_rules.get("scoring_method", "sum"),
+    )
+    
+    # 2. Prepare allowed subjects
+    allowed_subjects = applied_rules.get("allowed_subject_codes", [])
+    # Removed legacy fallback - allowed_subjects must be populated in validation phase
+
+    # 3. Calculate using robust engine
+    score_result = AdmissionScoringService.calculate_score(
+        criteria=snapshot_criteria,
+        subject_scores=target_scores_map,
+        allowed_subjects=allowed_subjects,
+    )
+    
+    # Update transient fields
+    # Note: AdmissionScoreResult uses final_score (not total_score/average_score)
+    final_score_value = float(score_result.final_score) if score_result.final_score is not None else 0.0
+    profile.total_score = final_score_value
+    
+    # Compute average from selected scores
+    # Note: AdmissionScoreResult uses `subject_scores` (not `selected_scores`)
+    selected_scores_list = list(score_result.subject_scores.values()) if score_result.subject_scores else []
+    if selected_scores_list:
+        profile.average_score = sum(float(s) for s in selected_scores_list) / len(selected_scores_list)
+    else:
+        profile.average_score = 0.0
+
+    # Update admission_scores schema field with detailed snapshot
+    profile.admission_scores = {
+        "subject_scores": {k: float(v) for k, v in target_scores_map.items()},
+        "total_score": profile.total_score,
+        "average_score": profile.average_score,
+        "gpa": profile.average_score,
+        "snapshot_score": {
+            "selected_subjects": score_result.selected_subjects,
+            "selected_scores": {k: float(v) for k, v in score_result.subject_scores.items()},
+            "status": score_result.status.value,
+            "failure_reasons": score_result.failure_reasons
+        }
+    }
 
 
 async def submit_and_evaluate(
@@ -563,8 +1876,32 @@ async def submit_and_evaluate(
         PermissionDeniedError: User doesn't have access
         BadRequest: Status is not 'draft'
     """
-    # Get profile with IDOR check
-    profile = await get_profile(db, profile_id, current_user)
+    # ✅ CRITICAL FIX #2: Add pessimistic lock to prevent race conditions
+    # Scenario: 2 officers submit same profile simultaneously
+    # Without lock: Both pass status check, both update to "submitted"
+    # With lock: Second request waits, then fails status check
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    # Use selectinload to avoid "FOR UPDATE cannot be applied to nullable side of outer join"
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))  # ✅ Eager load Lead
+        .with_for_update()  # ✅ CRITICAL: Acquire row lock
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR check (after lock acquired)
+    _check_admin_or_unit_access(profile, current_user)
+
+    # Initialize repository for document/citizen_id checks
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
 
     # Must be in draft status
     if profile.status != "draft":
@@ -580,128 +1917,128 @@ async def submit_and_evaluate(
     mandatory_docs = applied_rules.get("mandatory_docs", [])
     
     # ========================================
-    # Phase 6: Dynamic Admission Scoring Validation
+    # Phase 6: Dynamic Admission Scoring Validation (Refactored)
     # ========================================
+
+    # Use AdmissionScoringService for robust validation (Best N, Min Score, etc.)
+    from .admission_scoring_service import AdmissionScoringService, ProfileStatus, SubjectSelectionMode, ScoringMethod
+    from app.models.admission_config import AdmissionCriteria
     
-    # Get criteria from applied_rules (new structure)
-    criteria = applied_rules.get("criteria", [])
-    min_gpa = applied_rules.get("min_gpa")  # Legacy fallback
+    # 1. Reconstruct Criteria from Snapshot (applied_rules)
+    # Note: applied_rules is a dict snapshot. We wrap it in a pseudo-model or Dict
+    # compatible with ScoringService if possible, or construct a temporary Criteria object.
+    # Since Service expects a model, we populate one.
+
+    # ✅ FIX: Safe extraction of admission_method (can be string or dict in legacy data)
+    method_data = applied_rules.get("admission_method")
+    if isinstance(method_data, dict):
+        method_code = method_data.get("code", "SNAPSHOT")
+    else:
+        # applied_rules.admission_method is a string (e.g., "HOC_BA") - current schema
+        method_code = str(method_data) if method_data else "SNAPSHOT"
+
+    snapshot_criteria = models.AdmissionCriteria(
+        code=method_code,
+        min_gpa=float(applied_rules.get("min_gpa", 0)) if applied_rules.get("min_gpa") else None,
+        min_score=float(applied_rules.get("min_score", 0)) if applied_rules.get("min_score") else None,
+        min_subject_score=float(applied_rules.get("min_subject_score", 0)) if applied_rules.get("min_subject_score") else None,
+        required_subject_count=applied_rules.get("required_subject_count"),
+        subject_selection_mode=applied_rules.get("subject_selection_mode", "fixed"),
+        scoring_method=applied_rules.get("scoring_method", "sum"),
+        # subject_group_mappings are tricky from snapshot.
+        # For Phase 1/2 we assume "fixed" mode or explicit "subject_groups" list in snapshot.
+    )
+
+    # 2. Get Scores
+    scores = await admission_repo.get_profile_scores(profile.id)
+    subject_scores_map = {s.subject.code: Decimal(str(s.score)) for s in scores}
     
-    # Get admission scores from profile
-    admission_scores = profile.admission_scores or {}
-    selected_criterion_id = admission_scores.get("selected_criterion_id")
-    
-    if not criteria and min_gpa is not None:
-        # Legacy validation: GPA-only (backward compatibility)
-        gpa = admission_scores.get("gpa")
-        if gpa is None:
-            errors.append("GPA chưa được nhập")
-        elif gpa < min_gpa:
-            errors.append(f"GPA ({gpa}) không đạt yêu cầu tối thiểu ({min_gpa})")
-    
-    elif criteria:
-        # New validation: Dynamic admission method
-        if not selected_criterion_id:
-            errors.append("Chưa chọn phương thức xét tuyển")
-        else:
-            # Find selected criterion
-            selected_criterion = next(
-                (c for c in criteria if c.get("id") == selected_criterion_id),
-                None
+    # 3. Resolve Allowed Subjects
+    # ✅ CRITICAL FIX: Strict validation - require allowed_subject_codes in snapshot
+    # This field is now mandatory (added in create_profile fix)
+    allowed_subjects = applied_rules.get("allowed_subject_codes")
+
+    if not allowed_subjects:
+        # ⚠️ Legacy Profile Compatibility Check
+        # If profile was created before the fix, fallback to all scored subjects
+        # but log a warning for admin attention
+        log.warning(
+            "Profile has incomplete snapshot - missing allowed_subject_codes. "
+            "Using fallback to all scored subjects (legacy compatibility). "
+            "This profile should be recreated for deterministic scoring.",
+            profile_id=profile.id,
+            lead_id=profile.lead_id,
+            snapshot_source=applied_rules.get("snapshot_source"),
+        )
+
+        # TEMPORARY FALLBACK (for legacy profiles only)
+        # New profiles created after this fix will always have allowed_subject_codes
+        allowed_subjects = list(subject_scores_map.keys())
+
+        if not allowed_subjects:
+            raise BadRequest(
+                "Cannot evaluate profile: No subject scores found and snapshot has no subject whitelist. "
+                "Please add subject scores before submitting."
             )
+    
+    # 4. Calculate Score using Engine
+    score_result = AdmissionScoringService.calculate_score(
+        criteria=snapshot_criteria,
+        subject_scores=subject_scores_map,
+        allowed_subjects=allowed_subjects,
+    )
+    
+    # 5. Handle Validation Results
+    if score_result.status != ProfileStatus.VALID:
+        # Collect failure reasons
+        for reason in score_result.failure_reasons:
+            errors.append(f"Điểm xét tuyển không đạt: {reason}")
             
-            if not selected_criterion:
-                errors.append(f"Phương thức xét tuyển không hợp lệ: {selected_criterion_id}")
-            else:
-                method_name = selected_criterion.get("method_name", "")
-                min_score = selected_criterion.get("min_score", 0)
-                subject_groups = selected_criterion.get("subject_groups", [])
-                
-                # Determine validation type based on method name
-                is_gpa_method = (
-                    "học bạ" in method_name.lower() or 
-                    "gpa" in method_name.lower() or
-                    "điểm trung bình" in method_name.lower()
-                )
-                
-                if is_gpa_method:
-                    # GPA-based validation
-                    gpa = admission_scores.get("gpa")
-                    if gpa is None:
-                        errors.append("GPA chưa được nhập")
-                    elif min_score and gpa < min_score:
-                        errors.append(
-                            f"GPA ({gpa}) không đạt điểm chuẩn ({min_score}) "
-                            f"của phương thức '{method_name}'"
-                        )
-                else:
-                    # Exam-based validation (subject scores)
-                    selected_group = admission_scores.get("selected_group")
-                    subject_scores = admission_scores.get("subject_scores", {})
-                    
-                    if subject_groups and not selected_group:
-                        errors.append("Chưa chọn tổ hợp môn xét tuyển")
-                    elif selected_group and selected_group not in subject_groups:
-                        errors.append(
-                            f"Tổ hợp môn '{selected_group}' không thuộc danh sách cho phép "
-                            f"({', '.join(subject_groups)})"
-                        )
-                    
-                    # Calculate total score from subject_scores
-                    if subject_scores:
-                        total = sum(
-                            v for v in subject_scores.values() 
-                            if isinstance(v, (int, float))
-                        )
-                        if min_score and total < min_score:
-                            errors.append(
-                                f"Tổng điểm ({total:.1f}) không đạt điểm chuẩn ({min_score}) "
-                                f"của phương thức '{method_name}'"
-                            )
-                    else:
-                        errors.append("Chưa nhập điểm các môn xét tuyển")
+        log.warning(
+            "Scoring validation failed",
+            profile_id=profile.id,
+            reasons=score_result.failure_reasons,
+            disqualification_codes=score_result.disqualification_codes
+        )
     else:
-        # No validation criteria defined
-        errors.append("Không có tiêu chí xét tuyển được định nghĩa")
+        # Valid! Update profile with official calculated metrics
+        # (transient or persistent depending on design - here updating admission_scores JSON)
+        official_gpa = float(score_result.final_score) if score_result.final_score else 0.0
+        
+        # Log success
+        log.info(
+            "Scoring validation passed",
+            profile_id=profile.id,
+            final_score=official_gpa,
+            selected_subjects=score_result.selected_subjects
+        )
 
-    # Validation 2: Check mandatory documents
-    if not profile.documents_checklist:
-        if mandatory_docs:
-            errors.append("Danh sách tài liệu trống (documents_checklist is empty)")
-    else:
-        uploaded_docs = {
-            doc["code"]: doc
-            for doc in profile.documents_checklist
-            if doc.get("status") == "uploaded" and doc.get("file_path")
-        }
+    # Validation 2: Check mandatory documents (using relational ProfileDocument)
+    uploaded_docs = await admission_repo.get_uploaded_documents(profile.id)
+    uploaded_doc_codes = {doc.document_type.code for doc in uploaded_docs}
 
-        for doc_code in mandatory_docs:
-            if doc_code not in uploaded_docs:
-                # Find document label from checklist
-                doc_item = next(
-                    (d for d in profile.documents_checklist if d["code"] == doc_code),
-                    None
-                )
-                label = doc_item["label"] if doc_item else doc_code
-                errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
+    for doc_code in mandatory_docs:
+        if doc_code not in uploaded_doc_codes:
+            # Find document for label
+            doc = await admission_repo.get_document_by_type(profile.id, doc_code)
+            label = doc.document_type.name if doc else doc_code
+            errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
 
     # Validation 3: Check citizen_id uniqueness
     if not profile.citizen_id:
         errors.append("Số CCCD/CMND chưa được nhập (citizen_id is null)")
     else:
-        # ✅ SPRINT 6: Use Repository for validation
-        from app.repositories import AdmissionRepository
-        admission_repo = AdmissionRepository(db)
-        
-        # Check in admission_profile table (other profiles)
+        # Check in admission_profile table (other profiles IN THE SAME YEAR)
         duplicate_profile = await admission_repo.check_citizen_id_exists(
-            profile.citizen_id, exclude_profile_id=profile.id
+            citizen_id=profile.citizen_id,
+            academic_year=profile.academic_year,  # ✅ UPDATED: Filter by year
+            exclude_profile_id=profile.id
         )
 
         if duplicate_profile:
             errors.append(
                 f"CCCD {profile.citizen_id} đã được sử dụng bởi hồ sơ khác "
-                f"(ID: {duplicate_profile.id})"
+                f"trong năm {profile.academic_year} (ID: {duplicate_profile.id})"
             )
 
         # Check in student table (already enrolled students)
@@ -713,15 +2050,23 @@ async def submit_and_evaluate(
                 f"(Mã SV: {existing_student.student_code})"
             )
 
-    # Decision: Approve or Reject
+    # Validation 4: Check Family Info (Fix Finding 1.7)
+    if not profile.family_info:
+        errors.append("Chưa nhập thông tin gia đình (Family Info is empty)")
+
+    # Validation 5: Check Academic History (Fix Finding 1.7)
+    if not profile.academic_history:
+        errors.append("Chưa nhập quá trình học tập (Academic History is empty)")
+
+    # ✅ CRITICAL FIX #1: Submit should transition to SUBMITTED, not APPROVED/REJECTED
+    # Per ADMISSION_STATE_MACHINE: draft → submitted (wait for Manager approval)
+    # Validation errors should NOT change status - stay in draft for user to fix
     if errors:
-        # Reject
-        profile.status = "rejected"
-        profile.version += 1  # Increment version on status change
-        await db.flush()
+        # Keep in draft - user needs to fix validation errors
+        await db.flush()  # No status change
 
         log.warning(
-            "Admission profile rejected",
+            "Admission profile submission failed - validation errors",
             profile_id=profile_id,
             user_id=current_user.id,
             errors_count=len(errors),
@@ -729,28 +2074,45 @@ async def submit_and_evaluate(
         )
 
         return {
-            "status": "rejected",
+            "status": "draft",  # ✅ FIX: Stay in draft, not "rejected"
             "message": None,
-            "errors": errors,
+            "validation_errors": errors,  # ✅ FIX: Match schema field name
         }
     else:
-        # Approve
-        profile.status = "approved"
+        # ✅ FIX: Submit validation passed → Move to SUBMITTED (not APPROVED)
+        # ✅ CRITICAL FIX #1.3: Validate transition DRAFT -> SUBMITTED
+        from .admission_state_machine import validate_transition
+        try:
+            validate_transition(profile.status, "submitted")
+        except ValueError as e:
+            raise BadRequest(str(e))
+        
+        profile.status = "submitted"  # ✅ CRITICAL FIX: submitted, not approved
         profile.version += 1  # Increment version on status change
+
+        # ✅ PIPELINE SYNC: Create system consultation for admission milestone
+        if profile.lead:
+            await _create_admission_milestone_consultation(
+                db=db,
+                lead=profile.lead,
+                event="profile_submitted",
+                actor=current_user,
+                profile_id=profile_id,
+            )
+
         await db.flush()
 
         log.info(
-            "Admission profile approved",
+            "Admission profile submitted successfully",
             profile_id=profile_id,
             user_id=current_user.id,
             citizen_id=profile.citizen_id,
-            gpa=profile.admission_scores.get("gpa") if profile.admission_scores else None,
         )
 
         return {
-            "status": "approved",
-            "message": "Hồ sơ đã được duyệt tự động. Bạn có thể tiến hành nhập học.",
-            "errors": None,
+            "status": "submitted",  # ✅ FIX: submitted status
+            "message": "Hồ sơ đã được nộp thành công. Chờ phê duyệt từ Manager.",
+            "validation_errors": None,  # ✅ FIX: Match schema field name
         }
 
 
@@ -760,29 +2122,39 @@ async def upload_document(
     doc_code: str,
     file: Any,  # UploadFile
     current_user: models.User,
-) -> tuple[Dict[str, Any], Any]:
+    actual_submission_format: Optional[str] = None,
+) -> models.AdmissionProfile:
     """
     Upload a document for an admission profile.
-    
+
     Workflow:
     1. Verify access (IDOR)
     2. Verify profile status (draft/rejected)
-    3. Verify doc_code exists in checklist
+    3. Verify doc_code exists in ProfileDocument
     4. Save file to disk (uploads/admissions/{id}/{doc_code}_{filename})
-    5. Update documents_checklist status='uploaded' and file_path
-    
+    5. Update ProfileDocument status='uploaded', file_path, and actual_submission_format
+    6. Re-compute validation_summary with updated documents
+
     IMPORTANT: This function does NOT commit the transaction.
-    Router must call db.commit() and then execute the returned callback.
-    
+    Router must call db.commit().
+
+    Args:
+        actual_submission_format: Type of document submitted (original | certified_copy | photo)
+            User must declare what type of physical document they scanned/uploaded.
+
     Returns:
-        Tuple of (updated_doc_item, post_commit_callback)
-    
+        AdmissionProfile with updated validation_summary
+
     Security:
     - Path Traversal: filename sanitization (inherent in modern frameworks but good practice)
     - File Type: Should be validated at Router level generally, but here we accept generic
     """
+    # Initialize repository
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
     profile = await get_profile(db, profile_id, current_user)
-    
+
     # State Locking
     if profile.status not in ["draft", "rejected"]:
         raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
@@ -809,30 +2181,29 @@ async def upload_document(
             f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
         )
 
-    # Find document item in checklist
-    checklist = profile.documents_checklist or []
-    doc_item = next((d for d in checklist if d["code"] == doc_code), None)
-    
-    if not doc_item:
-        raise BadRequest(f"Document code '{doc_code}' not found in checklist")
+    # Find document in ProfileDocument table (replaces JSONB checklist)
+    doc_record = await admission_repo.get_document_by_type(profile_id, doc_code)
+
+    if not doc_record:
+        raise BadRequest(f"Document code '{doc_code}' not found in profile documents")
 
     # Prepare file path with security measures
     import os
     import shutil
     import uuid
-    
+
     upload_dir = f"uploads/admissions/{profile_id}"
     os.makedirs(upload_dir, exist_ok=True)
-    
+
     # SECURITY: Delete old file if exists (prevent orphan files)
-    old_file_path = doc_item.get("file_path")
+    old_file_path = doc_record.file_path
     if old_file_path and os.path.exists(old_file_path):
         try:
             os.remove(old_file_path)
             log.info("Old document file deleted", old_path=old_file_path)
         except OSError as e:
             log.warning("Failed to delete old file", path=old_file_path, error=str(e))
-    
+
     # SECURITY: Generate UUID-based filename (prevents path traversal & leaks)
     original_filename = file.filename or "document"
     file_extension = os.path.splitext(original_filename)[1].lower()
@@ -840,10 +2211,10 @@ async def upload_document(
     allowed_extensions = {".pdf", ".jpg", ".jpeg", ".png"}
     if file_extension not in allowed_extensions:
         file_extension = ".bin"  # Fallback for unknown types
-    
+
     unique_filename = f"{doc_code}_{uuid.uuid4().hex[:12]}{file_extension}"
     file_path = f"{upload_dir}/{unique_filename}"
-    
+
     # Save file
     try:
         with open(file_path, "wb") as buffer:
@@ -852,56 +2223,372 @@ async def upload_document(
         log.error("File upload failed", error=str(e), profile_id=profile_id)
         raise BadRequest("Failed to save file")
 
-    # Update checklist
-    # IMPORTANT: SQLAlchemy doesn't detect in-place mutations of JSONB columns.
-    # We must create new dict objects AND use flag_modified() to ensure persistence.
-    from sqlalchemy.orm.attributes import flag_modified
-    
-    new_checklist = []
-    uploaded_at = datetime.now().isoformat()
-    for item in checklist:
-        if item["code"] == doc_code:
-            # Create a NEW dict with updated values (not mutate in place)
-            new_item = {
-                **item,
-                "status": "uploaded",
-                "file_path": file_path,
-                "uploaded_at": uploaded_at,
-            }
-            new_checklist.append(new_item)
-        else:
-            # Copy other items to create new references
-            new_checklist.append(dict(item))
-    
-    profile.documents_checklist = new_checklist
-    profile.updated_at = datetime.now(timezone.utc)
-    
-    # Explicitly mark the JSONB column as modified
-    flag_modified(profile, "documents_checklist")
-    
+    # Update ProfileDocument record (replaces JSONB flag_modified workaround)
+    uploaded_at_dt = datetime.now(timezone.utc)
+    await admission_repo.update_document_status(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        status="uploaded",
+        file_path=file_path,
+        uploaded_at=uploaded_at_dt.isoformat(),
+        actual_submission_format=actual_submission_format
+    )
+
+    profile.updated_at = uploaded_at_dt
+
     await db.flush()
+
+    # ✅ Re-compute validation_summary with updated documents
+    from app.repositories import AdmissionRepository
+    admission_repo_refresh = AdmissionRepository(db)
+    documents = await admission_repo_refresh.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    # ✅ AUDIT LOG: Track document upload
+    from .document_audit_service import log_document_upload
+    await log_document_upload(
+        db=db,
+        profile_document_id=doc_record.id,
+        actor_user_id=current_user.id,
+        old_status=doc_record.status if doc_record.status != "uploaded" else "missing",
+        new_file_path=file_path,
+        original_filename=file.filename or "unknown",
+        file_size_bytes=file_size,
+        content_type=file.content_type,
+        old_file_path=old_file_path,
+        declared_format=actual_submission_format,
+    )
+
+    log.info(
+        "Document uploaded with audit log",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        file_path=file_path,
+        user_id=current_user.id
+    )
+
+    return profile
+
+
+async def confirm_document_format(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    format_type: str,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """
+    Confirm physical format of a document and mark as verified.
+
+    This performs the full verification workflow:
+    1. Updates verified_format (original | certified_copy | photo)
+    2. Sets status to 'verified'
+    3. Records verification timestamp and officer
+    4. Re-computes validation_summary with updated document status
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        doc_code: Document type code
+        format_type: original | certified_copy | photo
+        current_user: Officer performing verification
+
+    Returns:
+        AdmissionProfile with updated validation_summary
+
+    Raises:
+        ResourceNotFoundError: Document not found
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # 1. Access Check
+    profile = await get_profile(db, profile_id, current_user)
+
+    # 2. Verify Document Format (full verification)
+    doc = await admission_repo.confirm_document_format(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        verified_format=format_type,
+        officer_id=current_user.id,
+    )
+
+    if not doc:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found")
+
+    await db.flush()
+
+    # 3. Re-compute validation_summary with updated documents
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    # ✅ AUDIT LOG: Track document verification
+    from .document_audit_service import log_document_verification
+    await log_document_verification(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status="uploaded",
+        verified_format=format_type,
+    )
+
+    log.info(
+        "Document verified with audit log",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        verified_format=format_type,
+        officer_id=current_user.id,
+        officer_email=current_user.email,
+    )
+
+    return profile
+
+
+async def mark_paper_submitted(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    current_user: models.User,
+    actual_submission_format: Optional[str] = None,
+) -> models.AdmissionProfile:
+    """
+    Mark a document as paper submitted (officer confirms receipt).
+
+    For documents where requires_upload=false.
+    Only officers/managers/admins can mark paper submitted.
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        doc_code: Document type code
+        current_user: Current authenticated user (must be officer+)
+        actual_submission_format: Type of document submitted (original | certified_copy | photo)
+
+    Returns:
+        AdmissionProfile with updated validation_summary
+
+    Raises:
+        ResourceNotFoundError: Document not found
+        BadRequest: Document requires upload (not paper submission)
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # Get profile for access check
+    profile = await get_profile(db, profile_id, current_user)
+
+    # Get document to capture old status
+    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
+    old_status = doc_before.status if doc_before else "missing"
+
+    # Mark paper submitted
+    doc = await admission_repo.mark_paper_submitted(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        officer_id=current_user.id,
+        actual_submission_format=actual_submission_format,
+    )
+
+    if not doc:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
+
+    await db.flush()
+
+    # ✅ AUDIT LOG: Track paper submission
+    from .document_audit_service import log_paper_submission
+    await log_paper_submission(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status=old_status,
+        declared_format=actual_submission_format,
+    )
+
+    # ✅ Re-compute validation_summary with updated documents
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    log.info(
+        "Document paper submitted confirmed with audit log",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        officer_id=current_user.id,
+    )
+
+    return profile
+
+
+async def reject_document(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    reason: str,
+    current_user: models.User,
+) -> tuple[Dict[str, Any], Any]:
+    """
+    Reject a document with reason.
     
-    # Prepare response data (matches DocumentUploadResponse schema)
+    User will need to re-upload or resubmit.
+    Only officers/managers/admins can reject documents.
+    
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        doc_code: Document type code
+        reason: Rejection reason (required)
+        current_user: Current authenticated user (must be officer+)
+        
+    Returns:
+        Tuple of (updated_doc_item, post_commit_callback)
+        
+    Raises:
+        ResourceNotFoundError: Document not found
+        BadRequest: Reason not provided
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+    
+    if not reason or not reason.strip():
+        raise BadRequest("Rejection reason is required")
+    
+    # Get profile for access check
+    profile = await get_profile(db, profile_id, current_user)
+    
+    # Get document to capture old status
+    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
+    old_status = doc_before.status if doc_before else "unknown"
+
+    # Reject document
+    doc = await admission_repo.reject_document(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        officer_id=current_user.id,
+        reason=reason.strip(),
+    )
+
+    if not doc:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
+
+    await db.flush()
+
+    # ✅ AUDIT LOG: Track document rejection
+    from .document_audit_service import log_document_rejection
+    await log_document_rejection(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status=old_status,
+        reason=reason.strip(),
+    )
+
     response_data = {
         "code": doc_code,
-        "label": doc_item.get("label", doc_code),
-        "is_mandatory": doc_item.get("is_mandatory", True),
-        "status": "uploaded",
-        "file_path": file_path,
-        "uploaded_at": uploaded_at,
+        "status": "rejected",
+        "rejection_reason": reason.strip(),
+        "rejected_at": doc.rejected_at.isoformat() if doc.rejected_at else None,
+        "rejected_by_id": current_user.id,
     }
-    
-    # Post-commit callback for logging/side effects
+
     async def _post_commit():
         log.info(
-            "Document uploaded", 
-            profile_id=profile_id, 
-            doc_code=doc_code, 
-            file_path=file_path,
-            user_id=current_user.id
+            "Document rejected with audit log",
+            profile_id=profile_id,
+            doc_code=doc_code,
+            reason=reason,
+            officer_id=current_user.id,
         )
-    
+
     return response_data, _post_commit
+
+
+async def reset_document(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """
+    Reset a document to 'missing' status (undo submission).
+
+    Use case: User accidentally clicked "Đã nộp" or uploaded wrong file.
+    Allows simple undo without complex audit trail.
+
+    Permissions:
+    - Officer: Can reset documents for profiles in draft/rejected status
+    - Manager/Admin: Can reset any document except for enrolled profiles
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        doc_code: Document type code
+        current_user: Current authenticated user
+
+    Returns:
+        AdmissionProfile with updated validation_summary
+
+    Raises:
+        ResourceNotFoundError: Document not found
+        BadRequest: Cannot reset (e.g., profile is enrolled)
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # Get profile for access check
+    profile = await get_profile(db, profile_id, current_user)
+
+    # State Locking: Cannot reset documents for enrolled profiles
+    if profile.status == "enrolled":
+        raise BadRequest("Cannot reset documents for enrolled profiles")
+
+    # Get document to capture old status and file path before reset
+    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
+    old_status = doc_before.status if doc_before else "unknown"
+    old_file_path = doc_before.file_path if doc_before else None
+
+    # Reset document
+    doc = await admission_repo.reset_document(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+    )
+
+    if not doc:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
+
+    # ✅ AUDIT LOG: Track document reset
+    from .document_audit_service import log_document_reset
+    await log_document_reset(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status=old_status,
+        old_file_path=old_file_path,
+        reason="User requested reset",
+    )
+
+    # Delete physical file if exists
+    if old_file_path:
+        import os
+        if os.path.exists(old_file_path):
+            try:
+                os.remove(old_file_path)
+                log.info("Document file deleted during reset", file_path=old_file_path)
+            except OSError as e:
+                log.warning("Failed to delete document file", error=str(e), file_path=old_file_path)
+
+    await db.flush()
+
+    # Re-compute validation_summary with updated documents
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    log.info(
+        "Document reset to missing",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        user_id=current_user.id,
+    )
+
+    return profile
 
 
 async def enroll_student(
@@ -913,14 +2600,15 @@ async def enroll_student(
     Enroll student (create Student + StudentDocument records).
 
     ACID Transaction Flow:
-    1. Get and validate profile (status must be 'approved')
-    2. BEGIN SAVEPOINT (via begin_nested)
-    3. Generate unique student_code (SV + YYYY + 4-digit random, retry on conflict)
-    4. Create Student record
-    5. Create StudentDocument records (from documents_checklist)
-    6. Update AdmissionProfile.status = 'enrolled'
-    7. Update Lead.status = 'converted'
-    8. COMMIT SAVEPOINT (auto if no errors)
+    1. Get and validate profile (status must be 'confirmed' or 'overridden')
+    2. Fee Gate: Verify tuition fee is paid/waived (if ENABLE_FEE_VERIFICATION=True)
+    3. BEGIN SAVEPOINT (via begin_nested)
+    4. Generate unique student_code (SV + YYYY + 4-digit random, retry on conflict)
+    5. Create Student record
+    6. Create StudentDocument records (from ProfileDocument table)
+    7. Update AdmissionProfile.status = 'enrolled'
+    8. Update Lead.status = 'converted'
+    9. COMMIT SAVEPOINT (auto if no errors)
 
     On IntegrityError:
     - Savepoint auto-rollback
@@ -928,7 +2616,14 @@ async def enroll_student(
 
     Security:
     - IDOR: Check lead.unit_id == user.unit_id
-    - State Check: Only approved profiles can be enrolled
+    - State Check: Only confirmed/overridden profiles can be enrolled
+    - Fee Gate: Tuition fee must be paid/waived (when ENABLE_FEE_VERIFICATION=True)
+
+    Fee Gate (Phase 6):
+    Per FINANCE_MODULE_DESIGN.md Section 5.3 - Gate 2:
+    - When ENABLE_FEE_VERIFICATION=True, enrollment is blocked if tuition fee not cleared
+    - Fee is "cleared" if status == 'paid' OR status == 'waived'
+    - Default: ENABLE_FEE_VERIFICATION=False (backward compatible)
 
     Args:
         db: Database session
@@ -941,17 +2636,123 @@ async def enroll_student(
     Raises:
         ResourceNotFoundError: Profile not found
         PermissionDeniedError: User doesn't have access
-        BadRequest: Status is not 'approved'
+        BadRequest: Status is not 'confirmed', or tuition fee not cleared
         ConflictError: Unique constraint violation (student_code, citizen_id)
     """
-    # Get profile with IDOR check
-    profile = await get_profile(db, profile_id, current_user)
+    # Initialize repository
+    from app.repositories import AdmissionRepository
+    from sqlalchemy import select
+    admission_repo = AdmissionRepository(db)
 
-    # Must be in approved status
-    if profile.status != "approved":
-        raise BadRequest(
-            f"Cannot enroll student with profile status '{profile.status}'. "
-            "Only approved profiles can be enrolled."
+    # ✅ CRITICAL FIX #2 & #3: Acquire row lock and check state atomically
+    # Scenario: Admin enrolls profile while Lead confirms via magic link
+    # Without lock: Both can modify status simultaneously
+    # With lock: Operations are serialized
+    from sqlalchemy.orm import selectinload
+    
+    # Use selectinload to avoid "FOR UPDATE cannot be applied to nullable side of outer join"
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))  # ✅ Eager load Lead
+        .with_for_update()  # ✅ CRITICAL: Lock row for enrollment
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR check (after lock acquired)
+    _check_admin_or_unit_access(profile, current_user)
+
+    # ✅ HIGH PRIORITY FIX #7: Idempotency check - return existing student if already enrolled
+    # MUST be BEFORE status check to handle idempotent requests correctly
+    # Prevents duplicate student creation if endpoint is called multiple times
+    # This can happen if:
+    # - Client retries on network timeout
+    # - Multiple admins click "Enroll" simultaneously (despite lock, status is already 'enrolled')
+    # - Background job + manual action race
+    if profile.status == "enrolled":
+        # Profile already enrolled - return existing student (idempotent operation)
+        if profile.student:
+            log.info(
+                "Idempotent enroll: Profile already enrolled, returning existing student",
+                profile_id=profile_id,
+                student_id=profile.student.id,
+                student_code=profile.student.student_code,
+            )
+            return {
+                "student_id": profile.student.id,
+                "student_code": profile.student.student_code,
+                "enrollment_date": profile.student.enrollment_date,
+            }
+        else:
+            # Data inconsistency: status is 'enrolled' but no student record exists
+            log.error(
+                "CRITICAL: Profile status is 'enrolled' but no student record found",
+                profile_id=profile_id,
+                status=profile.status,
+            )
+            raise ConflictError(
+                f"Data inconsistency: Profile {profile_id} is marked as enrolled "
+                "but has no associated student record. Please contact system administrator."
+            )
+
+    # Must be in approved or confirmed status
+    # 'confirmed' = Lead confirmed via magic link, ready to enroll
+    # ✅ CRITICAL FIX #1.1: Enforce State Machine (APPROVED -> CONFIRMED -> ENROLLED)
+    # Prevents skipping confirmation step
+    from .admission_state_machine import validate_transition
+    
+    try:
+        validate_transition(profile.status, "enrolled")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for enrollment",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    if profile.status not in ("confirmed", "overridden"):
+         # Double check (redundant with validate_transition but keeps specific error message clear)
+         # Actually validate_transition handles this, but we keep this block if we want custom message
+         # However, for strict compliance, let's rely on validate_transition or re-raise cleaner error
+         pass # validate_transition already checked this
+
+    # ✅ FEE GATE (Phase 6): Verify tuition fee is paid/waived before enrollment
+    # Per FINANCE_MODULE_DESIGN.md Section 5.3 - Gate 2 (Tuition Fee Gate)
+    # Only enforced when ENABLE_FEE_VERIFICATION feature flag is True
+    from app.config import settings
+    if settings.ENABLE_FEE_VERIFICATION:
+        await check_enrollment_fee_eligibility(db, profile_id)
+        log.info(
+            "Fee gate passed for enrollment",
+            profile_id=profile_id,
+            user_id=current_user.id,
+        )
+
+    # ✅ CRITICAL FIX #3: Final citizen_id duplicate check INSIDE transaction
+    # Prevents race condition where 2 enrolls pass validation check but both create Student
+    # Check must be AFTER acquiring lock but BEFORE creating Student record
+    if not profile.citizen_id:
+        raise BadRequest("Cannot enroll: Profile has no citizen_id")
+
+    duplicate_student = await admission_repo.check_citizen_id_enrolled(profile.citizen_id)
+    if duplicate_student:
+        log.error(
+            "CRITICAL: Citizen ID duplicate detected at enrollment time",
+            profile_id=profile_id,
+            citizen_id=profile.citizen_id,
+            existing_student_code=duplicate_student.student_code,
+            existing_student_id=duplicate_student.id,
+        )
+        raise ConflictError(
+            f"Cannot enroll: Citizen ID {profile.citizen_id} is already enrolled "
+            f"as student {duplicate_student.student_code}. "
+            "This profile may have been enrolled through a different process."
         )
 
     # ACID Transaction with Savepoint
@@ -1008,41 +2809,46 @@ async def enroll_student(
             await db.flush()  # Get student.id
 
             # Step 3: Create StudentDocument records
-            for doc_item in profile.documents_checklist:
-                if doc_item.get("status") == "uploaded" and doc_item.get("file_path"):
-                    # Parse uploaded_at safely (prevent ValueError on invalid ISO format)
-                    uploaded_at = datetime.now(timezone.utc)
-                    if doc_item.get("uploaded_at"):
-                        try:
-                            uploaded_at = datetime.fromisoformat(doc_item["uploaded_at"])
-                        except (ValueError, TypeError):
-                            # Invalid format, use current time
-                            log.warning(
-                                "Invalid uploaded_at format, using current time",
-                                doc_code=doc_item.get("code"),
-                                uploaded_at_value=doc_item.get("uploaded_at"),
-                            )
-                            uploaded_at = datetime.now(timezone.utc)
+            # Step 3b: Copy ProfileDocument records to StudentDocument (relational approach)
+            uploaded_docs = await admission_repo.get_uploaded_documents(profile.id)
+            for profile_doc in uploaded_docs:
+                # Use uploaded_at from ProfileDocument or fallback to now
+                uploaded_at = profile_doc.uploaded_at or datetime.now(timezone.utc)
 
-                    doc = models.StudentDocument(
-                        student_id=student.id,
-                        doc_type=doc_item["code"],
-                        file_path=doc_item["file_path"],
-                        is_verified=False,  # Default: pending verification
-                        uploaded_at=uploaded_at,
-                    )
-                    db.add(doc)
+                doc = models.StudentDocument(
+                    student_id=student.id,
+                    doc_type=profile_doc.document_type.code,
+                    file_path=profile_doc.file_path,
+                    is_verified=False,  # Default: pending verification
+                    uploaded_at=uploaded_at,
+                )
+                db.add(doc)
 
             # Step 4: Update AdmissionProfile status
             profile.status = "enrolled"
             profile.updated_at = datetime.now(timezone.utc)
             profile.version += 1  # Increment version on enrollment
 
-            # Step 5: Update Lead status
-            profile.lead.status = "converted"
-            profile.lead.updated_at = datetime.now(timezone.utc)
+            # Step 5: ✅ PIPELINE SYNC: Create system consultation for enrollment milestone
+            await _create_admission_milestone_consultation(
+                db=db,
+                lead=profile.lead,
+                event="profile_enrolled",
+                actor=current_user,
+                profile_id=profile_id,
+                student_code=student_code,
+            )
 
             await db.flush()
+
+            # ✅ SYNC: Update lead consultation status to match admission status (enrolled → sts11)
+            from .lead_admission_sync import sync_lead_from_admission
+            await sync_lead_from_admission(
+                db=db,
+                profile=profile,
+                changed_by_user_id=current_user.id,
+                reason="Student enrolled successfully",
+            )
             # Savepoint auto-commits here if no errors
 
         log.info(
@@ -1086,8 +2892,853 @@ async def enroll_student(
 
 
 # ==============================================================================
-# DELETE PROFILE
+# DELETE PROFILE (implemented at line ~2691)
 # ==============================================================================
+
+# ==============================================================================
+# STATE MACHINE TRANSITIONS (Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md)
+# ==============================================================================
+
+async def approve_profile(
+    db: AsyncSession,
+    profile_id: int,
+    approver: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Approve admission profile (Manager/Admin action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
+    - Transition: SUBMITTED/RESUBMITTED → APPROVED
+    - State validation via admission_state_machine module
+    - Version checking for optimistic locking
+    - Returns (result, post_commit_callback) pattern
+
+    Architecture Compliance:
+    - No HTTPException (use Domain Exceptions)
+    - No Request/Response imports
+    - Return callback for side effects
+    - Router calls db.commit()
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        approver: User performing approval
+        data: ApproveRequest data (notes)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch
+    """
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) 
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, approver)
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION (Business Rule)
+    try:
+        validate_transition(profile.status, "approved")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for approve",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # ✅ CRITICAL FIX #4: VERSION CHECK (Optimistic Locking) - Now REQUIRED
+    # Version is now mandatory in ApproveRequest schema (no longer optional)
+    # This prevents race conditions where 2 managers approve/reject simultaneously
+    if data["version"] != profile.version:
+        log.warning(
+            "Optimistic locking conflict: Version mismatch",
+            profile_id=profile.id,
+            expected_version=data["version"],
+            actual_version=profile.version,
+            user_id=approver.id,
+        )
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # ✅ APPLICATION FEE CHECK
+    # Per PHASE_WORKFLOW.md: Profile can only be approved if fee is paid or exempt
+    applied_rules = profile.applied_rules or {}
+    requires_fee = applied_rules.get("requires_application_fee", False)
+    fee_status = applied_rules.get("fee_status", "exempt")
+
+    if requires_fee and fee_status == "pending":
+        log.warning(
+            "Attempt to approve profile with unpaid application fee",
+            profile_id=profile.id,
+            fee_status=fee_status,
+            approver_id=approver.id,
+        )
+        raise BadRequest(
+            "Không thể duyệt hồ sơ: Lệ phí xét tuyển chưa được thanh toán. "
+            "Vui lòng xác nhận thanh toán lệ phí trước khi duyệt hồ sơ."
+        )
+
+    # STATE CHANGE
+    profile.status = "approved"
+    profile.approved_at = datetime.now(timezone.utc)
+    profile.approved_by_id = approver.id
+    profile.approval_notes = data.get("notes")
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ PIPELINE SYNC: Create system consultation for approval milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_approved",
+            actor=approver,
+            profile_id=profile.id,
+        )
+
+    await db.flush()  # Flush, don't commit! Router commits.
+
+    # ✅ SYNC: Update lead consultation status to match admission status (approved → sts09)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=approver.id,
+        reason="Admission profile approved",
+    )
+
+    log.info(
+        "Admission profile approved",
+        profile_id=profile.id,
+        approver_id=approver.id,
+        previous_status=profile.status,
+        citizen_id=profile.citizen_id,
+    )
+
+    # PREPARE POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit (notifications, etc.)."""
+        # TODO: Send notification to applicant
+        log.info(
+            "Post-commit: Profile approved notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def reject_profile(
+    db: AsyncSession,
+    profile_id: int,
+    rejector: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Reject admission profile (Manager/Admin action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
+    - Transition: SUBMITTED/RESUBMITTED → REJECTED
+    - Reason is MANDATORY (validated in schema, min 10 chars)
+    - State validation via admission_state_machine module
+    - Returns (result, post_commit_callback) pattern
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        rejector: User performing rejection
+        data: RejectRequest data (reason - required)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition or missing reason
+        ConflictError: Version mismatch
+    """
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) 
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, rejector)
+    
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "rejected")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for reject",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # BUSINESS RULE: Reason is mandatory (already validated by schema)
+    if not data.get("reason"):
+        raise BadRequest("Rejection reason is required (min 10 characters)")
+
+    # ✅ CRITICAL FIX #4: VERSION CHECK - Now REQUIRED (no longer optional)
+    if data["version"] != profile.version:
+        log.warning(
+            "Optimistic locking conflict: Version mismatch in reject",
+            profile_id=profile.id,
+            expected_version=data["version"],
+            actual_version=profile.version,
+            user_id=rejector.id,
+        )
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "rejected"
+    profile.rejected_at = datetime.now(timezone.utc)
+    profile.rejected_by_id = rejector.id
+    profile.rejection_reason = data["reason"]
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ PIPELINE SYNC: Create system consultation for rejection milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_rejected",
+            actor=rejector,
+            profile_id=profile.id,
+            reason=data["reason"],
+        )
+
+    await db.flush()
+
+    # ✅ SYNC: Update lead consultation status to match admission status (rejected → sts16)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=rejector.id,
+        reason=f"Admission profile rejected: {data['reason'][:50]}",
+    )
+
+    log.info(
+        "Admission profile rejected",
+        profile_id=profile.id,
+        rejector_id=rejector.id,
+        reason_length=len(data["reason"]),
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Profile rejected notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+# ==============================================================================
+# APPLICATION FEE MANAGEMENT
+# ==============================================================================
+
+async def record_application_fee_payment(
+    db: AsyncSession,
+    profile_id: int,
+    payment_data: Dict[str, Any],
+    recorded_by: Optional[models.User] = None,
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Record application fee payment for an admission profile.
+
+    This function is called when:
+    1. Payment gateway callback confirms payment
+    2. Manual payment confirmation by admin
+
+    Flow:
+    - Profile must be in "draft" or "submitted" status
+    - Updates applied_rules.fee_status to "paid"
+    - Syncs lead to sts13 (Đã hoàn lệ phí xét tuyển)
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        payment_data: Payment information (transaction_id, amount, paid_at, etc.)
+        recorded_by: User who recorded the payment (optional for system callbacks)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        ResourceNotFoundError: Profile not found
+        BadRequest: Profile doesn't require fee or already paid
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # Check fee requirement
+    applied_rules = profile.applied_rules or {}
+    requires_fee = applied_rules.get("requires_application_fee", False)
+    current_fee_status = applied_rules.get("fee_status", "exempt")
+
+    if not requires_fee:
+        raise BadRequest(
+            "This admission profile does not require application fee payment"
+        )
+
+    if current_fee_status == "paid":
+        log.info(
+            "Application fee already paid (idempotent)",
+            profile_id=profile_id,
+        )
+        # Return without error for idempotency
+        async def noop():
+            pass
+        return profile, noop
+
+    # Update fee_status in applied_rules
+    applied_rules["fee_status"] = "paid"
+    applied_rules["fee_paid_at"] = datetime.now(timezone.utc).isoformat()
+    applied_rules["fee_payment_data"] = payment_data
+    profile.applied_rules = applied_rules  # Trigger JSONB update
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ SYNC: Update lead to sts13 (Đã hoàn lệ phí xét tuyển)
+    from .lead_admission_sync import sync_lead_fee_paid
+    await sync_lead_fee_paid(
+        db=db,
+        profile=profile,
+        changed_by_user_id=recorded_by.id if recorded_by else None,
+        reason="Application fee payment confirmed",
+    )
+
+    await db.flush()
+
+    log.info(
+        "Application fee payment recorded",
+        profile_id=profile_id,
+        lead_id=profile.lead_id,
+        amount=payment_data.get("amount"),
+        transaction_id=payment_data.get("transaction_id"),
+        recorded_by=recorded_by.id if recorded_by else "system",
+    )
+
+    async def post_commit():
+        log.info(
+            "Post-commit: Fee payment notification",
+            profile_id=profile_id,
+        )
+
+    return profile, post_commit
+
+
+async def check_application_fee_status(
+    db: AsyncSession,
+    profile_id: int,
+) -> Dict[str, Any]:
+    """
+    Check application fee status for a profile.
+
+    Returns:
+        Dict with fee status information
+    """
+    from app.repositories import AdmissionRepository
+    repo = AdmissionRepository(db)
+
+    profile = await repo.get_profile_by_id(profile_id)
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    applied_rules = profile.applied_rules or {}
+
+    return {
+        "profile_id": profile_id,
+        "requires_fee": applied_rules.get("requires_application_fee", False),
+        "fee_amount": applied_rules.get("application_fee", 0),
+        "fee_status": applied_rules.get("fee_status", "exempt"),
+        "fee_paid_at": applied_rules.get("fee_paid_at"),
+        "can_approve": (
+            applied_rules.get("fee_status") in ("paid", "exempt")
+        ),
+    }
+
+
+async def resubmit_profile(
+    db: AsyncSession,
+    profile_id: int,
+    officer: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Resubmit rejected profile (Officer action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2:
+    - Transition: REJECTED → RESUBMITTED
+    - Officer fixes issues and resubmits for Manager review
+    - Optional notes about what was fixed
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        officer: User performing resubmit
+        data: ResubmitRequest data (notes)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch
+    """
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) 
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, officer)
+    
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "resubmitted")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for resubmit",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # VERSION CHECK
+    if data.get("version") is not None and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "resubmitted"
+    profile.resubmitted_at = datetime.now(timezone.utc)
+    profile.resubmitted_by_id = officer.id
+    profile.resubmit_notes = data.get("notes")
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ PIPELINE SYNC: Create system consultation for resubmission milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_resubmitted",
+            actor=officer,
+            profile_id=profile.id,
+        )
+
+    await db.flush()
+
+    log.info(
+        "Admission profile resubmitted",
+        profile_id=profile.id,
+        officer_id=officer.id,
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Profile resubmitted notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def confirm_enrollment(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    applicant: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Confirm enrollment intent (Applicant/User SELF action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3:
+    - Transition: APPROVED → CONFIRMED
+    - SELF check enforced by get_admission_for_owner dependency
+    - Applicant confirms they want to enroll
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile (from IDOR dependency with SELF check)
+        applicant: User performing confirmation (must be profile owner)
+        data: ConfirmRequest data (empty)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "confirmed")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for confirm",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # VERSION CHECK
+    if data.get("version") is not None and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "confirmed"
+    profile.confirmed_at = datetime.now(timezone.utc)
+    profile.confirmed_by_id = applicant.id
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ PIPELINE SYNC: Create system consultation for confirmation milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_confirmed",
+            actor=applicant,
+            profile_id=profile.id,
+        )
+
+    await db.flush()
+
+    log.info(
+        "Admission profile confirmed by applicant",
+        profile_id=profile.id,
+        applicant_id=applicant.id,
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Enrollment confirmed notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def override_profile(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    admin: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Override normal flow (Admin only, with audit).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4:
+    - Transition: APPROVED → OVERRIDDEN
+    - Admin only (enforced by router)
+    - Reason MANDATORY (min 10 chars, for audit)
+    - Full audit logging required
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile
+        admin: Admin user performing override
+        data: OverrideRequest data (reason, bypass_rules)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition or missing reason
+        ConflictError: Version mismatch
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "overridden")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for override",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # BUSINESS RULE: Reason is mandatory (already validated by schema)
+    if not data.get("reason"):
+        raise BadRequest("Override reason is required (min 10 characters)")
+
+    # VERSION CHECK
+    if data.get("version") is not None and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "overridden"
+    profile.overridden_at = datetime.now(timezone.utc)
+    profile.overridden_by_id = admin.id
+    profile.override_reason = data["reason"]
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ PIPELINE SYNC: Create system consultation for override milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_overridden",
+            actor=admin,
+            profile_id=profile.id,
+            reason=data["reason"],
+        )
+
+    await db.flush()
+
+    # ✅ FIX #8: Assignment Workflow (Claim Profile)
+    # MOVED OUT of override_profile scope (indentation fix)
+async def claim_review(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    reviewer: models.User,
+    expected_version: Optional[int] = None
+):
+    """
+    Manager claims a profile for review (Assignment Workflow).
+    
+    Business Rules:
+    1. Status MUST be 'submitted' (cannot claim draft/approved) # ADMISSION_RULE_008
+    2. Profile must NOT be already claimed by someone else
+    3. Version check (optimistic locking)
+    """
+    if profile.status != 'submitted':
+        raise BusinessRuleViolation(
+            f"Cannot claim profile in status '{profile.status}'. Only 'submitted' profiles can be claimed."
+        )
+
+    # 3. Version Check (CRITICAL FIX: Prevent Race Condition)
+    if expected_version is not None and profile.version != expected_version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {expected_version}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    if profile.assigned_reviewer_id:
+        if profile.assigned_reviewer_id == reviewer.id:
+            # Idempotent success (already claimed by self)
+            return
+        
+        # Already claimed by someone else
+        raise BusinessRuleViolation(
+            f"Profile is already claimed by another reviewer (ID: {profile.assigned_reviewer_id})"
+        )
+
+    # STATE CHANGE
+    profile.assigned_reviewer_id = reviewer.id
+    profile.assigned_at = datetime.now(timezone.utc)
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # Audit Log (Internal)
+    log.info(
+        "Profile claimed for review",
+        profile_id=profile.id,
+        reviewer_id=reviewer.id
+    )
+
+    await db.flush()
+
+
+    # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11)
+    # TODO: Implement proper audit log table
+    log.warning(
+        "AUDIT: Admin override action",
+        profile_id=profile.id,
+        admin_id=admin.id,
+        admin_email=admin.email,
+        reason=data["reason"],
+        bypass_rules=data.get("bypass_rules", []),
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        # TODO: Send audit alert to compliance team
+        log.info(
+            "Post-commit: Override audit notification sent",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def finalize_profile(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    admin: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Finalize enrollment (Admin only, creates Student record).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4:
+    - Transition: OVERRIDDEN/CONFIRMED → ENROLLED
+    - Admin only (enforced by router)
+    - Triggers student record creation (delegates to enroll_student)
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile
+        admin: Admin user performing finalization
+        data: FinalizeRequest data (empty)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch or enrollment conflict
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "enrolled")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for finalize",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # VERSION CHECK
+    if data.get("version") is not None and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # DELEGATE TO EXISTING ENROLL_STUDENT FUNCTION
+    # This function already handles:
+    # - Student code generation with Redis lock
+    # - Student record creation
+    # - StudentDocument creation
+    # - Lead status update
+    # - ACID transaction with savepoint
+    enrollment_result = await enroll_student(db, profile.id, admin)
+
+    log.info(
+        "Admission profile finalized (enrolled)",
+        profile_id=profile.id,
+        admin_id=admin.id,
+        student_code=enrollment_result["student_code"],
+    )
+
+    # Reload profile to get updated status
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+    profile = await admission_repo.reload_profile_with_lead(profile.id)
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Enrollment finalized notification",
+            profile_id=profile.id,
+            student_code=enrollment_result["student_code"],
+        )
+
+    return profile, post_commit
+
 
 async def delete_profile(
     db: AsyncSession,
@@ -1100,6 +3751,11 @@ async def delete_profile(
     Security:
     - IDOR: Check lead.unit_id == user.unit_id (unless admin)
     - State Locking: Only draft profiles can be deleted
+
+    Behavior:
+    - Does NOT revert Lead status (Lead already showed interest)
+    - Creates a consultation record noting the deletion
+    - Maintains full audit trail in timeline
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() after this function returns.
@@ -1118,33 +3774,524 @@ async def delete_profile(
         BadRequest: Status is not 'draft'
     """
     from app.repositories import AdmissionRepository
-    
+
     admission_repo = AdmissionRepository(db)
-    
+
     # Get profile with lead (for IDOR check)
     profile = await admission_repo.get_profile_by_id_with_lead(profile_id)
-    
+
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
-    
+
     # IDOR check
     _check_admin_or_unit_access(profile, current_user)
-    
+
     # State check: Only draft profiles can be deleted
     if profile.status != "draft":
         raise BadRequest(
             f"Cannot delete profile with status '{profile.status}'. "
             "Only draft profiles can be deleted."
         )
+
+    lead = profile.lead
+    lead_id = profile.lead_id
+
+    # ==========================================================================
+    # CREATE CONSULTATION RECORD: Log the deletion event (no status revert)
+    # ==========================================================================
+    # Following the Golden Rule: Every admission event must have a consultation record
+    # Lead status stays the same (they already showed interest by creating profile)
     
+    system_consultation = models.Consultation(
+        lead_id=lead_id,
+        officer_id=current_user.id,
+        consultation_status_id=lead.consultation_status_id,  # Keep current status
+        consultation_date=datetime.now(timezone.utc),
+        method="system",
+        notes=f"[HỆ THỐNG] Hồ sơ xét tuyển đã bị xóa - Profile #{profile_id}",
+        duration_minutes=0,
+    )
+    db.add(system_consultation)
+    
+    # Update lead timestamp
+    lead.updated_at = datetime.now(timezone.utc)
+
+    log.info(
+        "Profile deletion consultation record created",
+        lead_id=lead_id,
+        profile_id=profile_id,
+        consultation_status_id=lead.consultation_status_id,
+        actor_id=current_user.id,
+    )
+
     # Delete the profile
     await db.delete(profile)
     await db.flush()
-    
+
     log.info(
         "Admission profile deleted",
         profile_id=profile_id,
+        lead_id=lead_id,
         user_id=current_user.id,
     )
-    
+
     return True
+
+
+# ==============================================================================
+# CONFIRMATION TOKEN FUNCTIONS (Magic Link)
+# ==============================================================================
+
+
+async def generate_confirmation_token(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> tuple[models.AdmissionConfirmationToken, callable]:
+    """
+    Generate magic link confirmation token for approved profile.
+    
+    Called by: approve_profile() or send_confirmation endpoint.
+    
+    Args:
+        db: Database session
+        profile: Approved AdmissionProfile
+        
+    Returns:
+        Tuple of (token_object, email_callback)
+        
+    Raises:
+        BadRequest: Profile status is not 'approved'
+    """
+    import secrets
+    from datetime import timedelta, datetime, timezone
+    from app.config import settings
+    from app.repositories import AdmissionRepository
+    
+    # Validate profile status
+    if profile.status != "approved":
+        raise BadRequest(
+            f"Cannot generate confirmation token for profile with status '{profile.status}'. "
+            "Only approved profiles can receive confirmation links."
+        )
+    
+    # Generate secure token
+    token_value = secrets.token_urlsafe(32)  # 256-bit entropy
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        days=settings.ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS
+    )
+    
+    # Create token via repository
+    repo = AdmissionRepository(db)
+    token_obj = await repo.create_confirmation_token(
+        profile_id=profile.id,
+        token=token_value,
+        expires_at=expires_at,
+    )
+    
+    log.info(
+        "Confirmation token generated",
+        profile_id=profile.id,
+        token_id=token_obj.id,
+        expires_at=expires_at.isoformat(),
+    )
+    
+    # Post-commit callback for sending email
+    async def _send_email_callback():
+        # This will be implemented when email service is ready
+        # For now, just log
+        log.info(
+            "POST-COMMIT: Would send confirmation email",
+            profile_id=profile.id,
+            lead_email=profile.lead.email if profile.lead else None,
+            token_id=token_obj.id,
+        )
+    
+    return token_obj, _send_email_callback
+
+
+async def get_token_info(
+    db: AsyncSession,
+    token_value: str,
+) -> dict:
+    """
+    Get token info for frontend to display confirmation form.
+    
+    Called by: GET /confirm/{token}
+    
+    Args:
+        db: Database session
+        token_value: Token string from URL
+        
+    Returns:
+        Dict with token status info for ConfirmTokenInfoResponse
+        
+    Raises:
+        ResourceNotFoundError: Token not found
+    """
+    from datetime import datetime, timezone
+    from app.config import settings
+    from app.repositories import AdmissionRepository
+    
+    repo = AdmissionRepository(db)
+    token_obj = await repo.get_token_by_value(token_value)
+    
+    if not token_obj:
+        raise ResourceNotFoundError("Invalid or expired confirmation link")
+    
+    now = datetime.now(timezone.utc)
+    is_expired = token_obj.expires_at < now
+    is_locked = token_obj.locked_at is not None
+    is_used = token_obj.confirmed_at is not None
+    attempts_remaining = max(0, settings.ADMISSION_CONFIRM_MAX_ATTEMPTS - token_obj.attempt_count)
+    
+    # Get lead name from profile
+    profile_name = "Học viên"
+    if token_obj.profile and token_obj.profile.lead:
+        profile_name = token_obj.profile.lead.full_name or profile_name
+    
+    return {
+        "valid": not (is_expired or is_locked or is_used),
+        "expired": is_expired,
+        "locked": is_locked,
+        "already_used": is_used,
+        "attempts_remaining": attempts_remaining,
+        "profile_name": profile_name,
+        "expires_at": token_obj.expires_at,
+    }
+
+
+async def verify_and_confirm(
+    db: AsyncSession,
+    token_value: str,
+    last_digits: str,
+) -> tuple[models.AdmissionProfile, callable]:
+    """
+    Verify CCCD and confirm admission via token.
+    
+    Called by: POST /confirm/{token}
+    
+    Steps:
+    1. Validate token (exists, not expired, not used, not locked)
+    2. Verify last 4 digits of citizen_id
+    3. If match: confirm profile, mark token used
+    4. If mismatch: increment attempts, lock if exceeded
+    
+    Args:
+        db: Database session
+        token_value: Token string from URL
+        last_digits: Last 4 digits of CCCD from user input
+        
+    Returns:
+        Tuple of (updated_profile, notification_callback)
+        
+    Raises:
+        ResourceNotFoundError: Token not found
+        BadRequest: Token expired/used/locked or CCCD mismatch
+    """
+    from datetime import datetime, timezone
+    from app.config import settings
+    from app.repositories import AdmissionRepository
+    
+    repo = AdmissionRepository(db)
+    token_obj = await repo.get_token_by_value(token_value)
+    
+    if not token_obj:
+        raise ResourceNotFoundError("Invalid or expired confirmation link")
+    
+    now = datetime.now(timezone.utc)
+    
+    # Check token status
+    if token_obj.confirmed_at is not None:
+        raise BadRequest("This confirmation link has already been used")
+    
+    if token_obj.locked_at is not None:
+        raise BadRequest(
+            "This confirmation link has been locked due to too many failed attempts. "
+            "Please contact support for assistance."
+        )
+    
+    if token_obj.expires_at < now:
+        raise BadRequest("This confirmation link has expired. Please request a new link.")
+    
+    # Get profile and verify CCCD
+    profile = token_obj.profile
+    if not profile or not profile.citizen_id:
+        raise BadRequest("Profile data is incomplete. Please contact support.")
+    
+    # Verify last 4 digits
+    expected_digits = profile.citizen_id[-settings.ADMISSION_CONFIRM_CCCD_DIGITS:]
+    
+    if last_digits != expected_digits:
+        # Increment attempts
+        await repo.increment_token_attempts(token_obj, settings.ADMISSION_CONFIRM_MAX_ATTEMPTS)
+        
+        attempts_remaining = max(0, settings.ADMISSION_CONFIRM_MAX_ATTEMPTS - token_obj.attempt_count)
+        
+        if token_obj.locked_at is not None:
+            log.warning(
+                "Confirmation token locked after max attempts",
+                token_id=token_obj.id,
+                profile_id=profile.id,
+            )
+            raise BadRequest(
+                "Too many failed attempts. This confirmation link has been locked. "
+                "Please contact support for assistance."
+            )
+        
+        log.warning(
+            "CCCD verification failed",
+            token_id=token_obj.id,
+            profile_id=profile.id,
+            attempts_remaining=attempts_remaining,
+        )
+        raise BadRequest(
+            f"Incorrect CCCD digits. {attempts_remaining} attempts remaining."
+        )
+    
+    # CCCD matches - confirm the profile!
+    await repo.mark_token_confirmed(token_obj, confirmed_via="magic_link")
+    
+    log.info(
+        "Admission confirmed via magic link",
+        profile_id=profile.id,
+        token_id=token_obj.id,
+        confirmed_at=now.isoformat(),
+    )
+    
+    # Post-commit callback for notifications
+    async def _notification_callback():
+        log.info(
+            "POST-COMMIT: Would send confirmation success notification",
+            profile_id=profile.id,
+            lead_id=profile.lead_id,
+        )
+    
+    return profile, _notification_callback
+
+
+# ==============================================================================
+# BULK ACTION FUNCTIONS
+# ==============================================================================
+
+async def bulk_approve(
+    db: AsyncSession,
+    profile_ids: List[int],
+    approver: models.User,
+    notes: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Bulk approve multiple admission profiles.
+
+    Security:
+    - Only Manager/Admin can approve
+    - IDOR: Verifies each profile is accessible to user
+
+    Args:
+        db: Database session
+        profile_ids: List of profile IDs to approve
+        approver: User performing the approval
+        notes: Optional approval notes
+
+    Returns:
+        Dict with success_count, failed_count, failed_ids, errors, message
+    """
+    from app.repositories import AdmissionRepository
+
+    if approver.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can approve profiles")
+
+    repo = AdmissionRepository(db)
+    success_count = 0
+    failed_ids = []
+    errors: Dict[int, str] = {}
+
+    for profile_id in profile_ids:
+        try:
+            # Get profile with IDOR check
+            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            if not profile:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Profile not found"
+                continue
+
+            # Check IDOR for non-admin
+            if approver.role != UserRole.ADMIN and profile.lead.unit_id != approver.unit_id:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Permission denied"
+                continue
+
+            # Check if profile can be approved (status must be submitted/resubmitted)
+            if profile.status not in ["submitted", "resubmitted"]:
+                failed_ids.append(profile_id)
+                errors[profile_id] = f"Cannot approve profile with status '{profile.status}'"
+                continue
+
+            # Perform approval
+            now = datetime.now(timezone.utc)
+            profile.status = "approved"
+            profile.approved_at = now
+            profile.approved_by_id = approver.id
+            profile.approval_notes = notes
+            profile.version += 1
+
+            success_count += 1
+
+        except Exception as e:
+            log.error("Bulk approve failed for profile", profile_id=profile_id, error=str(e))
+            failed_ids.append(profile_id)
+            errors[profile_id] = str(e)
+
+    await db.flush()
+
+    return {
+        "success_count": success_count,
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids,
+        "errors": errors if errors else None,
+        "message": f"Approved {success_count} of {len(profile_ids)} profiles",
+    }
+
+
+async def bulk_reject(
+    db: AsyncSession,
+    profile_ids: List[int],
+    rejector: models.User,
+    reason: str,
+) -> Dict[str, Any]:
+    """
+    Bulk reject multiple admission profiles.
+
+    Security:
+    - Only Manager/Admin can reject
+    - IDOR: Verifies each profile is accessible to user
+
+    Args:
+        db: Database session
+        profile_ids: List of profile IDs to reject
+        rejector: User performing the rejection
+        reason: Rejection reason (required)
+
+    Returns:
+        Dict with success_count, failed_count, failed_ids, errors, message
+    """
+    from app.repositories import AdmissionRepository
+
+    if rejector.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can reject profiles")
+
+    repo = AdmissionRepository(db)
+    success_count = 0
+    failed_ids = []
+    errors: Dict[int, str] = {}
+
+    for profile_id in profile_ids:
+        try:
+            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            if not profile:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Profile not found"
+                continue
+
+            if rejector.role != UserRole.ADMIN and profile.lead.unit_id != rejector.unit_id:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Permission denied"
+                continue
+
+            if profile.status not in ["submitted", "resubmitted"]:
+                failed_ids.append(profile_id)
+                errors[profile_id] = f"Cannot reject profile with status '{profile.status}'"
+                continue
+
+            now = datetime.now(timezone.utc)
+            profile.status = "rejected"
+            profile.rejected_at = now
+            profile.rejected_by_id = rejector.id
+            profile.rejection_reason = reason
+            profile.version += 1
+
+            success_count += 1
+
+        except Exception as e:
+            log.error("Bulk reject failed for profile", profile_id=profile_id, error=str(e))
+            failed_ids.append(profile_id)
+            errors[profile_id] = str(e)
+
+    await db.flush()
+
+    return {
+        "success_count": success_count,
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids,
+        "errors": errors if errors else None,
+        "message": f"Rejected {success_count} of {len(profile_ids)} profiles",
+    }
+
+
+async def bulk_assign(
+    db: AsyncSession,
+    profile_ids: List[int],
+    officer_id: int,
+    assigner: models.User,
+) -> Dict[str, Any]:
+    """
+    Bulk assign profiles to an officer (updates lead.assigned_officer_id).
+
+    Security:
+    - Manager/Admin can assign within their unit
+    - IDOR: Verifies each profile is accessible to user
+
+    Args:
+        db: Database session
+        profile_ids: List of profile IDs to assign
+        officer_id: ID of the officer to assign to
+        assigner: User performing the assignment
+
+    Returns:
+        Dict with success_count, failed_count, failed_ids, errors, message
+    """
+    from app.repositories import AdmissionRepository
+
+    if assigner.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can assign profiles")
+
+    # Verify officer exists
+    officer = await db.get(models.User, officer_id)
+    if not officer:
+        raise ResourceNotFoundError("Officer not found")
+
+    repo = AdmissionRepository(db)
+    success_count = 0
+    failed_ids = []
+    errors: Dict[int, str] = {}
+
+    for profile_id in profile_ids:
+        try:
+            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            if not profile:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Profile not found"
+                continue
+
+            if assigner.role != UserRole.ADMIN and profile.lead.unit_id != assigner.unit_id:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Permission denied"
+                continue
+
+            # Update lead assignment
+            profile.lead.assigned_officer_id = officer_id
+            success_count += 1
+
+        except Exception as e:
+            log.error("Bulk assign failed for profile", profile_id=profile_id, error=str(e))
+            failed_ids.append(profile_id)
+            errors[profile_id] = str(e)
+
+    await db.flush()
+
+    return {
+        "success_count": success_count,
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids,
+        "errors": errors if errors else None,
+        "message": f"Assigned {success_count} of {len(profile_ids)} profiles to officer",
+    }

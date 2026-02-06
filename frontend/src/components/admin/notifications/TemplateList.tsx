@@ -141,19 +141,19 @@ export function TemplateList({ initialData }: TemplateListProps) {
   const getCategoryColor = (cat: string | null) => {
     switch (cat) {
       case "lead":
-        return "bg-blue-100 text-blue-800";
+        return "bg-info-100 text-info-800 dark:bg-info-900/50 dark:text-info-300";
       case "consultation":
-        return "bg-purple-100 text-purple-800";
+        return "bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300";
       case "application":
-        return "bg-green-100 text-green-800";
+        return "bg-success-100 text-success-800 dark:bg-success-900/50 dark:text-success-300";
       case "finance":
-        return "bg-yellow-100 text-yellow-800";
+        return "bg-warning-100 text-warning-800 dark:bg-warning-900/50 dark:text-warning-300";
       case "dorm":
-        return "bg-orange-100 text-orange-800";
+        return "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300";
       case "system":
-        return "bg-gray-100 text-gray-800";
+        return "bg-muted text-muted-foreground";
       default:
-        return "bg-slate-100 text-slate-800";
+        return "bg-muted text-muted-foreground";
     }
   };
 
@@ -162,7 +162,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <h1 className="text-3xl font-bold font-display tracking-tight flex items-center gap-2">
             <FileText className="h-8 w-8" />
             Notification Templates
           </h1>
@@ -326,6 +326,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
                           size="icon"
                           onClick={() => handleEditClick(template.id)}
                           disabled={deleteMutation.isPending}
+                          aria-label="Chỉnh sửa"
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -338,6 +339,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
                             template.usage_count > 0 ||
                             deleteMutation.isPending
                           }
+                          aria-label="Xóa"
                           title={
                             template.is_system
                               ? "Cannot delete system template"
@@ -404,7 +406,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
               {deleteMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Deleting...
+                  Deleting…
                 </>
               ) : (
                 "Delete Template"

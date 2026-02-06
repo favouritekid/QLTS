@@ -156,25 +156,39 @@ function segmentToLabel(segment: string): string {
     .join(" ");
 }
 
+// ✅ PERFORMANCE: Pre-compile RegExp patterns for dynamic routes (created once, reused)
+interface DynamicRouteMatch {
+  route: RouteConfig;
+  regex: RegExp;
+}
+
+const dynamicRoutePatterns: DynamicRouteMatch[] = Object.values(routes)
+  .filter((route) => route.path.includes("["))
+  .map((route) => ({
+    route,
+    regex: new RegExp(`^${route.path.replace(/\[([^\]]+)\]/g, "[^/]+")}$`),
+  }));
+
+// ✅ PERFORMANCE: Pre-built Map for O(1) exact route lookups
+const exactRouteMap = new Map<string, RouteConfig>(
+  Object.values(routes)
+    .filter((route) => !route.path.includes("["))
+    .map((route) => [route.path, route])
+);
+
 /**
  * Get route config by pathname
  * Handles dynamic routes with parameters
  */
 export function getRouteConfig(pathname: string): RouteConfig | null {
-  // Exact match first
-  const exactMatch = Object.values(routes).find((route) => route.path === pathname);
+  // O(1) exact match first via Map
+  const exactMatch = exactRouteMap.get(pathname);
   if (exactMatch) return exactMatch;
 
-  // Match dynamic routes (e.g., /leads/123 matches /leads/[id])
-  const dynamicMatch = Object.values(routes).find((route) => {
-    if (!route.path.includes("[")) return false;
+  // Match dynamic routes using pre-compiled RegExp patterns
+  const dynamicMatch = dynamicRoutePatterns.find(({ regex }) => regex.test(pathname));
 
-    const pattern = route.path.replace(/\[([^\]]+)\]/g, "[^/]+");
-    const regex = new RegExp(`^${pattern}$`);
-    return regex.test(pathname);
-  });
-
-  return dynamicMatch || null;
+  return dynamicMatch?.route || null;
 }
 
 /**

@@ -32,14 +32,14 @@ __all__ = [
     "get_current_user",
     "get_current_active_user",
     "require_password_not_forced",
-    
+
     # Authorization (Layer 2)
     "check_permission",
     "require_admin",
     "require_admin_or_manager",
     "require_any_staff",
     "require_roles",
-    
+
     # Resource Access / IDOR (Layer 3)
     "get_lead_for_user",
     "get_application_for_user",
@@ -52,11 +52,19 @@ __all__ = [
     "get_lead_list_filter",  # Phase 2.1
     "verify_criteria_visibility",  # Phase 6.5
     "verify_user_management_permission",
+
+    # Admission State Machine IDOR (State Machine Implementation)
+    "get_admission_for_manager",  # Manager approve/reject
+    "get_admission_for_user",  # Officer resubmit
+    "get_admission_for_owner",  # Applicant confirm (SELF check)
     
+    # Admission Configuration Console IDOR
+    "get_admission_path_for_user",  # Phase 1: Config Console
+
     # Data Classes
     "OfficerDashboardScope",
     "LeadListFilter",
-    
+
     # Standard Aliases (Phase 2.2)
     "CasbinAuth",
     "RequireAdmin",
@@ -245,37 +253,18 @@ async def get_current_user(
                 raise credentials_exception
 
         # ← PHASE 2: Auto-sync DB role to match Casbin (source of truth)
-        try:
-            enforcer = request.app.state.enforcer
-            casbin_role = await user_service.get_highest_priority_role_from_casbin(
-                enforcer, user.id
-            )
-
-            if user.role != casbin_role:
-                log.warning(
-                    "DB/Casbin role mismatch detected! Auto-syncing DB to Casbin.",
-                    user_id=user.id,
-                    db_role=user.role,
-                    casbin_role=casbin_role
-                )
-                # Update DB to match Casbin (source of truth)
-                user.role = casbin_role
-                db.add(user)
-                await db.commit()
-                await db.refresh(user)
-                log.info(
-                    "DB role auto-synced successfully",
-                    user_id=user.id,
-                    new_role=casbin_role
-                )
-        except Exception as e_sync:
-            # Don't fail auth if sync fails, just log it
-            log.error(
-                "Auto-sync failed, but continuing with authentication",
-                user_id=user.id,
-                error=str(e_sync),
-                exc_info=True
-            )
+        # ⚠️ DISABLED (Phase 7): This was causing issues because:
+        #    - get_highest_priority_role_from_casbin() checks g-rules for user:X
+        #    - If no g-rules exist (which is our case), it returns "user"
+        #    - This overwrites officer/manager roles set in DB!
+        #
+        # Current design: DB role IS the source of truth.
+        # Casbin p-rules are defined for role:X (not user:X).
+        # check_permission() uses role:{user.role} as subject.
+        #
+        # If you need per-user Casbin roles (g-rules), implement:
+        #   1. Create g-rule when user is created/role changed
+        #   2. OR keep DB as source of truth (current approach)
 
         return user
 
@@ -369,14 +358,18 @@ async def check_permission(
     ✅ SECURITY FIX (Phase 1): Now uses get_current_active_user to block inactive users.
     Previously allowed inactive users which was a security vulnerability affecting 18+ files.
     
-    Checks: (user:id, url_path, http_method) against Casbin policy.
+    ✅ FIX (Phase 7): Changed subject from user:X to role:X to match policy definitions.
+    Policies are defined for role:officer, role:manager, etc. not user:1, user:2.
+    
+    Checks: (role:X, url_path, http_method) against Casbin policy.
     """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     if not enforcer:
         log.critical("Casbin enforcer not found in app state!")
         raise PermissionDeniedError("Permission system is misconfigured.")
 
-    subject = f"user:{current_user.id}"
+    # ✅ FIX: Use role:X instead of user:X to match policy templates
+    subject = f"role:{current_user.role}"
     object_path = request.url.path
     action = request.method
 
@@ -386,6 +379,8 @@ async def check_permission(
             subject=subject,
             object=object_path,
             action=action,
+            user_id=current_user.id,
+            username=current_user.username,
         )
         raise PermissionDeniedError(
             detail="You do not have permission for this action."
@@ -467,26 +462,52 @@ async def require_admin_or_manager(
     return current_user
 
 
+async def require_finance_staff(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """
+    Dependency that requires the user to have finance-related role (admin, manager, or accountant).
+
+    Use this on finance endpoints like recording payments, issuing invoices, etc.
+
+    Example:
+        @router.post("/payments")
+        async def record_payment(
+            current_user: models.User = Depends(require_finance_staff)
+        ):
+            # Guaranteed to be admin, manager, or accountant
+            ...
+
+    Raises:
+        PermissionDeniedError: If user is not finance staff
+    """
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT]:
+        raise PermissionDeniedError(
+            detail="Finance staff access required for this operation."
+        )
+    return current_user
+
+
 async def require_any_staff(
     current_user: models.User = Depends(get_current_active_user),
 ) -> models.User:
     """
-    Dependency that requires the user to be any staff role (admin, manager, or officer).
-    
+    Dependency that requires the user to be any staff role (admin, manager, accountant, or officer).
+
     Use this on endpoints accessible by all authenticated staff members.
-    
+
     Example:
         @router.get("/team-data")
         async def get_team_data(
             current_user: models.User = Depends(require_any_staff)
         ):
-            # Guaranteed to be admin, manager, or officer
+            # Guaranteed to be admin, manager, accountant, or officer
             ...
-    
+
     Raises:
         PermissionDeniedError: If user is not a staff member
     """
-    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.OFFICER]:
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.OFFICER]:
         raise PermissionDeniedError(
             detail="Staff access required for this operation."
         )
@@ -625,8 +646,10 @@ async def get_lead_for_user(
         return lead
     if current_user.role == UserRole.OFFICER and lead.assigned_officer_id == current_user.id:
         return lead
-    raise PermissionDeniedError(
-        detail="You do not have permission to access this lead."
+    # ✅ SECURITY FIX: Return 404 instead of 403 to prevent resource enumeration
+    # Per IDOR best practices, unauthorized access should not reveal resource existence
+    raise ResourceNotFoundError(
+        detail="Lead not found"
     )
 
 
@@ -734,9 +757,8 @@ async def get_application_for_user(
                 manager_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail="You do not have permission to access this application. "
-                       "This application belongs to a lead outside your managed units."
+            raise ResourceNotFoundError(
+                detail="Application not found"
             )
 
     # OFFICER: Access to applications for their assigned leads only
@@ -758,9 +780,8 @@ async def get_application_for_user(
                 officer_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail="You do not have permission to access this application. "
-                       "This application belongs to a lead assigned to another officer."
+            raise ResourceNotFoundError(
+                detail="Application not found"
             )
 
     # ACCESS DENIED - Unknown role or no permission
@@ -772,8 +793,98 @@ async def get_application_for_user(
         lead_officer_id=lead.assigned_officer_id,
         lead_unit_id=lead.unit_id
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to access this application."
+    raise ResourceNotFoundError(
+        detail="Application not found"
+    )
+
+
+async def get_notification_for_user(
+    notification_id: int = Path(..., description="ID of the Notification"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.Notification:
+    """
+    Verify ownership and retrieve a notification.
+
+    **Security Levels:**
+    - **Admin**: Can access all notifications (for debugging/support)
+    - **Manager/Officer/User**: Can only access their own notifications
+
+    **IDOR Prevention:**
+    This dependency prevents Insecure Direct Object Reference attacks by verifying
+    that the current user owns the notification before access.
+
+    **Important Security Note:**
+    Returns 404 (not 403) when user doesn't own the notification.
+    This prevents inference attacks where attacker can enumerate existing IDs.
+
+    Args:
+        notification_id: ID of the notification to access
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
+
+    Returns:
+        Notification model if access is permitted
+
+    Raises:
+        ResourceNotFoundError: If notification doesn't exist OR user doesn't own it
+
+    Example:
+        ```python
+        @router.delete("/notifications/{notification_id}")
+        async def delete_notification(
+            notification: models.Notification = Depends(get_notification_for_user)
+        ):
+            # notification is guaranteed to be owned by current user
+            await db.delete(notification)
+        ```
+
+    Reference: AUTHORIZATION_DECISIONS.md Decision 2 & 5
+    """
+    from ..repositories.notification_repository import NotificationRepository
+
+    repo = NotificationRepository(db)
+    notification = await repo.get(notification_id)
+
+    # Notification not found
+    if not notification:
+        log.debug(
+            "Notification not found",
+            notification_id=notification_id,
+            user_id=current_user.id
+        )
+        raise ResourceNotFoundError(
+            detail="Notification not found"
+        )
+
+    # ADMIN: Full access (for debugging/support purposes)
+    if current_user.role == UserRole.ADMIN:
+        log.debug(
+            "Admin accessing notification",
+            notification_id=notification_id,
+            admin_id=current_user.id,
+            notification_owner=notification.user_id
+        )
+        return notification
+
+    # ALL OTHER ROLES: Must own the notification
+    if notification.user_id == current_user.id:
+        return notification
+
+    # IDOR ATTEMPT: User trying to access someone else's notification
+    # Return 404 (not 403) to prevent inference attack
+    log.warning(
+        "IDOR attempt detected: User trying to access another user's notification",
+        notification_id=notification_id,
+        notification_owner_id=notification.user_id,
+        attacker_id=current_user.id,
+        attacker_username=current_user.username,
+        attacker_role=current_user.role
+    )
+
+    # Return 404 to hide existence of notification (security best practice)
+    raise ResourceNotFoundError(
+        detail="Notification not found"
     )
 
 
@@ -893,9 +1004,8 @@ async def get_distribution_rule_for_user(
                 user_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail=f"You do not have permission to access this distribution rule. "
-                       f"This rule belongs to unit {rule.unit_id}, which is not in your managed units."
+            raise ResourceNotFoundError(
+                detail="Distribution rule not found"
             )
 
     # Officer or other roles: deny access
@@ -905,9 +1015,8 @@ async def get_distribution_rule_for_user(
         user_id=current_user.id,
         user_role=current_user.role
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to manage distribution rules. "
-               "Only Admins and Managers can access this resource."
+    raise ResourceNotFoundError(
+        detail="Distribution rule not found"
     )
 
 
@@ -1005,9 +1114,8 @@ async def get_organizational_unit_for_user(
                 user_id=current_user.id,
                 username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail=f"You do not have permission to access this organizational unit. "
-                       f"Unit {unit_id} is not in your managed units."
+            raise ResourceNotFoundError(
+                detail="Organizational unit not found"
             )
 
     # Officer: allow read-only if enabled and user belongs to this unit
@@ -1026,8 +1134,8 @@ async def get_organizational_unit_for_user(
                 user_unit_id=current_user.unit_id,
                 user_id=current_user.id
             )
-            raise PermissionDeniedError(
-                detail=f"You can only view your own organizational unit (Unit {current_user.unit_id})."
+            raise ResourceNotFoundError(
+                detail="Organizational unit not found"
             )
 
     # Officer without read permission or other roles: deny access
@@ -1038,9 +1146,8 @@ async def get_organizational_unit_for_user(
         user_role=current_user.role,
         allow_read_only=allow_read_only
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to access organizational units. "
-               "Only Admins and Managers can manage organizational units."
+    raise ResourceNotFoundError(
+        detail="Organizational unit not found"
     )
 
 
@@ -1135,9 +1242,8 @@ async def verify_user_management_permission(
                 current_user_id=current_user.id,
                 current_username=current_user.username
             )
-            raise PermissionDeniedError(
-                detail=f"You do not have permission to manage this user. "
-                       f"User belongs to unit {target_user.unit_id}, which is not in your managed units."
+            raise ResourceNotFoundError(
+                detail="User not found"
             )
 
     # Officer or other roles: deny access
@@ -1147,9 +1253,8 @@ async def verify_user_management_permission(
         current_user_id=current_user.id,
         current_user_role=current_user.role
     )
-    raise PermissionDeniedError(
-        detail="You do not have permission to manage users. "
-               "Only Admins and Managers can perform user management operations."
+    raise ResourceNotFoundError(
+        detail="User not found"
     )
 
 
@@ -1488,23 +1593,274 @@ async def get_kpi_target_for_admin(
 ) -> models.KpiTarget:
     """
     Fetch KPI Target with admin/manager authorization.
-    
+
     This dependency replaces direct db.get() in router per
     AUTHORIZATION_GUIDELINES.md Section 4 (IDOR Protection).
-    
+
     Args:
         target_id: ID of the KPI Target to fetch
-        
+
     Returns:
         KpiTarget if found and active
-        
+
     Raises:
         ResourceNotFoundError: If target not found or inactive
     """
     from ..models.config import KpiTarget
-    
+
     target = await db.get(KpiTarget, target_id)
     if not target or not target.is_active:
         raise ResourceNotFoundError(detail="KPI Target not found")
     return target
 
+
+# =============================================================================
+# ADMISSION STATE MACHINE IDOR DEPENDENCIES
+# Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Sections 2.2 and 3
+# =============================================================================
+
+async def get_admission_for_manager(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """
+    IDOR Protection for Manager actions (approve/reject).
+
+    ✅ CRITICAL FIX #2: Added SELECT FOR UPDATE lock to prevent race conditions
+    Scenario: 2 managers approve/reject same profile simultaneously
+    Without lock: Both pass state check, last write wins (inconsistent state)
+    With lock: Second request waits, then fails state validation
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1.3:
+    - Admin: Can access all profiles
+    - Manager: Can access profiles where lead.unit_id == user.unit_id
+    - Return 404 (not 403) for unauthorized access
+
+    Used by:
+    - POST /admissions/{id}/approve
+    - POST /admissions/{id}/reject
+
+    Args:
+        profile_id: Admission profile ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        AdmissionProfile with lead relationship loaded (LOCKED)
+
+    Raises:
+        ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload  # Use selectinload to avoid LEFT JOIN
+
+    # ✅ CRITICAL FIX #2: Acquire row lock for state-changing operations
+    # Use selectinload (separate query) instead of joinedload (LEFT JOIN)
+    # to avoid PostgreSQL "FOR UPDATE cannot be applied to nullable side of outer join"
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()  # ✅ CRITICAL: Prevent concurrent approve/reject
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    # IDOR CHECK (after lock acquired)
+    if current_user.role != UserRole.ADMIN:
+        if not profile.lead or profile.lead.unit_id != current_user.unit_id:
+            # Fake 404 to prevent information leakage
+            log.warning(
+                "IDOR attempt: Manager tried to access profile from different unit",
+                user_id=current_user.id,
+                user_unit_id=current_user.unit_id,
+                profile_id=profile_id,
+                profile_unit_id=profile.lead.unit_id if profile.lead else None,
+            )
+            raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
+
+
+async def get_admission_for_user(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """
+    IDOR Protection for Officer/Manager actions (resubmit, update).
+
+    ✅ CRITICAL FIX #2: Added SELECT FOR UPDATE lock
+    Prevents race conditions in resubmit operations
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2:
+    - Admin: Can access all profiles
+    - Officer: Can access profiles where lead.unit_id == user.unit_id
+    - Manager: Can access profiles where lead.unit_id == user.unit_id
+    - Return 404 (not 403) for unauthorized access
+
+    Used by:
+    - POST /admissions/{id}/resubmit
+
+    Args:
+        profile_id: Admission profile ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        AdmissionProfile with lead relationship loaded (LOCKED)
+
+    Raises:
+        ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload  # Use selectinload to avoid LEFT JOIN
+
+    # ✅ CRITICAL FIX #2: Acquire row lock for resubmit
+    # Use selectinload (separate query) instead of joinedload (LEFT JOIN)
+    # to avoid PostgreSQL "FOR UPDATE cannot be applied to nullable side of outer join"
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    # IDOR CHECK
+    if current_user.role != UserRole.ADMIN:
+        if not profile.lead or profile.lead.unit_id != current_user.unit_id:
+            # Fake 404 to prevent information leakage
+            log.warning(
+                "IDOR attempt: User tried to access profile from different unit",
+                user_id=current_user.id,
+                user_unit_id=current_user.unit_id,
+                profile_id=profile_id,
+                profile_unit_id=profile.lead.unit_id if profile.lead else None,
+            )
+            raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
+
+
+# ==============================================================================
+# DEPRECATED: get_admission_for_owner
+# ==============================================================================
+# 
+# This dependency was designed for user-based confirmation with Lead.user_id.
+# However, the Lead model doesn't have a user_id field, so this check is broken.
+# 
+# REPLACED BY: Token-based confirmation flow (Magic Link)
+# - POST /api/admissions/confirm/{token} (public endpoint)
+# - Uses AdmissionConfirmationToken + CCCD verification
+# 
+# See: implementation_plan.md (Magic Link + CCCD Verification)
+# 
+# async def get_admission_for_owner(
+#     profile_id: int = Path(..., description="Admission Profile ID"),
+#     current_user: models.User = Depends(get_current_active_user),
+#     db: AsyncSession = Depends(database.get_db),
+# ) -> models.AdmissionProfile:
+#     """DEPRECATED: Use token-based confirmation instead."""
+#     raise NotImplementedError(
+#         "get_admission_for_owner is deprecated. "
+#         "Use token-based confirmation: POST /api/admissions/confirm/{token}"
+#     )
+
+
+# ==============================================================================
+# FSM VALIDATION DEPENDENCIES (Smart Dependencies Pattern)
+# ==============================================================================
+
+async def validate_status_transition(
+    to_status_id: str,
+    lead_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user)
+) -> models.ConsultationStatus:
+    """
+    Smart Dependency: Validate FSM transition BEFORE updating lead status.
+    
+    This dependency enforces RULE #12: Backend must validate transitions.
+    
+    Args:
+        to_status_id: Target status ID
+        lead_id: Lead ID to update
+        db: Database session
+        current_user: Authenticated user
+        
+    Returns:
+        Validated ConsultationStatus object
+        
+    Raises:
+        ResourceNotFoundError: If lead or status not found (404)
+        BusinessRuleViolation: If transition violates FSM rules (400)
+        
+    Architecture Compliance:
+        - Smart Dependency: ALL validation logic here
+        - Dumb Router: Just coordinates service + commit
+        - Service: Pure Python, no HTTPException
+    """
+    from ..repositories.lead_repository import LeadRepository
+    from ..services.phase_manager import derive_phase_from_admission
+    from ..services.fsm_engine import is_transition_allowed
+    from ..utils.exceptions import BusinessRuleViolation
+    
+    # 1. Get lead with admission_profile for phase derivation (IDOR check)
+    repo = LeadRepository(db)
+    lead = await repo.get_lead_by_id_and_unit(lead_id, current_user.unit_id)
+    
+    if not lead:
+        raise ResourceNotFoundError(f"Lead {lead_id} not found")
+    
+    # 2. Get target status
+    to_status = await db.get(models.ConsultationStatus, to_status_id)
+    if not to_status:
+        raise ResourceNotFoundError(f"Status {to_status_id} not found")
+    
+    # 3. Derive lead phase from admission_profile
+    lead_phase = derive_phase_from_admission(lead.admission_profile).value
+    
+    # 4. ✅ RULE #12: Validate transition using FSM engine
+    is_allowed = await is_transition_allowed(
+        db=db,
+        from_status_id=lead.consultation_status_id,
+        to_status_id=to_status_id,
+        lead_phase=lead_phase,
+        user_role=current_user.role
+    )
+    
+    if not is_allowed:
+        log.warning(
+            "FSM validation failed - invalid transition",
+            user_id=current_user.id,
+            lead_id=lead_id,
+            from_status=lead.consultation_status_id,
+            to_status=to_status_id,
+            lead_phase=lead_phase,
+            user_role=current_user.role
+        )
+        raise BusinessRuleViolation(
+            f"Invalid status transition from {lead.consultation_status_id or 'NULL'} "
+            f"to {to_status_id}. Not allowed in current phase '{lead_phase}' "
+            f"for role '{current_user.role}'."
+        )
+    
+    log.info(
+        "FSM validation passed",
+        user_id=current_user.id,
+        lead_id=lead_id,
+        from_status=lead.consultation_status_id,
+        to_status=to_status_id,
+        lead_phase=lead_phase
+    )
+    
+    return to_status

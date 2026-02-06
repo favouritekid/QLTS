@@ -7,13 +7,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+// useMutation removed, useQueryClient kept if needed (but hook handles it)
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Briefcase, Users, CircleDot } from "lucide-react";
-import { api } from "@/lib/api/client";
+// officerApi removed
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -28,15 +28,10 @@ interface WorkloadCardProps {
   statusOverview: StatusOverview;
 }
 
-async function updateAvailability(status: string) {
-  const response = await api.post("/api/officer/availability", {
-    availability_status: status,
-  });
-  return response.data;
-}
+import { useOfficerAvailability } from "@/hooks/officer/useOfficerAvailability";
 
 export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
-  const queryClient = useQueryClient();
+
   // Derive isAvailable directly from props - avoids unnecessary sync with useEffect
   // Local state only tracks optimistic update during mutation
   const [optimisticAvailable, setOptimisticAvailable] = useState<boolean | null>(null);
@@ -44,25 +39,19 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   // Use optimistic state during mutation, otherwise derive from props
   const isAvailable = optimisticAvailable ?? (statusOverview.availability_status === "available");
 
-  const mutation = useMutation({
-    mutationFn: updateAvailability,
-    onSuccess: (data) => {
-      // Clear optimistic state - let props drive the UI
-      setOptimisticAvailable(null);
-      queryClient.invalidateQueries({ queryKey: ["officer", "dashboard"] });
-      toast.success(`Đã cập nhật: ${data.availability_status === "available" ? "Sẵn sàng" : "Bận"}`);
-    },
-    onError: () => {
-      toast.error("Không thể cập nhật trạng thái");
-      // Revert optimistic state
-      setOptimisticAvailable(null);
-    },
-  });
+  const mutation = useOfficerAvailability();
 
   const handleAvailabilityToggle = (checked: boolean) => {
     // Set optimistic state for immediate UI feedback
     setOptimisticAvailable(checked);
-    mutation.mutate(checked ? "available" : "busy");
+    mutation.mutate(checked ? "available" : "busy", {
+      onSuccess: () => {
+        setOptimisticAvailable(null);
+      },
+      onError: () => {
+        setOptimisticAvailable(null);
+      }
+    });
   };
 
   const utilizationPercentage = statusOverview.utilization ?? 0;
@@ -73,14 +62,14 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   const circumference = 2 * Math.PI * 40;
   const strokeDashoffset = circumference - (utilizationPercentage / 100) * circumference;
 
-  const utilizationColor = 
-    utilizationPercentage >= 90 ? "text-red-500" : 
-    utilizationPercentage >= 70 ? "text-amber-500" : 
-    "text-green-500";
+  const utilizationColor =
+    utilizationPercentage >= 90 ? "text-error-500" :
+    utilizationPercentage >= 70 ? "text-warning-500" :
+    "text-success-500";
 
-  const strokeColor = 
-    utilizationPercentage >= 90 ? "stroke-red-500" : 
-    utilizationPercentage >= 70 ? "stroke-amber-500" : 
+  const strokeColor =
+    utilizationPercentage >= 90 ? "stroke-error-500" :
+    utilizationPercentage >= 70 ? "stroke-warning-500" :
     "stroke-primary";
 
   return (
@@ -88,17 +77,17 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <Briefcase className="h-4 w-4" />
+            <Briefcase aria-hidden="true" className="h-4 w-4" />
             Khối lượng công việc
           </CardTitle>
-          <Badge 
+          <Badge
             variant={isAvailable ? "default" : "secondary"}
             className={cn(
               "text-xs",
-              isAvailable && "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+              isAvailable && "bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400"
             )}
           >
-            <CircleDot className="h-3 w-3 mr-1" />
+            <CircleDot aria-hidden="true" className="h-3 w-3 mr-1" />
             {isAvailable ? "Sẵn sàng" : "Bận"}
           </Badge>
         </div>
@@ -126,7 +115,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
                 fill="none"
                 strokeWidth="10"
                 strokeLinecap="round"
-                className={cn("transition-all duration-500", strokeColor)}
+                className={cn("transition-[stroke-dashoffset] duration-500", strokeColor)}
                 style={{
                   strokeDasharray: circumference,
                   strokeDashoffset: strokeDashoffset,
@@ -135,7 +124,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
             </svg>
             {/* Center text */}
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className={cn("text-2xl font-bold", utilizationColor)}>
+              <span className={cn("text-2xl font-bold tabular-nums", utilizationColor)}>
                 {utilizationPercentage.toFixed(0)}%
               </span>
             </div>
@@ -145,19 +134,19 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
           <div className="flex-1 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Đang xử lý</span>
-              <span className="text-lg font-semibold">
+              <span className="text-lg font-semibold tabular-nums">
                 {statusOverview.current_workload}/{statusOverview.max_capacity}
               </span>
             </div>
             <Progress value={utilizationPercentage} className="h-2" />
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground flex items-center gap-1">
-                <Users className="h-3.5 w-3.5" />
+                <Users aria-hidden="true" className="h-3.5 w-3.5" />
                 Còn trống
               </span>
               <span className={cn(
-                "font-medium",
-                remainingCapacity <= 5 ? "text-amber-600" : "text-green-600"
+                "font-medium tabular-nums",
+                remainingCapacity <= 5 ? "text-warning-600" : "text-success-600"
               )}>
                 {remainingCapacity} leads
               </span>

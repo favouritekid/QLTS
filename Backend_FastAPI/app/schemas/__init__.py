@@ -51,13 +51,14 @@ from .organization import (
     OfferingAcademicInfoBase,
     OfferingAcademicInfoCreate,
     OfferingAcademicInfoUpdate,
-    AdmissionCriterion,
+
     ScoringRules,  # Fit Score configuration schema
     # Organization Unit schemas
     OrganizationUnit,
     OrganizationUnitCreate,
     OrganizationUnitShallow,
     OrganizationUnitType,
+    AdmissionStatus,
     OrganizationUnitUpdate,
     # Tree with aggregation schemas
     MajorWithStats,
@@ -123,6 +124,7 @@ from .lead import (
     LeadInsights,
     LeadsPage,
     LeadUpdate,
+    LeadStatusUpdate,  # ✅ FSM v3.0: Status update schema
     TimelineItem,
     # Application schemas (Hồ sơ Tuyển sinh - Legacy)
     Application,
@@ -131,7 +133,11 @@ from .lead import (
     ApplicationUpdate,
     ApplicationDocuments,
     ChecklistItem,
+    # ✅ Phase-Based Workflow schemas
+    WorkflowContext,
+    WorkflowAllowedStatus,
 )
+
 
 # --- 5. Từ admission.py (Depends on: lead, organization) ---
 from .admission import (
@@ -144,13 +150,35 @@ from .admission import (
     AdmissionProfileCreate,
     AdmissionProfileUpdate,
     AdmissionProfileResponse,
+    AdmissionsPage,
     AdmissionSubmitResponse,
     EnrollStudentResponse,
+    # Bulk action schemas
+    BulkApproveRequest,
+    BulkRejectRequest,
+    BulkAssignRequest,
+    BulkActionResponse,
     # Document upload
     DocumentUploadResponse,
+    DocumentRejectRequest,
+    DocumentSubmissionRequest,
     # Student schemas
     StudentDocumentResponse,
     StudentResponse,
+    # State transition schemas (State Machine)
+    ClaimRequest,
+    DocumentFormatVerifyRequest,
+    ApproveRequest,
+    RejectRequest,
+    ResubmitRequest,
+    ConfirmRequest,
+    OverrideRequest,
+    FinalizeRequest,
+    # Confirmation token schemas (Magic Link)
+    ConfirmTokenVerifyRequest,
+    ConfirmTokenResponse,
+    ConfirmTokenInfoResponse,
+    SendConfirmationResponse,
 )
 
 # --- Từ permissions.py ---

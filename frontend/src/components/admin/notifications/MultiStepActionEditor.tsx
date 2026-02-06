@@ -62,13 +62,13 @@ const CHANNEL_CONFIG = {
   browser: {
     label: "Browser (Real-time)",
     icon: Bell,
-    color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    color: "bg-info-100 text-info-800 dark:bg-info-900 dark:text-info-200",
     description: "Hiển thị popup trong trình duyệt ngay lập tức",
   },
   email: {
     label: "Email",
     icon: Mail,
-    color: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+    color: "bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200",
     description: "Gửi email đến hộp thư của người dùng",
   },
   zalo: {
@@ -169,6 +169,7 @@ function ActionStep({
                 className="h-5 w-5"
                 onClick={onMoveUp}
                 disabled={index === 0}
+                aria-label="Di chuyển lên"
               >
                 <ChevronUp className="h-3 w-3" />
               </Button>
@@ -179,6 +180,7 @@ function ActionStep({
                 className="h-5 w-5"
                 onClick={onMoveDown}
                 disabled={index === totalSteps - 1}
+                aria-label="Di chuyển xuống"
               >
                 <ChevronDown className="h-3 w-3" />
               </Button>
@@ -190,6 +192,7 @@ function ActionStep({
               variant="ghost"
               size="icon"
               onClick={() => setExpanded(!expanded)}
+              aria-label={expanded ? "Thu gọn" : "Mở rộng"}
             >
               <GripVertical className="h-4 w-4" />
             </Button>
@@ -202,6 +205,7 @@ function ActionStep({
                 size="icon"
                 onClick={onRemove}
                 className="text-destructive hover:text-destructive"
+                aria-label="Xóa bước"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -434,7 +438,7 @@ export function MultiStepActionEditor({
       )}
 
       {/* Help Text */}
-      <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-900 dark:bg-blue-950 dark:text-blue-100">
+      <div className="rounded-lg bg-info-50 border border-info-200 p-3 text-xs text-info-900 dark:bg-info-950 dark:text-info-100">
         <p className="font-medium mb-1">💡 Mẹo sử dụng:</p>
         <ul className="list-disc list-inside space-y-0.5 text-xs">
           <li>Bước 1 thường gửi qua Browser để thông báo ngay</li>

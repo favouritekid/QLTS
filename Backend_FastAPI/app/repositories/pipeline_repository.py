@@ -130,9 +130,10 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
         return result or 0
 
     async def count_consultations_using_status(self, status_id: str) -> int:
-        """Count consultation records using a specific status."""
+        """Count consultation records using a specific status (excluding soft-deleted)."""
         query = select(func.count(models.Consultation.id)).where(
-            models.Consultation.consultation_status_id == status_id
+            models.Consultation.consultation_status_id == status_id,
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
         )
         result = await self.db.scalar(query)
         return result or 0
@@ -387,7 +388,8 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
             Number of consultations using this status
         """
         query = select(func.count(models.Consultation.id)).where(
-            models.Consultation.consultation_status_id == status_id
+            models.Consultation.consultation_status_id == status_id,
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
         )
         result = await self.db.execute(query)
         return result.scalar_one() or 0

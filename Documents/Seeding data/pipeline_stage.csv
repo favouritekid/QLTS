@@ -1,8 +1,8 @@
-"id","name","order","is_final_stage"
-"stg01","Chưa tư vấn",1,False
-"stg02","Đang tư vấn",2,False
-"stg03","Đã nộp hồ sơ",3,False
-"stg04","Chờ nhập học",4,False
-"stg05","Đã nộp học phí",5,False
-"stg06","Đã nhập học",6,True
-"stg07","Không đi học",7,True
+"id","name","order","is_final_stage","color_code"
+"stg01","Chưa tư vấn",1,False,"#3B82F6"
+"stg02","Đang tư vấn",2,False,"#F59E0B"
+"stg03","Đã nộp hồ sơ",3,False,"#8B5CF6"
+"stg04","Chờ nhập học",4,False,"#06B6D4"
+"stg05","Đã nộp học phí",5,False,"#10B981"
+"stg06","Đã nhập học",6,True,"#22C55E"
+"stg07","Không đi học",7,True,"#EF4444"

@@ -13,24 +13,43 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_active_user, get_criteria_access, get_config_filter, get_admission_config_repo, verify_criteria_visibility
+from app.core.deps import (
+    get_current_active_user,
+    get_criteria_access,
+    get_config_filter,
+    get_admission_config_repo,
+    verify_criteria_visibility,
+    require_admin_or_manager,
+)
 from app.models.admission_config.criteria import AdmissionCriteria
 from app.database import get_db
 from app.models import User
 from app.repositories.admission_config_repository import AdmissionConfigRepository
 from app.services.admission_scoring_service import AdmissionScoringService
+from app.services.admission_config_service import AdmissionConfigService
 from app.schemas.admission_config import (
     SubjectResponse,
     SubjectListResponse,
+    SubjectCreate,
+    SubjectUpdate,
     SubjectGroupResponse,
     SubjectInGroupResponse,
     SubjectGroupListResponse,
+    SubjectGroupCreate,
+    SubjectGroupUpdate,
     AdmissionMethodResponse,
     AdmissionMethodListResponse,
+    AdmissionMethodCreate,
+    AdmissionMethodUpdate,
     AdmissionCriteriaResponse,
     AdmissionCriteriaListResponse,
+    AdmissionCriteriaCreate,
+    AdmissionCriteriaUpdate,
     ScoringPreviewRequest,
     ScoringPreviewResponse,
+    SharedDocumentGroupResponse,
+    SharedDocumentGroupUpdate,
+    DocumentGroupItemResponse,
 )
 
 router = APIRouter(prefix="/admission-config", tags=["Admission Config"])
@@ -70,6 +89,61 @@ async def get_subject_by_code(
         )
     
     return SubjectResponse.model_validate(subject)
+
+
+# =============================================================================
+# SUBJECT CRUD (Admin Only)
+# =============================================================================
+
+@router.post("/subjects", response_model=SubjectResponse, status_code=status.HTTP_201_CREATED)
+async def create_subject(
+    data: SubjectCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Create new subject. Requires: Admin or Manager role."""
+    service = AdmissionConfigService(db)
+    subject, callback = await service.create_subject(data, current_user)
+    await db.commit()
+    await callback()
+    return SubjectResponse.model_validate(subject)
+
+
+@router.put("/subjects/{subject_id}", response_model=SubjectResponse)
+async def update_subject(
+    subject_id: int,
+    data: SubjectUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Update existing subject. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    subject = await repo.get_subject_by_id(subject_id)
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Subject with ID {subject_id} not found"
+        )
+    
+    service = AdmissionConfigService(db)
+    updated, callback = await service.update_subject(subject, data, current_user)
+    await db.commit()
+    await callback()
+    return SubjectResponse.model_validate(updated)
+
+
+@router.delete("/subjects/{subject_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_subject(
+    subject_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Delete subject. Requires: Admin or Manager role."""
+    service = AdmissionConfigService(db)
+    _, callback = await service.delete_subject(subject_id, current_user)
+    await db.commit()
+    await callback()
+    return None
 
 
 # =============================================================================
@@ -142,6 +216,88 @@ async def get_subject_group_by_code(
 
 
 # =============================================================================
+# SUBJECT GROUP CRUD (Admin Only)
+# =============================================================================
+
+def _build_subject_group_response(group) -> SubjectGroupResponse:
+    """Helper to build SubjectGroupResponse from ORM model."""
+    subjects = []
+    for mapping in sorted(group.subject_mappings, key=lambda m: m.position):
+        subjects.append(SubjectInGroupResponse(
+            code=mapping.subject.code,
+            name_vi=mapping.subject.name_vi,
+            position=mapping.position,
+        ))
+    
+    return SubjectGroupResponse(
+        id=group.id,
+        code=group.code,
+        name=group.name,
+        display_order=group.display_order,
+        is_active=group.is_active,
+        subjects=subjects,
+    )
+
+
+@router.post("/subject-groups", response_model=SubjectGroupResponse, status_code=status.HTTP_201_CREATED)
+async def create_subject_group(
+    data: SubjectGroupCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Create new subject group. Requires: Admin or Manager role."""
+    service = AdmissionConfigService(db)
+    group, callback = await service.create_subject_group(data, current_user)
+    await db.commit()
+    await callback()
+    
+    # Reload with subjects for response
+    repo = AdmissionConfigRepository(db)
+    group = await repo.get_subject_group_by_id(group.id, with_subjects=True)
+    return _build_subject_group_response(group)
+
+
+@router.put("/subject-groups/{group_id}", response_model=SubjectGroupResponse)
+async def update_subject_group(
+    group_id: int,
+    data: SubjectGroupUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Update existing subject group. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    group = await repo.get_subject_group_by_id(group_id, with_subjects=True)
+    if not group:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Subject group with ID {group_id} not found"
+        )
+    
+    service = AdmissionConfigService(db)
+    updated, callback = await service.update_subject_group(group, data, current_user)
+    await db.commit()
+    await callback()
+    
+    # Reload with subjects
+    updated = await repo.get_subject_group_by_id(group_id, with_subjects=True)
+    return _build_subject_group_response(updated)
+
+
+@router.delete("/subject-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_subject_group(
+    group_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Delete subject group. Requires: Admin or Manager role."""
+    service = AdmissionConfigService(db)
+    _, callback = await service.delete_subject_group(group_id, current_user)
+    await db.commit()
+    await callback()
+    return None
+
+
+# =============================================================================
 # ADMISSION METHODS
 # =============================================================================
 
@@ -175,6 +331,75 @@ async def get_method_by_code(
         )
     
     return AdmissionMethodResponse.model_validate(method)
+
+
+# =============================================================================
+# ADMISSION METHOD CRUD (Admin Only)
+# =============================================================================
+
+@router.post("/methods", response_model=AdmissionMethodResponse, status_code=status.HTTP_201_CREATED)
+async def create_method(
+    data: AdmissionMethodCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Create new admission method.
+    
+    Requires: Admin or Manager role.
+    """
+    service = AdmissionConfigService(db)
+    method, callback = await service.create_method(data, current_user)
+    await db.commit()
+    await callback()
+    
+    return AdmissionMethodResponse.model_validate(method)
+
+
+@router.put("/methods/{method_id}", response_model=AdmissionMethodResponse)
+async def update_method(
+    method_id: int,
+    data: AdmissionMethodUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Update existing admission method.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    method = await repo.get_method_by_id(method_id)
+    if not method:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Method with ID {method_id} not found"
+        )
+    
+    service = AdmissionConfigService(db)
+    updated, callback = await service.update_method(method, data, current_user)
+    await db.commit()
+    await callback()
+    
+    return AdmissionMethodResponse.model_validate(updated)
+
+
+@router.delete("/methods/{method_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_method(
+    method_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Delete admission method.
+    
+    Requires: Admin or Manager role.
+    """
+    service = AdmissionConfigService(db)
+    _, callback = await service.delete_method(method_id, current_user)
+    await db.commit()
+    await callback()
+    return None
 
 
 # =============================================================================
@@ -275,6 +500,128 @@ async def get_criteria_by_code(
 
 
 # =============================================================================
+# ADMISSION CRITERIA CRUD
+# =============================================================================
+
+@router.post("/criteria", response_model=AdmissionCriteriaResponse, status_code=201)
+async def create_criteria(
+    data: AdmissionCriteriaCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Create new admission criteria.
+    
+    Requires: Admin or Manager role.
+    """
+    service = AdmissionConfigService(db)
+    criteria, callback = await service.create_criteria(data, current_user)
+    await db.commit()
+    await callback()
+    
+    # Reload with relationships
+    repo = AdmissionConfigRepository(db)
+    criteria = await repo.get_criteria_by_id(criteria.id, load_level="with_groups")
+    
+    allowed_groups = [m.subject_group.code for m in criteria.subject_group_mappings]
+    
+    return AdmissionCriteriaResponse(
+        id=criteria.id,
+        code=criteria.code,
+        name=criteria.name,
+        method_code=criteria.method.code if criteria.method else None,
+        method_name=criteria.method.name if criteria.method else None,
+        min_gpa=criteria.min_gpa,
+        min_score=criteria.min_score,
+        required_subject_count=criteria.required_subject_count,
+        subject_selection_mode=criteria.subject_selection_mode,
+        scoring_method=criteria.scoring_method,
+        max_possible_score=criteria.max_possible_score,
+        min_subject_score=criteria.min_subject_score,
+        conditions=criteria.conditions,
+        is_active=criteria.is_active,
+        allowed_subject_groups=allowed_groups,
+    )
+
+
+@router.put("/criteria/{criteria_id}", response_model=AdmissionCriteriaResponse)
+async def update_criteria(
+    criteria_id: int,
+    data: AdmissionCriteriaUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Update existing admission criteria.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    criteria = await repo.get_criteria_by_id(criteria_id, load_level="with_groups")
+    
+    if not criteria:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Criteria with ID {criteria_id} not found"
+        )
+    
+    service = AdmissionConfigService(db)
+    criteria, callback = await service.update_criteria(criteria, data, current_user)
+    await db.commit()
+    await callback()
+    
+    # Reload with relationships
+    criteria = await repo.get_criteria_by_id(criteria.id, load_level="with_groups")
+    allowed_groups = [m.subject_group.code for m in criteria.subject_group_mappings]
+    
+    return AdmissionCriteriaResponse(
+        id=criteria.id,
+        code=criteria.code,
+        name=criteria.name,
+        method_code=criteria.method.code if criteria.method else None,
+        method_name=criteria.method.name if criteria.method else None,
+        min_gpa=criteria.min_gpa,
+        min_score=criteria.min_score,
+        required_subject_count=criteria.required_subject_count,
+        subject_selection_mode=criteria.subject_selection_mode,
+        scoring_method=criteria.scoring_method,
+        max_possible_score=criteria.max_possible_score,
+        min_subject_score=criteria.min_subject_score,
+        conditions=criteria.conditions,
+        is_active=criteria.is_active,
+        allowed_subject_groups=allowed_groups,
+    )
+
+
+@router.delete("/criteria/{criteria_id}", status_code=204)
+async def delete_criteria(
+    criteria_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Delete admission criteria.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    criteria = await repo.get_criteria_by_id(criteria_id, load_level="light")
+    
+    if not criteria:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Criteria with ID {criteria_id} not found"
+        )
+    
+    service = AdmissionConfigService(db)
+    success, callback = await service.delete_criteria(criteria, current_user)
+    await db.commit()
+    await callback()
+    
+    return None
+
+
+# =============================================================================
 # SCORING PREVIEW
 # =============================================================================
 
@@ -372,4 +719,75 @@ async def preview_scoring(
         disqualification_codes=result.disqualification_codes,
         snapshot=snapshot,
     )
+
+
+# =============================================================================
+# SHARED DOCUMENT GROUPS (Phase 1)
+# =============================================================================
+
+def _build_doc_group_response(group) -> Optional[SharedDocumentGroupResponse]:
+    if not group:
+        return None
+        
+    items = []
+    # Sort items by display_order
+    # Note: selectinload already orders by display_order if defined in relationship, 
+    # but we double check sort here just in case.
+    sorted_items = sorted(group.items, key=lambda x: x.display_order)
+    
+    for item in sorted_items:
+        items.append(DocumentGroupItemResponse(
+            id=item.id,
+            document_type_id=item.document_type_id,
+            document_type_name=item.document_type.name, # Eager loaded
+            is_mandatory=item.is_mandatory,
+            requires_upload=item.requires_upload,
+            submission_format=item.submission_format,
+            display_order=item.display_order,
+        ))
+        
+    return SharedDocumentGroupResponse(
+        id=group.id,
+        offering_type_id=group.offering_type_id,
+        code=group.code,
+        name=group.name,
+        items=items
+    )
+
+
+@router.get("/document-groups/shared/{offering_type_id}", response_model=Optional[SharedDocumentGroupResponse])
+async def get_shared_document_group(
+    offering_type_id: int,
+    db: AsyncSession = Depends(get_db),
+    # Read access allowed for all
+):
+    """
+    Get shared document group configuration for an Offering Type.
+    """
+    service = AdmissionConfigService(db)
+    group = await service.get_shared_document_group(offering_type_id)
+    
+    if not group:
+        return None
+        
+    return _build_doc_group_response(group)
+
+
+@router.put("/document-groups/shared/{offering_type_id}", response_model=SharedDocumentGroupResponse)
+async def upsert_shared_document_group(
+    offering_type_id: int,
+    data: SharedDocumentGroupUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Create or Update shared document group configuration.
+    Requires: Admin or Manager role.
+    """
+    service = AdmissionConfigService(db)
+    group, callback = await service.upsert_shared_document_group(offering_type_id, data, current_user)
+    await db.commit()
+    await callback()
+    
+    return _build_doc_group_response(group)
 

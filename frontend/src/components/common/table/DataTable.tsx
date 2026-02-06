@@ -290,6 +290,7 @@ export function DataTable<TData, TValue>({
                 <TableRow
                   key={row.id}
                   data-state={row.getIsSelected() && "selected"}
+                  className="virtual-row" /* ✅ PERFORMANCE: content-visibility for off-screen rows */
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>

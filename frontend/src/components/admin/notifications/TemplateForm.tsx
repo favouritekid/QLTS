@@ -382,6 +382,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                           type="button"
                           variant="outline"
                           onClick={handleAddVariable}
+                          aria-label="Thêm biến"
                         >
                           <Plus className="h-4 w-4" />
                         </Button>
@@ -397,6 +398,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                                 type="button"
                                 onClick={() => handleRemoveVariable(variable)}
                                 className="ml-1 hover:text-destructive"
+                                aria-label="Xóa biến"
                               >
                                 <X className="h-3 w-3" />
                               </button>

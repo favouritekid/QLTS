@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import {
   usePipelineStages,
   useConsultationStatuses,
@@ -125,21 +126,22 @@ export function TransitionMatrix() {
                           key={status.id}
                           onClick={() => setSelectedFromId(status.id)}
                           className={cn(
-                            "flex w-full items-center justify-between rounded-md p-2 text-sm transition-all",
+                            "flex w-full items-center justify-between rounded-md p-2 text-sm transition-colors",
                             selectedFromId === status.id
                               ? "bg-primary text-primary-foreground shadow-md"
                               : "hover:bg-muted text-foreground"
                           )}
                         >
                           <div className="flex items-center gap-3">
-                            <div
+                            <ColorDot
+                              color={status.color_code}
+                              size="md"
                               className={cn(
-                                "h-3 w-3 rounded-full ring-2 ring-offset-1",
+                                "ring-2 ring-offset-1",
                                 selectedFromId === status.id
                                   ? "ring-primary-foreground"
                                   : "ring-transparent"
                               )}
-                              style={{ backgroundColor: status.color_code }}
                             />
                             <span className="font-medium">{status.name}</span>
                           </div>
@@ -174,10 +176,7 @@ export function TransitionMatrix() {
             </div>
             {selectedFromId && (
               <Badge variant="outline" className="gap-2 px-3 py-1 text-sm">
-                <div
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: selectedFromStatus?.color_code }}
-                />
+                <ColorDot color={selectedFromStatus?.color_code} size="sm" />
                 {selectedFromStatus?.name}
               </Badge>
             )}
@@ -216,9 +215,9 @@ export function TransitionMatrix() {
                             <div
                               key={toStatus.id}
                               className={cn(
-                                "flex items-center space-x-3 rounded-md border p-3 transition-all",
+                                "flex items-center space-x-3 rounded-md border p-3 transition-colors",
                                 isAllowed
-                                  ? "border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-900/20"
+                                  ? "border-success-200 bg-success-50 dark:border-success-900 dark:bg-success-900/20"
                                   : "bg-background hover:bg-accent",
                                 isSelf && "bg-muted cursor-not-allowed opacity-50"
                               )}
@@ -230,17 +229,14 @@ export function TransitionMatrix() {
                                 disabled={isSelf || isMutating}
                                 className={cn(
                                   isAllowed &&
-                                    "data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                                    "data-[state=checked]:border-success-600 data-[state=checked]:bg-success-600"
                                 )}
                               />
                               <label
                                 htmlFor={`to-${toStatus.id}`}
                                 className="flex flex-1 cursor-pointer items-center gap-2 text-sm leading-none font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                               >
-                                <div
-                                  className="h-2 w-2 rounded-full"
-                                  style={{ backgroundColor: toStatus.color_code }}
-                                />
+                                <ColorDot color={toStatus.color_code} size="sm" />
                                 {toStatus.name}
                               </label>
                             </div>

@@ -260,7 +260,7 @@ export function FileUpload({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={cn(
-            "border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors",
+            "border-2 border-dashed rounded-lg p-6 min-h-[120px] md:min-h-0 text-center cursor-pointer transition-colors",
             isDragging && "border-primary bg-primary/5",
             disabled && "opacity-50 cursor-not-allowed",
             hasError && "border-destructive",
@@ -304,7 +304,7 @@ export function FileUpload({
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 )}
                 {fileItem.status === "success" && (
-                  <CheckCircle className="h-5 w-5 text-green-500" />
+                  <CheckCircle className="h-5 w-5 text-success-500" />
                 )}
                 {fileItem.status === "error" && (
                   <AlertCircle className="h-5 w-5 text-destructive" />
@@ -317,7 +317,7 @@ export function FileUpload({
               {/* File info */}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">{fileItem.file.name}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground tabular-nums">
                   {formatFileSize(fileItem.file.size)}
                 </p>
                 {fileItem.status === "error" && fileItem.error && (
@@ -333,9 +333,10 @@ export function FileUpload({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="shrink-0 h-8 w-8"
+                className="shrink-0 h-10 w-10 md:h-8 md:w-8"
                 onClick={() => handleRemove(fileItem.id)}
                 disabled={fileItem.status === "uploading"}
+                aria-label="Xóa file"
               >
                 <X className="h-4 w-4" />
               </Button>

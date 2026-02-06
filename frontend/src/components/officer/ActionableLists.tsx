@@ -49,7 +49,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-green-600" />
+            <TrendingUp className="h-5 w-5 text-success-600" />
             <CardTitle>High-Value Leads</CardTitle>
           </div>
           <CardDescription>
@@ -57,7 +57,8 @@ export function ActionableLists({ lists }: ActionableListsProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="h-[300px]">
+          {/* ✅ PERFORMANCE: virtual-list for content-visibility */}
+          <ScrollArea className="h-[300px] virtual-list">
             {lists.high_score.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
                 No high-score leads at the moment
@@ -67,7 +68,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                 {lists.high_score.map((lead) => (
                   <div
                     key={lead.id}
-                    className="flex items-start justify-between border-b pb-3 last:border-0"
+                    className="flex items-start justify-between border-b pb-3 last:border-0 virtual-item"
                   >
                     <div className="space-y-1 flex-1">
                       <div className="flex items-center gap-2">
@@ -105,7 +106,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-yellow-600" />
+            <AlertTriangle className="h-5 w-5 text-warning-600" />
             <CardTitle>Stale Leads</CardTitle>
           </div>
           <CardDescription>
@@ -113,7 +114,8 @@ export function ActionableLists({ lists }: ActionableListsProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="h-[300px]">
+          {/* ✅ PERFORMANCE: virtual-list for content-visibility */}
+          <ScrollArea className="h-[300px] virtual-list">
             {lists.stale.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
                 Great! No stale leads
@@ -123,7 +125,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                 {lists.stale.map((lead) => (
                   <div
                     key={lead.id}
-                    className="flex items-start justify-between border-b pb-3 last:border-0"
+                    className="flex items-start justify-between border-b pb-3 last:border-0 virtual-item"
                   >
                     <div className="space-y-1 flex-1">
                       <p className="font-medium text-sm">{lead.full_name}</p>
@@ -152,7 +154,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Calendar className="h-5 w-5 text-blue-600" />
+            <Calendar className="h-5 w-5 text-info-600" />
             <CardTitle>Today&apos;s Schedule</CardTitle>
           </div>
           <CardDescription>
@@ -161,7 +163,8 @@ export function ActionableLists({ lists }: ActionableListsProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="h-[300px]">
+          {/* ✅ PERFORMANCE: virtual-list for content-visibility */}
+          <ScrollArea className="h-[300px] virtual-list">
             {lists.upcoming.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
                 No consultations scheduled today
@@ -171,7 +174,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                 {lists.upcoming.map((consult) => (
                   <div
                     key={consult.id}
-                    className="flex items-start justify-between border-b pb-3 last:border-0"
+                    className="flex items-start justify-between border-b pb-3 last:border-0 virtual-item"
                   >
                     <div className="space-y-1 flex-1">
                       <p className="font-medium text-sm">{consult.lead_name}</p>

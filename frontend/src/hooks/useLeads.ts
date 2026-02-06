@@ -36,6 +36,62 @@ export const leadsKeys = {
 };
 
 // =====================================================================
+// QUERY INVALIDATION HELPERS
+// =====================================================================
+
+/**
+ * Invalidate lead-related queries with optimized batching.
+ * Only invalidates pipeline when a status-changing operation is performed.
+ *
+ * @param queryClient - React Query client
+ * @param leadId - ID of the lead to invalidate
+ * @param options - Control which queries to invalidate
+ */
+type InvalidationOptions = {
+  detail?: boolean;
+  timeline?: boolean;
+  insights?: boolean;
+  lists?: boolean;
+  pipeline?: boolean;
+};
+
+const invalidateLeadQueries = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  leadId: number,
+  options: InvalidationOptions = {}
+) => {
+  const { detail = true, timeline = false, insights = false, lists = false, pipeline = false } = options;
+
+  // Batch invalidations for better performance
+  const invalidations: Promise<void>[] = [];
+
+  if (detail) {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) }));
+  }
+  if (timeline) {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) }));
+  }
+  if (insights) {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) }));
+  }
+  if (lists) {
+    // Use refetchType: 'active' to only refetch visible queries
+    invalidations.push(queryClient.invalidateQueries({
+      queryKey: leadsKeys.lists(),
+      refetchType: 'active'
+    }));
+  }
+  if (pipeline) {
+    invalidations.push(queryClient.invalidateQueries({
+      queryKey: ["pipeline"],
+      refetchType: 'active'
+    }));
+  }
+
+  return Promise.all(invalidations);
+};
+
+// =====================================================================
 // QUERIES (READ) - LEADS
 // =====================================================================
 
@@ -91,8 +147,26 @@ export function useLead(
     },
     enabled: enabled && !!id,
     initialData: options?.initialData,
-    staleTime: 0, // Always refetch when invalidated to ensure sync between panels
+    // ✅ FIX: Increased staleTime to reduce unnecessary re-fetches
+    // Invalidation will still trigger refetch when needed (e.g., after mutations)
+    staleTime: 1000 * 30, // 30 seconds - allows caching while mutations still trigger updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
+  });
+}
+
+/**
+ * Get lead reassign quota for current user
+ */
+import { type ReassignQuota } from "@/lib/api/leads";
+
+export function useReassignQuota(enabled: boolean = true) {
+  return useQuery<ReassignQuota>({
+    queryKey: ["leads", "reassign-quota"],
+    queryFn: async () => {
+      return leadsApi.getReassignQuota();
+    },
+    staleTime: 1000 * 60, // 1 minute
+    enabled,
   });
 }
 
@@ -589,6 +663,8 @@ export function usePerformLeadAction() {
   });
 }
 
+
+
 // =====================================================================
 // MUTATIONS - CONSULTATIONS
 // =====================================================================
@@ -622,15 +698,36 @@ export function useAddConsultation() {
       return await leadsApi.addConsultation(leadId, data);
     },
 
-    onSuccess: (consultation, { leadId }) => {
+    onSuccess: async (_consultation, { leadId }) => {
       toast.success("Consultation added successfully!");
 
-      // Invalidate lead detail, timeline, insights and lists (for LeadCard updates)
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ FIX: Invalidate queries with exact: true to prevent cascade
+      // Using invalidateQueries instead of refetchQueries to let React Query
+      // handle deduplication and prevent multiple refetches
+      await queryClient.invalidateQueries({
+        queryKey: leadsKeys.detail(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
+
+      // Invalidate timeline separately (different query key structure)
+      queryClient.invalidateQueries({
+        queryKey: leadsKeys.timeline(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
+
+      // Invalidate lists (background refresh)
+      queryClient.invalidateQueries({
+        queryKey: leadsKeys.lists(),
+        refetchType: 'active'
+      });
+
+      // ✅ FIX: Only invalidate allowedNextStatuses for this specific lead
+      queryClient.invalidateQueries({
+        queryKey: ["pipeline", "allowedNextStatuses"],
+        refetchType: 'active'
+      });
     },
 
     onError: (error) => {
@@ -647,7 +744,7 @@ export function useAddConsultation() {
 }
 
 /**
- * Update a consultation (admin: any, officer: most recent only)
+ * Update a consultation (admin: all, officer: most recent only)
  *
  * @example
  * ```tsx
@@ -671,15 +768,28 @@ export function useUpdateConsultation() {
       return await leadsApi.updateConsultation(leadId, consultationId, data);
     },
 
-    onSuccess: (consultation, { leadId }) => {
+    onSuccess: async (_consultation, { leadId, data }) => {
       toast.success("Consultation updated successfully!");
 
-      // Invalidate lead detail, timeline, insights and pipeline (if status changed)
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ FIX: Use invalidateQueries with exact: true to prevent cascade
+      await queryClient.invalidateQueries({
+        queryKey: leadsKeys.detail(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: leadsKeys.timeline(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
+
+      // ✅ OPTIMIZED: Only invalidate pipeline if status was updated
+      const statusChanged = !!data.status_id;
+      if (statusChanged) {
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+        queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
+      }
     },
 
     onError: (error) => {
@@ -696,7 +806,9 @@ export function useUpdateConsultation() {
 }
 
 /**
- * Delete a consultation (admin: any, officer: most recent only)
+ * Delete a consultation (admin: all, officer: most recent only)
+ *
+ * Shows an undo toast that allows restoring the consultation within 10 seconds.
  *
  * @example
  * ```tsx
@@ -716,13 +828,51 @@ export function useDeleteConsultation() {
       await leadsApi.deleteConsultation(leadId, consultationId);
     },
 
-    onSuccess: (_, { leadId }) => {
-      toast.success("Consultation deleted successfully!");
+    onSuccess: async (_, { leadId, consultationId }) => {
+      // ✅ FIX: Use invalidateQueries with exact: true to prevent cascade
+      await queryClient.invalidateQueries({
+        queryKey: leadsKeys.detail(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
 
-      // Invalidate lead detail and timeline
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      queryClient.invalidateQueries({
+        queryKey: leadsKeys.timeline(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
+
+      // Invalidate lists and pipeline
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
+
+      // ✅ UNDO TOAST: Show toast with undo button for 10 seconds
+      toast.success("Đã xóa ghi nhận tư vấn", {
+        description: "Bấm Hoàn tác để khôi phục",
+        duration: 10000, // 10 seconds
+        action: {
+          label: "Hoàn tác",
+          onClick: async () => {
+            try {
+              await leadsApi.restoreConsultation(leadId, consultationId);
+              toast.success("Đã khôi phục ghi nhận tư vấn");
+              // Refresh data after restore
+              await queryClient.invalidateQueries({
+                queryKey: leadsKeys.detail(leadId),
+                exact: true,
+                refetchType: 'active'
+              });
+              queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId), exact: true, refetchType: 'active' });
+              queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+              queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
+            } catch {
+              toast.error("Không thể khôi phục", {
+                description: "Vui lòng thử lại hoặc liên hệ admin",
+              });
+            }
+          },
+        },
+      });
     },
 
     onError: (error) => {
@@ -733,6 +883,55 @@ export function useDeleteConsultation() {
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : "Failed to delete consultation";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Restore a soft-deleted consultation
+ *
+ * @example
+ * ```tsx
+ * const restoreConsultation = useRestoreConsultation();
+ * restoreConsultation.mutate({ leadId: 123, consultationId: 456 });
+ * ```
+ */
+export function useRestoreConsultation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Consultation,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; consultationId: number }
+  >({
+    mutationFn: async ({ leadId, consultationId }) => {
+      return await leadsApi.restoreConsultation(leadId, consultationId);
+    },
+
+    onSuccess: async (_, { leadId }) => {
+      toast.success("Đã khôi phục ghi nhận tư vấn");
+
+      // ✅ FIX: Use invalidateQueries with exact: true to prevent cascade
+      await queryClient.invalidateQueries({
+        queryKey: leadsKeys.detail(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
+
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId), exact: true, refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Không thể khôi phục ghi nhận tư vấn";
       toast.error("Error", { description: message });
     },
   });

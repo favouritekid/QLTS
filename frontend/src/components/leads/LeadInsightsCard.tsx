@@ -68,13 +68,13 @@ function ScoreIndicator({
   const getColor = () => {
     if (variant === "hot") return "bg-orange-500";
     if (variant === "urgent") {
-      if (value >= 70) return "bg-red-500";
-      if (value >= 40) return "bg-yellow-500";
-      return "bg-green-500";
+      if (value >= 70) return "bg-error-500";
+      if (value >= 40) return "bg-warning-500";
+      return "bg-success-500";
     }
-    if (percentage >= 70) return "bg-emerald-500";
-    if (percentage >= 40) return "bg-blue-500";
-    return "bg-slate-400";
+    if (percentage >= 70) return "bg-success-500";
+    if (percentage >= 40) return "bg-info-500";
+    return "bg-muted-foreground/50";
   };
 
   return (
@@ -86,15 +86,15 @@ function ScoreIndicator({
         </span>
         <span className={cn(
           "text-sm font-bold tabular-nums",
-          variant === "hot" && value >= 70 && "text-orange-600",
-          variant === "urgent" && value >= 70 && "text-red-600",
+          variant === "hot" && value >= 70 && "text-orange-600 dark:text-orange-400",
+          variant === "urgent" && value >= 70 && "text-error-600",
         )}>
           {value}
         </span>
       </div>
       <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
         <div 
-          className={cn("h-full rounded-full transition-all duration-500", getColor())}
+          className={cn("h-full rounded-full transition-[width] duration-500", getColor())}
           style={{ width: `${percentage}%` }}
         />
       </div>
@@ -168,7 +168,7 @@ export function LeadInsightsCard({
             Lead Insights
           </span>
           {lead.is_hot_lead && (
-            <span className="flex items-center gap-1 text-orange-600 text-xs font-medium bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded-full">
+            <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 text-xs font-medium bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded-full">
               <Flame className="h-3 w-3" />
               Hot Lead
             </span>
@@ -228,7 +228,7 @@ export function LeadInsightsCard({
                 key={index}
                 className={cn(
                   "flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm border",
-                  suggestion.priority === "urgent" && "bg-red-100 border-red-200 text-red-800 dark:bg-red-900/50 dark:border-red-700 dark:text-red-100",
+                  suggestion.priority === "urgent" && "bg-error-100 border-error-200 text-error-800 dark:bg-error-900/50 dark:border-error-700 dark:text-error-100",
                   suggestion.priority === "high" && "bg-orange-100 border-orange-200 text-orange-800 dark:bg-orange-900/50 dark:border-orange-700 dark:text-orange-100",
                   suggestion.priority === "medium" && "bg-amber-100 border-amber-200 text-amber-800 dark:bg-amber-900/50 dark:border-amber-700 dark:text-amber-100",
                 )}
@@ -244,7 +244,7 @@ export function LeadInsightsCard({
                     size="sm"
                     className={cn(
                       "h-7 px-3 text-xs font-semibold shrink-0",
-                      suggestion.priority === "urgent" && "bg-red-600 text-white hover:bg-red-700",
+                      suggestion.priority === "urgent" && "bg-error-600 text-white hover:bg-error-700",
                       suggestion.priority === "high" && "bg-orange-600 text-white hover:bg-orange-700",
                     )}
                     onClick={suggestion.onAction}
@@ -268,6 +268,7 @@ export function LeadInsightsCard({
             leadId={lead.id}
             currentRating={lead.officer_rating ?? null}
             currentLeadScore={lead.lead_score}
+            version={lead.version}
             compact
           />
         </div>

@@ -25,12 +25,12 @@ import type { FullPipeline } from '@/types/pipeline.types';
  * Cache strategy: 5 minutes (statistics change infrequently)
  * Revalidate tag: 'user-statistics'
  */
-export async function getCachedUserStatistics(): Promise<UserStatistics> {
+export async function getCachedUserStatistics(cookieHeader?: string): Promise<UserStatistics> {
   'use cache';
   cacheLife('minutes'); // 5 minutes default
   cacheTag('user-statistics');
   
-  return serverApi.admin.users.getStatistics();
+  return serverApi.admin.users.getStatistics(cookieHeader);
 }
 
 /**
@@ -39,7 +39,7 @@ export async function getCachedUserStatistics(): Promise<UserStatistics> {
  * Cache strategy: 1 minute (leads data changes more frequently)
  * Revalidate tag: 'pipeline-data'
  */
-export async function getCachedPipelineStats(): Promise<FullPipeline> {
+export async function getCachedPipelineStats(cookieHeader?: string): Promise<FullPipeline> {
   'use cache';
   cacheLife('seconds'); // 30 seconds default for frequently changing data
   cacheTag('pipeline-data');
@@ -47,7 +47,7 @@ export async function getCachedPipelineStats(): Promise<FullPipeline> {
   return serverApi.admin.pipeline.getFullPipeline({
     include_stats: true,
     include_leads: false, // Only stats, not full leads list
-  });
+  }, cookieHeader);
 }
 
 /**

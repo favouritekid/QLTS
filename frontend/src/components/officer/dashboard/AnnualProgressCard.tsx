@@ -44,34 +44,67 @@ export interface AnnualProgressInfo {
 
 const statusConfig = {
   completed: {
-    color: "text-green-600 dark:text-green-400",
-    bgColor: "bg-green-100 dark:bg-green-900/30",
-    progressColor: "bg-green-500",
+    color: "text-success-600 dark:text-success-500",
+    bgColor: "bg-success-100 dark:bg-success-500/20",
+    progressColor: "bg-success-500",
     icon: CheckCircle2,
     label: "Hoàn thành!",
   },
   in_progress: {
-    color: "text-blue-600 dark:text-blue-400",
-    bgColor: "bg-blue-100 dark:bg-blue-900/30",
-    progressColor: "bg-blue-500",
+    color: "text-info-600 dark:text-info-500",
+    bgColor: "bg-info-100 dark:bg-info-500/20",
+    progressColor: "bg-info-500",
     icon: TrendingUp,
     label: "Đang tiến hành",
   },
   at_risk: {
-    color: "text-amber-600 dark:text-amber-400",
-    bgColor: "bg-amber-100 dark:bg-amber-900/30",
-    progressColor: "bg-amber-500",
+    color: "text-warning-600 dark:text-warning-500",
+    bgColor: "bg-warning-100 dark:bg-warning-500/20",
+    progressColor: "bg-warning-500",
     icon: AlertTriangle,
     label: "Có nguy cơ",
   },
   overdue: {
-    color: "text-red-600 dark:text-red-400",
-    bgColor: "bg-red-100 dark:bg-red-900/30",
-    progressColor: "bg-red-500",
+    color: "text-error-600 dark:text-error-500",
+    bgColor: "bg-error-100 dark:bg-error-500/20",
+    progressColor: "bg-error-500",
     icon: TrendingDown,
     label: "Quá hạn",
   },
 };
+
+/**
+ * KPI code to display name mapping
+ * Synced with Backend_FastAPI/app/services/kpi_service.py DEFAULT_KPIS
+ */
+const KPI_NAME_LABELS: Record<string, string> = {
+  // Enrollment KPIs
+  enrollments: "Nhập học",
+  enrollments_monthly: "Nhập học tháng",
+  enrollments_annual: "Nhập học năm",
+
+  // Consultation KPIs
+  consultations_daily: "Tư vấn ngày",
+  consultations_monthly: "Tư vấn tháng",
+  consultations: "Tư vấn",
+
+  // Performance KPIs
+  conversion_rate: "Tỷ lệ chuyển đổi",
+  response_time_hours: "Thời gian phản hồi",
+
+  // Lead KPIs
+  leads_assigned: "Lead được giao",
+  leads_contacted: "Lead đã liên hệ",
+  leads_converted: "Lead chuyển đổi",
+};
+
+/**
+ * Get display name for KPI code
+ * Falls back to code if not found
+ */
+function getKpiDisplayName(kpiCode: string): string {
+  return KPI_NAME_LABELS[kpiCode] ?? kpiCode;
+}
 
 // =============================================================================
 // COMPONENT
@@ -116,7 +149,7 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
   const StatusIcon = config.icon;
 
   // Format KPI name for display
-  const kpiName = progress.kpi_code === "enrollments" ? "Nhập học" : progress.kpi_code;
+  const kpiName = getKpiDisplayName(progress.kpi_code);
 
   return (
     <Card className={cn("border bg-card overflow-hidden", className)}>
@@ -139,10 +172,10 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
         {/* Main stats */}
         <div className="flex items-baseline justify-between">
           <div>
-            <span className="text-3xl font-bold">{progress.achieved_ytd}</span>
-            <span className="text-lg text-muted-foreground ml-1">/ {progress.annual_target}</span>
+            <span className="text-3xl font-bold tabular-nums">{progress.achieved_ytd}</span>
+            <span className="text-lg text-muted-foreground ml-1 tabular-nums">/ {progress.annual_target}</span>
           </div>
-          <div className={cn("text-2xl font-semibold", config.color)}>
+          <div className={cn("text-2xl font-semibold tabular-nums", config.color)}>
             {progress.progress_pct.toFixed(1)}%
           </div>
         </div>
@@ -156,7 +189,7 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
           {/* Expected progress marker */}
           {progress.status !== "completed" && (
             <div 
-              className="absolute top-0 h-3 w-0.5 bg-gray-400 dark:bg-gray-500"
+              className="absolute top-0 h-3 w-0.5 bg-muted-foreground dark:bg-muted-foreground"
               style={{ 
                 left: `${Math.min(((12 - progress.months_left) / 12) * 100, 100)}%` 
               }}
@@ -175,11 +208,11 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             </div>
             <div className="font-medium">
               {progress.status === "completed" ? (
-                <span className="text-green-600 dark:text-green-400">
+                <span className="text-success-600 dark:text-success-500 tabular-nums">
                   +{progress.surplus} vượt chỉ tiêu
                 </span>
               ) : (
-                <span>{progress.remaining} {kpiName.toLowerCase()}</span>
+                <span className="tabular-nums">{progress.remaining} {kpiName.toLowerCase()}</span>
               )}
             </div>
           </div>
@@ -192,13 +225,13 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             </div>
             <div className="font-medium">
               {progress.status === "completed" ? (
-                <span className="text-green-600 dark:text-green-400">—</span>
+                <span className="text-success-600 dark:text-success-500">—</span>
               ) : (
                 <>
-                  <span className={cn(!progress.on_track && "text-amber-600 dark:text-amber-400")}>
+                  <span className={cn("tabular-nums", !progress.on_track && "text-warning-600 dark:text-warning-500")}>
                     {progress.monthly_target.toFixed(1)}
                   </span>
-                  <span className="text-xs text-muted-foreground ml-1">
+                  <span className="text-xs text-muted-foreground ml-1 tabular-nums">
                     × {progress.months_left} tháng
                   </span>
                 </>
@@ -209,7 +242,7 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
 
         {/* Warning message for at_risk status */}
         {progress.status === "at_risk" && (
-          <div className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1 pt-1">
+          <div className="text-xs text-warning-600 dark:text-warning-500 flex items-center gap-1 pt-1">
             <AlertTriangle className="h-3 w-3" />
             Cần tăng tốc để đạt chỉ tiêu năm
           </div>

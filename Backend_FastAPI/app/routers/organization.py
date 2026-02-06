@@ -60,14 +60,15 @@ async def get_organization_tree_with_aggregation(
 @router.get("/programs", response_model=List[schemas.MajorProgram])
 async def get_filtered_programs(
     request: Request,
-    unitId: int,
+    unitId: Optional[int] = None,
     search: Optional[str] = None,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = CasbinAuth  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy danh sách chương trình đào tạo (MajorProgram - Level 1), lọc theo unitId và tìm kiếm.
-
+    
+    Nếu không có unitId, trả về tất cả chương trình.
     Đây là endpoint mới thay thế cho /majors trong kiến trúc 3-tier.
     """
     return await organization_service.get_programs_by_unit_tree(
@@ -196,11 +197,15 @@ async def create_offering_academic_info(
         from ..utils.exceptions import BadRequest
         raise BadRequest(detail="offering_id in path must match offering_id in request body")
 
-    return await organization_service.create_academic_info(
+    result, post_commit_callback = await organization_service.create_academic_info(
         db,
         academic_info_in=academic_info_in,
+        current_user=current_user,
         created_by_user_id=current_user.id
     )
+    await db.commit()
+    await post_commit_callback()
+    return result
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/program-offerings", response_model=List[schemas.ProgramOffering])
@@ -220,6 +225,24 @@ async def get_all_program_offerings(
         db, is_active=is_active, skip=skip, limit=limit
     )
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/offerings/academic-info", response_model=List[schemas.OfferingAcademicInfo])
+async def get_all_academic_infos(
+    request: Request,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 1000,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: schemas.User = CasbinAuth,
+):
+    """
+    Lấy danh sách tất cả thông tin học thuật (Flat list).
+    Dùng cho các bảng quản lý Academic Info.
+    """
+    return await organization_service.get_all_academic_infos(
+        db, is_active=is_active, skip=skip, limit=limit
+    )
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/academic-info/{academic_info_id}", response_model=schemas.OfferingAcademicInfo)
 async def update_offering_academic_info(
@@ -235,12 +258,16 @@ async def update_offering_academic_info(
     Requires admin role. Hỗ trợ partial updates.
     Returns 404 nếu academic info không tồn tại.
     """
-    return await organization_service.update_academic_info(
+    result, post_commit_callback = await organization_service.update_academic_info(
         db,
         academic_info_id=academic_info_id,
         academic_info_in=academic_info_in,
+        current_user=current_user,
         updated_by_user_id=current_user.id
     )
+    await db.commit()
+    await post_commit_callback()
+    return result
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -258,5 +285,11 @@ async def delete_offering_academic_info(
     Note: Đây là hard delete. Nên cân nhắc đánh dấu unpublished thay vì xóa.
     Returns 404 nếu academic info không tồn tại.
     """
-    await organization_service.delete_academic_info(db, academic_info_id=academic_info_id)
+    result, post_commit_callback = await organization_service.delete_academic_info(
+        db,
+        academic_info_id=academic_info_id,
+        current_user=current_user
+    )
+    await db.commit()
+    await post_commit_callback()
     return None  # 204 No Content

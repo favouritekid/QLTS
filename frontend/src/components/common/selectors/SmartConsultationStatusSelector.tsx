@@ -11,9 +11,8 @@
  * - Searchable with Command component
  *
  * Usage:
- * - ConsultationDialog (status selection)
- * - EditConsultationDialog (status update)
- * - QuickDisposition (quick status change)
+ * - ConsultationDialog (status selection in create/edit mode)
+ * - QuickConsultationSection (quick status change)
  */
 
 "use client";
@@ -43,13 +42,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import {
   useConsultationStatuses,
   usePipelineStages,
+  useAllowedNextStatuses,
 } from "@/hooks/usePipeline";
 import type { ConsultationStatus, PipelineStage, OutcomeType } from "@/types/pipeline.types";
+import { SelectableMode } from "@/types/pipeline.types";
 import { OUTCOME_TYPE_OPTIONS, getOutcomeTypeColor } from "@/constants/consultation.constants";
+import { useAuth } from "@/hooks/useAuth"; 
 
 // =============================================================================
 // TYPES
@@ -82,6 +84,14 @@ export interface SmartConsultationStatusSelectorProps {
   showOutcomeType?: boolean;
   /** Additional CSS classes */
   className?: string;
+
+  // ✅ FSM v3.0: Use FSM engine for status selection
+  /** Current status ID for FSM transition lookup */
+  currentStatusId?: string | null;
+  /** Lead ID for phase-based FSM filtering */
+  leadId?: number;
+  /** Use FSM engine instead of all statuses (default: false) */
+  useFsmEngine?: boolean;
 }
 
 interface StatusWithStage extends ConsultationStatus {
@@ -99,6 +109,7 @@ interface StatusWithStage extends ConsultationStatus {
 function processStatuses(
   statuses: ConsultationStatus[],
   stages: PipelineStage[],
+  userRole: string | undefined, // ✅ Added userRole for permission checks
   options: {
     filterStageId?: string;
     filterOutcomeType?: OutcomeType;
@@ -115,14 +126,26 @@ function processStatuses(
 
   return statuses
     .map((status) => {
-      const stage = stageMap.get(status.stage_id);
+      // FSM v3.0: Handle null stage_id for universal statuses
+      const stage = status.stage_id ? stageMap.get(status.stage_id) : null;
       return {
         ...status,
-        stageName: stage?.name ?? "Unknown",
-        stageOrder: stage?.order ?? 999,
+        stageName: status.is_universal ? "Universal" : (stage?.name ?? "Unknown"),
+        stageOrder: status.is_universal ? 999 : (stage?.order ?? 998),
       };
     })
     .filter((status) => {
+      // ✅ FSM v3.0 Permission Logic
+      // 1. SYSTEM statuses are never manually selectable
+      if (status.selectable_mode === SelectableMode.SYSTEM) return false;
+
+      // 2. ROLE statuses require admin/manager privileges
+      if (status.selectable_mode === SelectableMode.ROLE) {
+        // Simple role check - can be expanded if needed
+        const isPrivileged = userRole === "admin" || userRole === "manager";
+        if (!isPrivileged) return false;
+      }
+
       // Filter by allowed IDs (for status transitions)
       if (allowedStatusIds && allowedStatusIds.length > 0 && !allowedStatusIds.includes(status.id)) return false;
 
@@ -135,9 +158,10 @@ function processStatuses(
       // Exclude specific IDs
       if (excludeStatusIds && excludeStatusIds.includes(status.id)) return false;
 
-      // Filter by final status
-      if (finalOnly && !status.is_final_status) return false;
-      if (nonFinalOnly && status.is_final_status) return false;
+      // Filter by final status (FSM v3.0: use is_final, fallback to is_final_status)
+      const isFinal = status.is_final ?? status.is_final_status ?? false;
+      if (finalOnly && !isFinal) return false;
+      if (nonFinalOnly && isFinal) return false;
 
       return true;
     })
@@ -180,8 +204,8 @@ function StatusItem({
       {!isSelected && <div className="w-4" />}
       <Circle
         className="h-3 w-3 shrink-0"
-        fill={status.color_code || status.color}
-        stroke={status.color_code || status.color}
+        fill={sanitizeColorCode(status.color_code || status.color)}
+        stroke={sanitizeColorCode(status.color_code || status.color)}
       />
       <span className="flex-1 truncate">{status.name}</span>
       {showOutcomeType && (
@@ -192,7 +216,8 @@ function StatusItem({
           {OUTCOME_TYPE_OPTIONS.find((o) => o.value === status.outcome_type)?.label}
         </Badge>
       )}
-      {status.is_final_status && (
+      {/* FSM v3.0: use is_final, fallback to is_final_status */}
+      {(status.is_final ?? status.is_final_status) && (
         <Badge variant="secondary" className="text-xs shrink-0">
           Final
         </Badge>
@@ -235,8 +260,8 @@ function SelectVariant({
             <div className="flex items-center gap-2">
               <Circle
                 className="h-3 w-3 shrink-0"
-                fill={selectedStatus.color_code || selectedStatus.color}
-                stroke={selectedStatus.color_code || selectedStatus.color}
+                fill={sanitizeColorCode(selectedStatus.color_code || selectedStatus.color)}
+                stroke={sanitizeColorCode(selectedStatus.color_code || selectedStatus.color)}
               />
               <span>{selectedStatus.name}</span>
             </div>
@@ -263,8 +288,8 @@ function SelectVariant({
                   <div className="flex items-center gap-2">
                     <Circle
                       className="h-3 w-3 shrink-0"
-                      fill={status.color_code || status.color}
-                      stroke={status.color_code || status.color}
+                      fill={sanitizeColorCode(status.color_code || status.color)}
+                      stroke={sanitizeColorCode(status.color_code || status.color)}
                     />
                     <span>{status.name}</span>
                     {showOutcomeType && (
@@ -328,8 +353,8 @@ function ComboboxVariant({
             <div className="flex items-center gap-2">
               <Circle
                 className="h-3 w-3 shrink-0"
-                fill={selectedStatus.color_code || selectedStatus.color}
-                stroke={selectedStatus.color_code || selectedStatus.color}
+                fill={sanitizeColorCode(selectedStatus.color_code || selectedStatus.color)}
+                stroke={sanitizeColorCode(selectedStatus.color_code || selectedStatus.color)}
               />
               <span className="truncate">{selectedStatus.name}</span>
             </div>
@@ -387,17 +412,32 @@ export function SmartConsultationStatusSelector({
   variant = "select",
   showOutcomeType = false,
   className,
+  // ✅ FSM v3.0 props
+  currentStatusId,
+  leadId,
+  useFsmEngine = false,
 }: SmartConsultationStatusSelectorProps) {
-  // Fetch data
-  const { data: statuses = [], isLoading: statusesLoading } = useConsultationStatuses();
+  // Fetch data - use FSM engine when enabled
+  const { data: allStatuses = [], isLoading: allStatusesLoading } = useConsultationStatuses();
+  const { data: fsmStatuses = [], isLoading: fsmLoading } = useAllowedNextStatuses(
+    useFsmEngine ? currentStatusId : undefined,
+    useFsmEngine ? leadId : undefined
+  );
   const { data: stages = [], isLoading: stagesLoading } = usePipelineStages();
+  
+  // ✅ Get current user to check permissions
+  const { user } = useAuth();
+  const userRole = user?.role;
 
+  // Use FSM statuses when enabled, otherwise use all statuses
+  const statuses = useFsmEngine ? fsmStatuses : allStatuses;
+  const statusesLoading = useFsmEngine ? fsmLoading : allStatusesLoading;
   const isLoading = statusesLoading || stagesLoading;
 
   // Process statuses with filtering
   const processedStatuses = useMemo(
     () =>
-      processStatuses(statuses, stages, {
+      processStatuses(statuses, stages, userRole, {
         filterStageId,
         filterOutcomeType,
         excludeStatusIds,
@@ -405,7 +445,7 @@ export function SmartConsultationStatusSelector({
         finalOnly,
         nonFinalOnly,
       }),
-    [statuses, stages, filterStageId, filterOutcomeType, excludeStatusIds, allowedStatusIds, finalOnly, nonFinalOnly]
+    [statuses, stages, userRole, filterStageId, filterOutcomeType, excludeStatusIds, allowedStatusIds, finalOnly, nonFinalOnly]
   );
 
   // Render based on variant

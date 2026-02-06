@@ -22,6 +22,45 @@ class OutcomeBreakdown(BaseModel):
     negative: int = 0
     neutral: int = 0
 
+
+class LossBreakdownItem(BaseModel):
+    """Loss reason breakdown item for funnel analytics."""
+    reason_code: str           # e.g., "PRICE_HIGH", "NO_CONTACT"
+    count: int                 # Number of leads lost with this reason
+    percentage: float          # Percentage of total losses at this stage
+
+
+class VelocityStats(BaseModel):
+    """Stage velocity statistics - time spent in each stage."""
+    avg_days: float            # Average days spent in stage
+    min_days: float            # Minimum days
+    max_days: float            # Maximum days
+    sample_size: int           # Number of transitions measured
+
+
+class EstimatedLostRevenue(BaseModel):
+    """Estimated lost revenue for funnel analytics."""
+    lost_leads_count: int              # Number of leads lost at this stage
+    avg_tuition: float                 # Average tuition fee (VND)
+    total_lost_revenue: float          # Total lost revenue = lost_leads × avg_tuition
+    leads_with_tuition: int            # Leads that have offering with tuition data
+
+
+class FunnelSuggestion(BaseModel):
+    """AI-powered suggestion for funnel optimization."""
+    id: str                            # Unique suggestion ID (e.g., "bottleneck_stg02")
+    type: Literal["bottleneck", "slow_stage", "high_loss", "loss_reason"]
+    priority: Literal["critical", "high", "medium", "low"]
+    stage_id: Optional[str] = None     # Related stage (if applicable)
+    stage_name: Optional[str] = None   # Stage name for display
+    title: str                         # Short title (e.g., "Điểm nghẽn tại Tư vấn")
+    description: str                   # Detailed description
+    metric_value: Optional[float] = None  # The metric that triggered this suggestion
+    metric_label: Optional[str] = None    # Label for the metric (e.g., "Conversion: 35%")
+    action_label: Optional[str] = None    # Suggested action button label
+    action_url: Optional[str] = None      # URL for the action (e.g., leads filtered by stage)
+
+
 class FunnelStage(BaseModel):
     stage_id: str                      # e.g. "stg05"
     stage_name: str                    # e.g. "Đã nộp học phí"
@@ -30,7 +69,10 @@ class FunnelStage(BaseModel):
     is_final_stage: bool = False       # For separating outcomes
     fill: Optional[str] = None
     conversion_rate: Optional[float] = None  # Historical conversion % (30 days)
-    outcome_breakdown: Optional[OutcomeBreakdown] = None  # positive/negative/neutral counts 
+    outcome_breakdown: Optional[OutcomeBreakdown] = None  # positive/negative/neutral counts
+    loss_breakdown: Optional[List[LossBreakdownItem]] = None  # Phase 2: Loss reason analytics
+    velocity: Optional[VelocityStats] = None  # Phase 2: Time in stage analytics
+    estimated_lost_revenue: Optional[EstimatedLostRevenue] = None  # Phase 2: Lost revenue analytics
 
 class LeadPreview(BaseModel):
     id: int
@@ -118,6 +160,9 @@ class PriorityAction(BaseModel):
     reason: str  # AI-generated explanation
     due_at: Optional[datetime] = None
     days_since_contact: Optional[int] = None
+    # Contact info for quick actions (Zalo, Phone)
+    phone: Optional[str] = None
+    last_contact_at: Optional[datetime] = None
 
 
 class OfficerDashboardEnhanced(BaseModel):
@@ -168,8 +213,9 @@ class LeaderboardEntry(BaseModel):
 
 
 class WeeklyLeaderboard(BaseModel):
-    """Weekly leaderboard response."""
-    week_start: str  # ISO date string
+    """Leaderboard response (weekly or custom date range)."""
+    week_start: str  # ISO date string (period start)
+    week_end: Optional[str] = None  # ISO date string (period end, for custom range)
     total_officers: int
     current_user_rank: int
     leaderboard: List[LeaderboardEntry]

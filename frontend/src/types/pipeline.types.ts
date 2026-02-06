@@ -63,30 +63,73 @@ export enum OutcomeType {
 }
 
 /**
- * Consultation Status
+ * Status Type (FSM v3.0)
+ * Classification of status behavior in FSM
+ */
+export enum StatusType {
+  TRANSITION = "transition", // Normal workflow status, follows FSM rules
+  ACTIVITY = "activity", // Activity tracking, doesn't affect workflow
+  SYSTEM = "system", // System-controlled, not user-selectable
+}
+
+/**
+ * Selectable Mode (FSM v3.0)
+ * Who can select this status
+ */
+export enum SelectableMode {
+  USER = "user", // Any authenticated user (officer+)
+  ROLE = "role", // Only manager/admin roles
+  SYSTEM = "system", // Only backend system (not UI selectable)
+}
+
+/**
+ * Trigger Type (FSM v3.0)
+ * What triggers a transition
+ */
+export enum TriggerType {
+  USER = "user", // UI action by any user
+  ROLE = "role", // UI action by manager/admin
+  SYSTEM = "system", // Backend system action
+  EVENT = "event", // External event (webhook, cron, etc.)
+}
+
+/**
+ * Consultation Status (FSM v3.0)
  * Status for consultations within a pipeline stage
  *
- * CRM Standards:
- * - Each status belongs to one stage
- * - Status has outcome_type: positive/neutral/negative
- * - Final statuses (end of lifecycle) marked with is_final_status=true
+ * FSM v3.0 Features:
+ * - Phase-based workflow (consultation/admission/fee/enrolled/universal)
+ * - Status types: transition/activity/system
+ * - Selectable modes: user/role/system
+ * - Universal statuses bypass FSM rules
  */
 export interface ConsultationStatus {
   id: string;
   name: string;
   color_code: string; // Hex color (e.g., '#4CAF50')
   color?: string; // Alias for color_code (for backward compatibility)
-  stage_id: string; // Foreign key to PipelineStage
+  stage_id: string | null; // Foreign key to PipelineStage (NULL for universal)
   outcome_type: OutcomeType; // Outcome classification
-  is_final_status: boolean; // Whether this status marks end of lead lifecycle
-  legacy_status?: string | null; // Maps to lead.status for backward compatibility (Hybrid Approach)
 
-  // ✅ Universal status support (Phase 1 - Option B)
-  is_universal?: boolean; // True nếu status có thể dùng ở mọi pipeline stage (VD: Không nghe máy, Thuê bao)
-  updates_pipeline?: boolean; // False nếu chỉ ghi nhận activity, không thay đổi pipeline progression
+  // ✅ FSM v3.0 fields
+  code?: string; // Machine-readable code (e.g., NOT_CONTACTED, ENROLLED)
+  is_final: boolean; // Whether this status marks end of lead lifecycle
+  status_type: StatusType; // transition/activity/system
+  selectable_mode: SelectableMode; // user/role/system
+  phase: string; // consultation/admission/fee/enrolled/universal
+  description?: string; // Optional description
+  display_order: number; // Sort order for UI
 
-  // ✅ KPI counting flag
-  counts_for_kpi?: boolean; // True nếu status được đếm vào KPI enrollments (VD: False cho 'Đã rút học phí')
+  // Universal & Pipeline flags
+  is_universal: boolean; // True for activity statuses that bypass FSM
+  updates_pipeline: boolean; // False if only records activity
+  counts_for_funnel: boolean; // True if counted in funnel analytics
+
+  // ✅ DEPRECATED fields (kept for backward compatibility)
+  is_final_status?: boolean; // Use is_final instead
+  legacy_status?: string | null;
+  counts_for_kpi?: boolean; // Use counts_for_funnel instead
+  selectable_by_user?: string; // Use selectable_mode instead
 
   // Relationship
   stage?: PipelineStage;
@@ -96,33 +139,57 @@ export interface ConsultationStatus {
 }
 
 /**
- * Consultation status creation payload
+ * Consultation status creation payload (FSM v3.0)
  */
 export interface ConsultationStatusCreate {
   id: string;
   name: string;
   color_code: string;
-  stage_id: string;
+  stage_id?: string | null; // NULL for universal statuses
   outcome_type?: OutcomeType; // Default: neutral
-  is_final_status?: boolean; // Default: false
-  legacy_status?: string | null; // Maps to lead.status for backward compatibility
+
+  // FSM v3.0 fields
+  code?: string;
+  is_final?: boolean; // Default: false
+  status_type?: StatusType; // Default: transition
+  selectable_mode?: SelectableMode; // Default: user
+  phase?: string; // Default: consultation
+  description?: string;
+  display_order?: number; // Default: 0
   is_universal?: boolean; // Default: false
   updates_pipeline?: boolean; // Default: true
-  counts_for_kpi?: boolean; // Default: true
+  counts_for_funnel?: boolean; // Default: true
+
+  // DEPRECATED
+  is_final_status?: boolean;
+  legacy_status?: string | null;
+  counts_for_kpi?: boolean;
 }
 
 /**
- * Consultation status update payload
+ * Consultation status update payload (FSM v3.0)
  */
 export interface ConsultationStatusUpdate {
   name?: string;
   color_code?: string;
-  stage_id?: string;
+  stage_id?: string | null;
   outcome_type?: OutcomeType;
-  is_final_status?: boolean;
-  legacy_status?: string | null; // Maps to lead.status for backward compatibility
+
+  // FSM v3.0 fields
+  code?: string;
+  is_final?: boolean;
+  status_type?: StatusType;
+  selectable_mode?: SelectableMode;
+  phase?: string;
+  description?: string;
+  display_order?: number;
   is_universal?: boolean;
   updates_pipeline?: boolean;
+  counts_for_funnel?: boolean;
+
+  // DEPRECATED
+  is_final_status?: boolean;
+  legacy_status?: string | null;
   counts_for_kpi?: boolean;
 }
 
@@ -131,8 +198,8 @@ export interface ConsultationStatusUpdate {
 // ============================================
 
 /**
- * Allowed Status Transition
- * Workflow rules for status changes (HubSpot standard)
+ * Allowed Status Transition (FSM v3.0)
+ * Workflow rules for status changes
  */
 export interface AllowedTransition {
   id: number;
@@ -140,6 +207,12 @@ export interface AllowedTransition {
   to_status_id: string;
   created_at: string;
   updated_at: string;
+
+  // ✅ FSM v3.0 fields
+  trigger_type: TriggerType; // user/role/system/event
+  required_phase?: string; // Target phase (must match to_status.phase)
+  is_active: boolean; // Whether transition is enabled
+  description?: string; // Human-readable description
 
   // Optional relationships
   from_status?: ConsultationStatus;
@@ -152,6 +225,10 @@ export interface AllowedTransition {
 export interface AllowedTransitionCreate {
   from_status_id: string;
   to_status_id: string;
+  trigger_type?: TriggerType; // Default: user
+  required_phase?: string;
+  is_active?: boolean; // Default: true
+  description?: string;
 }
 
 /**
@@ -160,6 +237,10 @@ export interface AllowedTransitionCreate {
 export interface AllowedTransitionUpdate {
   from_status_id?: string;
   to_status_id?: string;
+  trigger_type?: TriggerType;
+  required_phase?: string;
+  is_active?: boolean;
+  description?: string;
 }
 
 // ============================================

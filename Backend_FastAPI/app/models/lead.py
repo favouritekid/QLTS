@@ -110,6 +110,13 @@ class Lead(Base):
     assigned_at = Column(DateTime(timezone=True), nullable=True)
     # Soft delete support
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    # Optimistic locking version
+    version = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="Optimistic locking version - incremented on each update"
+    )
     # Quick Disposition: Next activity timestamp for bubble-up sorting
     next_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
     
@@ -228,10 +235,12 @@ class Consultation(Base):
     method = Column(String(50))
     notes = Column(Text)
     duration_minutes = Column(Integer, nullable=True)
-    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)  # ✅ FIX: Added index
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)
     consultation_status_id = Column(
-        String(50), ForeignKey("consultation_status.id"), nullable=True, index=True  # ✅ FIX: Added index
+        String(50), ForeignKey("consultation_status.id"), nullable=True, index=True
     )
+    # Soft delete support - when parent lead is deleted, consultations are also soft-deleted
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     consultation_status = relationship("ConsultationStatus")
     officer = relationship(

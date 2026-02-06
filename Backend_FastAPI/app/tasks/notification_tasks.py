@@ -217,7 +217,8 @@ def check_consultation_reminders_task(self):
                 .join(Lead, Consultation.lead_id == Lead.id)
                 .where(
                     and_(
-                        Lead.deleted_at.is_(None),  # ✅ FIX Bug #4: Exclude deleted leads
+                        Lead.deleted_at.is_(None),  # Exclude deleted leads
+                        Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
                         Consultation.scheduled_at.isnot(None),
                         Consultation.scheduled_at > now,
                         Consultation.scheduled_at <= reminder_window,

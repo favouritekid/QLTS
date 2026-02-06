@@ -50,17 +50,17 @@ interface LeadActionSuggestionsProps {
 // PRIORITY STYLES - Matching existing theme
 // =============================================================================
 
-const PRIORITY_STYLES: Record<Suggestion["priority"], { 
-  bg: string; 
+const PRIORITY_STYLES: Record<Suggestion["priority"], {
+  bg: string;
   border: string;
   icon: string;
   text: string;
 }> = {
-  urgent: { 
-    bg: "bg-red-50 dark:bg-red-950/30", 
-    border: "border-l-red-500",
-    icon: "text-red-500",
-    text: "text-red-700 dark:text-red-300",
+  urgent: {
+    bg: "bg-error-50 dark:bg-error-950/30",
+    border: "border-l-error-500",
+    icon: "text-error-500",
+    text: "text-error-700 dark:text-error-300",
   },
   high: { 
     bg: "bg-orange-50 dark:bg-orange-950/30", 
@@ -68,17 +68,17 @@ const PRIORITY_STYLES: Record<Suggestion["priority"], {
     icon: "text-orange-500",
     text: "text-orange-700 dark:text-orange-300",
   },
-  medium: { 
-    bg: "bg-amber-50 dark:bg-amber-950/30", 
-    border: "border-l-amber-500",
-    icon: "text-amber-500",
-    text: "text-amber-700 dark:text-amber-300",
+  medium: {
+    bg: "bg-warning-50 dark:bg-warning-950/30",
+    border: "border-l-warning-500",
+    icon: "text-warning-500",
+    text: "text-warning-700 dark:text-warning-300",
   },
-  low: { 
-    bg: "bg-slate-100 dark:bg-slate-800/50", 
-    border: "border-l-slate-400",
-    icon: "text-slate-500",
-    text: "text-slate-600 dark:text-slate-300",
+  low: {
+    bg: "bg-muted dark:bg-muted/50",
+    border: "border-l-muted-foreground",
+    icon: "text-muted-foreground",
+    text: "text-muted-foreground dark:text-muted-foreground",
   },
 };
 
@@ -200,7 +200,7 @@ export function LeadActionSuggestions({
     <Card className={className}>
       <CardHeader className="px-4 py-3">
         <CardTitle className="flex items-center gap-2 text-sm font-medium">
-          <Lightbulb className="h-4 w-4 text-amber-500" />
+          <Lightbulb aria-hidden="true" className="h-4 w-4 text-amber-500" />
           Gợi ý hành động
         </CardTitle>
       </CardHeader>
@@ -228,10 +228,10 @@ export function LeadActionSuggestions({
                   variant="ghost"
                   className={cn(
                     "shrink-0 h-7 px-2 text-xs font-medium",
-                    suggestion.priority === "urgent" && "text-red-600 hover:text-red-700 hover:bg-red-100",
+                    suggestion.priority === "urgent" && "text-error-600 hover:text-error-700 hover:bg-error-100",
                     suggestion.priority === "high" && "text-orange-600 hover:text-orange-700 hover:bg-orange-100",
-                    suggestion.priority === "medium" && "text-amber-600 hover:text-amber-700 hover:bg-amber-100",
-                    suggestion.priority === "low" && "text-slate-600 hover:text-slate-700 hover:bg-slate-200",
+                    suggestion.priority === "medium" && "text-warning-600 hover:text-warning-700 hover:bg-warning-100",
+                    suggestion.priority === "low" && "text-muted-foreground hover:text-foreground hover:bg-muted",
                   )}
                   onClick={suggestion.onAction}
                 >

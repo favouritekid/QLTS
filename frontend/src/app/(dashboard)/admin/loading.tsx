@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TableSkeleton } from '@/components/ui/skeletons'
+import { PageContainer } from '@/components/layouts/PageContainer'
 
 /**
  * Admin Panel Loading State
@@ -10,15 +11,15 @@ import { TableSkeleton } from '@/components/ui/skeletons'
  */
 export default function AdminLoading() {
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <PageContainer maxWidth="xl">
       {/* Admin Header */}
-      <div className="flex items-center justify-between">
-        <Skeleton className="h-10 w-48" />
-        <Skeleton className="h-10 w-32" />
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <Skeleton className="h-10 w-40 sm:w-48" />
+        <Skeleton className="h-10 w-full sm:w-32" />
       </div>
 
       {/* Admin Content */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-3 md:gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3">
         {[1, 2, 3].map((i) => (
           <Card key={i}>
             <CardHeader>
@@ -40,6 +41,6 @@ export default function AdminLoading() {
           <TableSkeleton rows={12} />
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   )
 }

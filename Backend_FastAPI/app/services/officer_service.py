@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models, schemas
 from ..core.events import SystemEvents
 from ..repositories import OfficerRepository
+from ..repositories.organization_repository import OrganizationRepository
 from .notification_dispatcher import dispatch
 from . import kpi_service
 
@@ -48,7 +49,46 @@ async def get_officer_dashboard_stats(
     all_stages = await repo.get_all_pipeline_stages()
     stage_counts = await repo.get_funnel_stage_counts_batch(officer_id)
     transition_rates = await repo.get_stage_transition_rates(officer_id, days=30)
-    
+
+    # Phase 2: Get loss reason breakdown per stage (no date filter for base dashboard)
+    loss_breakdown_by_stage = await repo.get_loss_reason_breakdown_by_stage(
+        officer_id=officer_id,
+    )
+
+    # Phase 2: Get velocity stats (time in stage) per stage
+    velocity_by_stage = await repo.get_stage_velocity_stats(
+        officer_id=officer_id,
+    )
+
+    # Phase 2: Get estimated lost revenue per stage
+    lost_revenue_by_stage = await repo.get_estimated_lost_revenue_by_stage(
+        officer_id=officer_id,
+    )
+
+    # Pre-build stage lookup dict for O(1) access (optimization)
+    stage_by_id = {s.id: s for s in all_stages}
+
+    # SPEC 2026-02-04: Calculate Net Conversion Rate
+    # Formula: Enrolled / (Enrolled + Lost)
+    # Enrolled = stage stg06 (is_final_stage=True, positive outcome)
+    # Lost = All FINAL leads with negative outcome (includes early exits)
+    total_enrolled = 0
+    total_lost = 0
+
+    for stage in all_stages:
+        stage_data = stage_counts.get(stage.id, {})
+        if stage.is_final_stage:
+            # Final stage: count positive as Won, negative as Lost
+            total_enrolled += stage_data.get("positive", 0)
+            total_lost += stage_data.get("negative", 0)
+        else:
+            # Non-final stage: count early_exit (FINAL + negative) as Lost
+            total_lost += stage_data.get("early_exit_count", 0)
+
+    net_conversion_rate = round(
+        (total_enrolled / (total_enrolled + total_lost)) * 100, 1
+    ) if (total_enrolled + total_lost) > 0 else 0.0
+
     sales_funnel = []
     for idx, stage in enumerate(all_stages):
         stage_data = stage_counts.get(stage.id, {})
@@ -56,20 +96,36 @@ async def get_officer_dashboard_stats(
         positive_count = stage_data.get("positive", 0)
         negative_count = stage_data.get("negative", 0)
         neutral_count = stage_data.get("neutral", 0)
-        
-        # Calculate conversion rate from transitions
+        early_exit_count = stage_data.get("early_exit_count", 0)
+
+        # Calculate conversion rate from transitions (optimized with dict lookup)
         conversion_rate = None
         if stage.id in transition_rates:
             transitions_from = transition_rates[stage.id]
             total_out = sum(transitions_from.values())
             if total_out > 0:
+                # Count progressive transitions (to higher non-final stages)
                 progressive = sum(
                     count for to_id, count in transitions_from.items()
-                    if any(s.id == to_id and s.order > stage.order and not s.is_final_stage 
-                           for s in all_stages)
+                    if to_id in stage_by_id
+                    and stage_by_id[to_id].order > stage.order
+                    and not stage_by_id[to_id].is_final_stage
                 )
                 conversion_rate = round((progressive / total_out) * 100, 1)
-        
+
+        # SPEC: Calculate move_forward = leads that continue to next stage
+        # move_forward = lead_count - early_exit_count (for non-final stages)
+        move_forward = lead_count - early_exit_count if not stage.is_final_stage else lead_count
+
+        # Phase 2: Get loss breakdown for this stage (if any)
+        stage_loss_breakdown = loss_breakdown_by_stage.get(stage.id, [])
+
+        # Phase 2: Get velocity stats for this stage (if any)
+        stage_velocity = velocity_by_stage.get(stage.id, None)
+
+        # Phase 2: Get estimated lost revenue for this stage (if any)
+        stage_lost_revenue = lost_revenue_by_stage.get(stage.id, None)
+
         sales_funnel.append({
             "stage_id": stage.id,
             "stage_name": stage.name,
@@ -78,18 +134,46 @@ async def get_officer_dashboard_stats(
             "is_final_stage": stage.is_final_stage,
             "fill": f"var(--chart-{idx % 5 + 1})",
             "conversion_rate": conversion_rate,
+            # SPEC: Early Exit metrics per stage
+            "early_exit_count": early_exit_count,
+            "move_forward": move_forward,
             "outcome_breakdown": {
                 "positive": positive_count,
                 "negative": negative_count,
                 "neutral": neutral_count,
-            }
+            },
+            "loss_breakdown": stage_loss_breakdown if stage_loss_breakdown else None,
+            "velocity": stage_velocity,  # Phase 2: Time in stage analytics
+            "estimated_lost_revenue": stage_lost_revenue,  # Phase 2: Lost revenue analytics
         })
-    
+
+    # Store net_conversion_rate for response (used in enhanced dashboard)
+    # Note: This is stored at module level for now, will be added to response later
+
+    # Phase 2: Generate funnel suggestions
+    # Aggregate loss breakdown for suggestions
+    aggregated_loss = []
+    loss_totals: Dict[str, int] = {}
+    for stage in sales_funnel:
+        for item in (stage.get("loss_breakdown") or []):
+            loss_totals[item["reason_code"]] = loss_totals.get(item["reason_code"], 0) + item["count"]
+
+    total_loss_reasons = sum(loss_totals.values()) or 1
+    aggregated_loss = [
+        {"reason_code": k, "count": v, "percentage": round((v / total_loss_reasons) * 100, 1)}
+        for k, v in sorted(loss_totals.items(), key=lambda x: -x[1])
+    ]
+
+    funnel_suggestions = generate_funnel_suggestions(
+        funnel_stages=sales_funnel,
+        aggregated_loss_breakdown=aggregated_loss,
+    )
+
     # 5. Actionable Lists (optimized queries)
     high_score_leads = await repo.get_high_score_leads(officer_id, limit=5)
     stale_leads = await repo.get_stale_leads(officer_id, stale_days=3, limit=5)
     upcoming = []
-    
+
     def lead_to_preview(lead: models.Lead) -> dict:
         """Convert Lead model to LeadPreview schema format."""
         return {
@@ -101,7 +185,7 @@ async def get_officer_dashboard_stats(
             "updated_at": lead.updated_at,
             "stage_name": lead.pipeline_stage.name if lead.pipeline_stage else None,
         }
-    
+
     return {
         "status_overview": {
             "current_workload": current_workload,
@@ -111,6 +195,7 @@ async def get_officer_dashboard_stats(
         },
         "performance_trends": performance_trends,
         "sales_funnel": sales_funnel,
+        "funnel_suggestions": funnel_suggestions,  # Phase 2: AI-powered suggestions
         "actionable_lists": {
             "high_score": [lead_to_preview(lead) for lead in high_score_leads],
             "stale": [lead_to_preview(lead) for lead in stale_leads],
@@ -185,18 +270,59 @@ async def _get_sales_funnel_in_range(
 ) -> List[Dict[str, Any]]:
     """
     Get sales funnel data filtered by date range.
-    
+
     REFACTORED: Uses OfficerRepository with batch queries.
+    Phase 2: Includes loss_breakdown per stage (LOSS_REASON_UX_SPEC.md)
     """
     repo = OfficerRepository(db)
-    
+
     # Get all stages and batch counts (optimized)
     all_stages = await repo.get_all_pipeline_stages()
     stage_counts = await repo.get_funnel_stage_counts_batch(
         officer_id, start_date=filter_start, end_date=filter_end
     )
     transition_rates = await repo.get_stage_transition_rates(officer_id, days=30)
-    
+
+    # Phase 2: Get loss reason breakdown per stage
+    loss_breakdown_by_stage = await repo.get_loss_reason_breakdown_by_stage(
+        officer_id=officer_id,
+        start_date=filter_start,
+        end_date=filter_end,
+    )
+
+    # Phase 2: Get velocity stats (time in stage) per stage
+    velocity_by_stage = await repo.get_stage_velocity_stats(
+        officer_id=officer_id,
+        start_date=filter_start,
+        end_date=filter_end,
+    )
+
+    # Phase 2: Get estimated lost revenue per stage
+    lost_revenue_by_stage = await repo.get_estimated_lost_revenue_by_stage(
+        officer_id=officer_id,
+        start_date=filter_start,
+        end_date=filter_end,
+    )
+
+    # Pre-build stage lookup dict for O(1) access (optimization)
+    stage_by_id = {s.id: s for s in all_stages}
+
+    # SPEC 2026-02-04: Calculate Net Conversion Rate
+    total_enrolled = 0
+    total_lost = 0
+
+    for stage in all_stages:
+        stage_data = stage_counts.get(stage.id, {})
+        if stage.is_final_stage:
+            total_enrolled += stage_data.get("positive", 0)
+            total_lost += stage_data.get("negative", 0)
+        else:
+            total_lost += stage_data.get("early_exit_count", 0)
+
+    net_conversion_rate = round(
+        (total_enrolled / (total_enrolled + total_lost)) * 100, 1
+    ) if (total_enrolled + total_lost) > 0 else 0.0
+
     sales_funnel = []
     for idx, stage in enumerate(all_stages):
         stage_data = stage_counts.get(stage.id, {})
@@ -204,20 +330,35 @@ async def _get_sales_funnel_in_range(
         positive_count = stage_data.get("positive", 0)
         negative_count = stage_data.get("negative", 0)
         neutral_count = stage_data.get("neutral", 0)
-        
-        # Calculate conversion rate from transitions
+        early_exit_count = stage_data.get("early_exit_count", 0)
+
+        # Calculate conversion rate from transitions (optimized with dict lookup)
         conversion_rate = None
         if stage.id in transition_rates:
             transitions_from = transition_rates[stage.id]
             total_out = sum(transitions_from.values())
             if total_out > 0:
+                # Count progressive transitions (to higher non-final stages)
                 progressive = sum(
                     count for to_id, count in transitions_from.items()
-                    if any(s.id == to_id and s.order > stage.order and not s.is_final_stage 
-                           for s in all_stages)
+                    if to_id in stage_by_id
+                    and stage_by_id[to_id].order > stage.order
+                    and not stage_by_id[to_id].is_final_stage
                 )
                 conversion_rate = round((progressive / total_out) * 100, 1)
-        
+
+        # SPEC: move_forward = lead_count - early_exit_count
+        move_forward = lead_count - early_exit_count if not stage.is_final_stage else lead_count
+
+        # Phase 2: Get loss breakdown for this stage (if any)
+        stage_loss_breakdown = loss_breakdown_by_stage.get(stage.id, [])
+
+        # Phase 2: Get velocity stats for this stage (if any)
+        stage_velocity = velocity_by_stage.get(stage.id, None)
+
+        # Phase 2: Get estimated lost revenue for this stage (if any)
+        stage_lost_revenue = lost_revenue_by_stage.get(stage.id, None)
+
         sales_funnel.append({
             "stage_id": stage.id,
             "stage_name": stage.name,
@@ -226,14 +367,194 @@ async def _get_sales_funnel_in_range(
             "is_final_stage": stage.is_final_stage,
             "fill": f"var(--chart-{idx % 5 + 1})",
             "conversion_rate": conversion_rate,
+            "early_exit_count": early_exit_count,
+            "move_forward": move_forward,
             "outcome_breakdown": {
                 "positive": positive_count,
                 "negative": negative_count,
                 "neutral": neutral_count,
-            }
+            },
+            "loss_breakdown": stage_loss_breakdown if stage_loss_breakdown else None,
+            "velocity": stage_velocity,  # Phase 2: Time in stage analytics
+            "estimated_lost_revenue": stage_lost_revenue,  # Phase 2: Lost revenue analytics
         })
-    
+
     return sales_funnel
+
+
+# =============================================================================
+# PHASE 2: Funnel Suggestions Generator
+# =============================================================================
+
+def generate_funnel_suggestions(
+    funnel_stages: List[Dict[str, Any]],
+    aggregated_loss_breakdown: List[Dict[str, Any]] = None,
+    config: Dict[str, Any] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Generate AI-powered suggestions based on funnel metrics.
+
+    SPEC: FUNNEL_FEASIBILITY_ANALYSIS.md - Suggested Actions
+
+    Analyzes funnel data and generates actionable suggestions:
+    1. Bottleneck detection (low conversion rate)
+    2. Slow stages (high velocity/time in stage)
+    3. High revenue loss stages
+    4. Top loss reasons to address
+
+    Args:
+        funnel_stages: List of funnel stage data (from _get_sales_funnel_in_range)
+        aggregated_loss_breakdown: Aggregated loss reasons across all stages
+        config: Optional configuration overrides
+
+    Returns:
+        List of FunnelSuggestion dicts, sorted by priority
+    """
+    # Default configuration
+    cfg = {
+        "bottleneck_threshold": 50,           # Conversion rate below this triggers bottleneck
+        "slow_stage_threshold_days": 5,       # Avg days above this triggers slow stage
+        "high_loss_threshold_vnd": 100_000_000,  # Lost revenue above this triggers high loss
+        "loss_reason_threshold_pct": 20,      # Loss reason above this % triggers suggestion
+        "max_suggestions": 5,                 # Maximum suggestions to return
+        **(config or {})
+    }
+
+    suggestions: List[Dict[str, Any]] = []
+
+    # Filter to non-final stages for analysis
+    core_stages = [s for s in funnel_stages if not s.get("is_final_stage", False)]
+
+    # 1. Bottleneck Detection (low conversion rate)
+    for stage in core_stages:
+        conversion_rate = stage.get("conversion_rate")
+        if conversion_rate is not None and conversion_rate < cfg["bottleneck_threshold"]:
+            # Calculate severity based on how far below threshold
+            severity = cfg["bottleneck_threshold"] - conversion_rate
+            priority = "critical" if severity > 30 else "high" if severity > 15 else "medium"
+
+            suggestions.append({
+                "id": f"bottleneck_{stage['stage_id']}",
+                "type": "bottleneck",
+                "priority": priority,
+                "stage_id": stage["stage_id"],
+                "stage_name": stage["stage_name"],
+                "title": f"Điểm nghẽn tại {stage['stage_name']}",
+                "description": f"Tỷ lệ chuyển đổi thấp ({conversion_rate:.0f}%), "
+                              f"cần review quy trình tư vấn và chất lượng leads đầu vào.",
+                "metric_value": conversion_rate,
+                "metric_label": f"Conversion: {conversion_rate:.0f}%",
+                "action_label": "Xem leads",
+                "action_url": f"/leads?stage={stage['stage_id']}",
+                "_severity": severity,  # For sorting
+            })
+
+    # 2. Slow Stage Detection (high velocity)
+    for stage in core_stages:
+        velocity = stage.get("velocity")
+        if velocity and velocity.get("avg_days", 0) > cfg["slow_stage_threshold_days"]:
+            avg_days = velocity["avg_days"]
+            # Calculate how many times over threshold
+            severity = avg_days / cfg["slow_stage_threshold_days"]
+            priority = "high" if severity > 2 else "medium"
+
+            suggestions.append({
+                "id": f"slow_{stage['stage_id']}",
+                "type": "slow_stage",
+                "priority": priority,
+                "stage_id": stage["stage_id"],
+                "stage_name": stage["stage_name"],
+                "title": f"Leads chậm tại {stage['stage_name']}",
+                "description": f"Leads ở stage này trung bình {avg_days:.1f} ngày "
+                              f"(>{cfg['slow_stage_threshold_days']} ngày). "
+                              f"Cần follow-up và đẩy nhanh tiến độ.",
+                "metric_value": avg_days,
+                "metric_label": f"TB: {avg_days:.1f} ngày",
+                "action_label": "Xem leads",
+                "action_url": f"/leads?stage={stage['stage_id']}",
+                "_severity": severity * 10,  # For sorting (multiply to compare with conversion)
+            })
+
+    # 3. High Revenue Loss Detection
+    for stage in core_stages:
+        lost_revenue = stage.get("estimated_lost_revenue")
+        if lost_revenue and lost_revenue.get("total_lost_revenue", 0) > cfg["high_loss_threshold_vnd"]:
+            total_loss = lost_revenue["total_lost_revenue"]
+            lost_count = lost_revenue["lost_leads_count"]
+            # Calculate severity based on revenue (in millions)
+            severity = total_loss / 1_000_000_000  # Billions
+
+            priority = "critical" if total_loss > 500_000_000 else "high" if total_loss > 200_000_000 else "medium"
+
+            # Format for display
+            if total_loss >= 1_000_000_000:
+                loss_display = f"{total_loss / 1_000_000_000:.1f}B"
+            else:
+                loss_display = f"{total_loss / 1_000_000:.0f}M"
+
+            suggestions.append({
+                "id": f"high_loss_{stage['stage_id']}",
+                "type": "high_loss",
+                "priority": priority,
+                "stage_id": stage["stage_id"],
+                "stage_name": stage["stage_name"],
+                "title": f"Mất {loss_display} VND tại {stage['stage_name']}",
+                "description": f"{lost_count} leads đã lost tại stage này, "
+                              f"ước tính mất {loss_display} VND doanh thu. "
+                              f"Ưu tiên cải thiện conversion tại đây.",
+                "metric_value": total_loss,
+                "metric_label": f"Lost: {loss_display} VND",
+                "action_label": "Xem leads lost",
+                "action_url": f"/leads?stage={stage['stage_id']}&outcome=negative",
+                "_severity": severity * 50,  # High weight for revenue
+            })
+
+    # 4. Top Loss Reasons
+    if aggregated_loss_breakdown:
+        for reason in aggregated_loss_breakdown[:2]:  # Top 2 reasons
+            if reason.get("percentage", 0) >= cfg["loss_reason_threshold_pct"]:
+                reason_code = reason["reason_code"]
+                count = reason["count"]
+                pct = reason["percentage"]
+
+                # Map reason codes to actionable labels
+                reason_actions = {
+                    "PRICE_HIGH": ("học phí cao", "Xem xét chính sách học bổng/ưu đãi"),
+                    "LOCATION_FAR": ("xa nhà", "Hỗ trợ thông tin ký túc xá/di chuyển"),
+                    "CHOSE_COMPETITOR": ("chọn trường khác", "Phân tích USP và cải thiện pitch"),
+                    "NO_CONTACT": ("không liên lạc được", "Cải thiện quy trình follow-up"),
+                    "TIMING_BAD": ("chưa sẵn sàng", "Nurture leads chưa ready"),
+                }
+
+                reason_label, action_hint = reason_actions.get(
+                    reason_code,
+                    (reason_code.lower().replace("_", " "), "Phân tích và có chiến lược xử lý")
+                )
+
+                suggestions.append({
+                    "id": f"loss_reason_{reason_code}",
+                    "type": "loss_reason",
+                    "priority": "high" if pct >= 30 else "medium",
+                    "stage_id": None,
+                    "stage_name": None,
+                    "title": f"{pct:.0f}% leads lost vì {reason_label}",
+                    "description": f"{count} leads đã lost với lý do '{reason_label}'. {action_hint}",
+                    "metric_value": pct,
+                    "metric_label": f"{count} leads ({pct:.0f}%)",
+                    "action_label": "Xem chi tiết",
+                    "action_url": f"/leads?outcome=negative&loss_reason={reason_code}",
+                    "_severity": pct,  # For sorting
+                })
+
+    # Sort by priority (critical > high > medium > low) then by severity
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    suggestions.sort(key=lambda x: (priority_order.get(x["priority"], 99), -x.get("_severity", 0)))
+
+    # Remove internal severity field and limit results
+    for s in suggestions:
+        s.pop("_severity", None)
+
+    return suggestions[:cfg["max_suggestions"]]
 
 
 # =============================================================================
@@ -346,21 +667,40 @@ async def get_enhanced_dashboard_stats(
         "direction": "up" if conversion_diff > 0 else "down" if conversion_diff < 0 else "neutral",
         "comparison": f"vs {filter_days} ngày trước"
     }
-    
+
     # === 4. AVERAGE RESPONSE TIME ===
-    avg_response_time = 2.5  # Placeholder
-    avg_response_trend = {
-        "value": 15,
-        "direction": "down",
-        "comparison": "vs TB"
-    }
-    
+    # Response time = Time from lead assignment to first consultation (in hours)
+    repo = OfficerRepository(db)
+    avg_response_time = await repo.get_avg_response_time_hours(officer_id, filter_start, filter_end)
+
+    # Default to 0 if no data
+    if avg_response_time is None:
+        avg_response_time = 0.0
+
+    # Get previous period response time for trend
+    prev_response_time = await repo.get_avg_response_time_hours(officer_id, prev_filter_start, prev_filter_end)
+
+    if prev_response_time is not None and prev_response_time > 0:
+        # Calculate percentage change (lower is better for response time)
+        response_diff_pct = ((avg_response_time - prev_response_time) / prev_response_time) * 100
+        avg_response_trend = {
+            "value": abs(round(response_diff_pct, 1)),
+            # For response time: negative change (faster) is "down" direction, which is good
+            "direction": "up" if response_diff_pct > 0 else "down" if response_diff_pct < 0 else "neutral",
+            "comparison": f"vs {filter_days} ngày trước"
+        }
+    else:
+        avg_response_trend = {
+            "value": 0,
+            "direction": "neutral",
+            "comparison": "Chưa có dữ liệu"
+        }
+
     # === 5. PRIORITY ACTIONS ===
     priority_actions = await _calculate_priority_actions(db, officer_id)
-    
+
     # === 6. PERFORMANCE TRENDS (within date range) - OPTIMIZED ===
-    # Use batch query instead of N+1 day loop
-    repo = OfficerRepository(db)
+    # Use batch query instead of N+1 day loop (repo already initialized in section 4)
     trends_data = await repo.get_performance_trends_batch(officer_id, filter_start, filter_end)
     performance_trends = [
         {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted}
@@ -370,7 +710,26 @@ async def get_enhanced_dashboard_stats(
     # === 7. SALES FUNNEL (within date range) ===
     # Get funnel stages with leads created in date range
     sales_funnel = await _get_sales_funnel_in_range(db, officer_id, filter_start, filter_end)
-    
+
+    # Phase 2: Generate funnel suggestions
+    # Aggregate loss breakdown for suggestions
+    aggregated_loss = []
+    loss_totals: Dict[str, int] = {}
+    for stage in sales_funnel:
+        for item in (stage.get("loss_breakdown") or []):
+            loss_totals[item["reason_code"]] = loss_totals.get(item["reason_code"], 0) + item["count"]
+
+    total_loss_reasons = sum(loss_totals.values()) or 1
+    aggregated_loss = [
+        {"reason_code": k, "count": v, "percentage": round((v / total_loss_reasons) * 100, 1)}
+        for k, v in sorted(loss_totals.items(), key=lambda x: -x[1])
+    ]
+
+    funnel_suggestions = generate_funnel_suggestions(
+        funnel_stages=sales_funnel,
+        aggregated_loss_breakdown=aggregated_loss,
+    )
+
     # === 8. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
     # Get annual target progress for enrollments KPI
     # Use fiscal year from date filter (filter_end.year)
@@ -397,6 +756,7 @@ async def get_enhanced_dashboard_stats(
         "priority_actions": priority_actions,
         "performance_trends": performance_trends,
         "sales_funnel": sales_funnel,
+        "funnel_suggestions": funnel_suggestions,  # Phase 2: AI-powered suggestions
         "actionable_lists": base_stats["actionable_lists"],
         "annual_progress": annual_progress,  # Phase 6: Rolling targets
     }
@@ -493,6 +853,39 @@ async def get_aggregated_dashboard_stats(
     # Aggregated Funnel using Repository (was N+1 loop)
     # ==========================================================================
     sales_funnel = await repo.get_aggregated_funnel(officer_ids)
+
+    # ==========================================================================
+    # Phase 2: Fetch metrics for aggregated funnel (loss_breakdown, velocity, lost_revenue)
+    # Use unit_ids for filtering (more efficient than officer_ids for these queries)
+    # ==========================================================================
+    unit_ids_for_metrics = [target_unit_id] if target_unit_id else None
+
+    # Fetch Phase 2 metrics (reusing existing repo methods with unit filter)
+    loss_breakdown_by_stage = await repo.get_loss_reason_breakdown_by_stage(
+        unit_ids=unit_ids_for_metrics,
+        start_date=filter_start,
+        end_date=filter_end,
+    )
+    velocity_by_stage = await repo.get_stage_velocity_stats(
+        unit_ids=unit_ids_for_metrics,
+        start_date=filter_start,
+        end_date=filter_end,
+    )
+    lost_revenue_by_stage = await repo.get_estimated_lost_revenue_by_stage(
+        unit_ids=unit_ids_for_metrics,
+        start_date=filter_start,
+        end_date=filter_end,
+    )
+
+    # Merge Phase 2 metrics into funnel stages
+    for stage in sales_funnel:
+        stage_id = stage["stage_id"]
+        stage["loss_breakdown"] = loss_breakdown_by_stage.get(stage_id, None) or None
+        stage["velocity"] = velocity_by_stage.get(stage_id, None)
+        stage["estimated_lost_revenue"] = lost_revenue_by_stage.get(stage_id, None)
+
+    # Phase 2: Generate funnel suggestions based on aggregated metrics
+    funnel_suggestions = generate_funnel_suggestions(sales_funnel)
     
     # ==========================================================================
     # Team Overview using Repository (was N+1 loop)
@@ -540,6 +933,7 @@ async def get_aggregated_dashboard_stats(
         "priority_actions": [],  # Not applicable for aggregated view
         "performance_trends": [],  # TODO: Add aggregated trends
         "sales_funnel": sales_funnel,
+        "funnel_suggestions": funnel_suggestions,  # Phase 2: AI-powered suggestions
         # Must match ActionableLists schema
         "actionable_lists": {
             "high_score": [],
@@ -551,7 +945,7 @@ async def get_aggregated_dashboard_stats(
 
 
 def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
-    """Return empty stats when no officers found."""
+    """Return empty stats when no officers found in the selected unit/scope."""
     return {
         "kpis": {
             "consultations_today": 0,
@@ -574,12 +968,15 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
         "priority_actions": [],
         "performance_trends": [],
         "sales_funnel": [],
+        "funnel_suggestions": [],  # Phase 2: Empty suggestions
         # Must match ActionableLists schema
         "actionable_lists": {
             "high_score": [],
             "stale": [],
             "upcoming": [],
         },
+        # Phase 6: Annual progress (null when no officers)
+        "annual_progress": None,
     }
 
 
@@ -648,6 +1045,8 @@ async def _calculate_priority_actions(
             "lead_score": lead_score,
             "reason": reason,
             "days_since_contact": days_since_contact,
+            "phone": lead.phone,  # For Zalo/Phone quick actions
+            "last_contact_at": last_contact,  # For display
             "_score": score  # For sorting
         })
     
@@ -666,29 +1065,67 @@ async def _calculate_priority_actions(
 # =============================================================================
 
 async def get_weekly_leaderboard(
-    db: AsyncSession, officer_id: int, limit: int = 5
+    db: AsyncSession,
+    officer_id: int,
+    limit: int = 5,
+    start_date: date = None,
+    end_date: date = None,
+    scope: str = None,
+    unit_id: int = None,
+    requesting_user: models.User = None,
 ) -> Dict[str, Any]:
     """
     Get weekly leaderboard for gamification.
-    
+
     REFACTORED: Uses OfficerRepository.get_all_weekly_rankings.
     - Reduced from 2 queries to 1 batch query.
-    
+
     Shows top officers by consultations this week.
     Includes current officer's rank even if not in top N.
     PHASE 6: Now includes rank change vs previous week.
+
+    Args:
+        officer_id: Current user's ID (for marking "you" in leaderboard)
+        limit: Number of top entries to show
+        start_date: Optional custom start date (defaults to this week's Monday)
+        end_date: Optional custom end date (defaults to today)
+        scope: "personal" | "team" | "organization"
+        unit_id: Filter by specific unit (for organization scope)
+        requesting_user: The user making the request (for team scope)
     """
     repo = OfficerRepository(db)
     today = datetime.now(timezone.utc).date()
-    week_start = today - timedelta(days=today.weekday())  # Monday
-    prev_week_start = week_start - timedelta(days=7)
-    prev_week_end = week_start - timedelta(days=1)
-    
-    # Get all officers' stats for THIS week using Repository
-    all_officers = await repo.get_all_weekly_rankings(week_start, today)
-    
-    # Get PREVIOUS week ranks using Repository
-    prev_officers = await repo.get_all_weekly_rankings(prev_week_start, prev_week_end)
+
+    # Use provided dates or default to current week
+    if start_date and end_date:
+        period_start = start_date
+        period_end = end_date
+    else:
+        period_start = today - timedelta(days=today.weekday())  # Monday
+        period_end = today
+
+    # Calculate previous period for rank comparison
+    period_length = (period_end - period_start).days + 1
+    prev_period_end = period_start - timedelta(days=1)
+    prev_period_start = prev_period_end - timedelta(days=period_length - 1)
+
+    # Determine unit filter based on scope
+    unit_ids = None
+    if scope == "team" and requesting_user and requesting_user.unit_id:
+        # Team scope: filter by requesting user's unit
+        org_repo = OrganizationRepository(db)
+        unit_ids = await org_repo.get_descendant_unit_ids(requesting_user.unit_id)
+    elif scope == "organization" and unit_id:
+        # Organization scope with specific unit: filter by that unit and descendants
+        org_repo = OrganizationRepository(db)
+        unit_ids = await org_repo.get_descendant_unit_ids(unit_id)
+    # For "personal" scope or no scope: show all officers (no filter)
+
+    # Get all officers' stats for THIS period using Repository
+    all_officers = await repo.get_all_weekly_rankings(period_start, period_end, unit_ids)
+
+    # Get PREVIOUS period ranks using Repository
+    prev_officers = await repo.get_all_weekly_rankings(prev_period_start, prev_period_end, unit_ids)
     
     # Build previous week rank lookup
     prev_ranks = {officer.id: rank for rank, officer in enumerate(prev_officers, 1)}
@@ -741,7 +1178,8 @@ async def get_weekly_leaderboard(
             current_user_rank = len(all_officers) + 1
     
     return {
-        "week_start": week_start.isoformat(),
+        "week_start": period_start.isoformat(),
+        "week_end": period_end.isoformat(),
         "total_officers": len(all_officers) + (1 if current_user_rank is None else 0),
         "current_user_rank": current_user_rank or (len(all_officers) + 1),
         "leaderboard": leaderboard,

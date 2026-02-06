@@ -1,0 +1,49 @@
+"id","from_status_id","to_status_id","note"
+# ═══════════════════════════════════════════════════════════
+# PHASE 1: CONSULTATION (stg01-02)
+# ═══════════════════════════════════════════════════════════
+1,"sts00","sts02","Chưa tiếp cận → Đã kết nối"
+2,"sts00","sts04","Chưa tiếp cận → Từ chối (không liên lạc được)"
+3,"sts02","sts03","Đã kết nối → Có nhu cầu"
+4,"sts02","sts04","Đã kết nối → Từ chối"
+5,"sts02","sts05","Đã kết nối → Hẹn lại"
+6,"sts03","sts04","Có nhu cầu → Từ chối"
+7,"sts03","sts05","Có nhu cầu → Hẹn lại"
+8,"sts03","sts06","Có nhu cầu → Đồng ý tư vấn"
+9,"sts05","sts03","Hẹn lại → Có nhu cầu (gọi lại thành công)"
+10,"sts05","sts04","Hẹn lại → Từ chối"
+11,"sts05","sts06","Hẹn lại → Đồng ý tư vấn"
+# sts04 = terminal (Từ chối tư vấn)
+# sts06 = exit to Phase 2 (khi tạo admission_profile)
+
+# ═══════════════════════════════════════════════════════════
+# PHASE 2: ADMISSION (stg03-04)
+# Entry: admission_profile.created → auto set sts07
+# ═══════════════════════════════════════════════════════════
+12,"sts07","sts17","Tiếp nhận → Yêu cầu bổ sung"
+13,"sts07","sts08","Tiếp nhận → Không tiếp tục"
+14,"sts17","sts07","Bổ sung xong → Tiếp nhận lại"
+15,"sts17","sts08","Không bổ sung → Không tiếp tục"
+# sts13 = system-only (không có trong allowed_transitions)
+# sts09, sts16 = role-based, set by admission system via event
+
+# ═══════════════════════════════════════════════════════════
+# PHASE 3: FEE (stg05)
+# Entry: admission_profile.approved → auto set sts14
+# ═══════════════════════════════════════════════════════════
+16,"sts14","sts18","Chưa hoàn tất → Hoàn (refund/cancel)"
+# sts10 = system-only (payment webhook)
+# sts14 → sts10 = system transition
+
+# ═══════════════════════════════════════════════════════════
+# PHASE 4: ENROLLED (stg06-07)
+# Entry: enrollment.completed → auto set sts11
+# ═══════════════════════════════════════════════════════════
+17,"sts11","sts12","Đã nhập học → Ngừng theo học"
+# sts11, sts12 = system-only
+
+# ═══════════════════════════════════════════════════════════
+# UNIVERSAL: sts01, sts15
+# Không có trong bảng này - xử lý riêng (is_universal = true)
+# Được phép chọn từ mọi status, không thay đổi stage
+# ═══════════════════════════════════════════════════════════

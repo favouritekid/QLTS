@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { api } from "@/lib/api/client";
+import { api } from "@/lib/api/client"; // architecture-allow legacy
 
 interface SystemOverview {
   timestamp: string;
@@ -128,15 +128,15 @@ export function SystemMonitoringDashboard() {
       case "healthy":
       case "connected":
       case "online":
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
+        return <CheckCircle className="h-5 w-5 text-success-500" />;
       case "degraded":
       case "no_workers":
-        return <AlertTriangle className="h-5 w-5 text-yellow-500" />;
+        return <AlertTriangle className="h-5 w-5 text-warning-500" />;
       case "error":
       case "unknown":
-        return <XCircle className="h-5 w-5 text-red-500" />;
+        return <XCircle className="h-5 w-5 text-error-500" />;
       default:
-        return <Activity className="h-5 w-5 text-gray-500" />;
+        return <Activity className="h-5 w-5 text-muted-foreground" />;
     }
   };
 
@@ -146,10 +146,10 @@ export function SystemMonitoringDashboard() {
       case "healthy":
       case "connected":
       case "online":
-        return <Badge variant="default" className="bg-green-500">OK</Badge>;
+        return <Badge variant="default" className="bg-success-500">OK</Badge>;
       case "degraded":
       case "no_workers":
-        return <Badge variant="secondary" className="bg-yellow-500">Warning</Badge>;
+        return <Badge variant="secondary" className="bg-warning-500">Warning</Badge>;
       case "error":
       case "unknown":
         return <Badge variant="destructive">Error</Badge>;
@@ -240,7 +240,7 @@ export function SystemMonitoringDashboard() {
                   {getStatusBadge(overview?.database.status || "unknown")}
                 </div>
                 {overview?.database.error && (
-                  <p className="text-xs text-red-500">{overview.database.error}</p>
+                  <p className="text-xs text-error-500">{overview.database.error}</p>
                 )}
               </div>
             )}
@@ -306,7 +306,7 @@ export function SystemMonitoringDashboard() {
               <CardTitle className="text-sm font-medium">Total Users</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{overview.statistics.total_users || 0}</div>
+              <div className="text-2xl font-bold tabular-nums">{overview.statistics.total_users || 0}</div>
             </CardContent>
           </Card>
 
@@ -315,7 +315,7 @@ export function SystemMonitoringDashboard() {
               <CardTitle className="text-sm font-medium">Total Leads</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{overview.statistics.total_leads || 0}</div>
+              <div className="text-2xl font-bold tabular-nums">{overview.statistics.total_leads || 0}</div>
             </CardContent>
           </Card>
 
@@ -324,7 +324,7 @@ export function SystemMonitoringDashboard() {
               <CardTitle className="text-sm font-medium">Active Sessions</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{overview.statistics.active_sessions || 0}</div>
+              <div className="text-2xl font-bold tabular-nums">{overview.statistics.active_sessions || 0}</div>
             </CardContent>
           </Card>
         </div>
@@ -365,11 +365,11 @@ export function SystemMonitoringDashboard() {
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
                           <p className="text-muted-foreground">Active Tasks</p>
-                          <p className="font-medium">{worker.active_tasks}</p>
+                          <p className="font-medium tabular-nums">{worker.active_tasks}</p>
                         </div>
                         <div>
                           <p className="text-muted-foreground">Registered Tasks</p>
-                          <p className="font-medium">{worker.registered_tasks}</p>
+                          <p className="font-medium tabular-nums">{worker.registered_tasks}</p>
                         </div>
                       </div>
                     </div>
@@ -412,8 +412,8 @@ export function SystemMonitoringDashboard() {
                   <div className="space-y-2">
                     <h4 className="font-medium">Clients</h4>
                     <div className="text-sm space-y-1">
-                      <p><span className="text-muted-foreground">Connected:</span> {redisInfo.clients.connected}</p>
-                      <p><span className="text-muted-foreground">Blocked:</span> {redisInfo.clients.blocked}</p>
+                      <p><span className="text-muted-foreground">Connected:</span> <span className="tabular-nums">{redisInfo.clients.connected}</span></p>
+                      <p><span className="text-muted-foreground">Blocked:</span> <span className="tabular-nums">{redisInfo.clients.blocked}</span></p>
                     </div>
                   </div>
 
@@ -428,13 +428,13 @@ export function SystemMonitoringDashboard() {
                   <div className="space-y-2">
                     <h4 className="font-medium">Statistics</h4>
                     <div className="text-sm space-y-1">
-                      <p><span className="text-muted-foreground">Commands/sec:</span> {redisInfo.stats.instantaneous_ops_per_sec}</p>
-                      <p><span className="text-muted-foreground">Total Commands:</span> {redisInfo.stats.total_commands_processed.toLocaleString()}</p>
-                      <p><span className="text-muted-foreground">Cache Hit Rate:</span> {
+                      <p><span className="text-muted-foreground">Commands/sec:</span> <span className="tabular-nums">{redisInfo.stats.instantaneous_ops_per_sec}</span></p>
+                      <p><span className="text-muted-foreground">Total Commands:</span> <span className="tabular-nums">{redisInfo.stats.total_commands_processed.toLocaleString()}</span></p>
+                      <p><span className="text-muted-foreground">Cache Hit Rate:</span> <span className="tabular-nums">{
                         redisInfo.stats.keyspace_hits + redisInfo.stats.keyspace_misses > 0
                           ? ((redisInfo.stats.keyspace_hits / (redisInfo.stats.keyspace_hits + redisInfo.stats.keyspace_misses)) * 100).toFixed(2)
                           : 0
-                      }%</p>
+                      }%</span></p>
                     </div>
                   </div>
                 </div>
@@ -464,7 +464,7 @@ export function SystemMonitoringDashboard() {
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
                       <Wifi className="h-5 w-5" />
-                      <span className="font-medium">
+                      <span className="font-medium tabular-nums">
                         {socketConnections.total_connections} Total Connections
                       </span>
                     </div>

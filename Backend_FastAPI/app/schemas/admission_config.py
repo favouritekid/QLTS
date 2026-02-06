@@ -32,6 +32,21 @@ class SubjectListResponse(BaseModel):
     total: int
 
 
+class SubjectCreate(BaseModel):
+    """Request schema for creating subject."""
+    code: str
+    name_vi: str
+    display_order: int = 0
+    is_active: bool = True
+
+
+class SubjectUpdate(BaseModel):
+    """Request schema for updating subject."""
+    name_vi: Optional[str] = None
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
 # =============================================================================
 # SUBJECT GROUP SCHEMAS
 # =============================================================================
@@ -63,6 +78,23 @@ class SubjectGroupListResponse(BaseModel):
     total: int
 
 
+class SubjectGroupCreate(BaseModel):
+    """Request schema for creating subject group."""
+    code: str
+    name: str
+    display_order: int = 0
+    is_active: bool = True
+    subject_ids: Optional[list[int]] = None  # M2M: subjects to link
+
+
+class SubjectGroupUpdate(BaseModel):
+    """Request schema for updating subject group."""
+    name: Optional[str] = None
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+    subject_ids: Optional[list[int]] = None  # Replace all subject mappings
+
+
 # =============================================================================
 # ADMISSION METHOD SCHEMAS
 # =============================================================================
@@ -85,6 +117,27 @@ class AdmissionMethodListResponse(BaseModel):
     """List of admission methods."""
     methods: list[AdmissionMethodResponse]
     total: int
+
+
+class AdmissionMethodCreate(BaseModel):
+    """Request schema for creating admission method."""
+    code: str
+    name: str
+    description: Optional[str] = None
+    requires_gpa: bool = False
+    requires_subject_scores: bool = True
+    display_order: int = 0
+    is_active: bool = True
+
+
+class AdmissionMethodUpdate(BaseModel):
+    """Request schema for updating admission method."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    requires_gpa: Optional[bool] = None
+    requires_subject_scores: Optional[bool] = None
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
 
 
 # =============================================================================
@@ -124,6 +177,56 @@ class AdmissionCriteriaListResponse(BaseModel):
     """List of admission criteria."""
     criteria: list[AdmissionCriteriaResponse]
     total: int
+
+
+class AdmissionCriteriaCreate(BaseModel):
+    """Request schema for creating admission criteria."""
+    method_code: str  # Lookup by code instead of ID
+    code: str
+    name: str
+    
+    # Thresholds (at least one required)
+    min_gpa: Optional[Decimal] = None
+    min_score: Optional[Decimal] = None
+    
+    # Rule Engine config
+    required_subject_count: Optional[int] = None
+    subject_selection_mode: Optional[str] = "fixed"
+    scoring_method: Optional[str] = "sum"
+    max_possible_score: Optional[Decimal] = None
+    min_subject_score: Optional[Decimal] = None
+    
+    # Meta
+    conditions: Optional[str] = None
+    is_active: Optional[bool] = False  # Draft by default
+    policy_version: Optional[str] = "2025.1"
+    
+    # Subject groups to link
+    subject_group_ids: Optional[list[int]] = None
+
+
+class AdmissionCriteriaUpdate(BaseModel):
+    """Request schema for updating admission criteria."""
+    name: Optional[str] = None
+    
+    # Thresholds
+    min_gpa: Optional[Decimal] = None
+    min_score: Optional[Decimal] = None
+    
+    # Rule Engine config
+    required_subject_count: Optional[int] = None
+    subject_selection_mode: Optional[str] = None
+    scoring_method: Optional[str] = None
+    max_possible_score: Optional[Decimal] = None
+    min_subject_score: Optional[Decimal] = None
+    
+    # Meta
+    conditions: Optional[str] = None
+    is_active: Optional[bool] = None
+    policy_version: Optional[str] = None
+    
+    # Subject groups (replace all)
+    subject_group_ids: Optional[list[int]] = None
 
 
 # =============================================================================
@@ -169,6 +272,47 @@ class ScoringPreviewResponse(BaseModel):
     failure_reasons: list[str] = []
     disqualification_codes: list[str] = []  # Standardized codes
     
-    # Snapshot (for reference)
-    snapshot: Optional[dict] = None
+# =============================================================================
+# DOCUMENT GROUP SCHEMAS (SHARED)
+# =============================================================================
+
+class DocumentGroupItemResponse(BaseModel):
+    """Document item within a group."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    document_type_id: int
+    document_type_name: str  # Flattened from relation
+    is_mandatory: bool
+    requires_upload: bool
+    submission_format: Optional[str]
+    display_order: int
+
+
+class SharedDocumentGroupResponse(BaseModel):
+    """Shared document group response."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    offering_type_id: int
+    code: str
+    name: str
+    items: list[DocumentGroupItemResponse] = []
+
+
+class DocumentGroupItemCreate(BaseModel):
+    """Item for creating/updating document group."""
+    document_type_id: int
+    is_mandatory: bool = True
+    requires_upload: bool = True
+    submission_format: Optional[str] = None
+    display_order: int = 0
+
+
+class SharedDocumentGroupUpdate(BaseModel):
+    """
+    Request to update shared documents for an Offering Type.
+    Replaces ALL items in the group.
+    """
+    items: list[DocumentGroupItemCreate]
 

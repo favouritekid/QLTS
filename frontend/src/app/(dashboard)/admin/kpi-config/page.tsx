@@ -76,6 +76,8 @@ import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { OrganizationUnit } from "@/types/organization.types";
 import { cn } from "@/lib/utils";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { TableEmptyState } from "@/components/common/EmptyState";
 
 // =============================================================================
 // TYPES
@@ -468,11 +470,11 @@ export default function KpiConfigPage() {
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
+    <PageContainer maxWidth="full">
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
+            <h1 className="text-2xl font-bold font-display flex items-center gap-2">
             <Target className="h-6 w-6 text-primary" />
             Cấu hình KPI
           </h1>
@@ -544,8 +546,11 @@ export default function KpiConfigPage() {
               <TableBody>
                 {configs?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                      Chưa có cấu hình nào. Hãy thêm cấu hình KPI đầu tiên của bạn.
+                    <TableCell colSpan={6} className="h-32">
+                      <TableEmptyState
+                        title="Chưa có cấu hình KPI"
+                        description="Hãy thêm cấu hình KPI đầu tiên để theo dõi hiệu suất"
+                      />
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -555,7 +560,7 @@ export default function KpiConfigPage() {
                         {KPI_CODES.find((k) => k.value === config.kpi_code)?.label ||
                           config.kpi_code}
                       </TableCell>
-                      <TableCell className="font-mono">
+                      <TableCell className="font-mono tabular-nums">
                         {config.target_value}
                       </TableCell>
                       <TableCell className="capitalize">{config.period_type}</TableCell>
@@ -576,9 +581,9 @@ export default function KpiConfigPage() {
                             variant="ghost"
                             size="icon"
                             onClick={() => restoreMutation.mutate(config.id)}
-                            title="Khôi phục"
+                            aria-label="Khôi phục"
                           >
-                            <RefreshCw className="h-4 w-4 text-green-600" />
+                            <RefreshCw className="h-4 w-4 text-success-600" />
                           </Button>
                         ) : (
                           <>
@@ -586,6 +591,7 @@ export default function KpiConfigPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => handleEdit(config)}
+                              aria-label="Chỉnh sửa"
                             >
                               <Pencil className="h-4 w-4" />
                             </Button>
@@ -593,6 +599,7 @@ export default function KpiConfigPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => setDeleteConfigId(config.id)}
+                              aria-label="Xóa"
                             >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
@@ -658,8 +665,11 @@ export default function KpiConfigPage() {
               <TableBody>
                 {targets?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      Chưa có mục tiêu năm. Hãy thêm mục tiêu để theo dõi YTD.
+                    <TableCell colSpan={8} className="h-32">
+                      <TableEmptyState
+                        title="Chưa có mục tiêu năm"
+                        description="Hãy thêm mục tiêu để theo dõi tiến độ YTD"
+                      />
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -681,21 +691,21 @@ export default function KpiConfigPage() {
                             <span className="text-sm">{getScopeLabel(target)}</span>
                           </div>
                         </TableCell>
-                        <TableCell className="font-mono">
+                        <TableCell className="font-mono tabular-nums">
                           {target.annual_target.toLocaleString()}
                         </TableCell>
-                        <TableCell className="font-mono">
+                        <TableCell className="font-mono tabular-nums">
                           {target.achieved_ytd.toLocaleString()}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <div className="flex-1 bg-muted rounded-full h-2 max-w-24">
                               <div
-                                className="bg-primary h-2 rounded-full transition-all"
+                                className="bg-primary h-2 rounded-full transition-[width]"
                                 style={{ width: `${Math.min(progress, 100)}%` }}
                               />
                             </div>
-                            <span className="text-sm font-medium">{progress}%</span>
+                            <span className="text-sm font-medium tabular-nums">{progress}%</span>
                           </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground text-sm">
@@ -723,7 +733,7 @@ export default function KpiConfigPage() {
                                   size="icon"
                                   onClick={() => syncTargetMutation.mutate(target.id)}
                                   disabled={syncTargetMutation.isPending}
-                                  title="Đồng bộ YTD"
+                                  aria-label="Đồng bộ YTD"
                                 >
                                   <RefreshCw className={cn("h-4 w-4", syncTargetMutation.isPending && "animate-spin")} />
                                 </Button>
@@ -732,6 +742,7 @@ export default function KpiConfigPage() {
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => handleEditTarget(target)}
+                                aria-label="Chỉnh sửa"
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
@@ -739,6 +750,7 @@ export default function KpiConfigPage() {
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => setDeleteTargetId(target.id)}
+                                aria-label="Xóa"
                               >
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               </Button>
@@ -1116,6 +1128,6 @@ export default function KpiConfigPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }

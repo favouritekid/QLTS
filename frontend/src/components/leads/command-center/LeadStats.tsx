@@ -2,8 +2,8 @@
 "use client";
 
 import React from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, UserPlus, Flame, TrendingUp } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 
 interface LeadStatsProps {
@@ -27,68 +27,78 @@ export const LeadStats = React.memo(function LeadStats({
 
   const stats = [
     {
-      title: "Tổng số Lead",
+      title: "Tổng số",
       value: totalCount,
       icon: Users,
-      color: "text-blue-600",
-      bgColor: "bg-blue-50",
+      color: "text-blue-600 dark:text-blue-400",
+      bgColor: "bg-blue-100 dark:bg-blue-900/40",
     },
     {
-      title: "Lead mới",
+      title: "Mới",
       value: newLeadsCount,
       icon: UserPlus,
-      color: "text-emerald-600",
-      bgColor: "bg-emerald-50",
+      color: "text-emerald-600 dark:text-emerald-400",
+      bgColor: "bg-emerald-100 dark:bg-emerald-900/40",
     },
     {
       title: "Điểm cao",
       value: highScoreCount,
       icon: Flame,
-      color: "text-orange-600",
-      bgColor: "bg-orange-50",
+      color: "text-orange-600 dark:text-orange-400",
+      bgColor: "bg-orange-100 dark:bg-orange-900/40",
     },
     {
-      title: "Tỉ lệ chuyển đổi",
+      title: "Chuyển đổi",
       value: `${conversionRate}%`,
       icon: TrendingUp,
-      color: "text-purple-600",
-      bgColor: "bg-purple-50",
+      color: "text-purple-600 dark:text-purple-400",
+      bgColor: "bg-purple-100 dark:bg-purple-900/40",
     },
   ];
 
   if (isLoading) {
     return (
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
         {[...Array(4)].map((_, i) => (
-          <Card key={i} className="animate-pulse">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <div className="h-4 w-20 bg-muted rounded" />
-            </CardHeader>
-            <CardContent>
-              <div className="h-8 w-16 bg-muted rounded" />
-            </CardContent>
-          </Card>
+          <div
+            key={i}
+            className="flex items-center gap-2 rounded-lg border bg-card p-2.5 sm:p-3 animate-pulse"
+          >
+            <div className="h-8 w-8 rounded-lg bg-muted" />
+            <div className="flex-1 space-y-1">
+              <div className="h-3 w-12 rounded bg-muted" />
+              <div className="h-5 w-8 rounded bg-muted" />
+            </div>
+          </div>
         ))}
       </div>
     );
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
       {stats.map((stat) => (
-        <Card key={stat.title} className="hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
+        <div
+          key={stat.title}
+          className={cn(
+            "flex items-center gap-2.5 rounded-lg border bg-card p-2.5 sm:p-3",
+            "hover:shadow-sm transition-shadow"
+          )}
+        >
+          {/* Icon - Always visible with strong colors */}
+          <div className={cn("flex-shrink-0 rounded-lg p-2", stat.bgColor)}>
+            <stat.icon className={cn("h-4 w-4 sm:h-5 sm:w-5", stat.color)} />
+          </div>
+          {/* Text */}
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] sm:text-xs font-medium text-muted-foreground truncate">
               {stat.title}
-            </CardTitle>
-            <div className={`p-2 rounded-lg ${stat.bgColor}`}>
-              <stat.icon className={`h-4 w-4 ${stat.color}`} />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stat.value}</div>
-          </CardContent>
-        </Card>
+            </p>
+            <p className="text-base sm:text-lg font-bold leading-tight">
+              {stat.value}
+            </p>
+          </div>
+        </div>
       ))}
     </div>
   );

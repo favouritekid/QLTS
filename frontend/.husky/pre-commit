@@ -1,2 +1,3 @@
 npx lint-staged
-npm run type-check # Add type checking before commit
+npm run type-check # Type checking before commit
+npm run arch:check # Architecture enforcement before commit

@@ -1,0 +1,21 @@
+"id","code","name_vi","display_order","is_active"
+1,"math","Toán",1,True
+2,"literature","Ngữ văn",2,True
+3,"english","Tiếng Anh",3,True
+4,"physics","Vật lý",4,True
+5,"chemistry","Hóa học",5,True
+6,"biology","Sinh học",6,True
+7,"history","Lịch sử",7,True
+8,"geography","Địa lý",8,True
+9,"civic_education","Giáo dục công dân",9,True
+10,"french","Tiếng Pháp",10,True
+11,"german","Tiếng Đức",11,True
+12,"russian","Tiếng Nga",12,True
+13,"chinese","Tiếng Trung",13,True
+14,"japanese","Tiếng Nhật",14,True
+15,"korean","Tiếng Hàn",15,True
+16,"art","Mỹ thuật",16,True
+17,"music","Âm nhạc",17,True
+18,"informatics","Tin học",18,True
+19,"technology","Công nghệ",19,True
+20,"physical_education","Thể dục",20,True

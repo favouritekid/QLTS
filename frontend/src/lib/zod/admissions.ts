@@ -18,6 +18,22 @@
 import { z } from "zod"
 
 // ==============================================================================
+// HELPERS
+// ==============================================================================
+
+/**
+ * Nullable String Helper
+ * Phase 3.1 Refactor: Reduces duplication for optional fields that need empty-string-to-null transformation.
+ */
+const nullableString = (max: number = 255) =>
+  z.string()
+    .max(max, `Không được quá ${max} ký tự`)
+    .optional()
+    .nullable()
+    .or(z.literal(""))
+    .transform(v => v === "" ? null : v)
+
+// ==============================================================================
 // NESTED SCHEMAS (for JSONB fields)
 // ==============================================================================
 
@@ -127,25 +143,13 @@ export const admissionScoreSchema = z.object({
   total_score: z.number().optional().nullable(),
   average_score: z.number().optional().nullable(),
   
-  // Legacy fields for backward compatibility
-  math_score: z
-    .number()
-    .min(0, "Điểm Toán phải từ 0 trở lên")
-    .max(10, "Điểm Toán không được quá 10")
-    .optional()
-    .nullable(),
-  literature_score: z
-    .number()
-    .min(0, "Điểm Văn phải từ 0 trở lên")
-    .max(10, "Điểm Văn không được quá 10")
-    .optional()
-    .nullable(),
-  english_score: z
-    .number()
-    .min(0, "Điểm Tiếng Anh phải từ 0 trở lên")
-    .max(10, "Điểm Tiếng Anh không được quá 10")
-    .optional()
-    .nullable(),
+  // =========================================================================
+  // ⚠️ DEPRECATED: Legacy fields – DO NOT USE FOR CALCULATION
+  // Only for backward compatibility
+  // =========================================================================
+  math_score: z.number().min(0).max(10).optional().nullable(),
+  literature_score: z.number().min(0).max(10).optional().nullable(),
+  english_score: z.number().min(0).max(10).optional().nullable(),
 })
 
 export type AdmissionScore = z.infer<typeof admissionScoreSchema>
@@ -166,16 +170,46 @@ export const documentItemSchema = z.object({
     .max(255, "Tên tài liệu không được quá 255 ký tự")
     .trim(),
   is_mandatory: z.boolean().optional(),
-  status: z.enum(["missing", "uploaded", "verified", "rejected"]),
+  // Phase 0.9: New document config fields (all optional for form/response compatibility)
+  requires_upload: z.boolean().optional(),
+  submission_format: z.enum(["photo", "certified_copy", "original"]).nullable().optional(),
+  /**
+   * FE-only state field - tracks user confirmation of submission format.
+   * Backend does not need this field.
+   * @see ADR-FE-005-submission-format-confirmed.md
+   */
+  submission_format_confirmed: z.boolean().optional(),
+  // Status and upload info
+  status: z.enum(["missing", "uploaded", "verified", "rejected", "paper_submitted"]),
   file_path: z
     .string()
     .max(512, "Đường dẫn file không được quá 512 ký tự")
     .nullable()
     .optional(),
+  /**
+   * File size in bytes (max 10MB).
+   * Added for BE-FE contract sync per admission.py:229-233
+   */
+  file_size: z.number().int().min(0).max(10485760).nullable().optional(),
   uploaded_at: z
     .string()
     .nullable()
     .optional(),
+  rejection_reason: z.string().nullable().optional(),
+  actual_submission_format: z.string().nullable().optional(),
+  /**
+   * Verified format - confirmed by officer during document review.
+   * Records the actual physical format of the document after verification.
+   */
+  verified_format: z.enum(["photo", "certified_copy", "original"]).nullable().optional(),
+  /**
+   * Verification timestamp - when officer verified the document.
+   */
+  verified_at: z.string().datetime({ offset: true }).nullable().optional(),
+  /**
+   * ID of officer who verified the document.
+   */
+  verified_by: z.number().int().nullable().optional(),
 })
 
 export type DocumentItem = z.infer<typeof documentItemSchema>
@@ -187,12 +221,17 @@ export type DocumentItem = z.infer<typeof documentItemSchema>
 /**
  * Create Admission Profile Schema
  * Used for POST /api/admissions
+ * REFACTORED (Phase 2): Now requires admission_method_id for AdmissionPath lookup
  */
 export const admissionProfileCreateSchema = z.object({
   lead_id: z
     .number()
     .int("Lead ID phải là số nguyên")
     .positive("Lead ID phải là số dương"),
+  admission_method_id: z
+    .number()
+    .int("Admission Method ID phải là số nguyên")
+    .positive("Admission Method ID phải là số dương"),
 })
 
 export type AdmissionProfileCreate = z.infer<
@@ -209,39 +248,44 @@ export const admissionProfileUpdateSchema = z.object({
   version: z.number().int().min(1).optional(),
 
   // Personal Info Fields
-  full_name: z.string().max(255).optional().nullable(),
+  // Phase 4 Fix: Allow optional for draft Save, backend enforces required on Submit
+  full_name: nullableString(255),
+  dob: nullableString(),
+  gender: nullableString(50),
+  nationality: nullableString(100),
+  ethnicity: nullableString(100),
+
+  // Optional fields
   phone: z
     .string()
     .regex(/^0\d{9,10}$/, "Số điện thoại không hợp lệ")
     .optional()
     .nullable()
-    .or(z.literal("")),
-  email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")),
-  dob: z.string().datetime({ offset: true }).optional().nullable(),
-  gender: z.string().max(50).optional().nullable(),
-  social_insurance_number: z.string().max(50).optional().nullable(),
-  nationality: z.string().max(100).optional().nullable(),
-  ethnicity: z.string().max(100).optional().nullable(),
-  religion: z.string().max(100).optional().nullable(),
-  disability_type: z.string().max(100).optional().nullable(),
-  permanent_province: z.string().max(100).optional().nullable(),
-  permanent_district: z.string().max(100).optional().nullable(),
-  permanent_ward: z.string().max(100).optional().nullable(),
-  place_of_birth: z.string().max(255).optional().nullable(),
-  native_place: z.string().max(255).optional().nullable(),
+    .or(z.literal(""))
+    .transform(v => v === "" ? null : v),
+  email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
+  social_insurance_number: nullableString(50),
+  religion: nullableString(100),
+  disability_type: nullableString(100),
+  permanent_province: nullableString(100),
+  permanent_district: nullableString(100),
+  permanent_ward: nullableString(100),
+  place_of_birth: nullableString(255),
+  native_place: nullableString(255),
   
-  // Political Info Dates
-  union_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
-  party_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
-  party_official_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
+  // Political Info Dates - Relaxed validation
+  union_entry_date: nullableString(),
+  party_entry_date: nullableString(),
+  party_official_entry_date: nullableString(),
 
-  // Identity
+  // Identity - Optional for draft, backend enforces on Submit
   citizen_id: z
     .string()
     .regex(/^\d{12}$/, "CCCD/CMND phải là 12 chữ số")
     .optional()
     .nullable()
-    .or(z.literal("")), // Allow empty string for drafts
+    .or(z.literal("")) // Allow empty string for drafts
+    .transform(v => v === "" ? null : v),
 
   // JSONB Arrays
   family_info: z.array(familyMemberSchema).optional().nullable(),
@@ -250,18 +294,114 @@ export const admissionProfileUpdateSchema = z.object({
   documents_checklist: z.array(documentItemSchema).optional().nullable(),
 })
 
-export type AdmissionProfileUpdate = z.infer<
+export type AdmissionProfileUpdateInput = z.input<
+  typeof admissionProfileUpdateSchema
+>
+
+export type AdmissionProfileUpdate = z.output<
   typeof admissionProfileUpdateSchema
 >
 
 /**
+ * Subject Group Schema (for applied_rules snapshot)
+ * Preserved from AdmissionPath for audit trail
+ */
+export const subjectGroupSnapshotSchema = z.object({
+  code: z.string(), // e.g., "A00", "D01"
+  name: z.string(), // e.g., "Toán - Lý - Hóa"
+  subjects: z.array(z.string()), // e.g., ["math", "physics", "chemistry"]
+})
+
+export type SubjectGroupSnapshot = z.infer<typeof subjectGroupSnapshotSchema>
+
+/**
+ * Document Config Schema (for applied_rules snapshot)
+ */
+export const documentConfigSnapshotSchema = z.object({
+  requires_upload: z.boolean().optional(),
+  submission_format: z.string().optional().nullable(),
+  is_mandatory: z.boolean().optional(),
+})
+
+export type DocumentConfigSnapshot = z.infer<typeof documentConfigSnapshotSchema>
+
+/**
+ * Applied Rules Schema
+ *
+ * ✅ CRITICAL: Complete snapshot with ALL scoring parameters
+ * Per ADMISSION_PROCESSING_FLOW_ANALYSIS.md Section 6.1
+ *
+ * This schema ensures immutable snapshot compliance:
+ * - All scoring rules frozen at profile creation time
+ * - No dependency on live configuration changes
+ * - Deterministic evaluation guaranteed
+ */
+export const appliedRulesSchema = z.object({
+  // =========================================================================
+  // GROUP 1: Basic Criteria
+  // =========================================================================
+  min_gpa: z.number().optional().nullable(),
+  min_score: z.number().optional().nullable(),
+
+  // =========================================================================
+  // GROUP 2: Scoring Configuration (CRITICAL for deterministic scoring)
+  // =========================================================================
+  subject_selection_mode: z.enum(["fixed", "best_n", "any_n"]).optional(),
+  scoring_method: z.enum(["sum", "average", "weighted"]).optional(),
+  required_subject_count: z.number().int().optional().nullable(),
+  min_subject_score: z.number().optional().nullable(), // Điểm liệt
+  max_possible_score: z.number().optional().nullable(),
+
+  // =========================================================================
+  // GROUP 3: Subject Validation (CRITICAL for input validation)
+  // =========================================================================
+  allowed_subject_codes: z.array(z.string()).optional().default([]), // e.g., ["math", "physics", "chemistry", "english"]
+  subject_groups: z.array(subjectGroupSnapshotSchema).optional().default([]), // Audit trail
+
+  // =========================================================================
+  // GROUP 4: Method & Path Metadata
+  // =========================================================================
+  admission_method: z.string().optional().nullable(), // e.g., "HOC_BA"
+  admission_method_id: z.number().int().optional(),
+  // Ticket #3: Explicit method type (Strict)
+  method_type: z.enum(["gpa_only", "subject_based", "combined"]).nullable(),
+
+  // =========================================================================
+  // GROUP 5: Document Requirements
+  // =========================================================================
+  mandatory_docs: z.array(z.string()).optional().default([]),
+  doc_configs: z.record(z.string(), documentConfigSnapshotSchema).optional().default({}),
+  // Ticket #4: Upload Configuration (Relaxed for migration compatibility)
+  upload_config: z.object({
+    allowed_types: z.array(z.string()).default([]),
+    max_file_size: z.number().int().default(10 * 1024 * 1024), // 10MB default
+    allowed_extensions: z.array(z.string()).default([]),
+  }).optional().nullable(),
+
+  // =========================================================================
+  // GROUP 6: Snapshot Metadata
+  // =========================================================================
+  snapshot_source: z.enum(["relational", "jsonb", "migration"]).optional(),
+  admission_path_id: z.number().int().optional(),
+  academic_info_id: z.number().int().optional(),
+})
+
+export type AppliedRules = z.infer<typeof appliedRulesSchema>
+
+/**
  * Admission Profile Response Schema
  * Used for API responses (GET, POST, PUT)
+ *
+ * Phase 7: Added permissions, eligibility_status, validation_errors,
+ * available_actions, completion_percent for Frontend Thin Client compliance.
+ *
+ * Phase 8: Updated applied_rules with complete 18-field schema
  */
 export const admissionProfileResponseSchema = z.object({
   id: z.number(),
   lead_id: z.number(),
   citizen_id: z.string().optional().nullable(),
+  citizen_id_masked: z.string().optional().nullable(), // Masked CCCD for display (e.g., ********1234)
   // Personal Info Extensions
   full_name: z.string().nullable(),
   dob: z.string().datetime({ offset: true }).nullable(), // Backend returns ISO string
@@ -281,9 +421,11 @@ export const admissionProfileResponseSchema = z.object({
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_official_entry_date: z.string().datetime({ offset: true }).nullable(),
-  status: z.enum(["draft", "approved", "rejected", "enrolled"]),
+  // Status (extended for async-first workflow)
+  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "confirmed", "enrolled"]),
   version: z.number().int().optional(), // Optimistic locking
-  applied_rules: z.record(z.string(), z.any()), // JSONB object
+  academic_year: z.number().int().optional(), // Academic year
+  applied_rules: appliedRulesSchema, // ✅ NEW: Properly typed with 18 fields
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),
   admission_scores: admissionScoreSchema.nullable(),
@@ -293,6 +435,125 @@ export const admissionProfileResponseSchema = z.object({
   // Nested relationships (optional)
   lead: z.any().optional().nullable(),
   student: z.any().optional().nullable(),
+
+  // Denormalized fields for list display
+  program_name: z.string().optional().nullable(),
+  
+  // =========================================================================
+  // Phase 7: Frontend Thin Client Fields (computed by backend)
+  // =========================================================================
+  
+  // Permission flags (from backend Casbin + status)
+  permissions: z.record(z.string(), z.boolean()).default({}),
+  
+  // ✅ Ticket #3.1: Document Status Summary (Computed by Backend)
+  document_stats: z.object({
+    submitted_count: z.number().int(),
+    verified_count: z.number().int(),
+    mandatory_count: z.number().int(), 
+    missing_count: z.number().int()
+  }).nullable().optional(),
+  
+  // Eligibility status (backend-computed)
+  eligibility_status: z.enum(["eligible", "ineligible", "pending"]).default("pending"),
+  
+  // Validation errors (reasons for ineligibility)
+  validation_errors: z.array(z.string()).default([]),
+  
+  // Available workflow actions
+  available_actions: z.array(z.string()).default([]),
+  
+  // Profile completion percentage (0-100)
+  completion_percent: z.number().int().min(0).max(100).default(0),
+  
+  // Phase 0.9: Validation Summary (Grouped Errors for UX)
+  validation_summary: z.object({
+    gpa: z.object({
+      has_error: z.boolean(),
+      label: z.string(),
+      count: z.number().int()
+    }).optional(),
+    documents: z.object({
+      has_error: z.boolean(),
+      label: z.string(),
+      count: z.number().int()
+    }).optional(),
+    personal: z.object({
+      has_error: z.boolean(),
+      label: z.string(),
+      count: z.number().int()
+    }).optional()
+  }).optional().nullable(),
+
+  // Grouped validation errors (categorized display)
+  grouped_validation_errors: z.object({
+    personal_info: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
+    }).optional(),
+    documents: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
+    }).optional(),
+    scores: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
+    }).optional()
+  }).optional().nullable(),
+
+  /**
+   * Step status for sidebar navigation.
+   * NOTE: Backend returns Dict[int, str] but JSON serializes keys as strings.
+   * Frontend converts parseInt() in AdmissionDetailClient.tsx:102-106
+   * @see FRONTEND_ARCHITECTURE_V3.md Section 0.6
+   */
+  step_status: z.record(z.string(), z.enum(["success", "warning", "error", "locked"])).optional().nullable(),
+
+  /**
+   * Executive summary for dashboard overview.
+   * Provides high-level status summary computed by backend.
+   * Frontend uses this to display overall progress, next actions, and blocking issues.
+   */
+  executive_summary: z.object({
+    overall_status: z.enum(["incomplete", "warning", "ready"]),
+    completion_percent: z.number().int().min(0).max(100),
+    step_summary: z.record(z.string(), z.number()),
+    critical_blockers: z.array(z.string()),
+    warnings: z.array(z.string()),
+    next_action: z.string(),
+    can_submit: z.boolean(),
+  }).optional().nullable(),
+
+  // Computed scores (backend-calculated)
+  total_score: z.number().optional().nullable(),
+  average_score: z.number().optional().nullable(),
+  
+  // =========================================================================
+  // Audit Trail Fields (BE-FE Contract Sync per admission.py:427-434)
+  // =========================================================================
+  approved_at: z.string().datetime({ offset: true }).nullable().optional(),
+  approved_by_id: z.number().nullable().optional(),
+  approval_notes: z.string().nullable().optional(),
+  rejected_at: z.string().datetime({ offset: true }).nullable().optional(),
+  rejected_by_id: z.number().nullable().optional(),
+  rejection_reason: z.string().nullable().optional(),
+
+  // Ticket #2: Backend-computed qualification status
+  is_qualified: z.boolean().nullable().optional().describe("Whether profile meets admission criteria. Computed by backend."),
+
+  // =========================================================================
+  // Ticket #5: Score Snapshot Status (Thin Client Compliance)
+  // Backend computes pass/fail status, Frontend ONLY renders
+  // =========================================================================
+  score_snapshot_status: z.object({
+    total_status: z.enum(["passing", "failing"]).nullable(),
+    subject_statuses: z.record(z.string(), z.enum(["passing", "failing"]).nullable()),
+    min_subject_score: z.number(),
+    min_score: z.number(),
+  }).nullable().optional().describe("Backend-computed score pass/fail status for each subject and total"),
 })
 
 export type AdmissionProfileResponse = z.infer<
@@ -300,13 +561,34 @@ export type AdmissionProfileResponse = z.infer<
 >
 
 /**
+ * Paginated Admissions Response Schema
+ * Used for GET /api/admissions response
+ */
+export const admissionsPageSchema = z.object({
+  total_count: z.number(),
+  page: z.number(),
+  page_size: z.number(),
+  profiles: z.array(admissionProfileResponseSchema),
+})
+
+export type AdmissionsPage = z.infer<typeof admissionsPageSchema>
+
+/**
  * Submit Response Schema
  * Used for POST /api/admissions/{id}/submit response
+ * 
+ * ✅ FIXED: Match Backend admission.py:546 exactly
+ * Backend only returns: "draft" (validation failed) or "submitted" (success)
+ * Other statuses (approved, rejected) come from separate action endpoints.
+ * 
+ * @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #4
  */
 export const admissionSubmitResponseSchema = z.object({
-  status: z.enum(["approved", "rejected"]).nullable(),
+  /** Status after submit: "draft" (failed validation) or "submitted" (success) */
+  status: z.enum(["draft", "submitted"]).nullable(),
   message: z.string().nullable(),
   errors: z.array(z.string()).nullable(),
+  validation_errors: z.array(z.string()).default([]),
 })
 
 export type AdmissionSubmitResponse = z.infer<
@@ -434,41 +716,153 @@ export function validatePhoneNumber(phone: string): boolean {
 }
 
 /**
- * Get status badge color
+ * Status color mapping
+ * Phase 3 Fix: Use Record with fallback for unknown statuses
+ * @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #5
  */
-export function getStatusColor(
-  status: "draft" | "approved" | "rejected" | "enrolled"
-): string {
-  switch (status) {
-    case "draft":
-      return "bg-gray-100 text-gray-800"
-    case "approved":
-      return "bg-green-100 text-green-800"
-    case "rejected":
-      return "bg-red-100 text-red-800"
-    case "enrolled":
-      return "bg-blue-100 text-blue-800"
-    default:
-      return "bg-gray-100 text-gray-800"
-  }
+const STATUS_COLORS: Record<string, string> = {
+  draft: "bg-muted text-muted-foreground",
+  submitted: "bg-warning-100 text-warning-800",
+  resubmitted: "bg-warning-100 text-warning-800",
+  approved: "bg-success-100 text-success-800",
+  rejected: "bg-error-100 text-error-800",
+  confirmed: "bg-success-100 text-success-800",
+  enrolled: "bg-info-100 text-info-800",
+  overridden: "bg-purple-100 text-purple-800",
+}
+
+/**
+ * Get status badge color
+ * Phase 3 Fix: Accepts any string status with fallback for unknown values
+ */
+export function getStatusColor(status: string): string {
+  return STATUS_COLORS[status] ?? "bg-muted text-muted-foreground"
+}
+
+/**
+ * Status label mapping (Vietnamese)
+ * Phase 3 Fix: Use Record with fallback for unknown statuses
+ */
+const STATUS_LABELS: Record<string, string> = {
+  draft: "Nháp",
+  submitted: "Chờ duyệt",
+  resubmitted: "Nộp lại",
+  approved: "Đã duyệt",
+  rejected: "Từ chối",
+  confirmed: "Đã xác nhận",
+  enrolled: "Đã nhập học",
+  overridden: "Đã override",
 }
 
 /**
  * Get status label (Vietnamese)
+ * Phase 3 Fix: Accepts any string status with fallback
  */
-export function getStatusLabel(
-  status: "draft" | "approved" | "rejected" | "enrolled"
-): string {
-  switch (status) {
-    case "draft":
-      return "Nháp"
-    case "approved":
-      return "Đã duyệt"
-    case "rejected":
-      return "Từ chối"
-    case "enrolled":
-      return "Đã nhập học"
-    default:
-      return status
-  }
+export function getStatusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status
 }
+
+// ==============================================================================
+// WORKFLOW ACTION SCHEMAS
+// ==============================================================================
+
+/**
+ * Approve Request Schema
+ * Mirrors backend: app/schemas/admissions.py -> ApproveRequest
+ * 
+ * Used when Manager/Admin approves a submitted admission profile.
+ * Requires version for optimistic locking.
+ */
+export const approveRequestSchema = z.object({
+  notes: z.string().optional(),
+  version: z.number().int().positive("Version must be a positive integer"),
+})
+
+export type ApproveRequest = z.infer<typeof approveRequestSchema>
+
+/**
+ * Reject Request Schema
+ * Mirrors backend: app/schemas/admissions.py -> RejectRequest
+ * 
+ * Used when Manager/Admin rejects a submitted admission profile.
+ * Requires rejection reason (minimum 10 characters for clarity)
+ * and version for optimistic locking.
+ */
+export const rejectRequestSchema = z.object({
+  reason: z
+    .string()
+    .min(10, "Lý do từ chối phải có ít nhất 10 ký tự")
+    .max(1000, "Lý do từ chối không được quá 1000 ký tự")
+    .trim(),
+  version: z.number().int().positive("Version must be a positive integer"),
+})
+
+export type RejectRequest = z.infer<typeof rejectRequestSchema>
+
+// ==============================================================================
+// BULK ACTION SCHEMAS
+// ==============================================================================
+
+/**
+ * Bulk Approve Request Schema
+ * Used for POST /api/admissions/bulk/approve
+ */
+export const bulkApproveRequestSchema = z.object({
+  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  notes: z.string().max(1000).optional(),
+})
+
+export type BulkApproveRequest = z.infer<typeof bulkApproveRequestSchema>
+
+/**
+ * Bulk Reject Request Schema
+ * Used for POST /api/admissions/bulk/reject
+ */
+export const bulkRejectRequestSchema = z.object({
+  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  reason: z.string().min(10, "Lý do từ chối phải có ít nhất 10 ký tự").max(1000),
+})
+
+export type BulkRejectRequest = z.infer<typeof bulkRejectRequestSchema>
+
+/**
+ * Bulk Assign Request Schema
+ * Used for POST /api/admissions/bulk/assign
+ */
+export const bulkAssignRequestSchema = z.object({
+  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  officer_id: z.number().int().positive(),
+})
+
+export type BulkAssignRequest = z.infer<typeof bulkAssignRequestSchema>
+
+/**
+ * Bulk Action Response Schema
+ * Used for bulk approve/reject/assign responses
+ */
+export const bulkActionResponseSchema = z.object({
+  success_count: z.number().int(),
+  failed_count: z.number().int(),
+  failed_ids: z.array(z.number().int()),
+  errors: z.record(z.string(), z.string()).optional().nullable(),
+  message: z.string(),
+})
+
+export type BulkActionResponse = z.infer<typeof bulkActionResponseSchema>
+
+/**
+ * Admission List Params
+ * Query parameters for GET /api/admissions
+ */
+export interface AdmissionListParams {
+  page?: number
+  page_size?: number
+  status?: string       // comma-separated for multi-select
+  search?: string
+  major_id?: string     // comma-separated
+  date_from?: string    // ISO date string
+  date_to?: string      // ISO date string
+  sort_by?: 'created_at' | 'updated_at' | 'full_name' | 'status'
+  order?: 'asc' | 'desc'
+}
+

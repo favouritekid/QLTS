@@ -1,0 +1,416 @@
+                                                                      
+● ---                                                                           
+  📊 CONSOLIDATED EDGE CASE ANALYSIS: Lead → Consultation → Admission           
+                                                                                
+  SUMMARY TABLE                                                                 
+  #: I. LEAD                                                                    
+  Category:                                                                     
+  Edge Case:                                                                    
+  Status:                                                                       
+  Risk:                                                                         
+  Priority:                                                                     
+  ────────────────────────────────────────                                      
+  #: 1                                                                          
+  Category: Lead                                                                
+  Edge Case: Duplicate detection (email/phone/citizen_id)                       
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 2                                                                          
+  Category: Lead                                                                
+  Edge Case: Data update after Admission created                                
+  Status: ⚠️ Partial                                                            
+  Risk: MEDIUM                                                                  
+  Priority: P2                                                                  
+  ────────────────────────────────────────                                      
+  #: 3                                                                          
+  Category: Lead                                                                
+  Edge Case: Validation (Zalo link, phone format)                               
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 4                                                                          
+  Category: Lead                                                                
+  Edge Case: Status transition restrictions                                     
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 5                                                                          
+  Category: Lead                                                                
+  Edge Case: Deletion with linked data                                          
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: II. CONSULTATION                                                           
+  Category:                                                                     
+  Edge Case:                                                                    
+  Status:                                                                       
+  Risk:                                                                         
+  Priority:                                                                     
+  ────────────────────────────────────────                                      
+  #: 6                                                                          
+  Category: Consultation                                                        
+  Edge Case: Parallel consultations                                             
+  Status: ⚠️ By Design                                                          
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 7                                                                          
+  Category: Consultation                                                        
+  Edge Case: Completion requirements                                            
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 8                                                                          
+  Category: Consultation                                                        
+  Edge Case: Cancelled handling                                                 
+  Status: ⚠️ Partial                                                            
+  Risk: MEDIUM                                                                  
+  Priority: P2                                                                  
+  ────────────────────────────────────────                                      
+  #: 9                                                                          
+  Category: Consultation                                                        
+  Edge Case: Incomplete data validation                                         
+  Status: ❌ Missing                                                            
+  Risk: HIGH                                                                    
+  Priority: P0                                                                  
+  ────────────────────────────────────────                                      
+  #: 10                                                                         
+  Category: Consultation                                                        
+  Edge Case: Edits after Admission                                              
+  Status: ⚠️ Partial                                                            
+  Risk: MEDIUM                                                                  
+  Priority: P2                                                                  
+  ────────────────────────────────────────                                      
+  #: 11                                                                         
+  Category: Consultation                                                        
+  Edge Case: Officer reassignment                                               
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: III. ADMISSION                                                             
+  Category:                                                                     
+  Edge Case:                                                                    
+  Status:                                                                       
+  Risk:                                                                         
+  Priority:                                                                     
+  ────────────────────────────────────────                                      
+  #: 12                                                                         
+  Category: Admission                                                           
+  Edge Case: Duplicate per academic year                                        
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 13                                                                         
+  Category: Admission                                                           
+  Edge Case: Prerequisite validation                                            
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 14                                                                         
+  Category: Admission                                                           
+  Edge Case: Lead ↔ Admission sync                                              
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 15                                                                         
+  Category: Admission                                                           
+  Edge Case: Program change mid-process                                         
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 16                                                                         
+  Category: Admission                                                           
+  Edge Case: Rejection → re-apply                                               
+  Status: ⚠️ Partial                                                            
+  Risk: MEDIUM                                                                  
+  Priority: P2                                                                  
+  ────────────────────────────────────────                                      
+  #: 17                                                                         
+  Category: Admission                                                           
+  Edge Case: API locking draft/submitted                                        
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 18                                                                         
+  Category: Admission                                                           
+  Edge Case: Multiple academic years                                            
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: IV. DATA CONSISTENCY                                                       
+  Category:                                                                     
+  Edge Case:                                                                    
+  Status:                                                                       
+  Risk:                                                                         
+  Priority:                                                                     
+  ────────────────────────────────────────                                      
+  #: 19                                                                         
+  Category: Data                                                                
+  Edge Case: Status sync Lead ↔ Consultation ↔ Admission                        
+  Status: ⚠️ Partial                                                            
+  Risk: MEDIUM                                                                  
+  Priority: P2                                                                  
+  ────────────────────────────────────────                                      
+  #: 20                                                                         
+  Category: Data                                                                
+  Edge Case: Cascade delete Lead → Admission                                    
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 21                                                                         
+  Category: Data                                                                
+  Edge Case: Orphan Admission when Consultation deleted                         
+  Status: ✅ By Design                                                          
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 22                                                                         
+  Category: Data                                                                
+  Edge Case: Concurrent officer updates                                         
+  Status: ⚠️ Partial                                                            
+  Risk: MEDIUM                                                                  
+  Priority: P2                                                                  
+  ────────────────────────────────────────                                      
+  #: V. PERFORMANCE                                                             
+  Category:                                                                     
+  Edge Case:                                                                    
+  Status:                                                                       
+  Risk:                                                                         
+  Priority:                                                                     
+  ────────────────────────────────────────                                      
+  #: 23                                                                         
+  Category: Performance                                                         
+  Edge Case: N+1 query prevention                                               
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 24                                                                         
+  Category: Performance                                                         
+  Edge Case: Large dataset pagination                                           
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 25                                                                         
+  Category: Performance                                                         
+  Edge Case: Cache invalidation                                                 
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: VI. SECURITY                                                               
+  Category:                                                                     
+  Edge Case:                                                                    
+  Status:                                                                       
+  Risk:                                                                         
+  Priority:                                                                     
+  ────────────────────────────────────────                                      
+  #: 26                                                                         
+  Category: Security                                                            
+  Edge Case: IDOR protection                                                    
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 27                                                                         
+  Category: Security                                                            
+  Edge Case: Mass assignment prevention                                         
+  Status: ⚠️ Partial                                                            
+  Risk: LOW-MED                                                                 
+  Priority: P3                                                                  
+  ────────────────────────────────────────                                      
+  #: 28                                                                         
+  Category: Security                                                            
+  Edge Case: Rate limiting                                                      
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: VII. UX                                                                    
+  Category:                                                                     
+  Edge Case:                                                                    
+  Status:                                                                       
+  Risk:                                                                         
+  Priority:                                                                     
+  ────────────────────────────────────────                                      
+  #: 29                                                                         
+  Category: UX                                                                  
+  Edge Case: UI block during pending                                            
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 30                                                                         
+  Category: UX                                                                  
+  Edge Case: Rollback UI on mutation fail                                       
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ────────────────────────────────────────                                      
+  #: 31                                                                         
+  Category: UX                                                                  
+  Edge Case: Realtime notifications                                             
+  Status: ✅ Full                                                               
+  Risk: LOW                                                                     
+  Priority: -                                                                   
+  ---                                                                           
+  🔴 HIGH RISK - IMMEDIATE ACTION NEEDED                                        
+                                                                                
+  #9: Incomplete Consultation Data (P0)                                         
+                                                                                
+  Problem: No validation that consultation has minimum required data before     
+  allowing Admission creation.                                                  
+                                                                                
+  Current State:                                                                
+  - Consultation can be created with only scheduled_at and notes                
+  - No check for key fields: consultation_status_id, officer_id                 
+  - Lead can proceed to Admission with incomplete consultation history          
+                                                                                
+  Risk: Orphaned leads in pipeline with no clear status/ownership.              
+                                                                                
+  Recommendation:                                                               
+  # In admission_service.create_profile():                                      
+  async def _validate_consultation_completeness(lead: Lead):                    
+      latest_consultation = lead.consultations[-1] if lead.consultations else   
+  None                                                                          
+      if not latest_consultation:                                               
+          raise BusinessRuleViolation("Lead must have at least one              
+  consultation")                                                                
+      if not latest_consultation.consultation_status_id:                        
+          raise BusinessRuleViolation("Latest consultation must have a status") 
+                                                                                
+  ---                                                                           
+  ⚠️ MEDIUM RISK - PLAN FOR NEXT SPRINT                                         
+                                                                                
+  #2: Data Update After Admission Created                                       
+                                                                                
+  Gap: Lead personal data can be updated even after Admission profile exists,   
+  causing snapshot drift.                                                       
+  Fix: Flag in admission_service.py: lead.has_admission_profile = True → lock   
+  certain lead fields.                                                          
+                                                                                
+  #8: Cancelled Consultation Handling                                           
+                                                                                
+  Gap: No explicit "cancelled" status in FSM. Users use "Hẹn liên hệ lại" as    
+  workaround.                                                                   
+  Fix: Add CONSULTATION_CANCELLED status with is_final=True,                    
+  outcome_type='negative'.                                                      
+                                                                                
+  #10: Consultation Edits After Admission                                       
+                                                                                
+  Gap: Officers can edit consultations even after Lead has active Admission,    
+  creating audit gaps.                                                          
+  Fix: Add check: if lead.admission_profile and admission.status != 'draft':    
+  raise                                                                         
+                                                                                
+  #16: Rejection → Re-apply Flow                                                
+                                                                                
+  Gap: After rejection, no clear "appeal" or "re-apply" workflow. Currently     
+  allows new profile for next academic year only.                               
+  Fix: Consider adding ADMISSION_APPEAL status or soft-reset to draft.          
+                                                                                
+  #19: Cross-Entity Status Sync                                                 
+                                                                                
+  Gap: Forward sync (Admission → Lead) exists, but reverse sync (Lead status →  
+  Admission) doesn't.                                                           
+  Fix: Implement bidirectional sync with clear "source of truth" documentation. 
+                                                                                
+  #22: Concurrent Officer Updates                                               
+                                                                                
+  Gap: Optimistic locking exists for Admission but NOT for Lead/Consultation    
+  updates.                                                                      
+  Fix: Add version check in lead_service.update_lead():                         
+  if lead.version != request.expected_version:                                  
+      raise ConflictError("Lead modified by another user")                      
+                                                                                
+  ---                                                                           
+  ✅ WELL HANDLED AREAS                                                         
+  Category: Duplicate Prevention                                                
+  Key Implementation: 3-layer locking: Redis distributed lock + SELECT FOR      
+  UPDATE                                                                        
+     + optimistic version                                                       
+  ────────────────────────────────────────                                      
+  Category: IDOR Protection                                                     
+  Key Implementation: Two-layer checks in deps.py + service layer. Returns 404  
+    (not 403)                                                                   
+  ────────────────────────────────────────                                      
+  Category: Rate Limiting                                                       
+  Key Implementation: 200 writes/hour per user, Redis-backed in production      
+  ────────────────────────────────────────                                      
+  Category: N+1 Prevention                                                      
+  Key Implementation: selectinload() + joinedload() in all list queries         
+  ────────────────────────────────────────                                      
+  Category: Cache Invalidation                                                  
+  Key Implementation: React Query + Socket.IO reconnect callback                
+  ────────────────────────────────────────                                      
+  Category: Cascade Deletes                                                     
+  Key Implementation: ORM-level cascade="all, delete-orphan" + DB               
+    ondelete="CASCADE"                                                          
+  ────────────────────────────────────────                                      
+  Category: Status FSM                                                          
+  Key Implementation: ALLOWED_TRANSITIONS dict with terminal status guards      
+  ---                                                                           
+  📋 RECOMMENDED ACTION PLAN                                                    
+  Priority: P0                                                                  
+  Edge Case: #9 Consultation completeness validation                            
+  Effort: 2h                                                                    
+  Impact: Prevents data quality issues                                          
+  ────────────────────────────────────────                                      
+  Priority: P2                                                                  
+  Edge Case: #22 Lead optimistic locking                                        
+  Effort: 1h                                                                    
+  Impact: Prevents data corruption                                              
+  ────────────────────────────────────────                                      
+  Priority: P2                                                                  
+  Edge Case: #2 Lock lead fields after admission                                
+  Effort: 2h                                                                    
+  Impact: Maintains snapshot integrity                                          
+  ────────────────────────────────────────                                      
+  Priority: P2                                                                  
+  Edge Case: #19 Bidirectional status sync                                      
+  Effort: 3h                                                                    
+  Impact: Reduces admin confusion                                               
+  ────────────────────────────────────────                                      
+  Priority: P3                                                                  
+  Edge Case: #8 Add CANCELLED consultation status                               
+  Effort: 1h                                                                    
+  Impact: Better workflow UX                                                    
+  ────────────────────────────────────────                                      
+  Priority: P3                                                                  
+  Edge Case: #27 Explicit allowed-fields validation                             
+  Effort: 1h                                                                    
+  Impact: Defense in depth                                                      
+  ---                                                                           
+                                                                                
+● Analysis complete. Key findings:                                              
+                                                                                
+  Overall Status: 20/31 fully handled, 9 partial, 1 missing, 1 by-design        
+                                                                                
+  Most Critical Gap (#9): System allows Admission creation even when Lead has   
+  incomplete consultation data (no status, no officer assignment). This is a    
+  data quality risk that should be addressed first.                             
+                                                                                
+  Architecture Strengths:                                                       
+  - 3-layer duplicate prevention (Redis + pessimistic + optimistic locking)     
+  - Two-layer IDOR protection (deps.py + service layer)                         
+  - Comprehensive eager loading prevents N+1                                    
+  - React Query + Socket.IO for cache coherence                                 
+                                                                                
+  Bạn muốn tôi implement fix cho edge case nào trước? Recommend bắt đầu từ #9   
+  (consultation completeness validation) vì có risk cao nhất.                   
+  

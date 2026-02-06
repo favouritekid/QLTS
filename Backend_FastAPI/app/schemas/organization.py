@@ -34,6 +34,14 @@ class OrganizationUnitType(str, Enum):
         return [item.value for item in cls]
 
 
+class AdmissionStatus(str, Enum):
+    """Trạng thái cấu hình tuyển sinh của một Offering trong năm học"""
+    CONFIGURED = "CONFIGURED"      # Đã có cấu hình (Path count > 0)
+    READY = "READY"                # Chưa có path nhưng đủ chỉ tiêu (Quota > 0)
+    NOT_ELIGIBLE = "NOT_ELIGIBLE"  # Chưa đủ chỉ tiêu
+
+
+
 # =============================================================================
 # SCHEMA VALIDATION CHO JSON (CẤP 3)
 # =============================================================================
@@ -56,30 +64,6 @@ class SubjectGroupResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class AdmissionCriterion(BaseModel):
-    """Schema validation cho admission_criteria JSON field"""
-    id: str = Field(..., description="Unique ID (e.g., 'hocba_2025')")
-    method_name: str = Field(..., max_length=100, description="Tên phương thức tuyển sinh")
-    program_type: Optional[str] = Field(None, max_length=100, description="Loại hình (e.g., 'Chính quy')")
-    subject_groups: Optional[List[str]] = Field(None, max_items=10, description="Tổ hợp môn (e.g., ['A00', 'D07'])")
-    min_score: Optional[float] = Field(None, ge=0, description="Điểm tối thiểu")
-    conditions: Optional[str] = Field(None, max_length=1000, description="Điều kiện")
-    profile_requirements: Optional[str] = Field(None, max_length=1000, description="Yêu cầu hồ sơ")
-    required_documents: Optional[List[RequiredDocument]] = Field(
-        None,
-        max_length=20,
-        description="Danh sách hồ sơ bắt buộc (e.g., [{'code': 'hoc_ba', 'label': 'Học bạ THPT'}])"
-    )
-
-    @field_validator('subject_groups')
-    @classmethod
-    def validate_subject_groups(cls, v):
-        if v:
-            for group in v:
-                if not re.match(r'^[A-Z0-9]{2,3}$', group):
-                    raise ValueError(f'Invalid subject group format: {group}. Must be like A00, D07')
-        return v
-
 
 # =============================================================================
 # CẤP 3: OfferingAcademicInfo
@@ -90,29 +74,10 @@ class OfferingAcademicInfoBase(BaseModel):
     tuition_fee_per_year: Optional[Decimal] = Field(None, ge=0, description="Học phí một năm (VND)")
     annual_admission_quota: Optional[int] = Field(None, ge=0, description="Chỉ tiêu tuyển sinh")
     is_published: bool = Field(default=False, description="Đã công bố?")
-    admission_criteria: Optional[List[AdmissionCriterion]] = Field(None, description="Tiêu chí tuyển sinh")
+    # NOTE: admission_criteria JSONB removed - use AdmissionPath API instead
     target_audience: Optional[str] = Field(None, max_length=1000, description="Đối tượng phù hợp")
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0, description="Điểm chuẩn năm trước")
     applied_discount_policy_ids: Optional[List[int]] = Field(None, description="Danh sách ID chính sách ưu đãi áp dụng")
-
-    @field_validator('admission_criteria', mode='before')
-    @classmethod
-    def normalize_admission_criteria(cls, value):
-        """
-        Normalize admission_criteria to handle both formats:
-        - Old format: {"criteria": [...]}  (from migration)
-        - New format: [...]  (direct list)
-
-        This validator runs BEFORE Pydantic tries to parse the field,
-        and works with from_attributes=True when loading from ORM models.
-        """
-        if value is None:
-            return None
-        # If it's a dict with 'criteria' key, extract the list
-        if isinstance(value, dict) and 'criteria' in value:
-            return value['criteria']
-        # Otherwise return as-is (should be a list already)
-        return value
 
 
 class OfferingAcademicInfoCreate(OfferingAcademicInfoBase):
@@ -124,10 +89,11 @@ class OfferingAcademicInfoUpdate(BaseModel):
     tuition_fee_per_year: Optional[Decimal] = Field(None, ge=0)
     annual_admission_quota: Optional[int] = Field(None, ge=0)
     is_published: Optional[bool] = None
-    admission_criteria: Optional[List[AdmissionCriterion]] = None
+    # NOTE: admission_criteria JSONB removed - use AdmissionPath API instead
     target_audience: Optional[str] = Field(None, max_length=1000)
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0)
     applied_discount_policy_ids: Optional[List[int]] = None
+
 
 
 class OfferingAcademicInfo(OfferingAcademicInfoBase):
@@ -138,6 +104,11 @@ class OfferingAcademicInfo(OfferingAcademicInfoBase):
     updated_at: Optional[datetime] = None
     created_by_user_id: Optional[int] = None
     updated_by_user_id: Optional[int] = None
+    
+    # Computed fields
+    path_count: Optional[int] = Field(default=0, description="Số lượng đợt tuyển sinh")
+    admission_status: Optional[AdmissionStatus] = Field(default=None, description="Trạng thái cấu hình")
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -178,9 +149,9 @@ class ProgramOffering(ProgramOfferingBase):
     program_id: int
     # Include program name for display (using forward reference)
     program: Optional["MajorProgramShallow"] = None
-    # ✅ Removed academic_info_history to prevent MissingGreenlet error
-    # Frontend should load academic info on-demand using dedicated endpoints
-    # This avoids loading 30,000+ historical records unnecessarily
+    # Include academic info history for quota calculation
+    academic_info_history: List["OfferingAcademicInfo"] = Field(default_factory=list)
+    offering_type_id: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -491,9 +462,10 @@ class ConfigDocumentTypeUpdate(BaseModel):
 class ConfigDocumentType(ConfigDocumentTypeBase):
     """Full schema for document type (includes ID)."""
     id: int = Field(..., description="Primary key")
-
     model_config = ConfigDict(from_attributes=True)
 
+# Resolve forward references
+ProgramOffering.model_rebuild()
 
 # --- Distribution Schemas ---
 class DistributionRuleBase(BaseModel):
@@ -520,6 +492,7 @@ class DistributionRuleResponse(DistributionRuleBase):
     unit_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
 
 # Resolve forward references
 ProgramOffering.model_rebuild()

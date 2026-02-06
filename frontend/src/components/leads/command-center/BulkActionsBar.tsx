@@ -72,6 +72,7 @@ export function BulkActionsBar({
           size="sm"
           onClick={onClearSelection}
           className="h-6 w-6 p-0"
+          aria-label="Bỏ chọn tất cả"
         >
           <X className="h-4 w-4" />
         </Button>
@@ -113,7 +114,7 @@ export function BulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={() => onBulkDelete(selectedLeads)}
-          className="h-8 gap-1.5 text-red-600 hover:text-red-700"
+          className="h-8 gap-1.5 text-error-600 hover:text-error-700"
         >
           <Trash2 className="h-4 w-4" />
           Xóa

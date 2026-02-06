@@ -1,0 +1,282 @@
+"id","code","name","subjects","display_order","is_active"
+1,"AH1","Toán, Địa lí, Tiếng Hàn","[""math"", ""geography"", ""korean""]",1,True
+2,"AH2","Toán, Hóa học, Tiếng Hàn","[""math"", ""chemistry"", ""korean""]",2,True
+3,"AH3","Toán, Vật lí, Tiếng Hàn","[""math"", ""physics"", ""korean""]",3,True
+4,"AH4","Toán, Sinh học, Tiếng Hàn","[""math"", ""biology"", ""korean""]",4,True
+5,"AH5","Toán, Lịch sử, Tiếng Hàn","[""math"", ""history"", ""korean""]",5,True
+6,"AH6","Toán, Giáo dục công dân, Tiếng Hàn","[""math"", ""civic_education"", ""korean""]",6,True
+7,"AH7","Toán, Khoa học tự nhiên, Tiếng Hàn","[""math"", ""natural_science"", ""korean""]",7,True
+8,"AH8","Toán, Khoa học xã hội, Tiếng Hàn","[""math"", ""social_science"", ""korean""]",8,True
+9,"A00","Toán, Vật lí, Hóa học","[""math"", ""physics"", ""chemistry""]",9,True
+10,"A01","Toán, Vật lí, Tiếng Anh","[""math"", ""physics"", ""english""]",10,True
+11,"A02","Toán, Vật lí, Sinh học","[""math"", ""physics"", ""biology""]",11,True
+12,"A03","Toán, Vật lí, Lịch sử","[""math"", ""physics"", ""history""]",12,True
+13,"A04","Toán, Vật lí, Địa lí","[""math"", ""physics"", ""geography""]",13,True
+14,"A05","Toán, Hóa học, Lịch sử","[""math"", ""chemistry"", ""history""]",14,True
+15,"A06","Toán, Hóa học, Địa lí","[""math"", ""chemistry"", ""geography""]",15,True
+16,"A07","Toán, Lịch sử, Địa lí","[""math"", ""history"", ""geography""]",16,True
+17,"A08","Toán, Lịch sử, Giáo dục công dân","[""math"", ""history"", ""civic_education""]",17,True
+18,"A09","Toán, Địa lí, Giáo dục công dân","[""math"", ""geography"", ""civic_education""]",18,True
+19,"A10","Toán, Vật lí, Giáo dục công dân","[""math"", ""physics"", ""civic_education""]",19,True
+20,"A11","Toán, Hoá học, Giáo dục công dân","[""math"", ""chemistry"", ""civic_education""]",20,True
+21,"A12","Toán, Khoa học tự nhiên, Khoa học xã hội","[""math"", ""natural_science"", ""social_science""]",21,True
+22,"A13","Toán, Khoa học tự nhiên, Lịch sử","[""math"", ""natural_science"", ""history""]",22,True
+23,"A14","Toán, Khoa học tự nhiên, Địa lí","[""math"", ""natural_science"", ""geography""]",23,True
+24,"A15","Toán, Khoa học tự nhiên, Giáo dục công dân","[""math"", ""natural_science"", ""civic_education""]",24,True
+25,"A16","Toán, Khoa học tự nhiên, Ngữ văn","[""math"", ""natural_science"", ""literature""]",25,True
+26,"A17","Toán, Vật lý, Khoa học xã hội","[""math"", ""physics"", ""social_science""]",26,True
+27,"A18","Toán, Hoá học, Khoa học xã hội","[""math"", ""chemistry"", ""social_science""]",27,True
+28,"B00","Toán, Hóa học, Sinh học","[""math"", ""chemistry"", ""biology""]",28,True
+29,"B01","Toán, Sinh học, Lịch sử","[""math"", ""biology"", ""history""]",29,True
+30,"B02","Toán, Sinh học, Địa lí","[""math"", ""biology"", ""geography""]",30,True
+31,"B03","Toán, Sinh học, Ngữ văn","[""math"", ""biology"", ""literature""]",31,True
+32,"B04","Toán, Sinh học, Giáo dục công dân","[""math"", ""biology"", ""civic_education""]",32,True
+33,"B05","Toán, Sinh học, Khoa học xã hội","[""math"", ""biology"", ""social_science""]",33,True
+34,"B08","Toán, Sinh học, Tiếng Anh","[""math"", ""biology"", ""english""]",34,True
+35,"C00","Ngữ văn, Lịch sử, Địa lí","[""literature"", ""history"", ""geography""]",35,True
+36,"C01","Ngữ văn, Toán, Vật lí","[""literature"", ""math"", ""physics""]",36,True
+37,"C02","Ngữ văn, Toán, Hóa học","[""literature"", ""math"", ""chemistry""]",37,True
+38,"C03","Ngữ văn, Toán, Lịch sử","[""literature"", ""math"", ""history""]",38,True
+39,"C04","Ngữ văn, Toán, Địa lí","[""literature"", ""math"", ""geography""]",39,True
+40,"C05","Ngữ văn, Vật lí, Hóa học","[""literature"", ""physics"", ""chemistry""]",40,True
+41,"C06","Ngữ văn, Vật lí, Sinh học","[""literature"", ""physics"", ""biology""]",41,True
+42,"C07","Ngữ văn, Vật lí, Lịch sử","[""literature"", ""physics"", ""history""]",42,True
+43,"C08","Ngữ văn, Hóa học, Sinh học","[""literature"", ""chemistry"", ""biology""]",43,True
+44,"C09","Ngữ văn, Vật lí, Địa lí","[""literature"", ""physics"", ""geography""]",44,True
+45,"C10","Ngữ văn, Hóa học, Lịch sử","[""literature"", ""chemistry"", ""history""]",45,True
+46,"C11","Ngữ văn, Hóa học, Địa lí","[""literature"", ""chemistry"", ""geography""]",46,True
+47,"C12","Ngữ văn, Sinh học, Lịch sử","[""literature"", ""biology"", ""history""]",47,True
+48,"C13","Ngữ văn, Sinh học, Địa lí","[""literature"", ""biology"", ""geography""]",48,True
+49,"C14","Ngữ văn, Toán, Giáo dục công dân","[""literature"", ""math"", ""civic_education""]",49,True
+50,"C15","Ngữ văn, Toán, Khoa học xã hội","[""literature"", ""math"", ""social_science""]",50,True
+51,"C16","Ngữ văn, Vật lí, Giáo dục công dân","[""literature"", ""physics"", ""civic_education""]",51,True
+52,"C17","Ngữ văn, Hóa học, Giáo dục công dân","[""literature"", ""chemistry"", ""civic_education""]",52,True
+53,"C18","Ngữ văn, Sinh học, Giáo dục công dân","[""literature"", ""biology"", ""civic_education""]",53,True
+54,"C19","Ngữ văn, Lịch sử, Giáo dục công dân","[""literature"", ""history"", ""civic_education""]",54,True
+55,"C20","Ngữ văn, Địa lí, Giáo dục công dân","[""literature"", ""geography"", ""civic_education""]",55,True
+56,"C21","Ngữ văn, Khoa học tự nhiên, Khoa học xã hội","[""literature"", ""natural_science"", ""social_science""]",56,True
+57,"C22","Ngữ văn, Địa lí, Khoa học tự nhiên","[""literature"", ""geography"", ""natural_science""]",57,True
+58,"C23","Ngữ văn, Giáo dục công dân, Khoa học tự nhiên","[""literature"", ""civic_education"", ""natural_science""]",58,True
+59,"C24","Ngữ văn, Khoa học xã hội, Vật lí","[""literature"", ""social_science"", ""physics""]",59,True
+60,"C25","Ngữ văn, Khoa học xã hội, Hoá học","[""literature"", ""social_science"", ""chemistry""]",60,True
+61,"C26","Ngữ văn, Khoa học xã hội, Sinh học","[""literature"", ""social_science"", ""biology""]",61,True
+62,"DD0","Toán, Khoa học xã hội, Tiếng Nhật","[""math"", ""social_science"", ""japanese""]",62,True
+63,"DD1","Toán, Khoa học xã hội, Tiếng Trung","[""math"", ""social_science"", ""chinese""]",63,True
+64,"DD2","Ngữ văn, Toán, Tiếng Hàn","[""literature"", ""math"", ""korean""]",64,True
+65,"DH1","Ngữ văn, Địa lí, Tiếng Hàn","[""literature"", ""geography"", ""korean""]",65,True
+66,"DH2","Ngữ văn, Hóa học, Tiếng Hàn","[""literature"", ""chemistry"", ""korean""]",66,True
+67,"DH3","Ngữ văn, Vật lí, Tiếng Hàn","[""literature"", ""physics"", ""korean""]",67,True
+68,"DH4","Ngữ văn, Sinh học, Tiếng Hàn","[""literature"", ""biology"", ""korean""]",68,True
+69,"DH5","Ngữ văn, Lịch sử, Tiếng Hàn","[""literature"", ""history"", ""korean""]",69,True
+70,"DH6","Ngữ văn, Giáo dục công dân, Tiếng Hàn","[""literature"", ""civic_education"", ""korean""]",70,True
+71,"DH7","Ngữ văn, Khoa học tự nhiên, Tiếng Hàn","[""literature"", ""natural_science"", ""korean""]",71,True
+72,"DH8","Ngữ văn, Khoa học xã hội, Tiếng Hàn","[""literature"", ""social_science"", ""korean""]",72,True
+73,"D01","Ngữ văn, Toán, Tiếng Anh","[""literature"", ""math"", ""english""]",73,True
+74,"D02","Ngữ văn, Toán, Tiếng Nga","[""literature"", ""math"", ""russian""]",74,True
+75,"D03","Ngữ văn, Toán, Tiếng Pháp","[""literature"", ""math"", ""french""]",75,True
+76,"D04","Ngữ văn, Toán, Tiếng Trung","[""literature"", ""math"", ""chinese""]",76,True
+77,"D05","Ngữ văn, Toán, Tiếng Đức","[""literature"", ""math"", ""german""]",77,True
+78,"D06","Ngữ văn, Toán, Tiếng Nhật","[""literature"", ""math"", ""japanese""]",78,True
+79,"D07","Toán, Hóa học, Tiếng Anh","[""math"", ""chemistry"", ""english""]",79,True
+80,"D08","Toán, Sinh học, Tiếng Anh","[""math"", ""biology"", ""english""]",80,True
+81,"D09","Toán, Lịch sử, Tiếng Anh","[""math"", ""history"", ""english""]",81,True
+82,"D10","Toán, Địa lí, Tiếng Anh","[""math"", ""geography"", ""english""]",82,True
+83,"D11","Ngữ văn, Vật lí, Tiếng Anh","[""literature"", ""physics"", ""english""]",83,True
+84,"D12","Ngữ văn, Hóa học, Tiếng Anh","[""literature"", ""chemistry"", ""english""]",84,True
+85,"D13","Ngữ văn, Sinh học, Tiếng Anh","[""literature"", ""biology"", ""english""]",85,True
+86,"D14","Ngữ văn, Lịch sử, Tiếng Anh","[""literature"", ""history"", ""english""]",86,True
+87,"D15","Ngữ văn, Địa lí, Tiếng Anh","[""literature"", ""geography"", ""english""]",87,True
+88,"D16","Toán, Địa lí, Tiếng Đức","[""math"", ""geography"", ""german""]",88,True
+89,"D17","Toán, Địa lí, Tiếng Nga","[""math"", ""geography"", ""russian""]",89,True
+90,"D18","Toán, Địa lí, Tiếng Nhật","[""math"", ""geography"", ""japanese""]",90,True
+91,"D19","Toán, Địa lí, Tiếng Pháp","[""math"", ""geography"", ""french""]",91,True
+92,"D20","Toán, Địa lí, Tiếng Trung","[""math"", ""geography"", ""chinese""]",92,True
+93,"D21","Toán, Hóa học, Tiếng Đức","[""math"", ""chemistry"", ""german""]",93,True
+94,"D22","Toán, Hóa học, Tiếng Nga","[""math"", ""chemistry"", ""russian""]",94,True
+95,"D23","Toán, Hóa học, Tiếng Nhật","[""math"", ""chemistry"", ""japanese""]",95,True
+96,"D24","Toán, Hóa học, Tiếng Pháp","[""math"", ""chemistry"", ""french""]",96,True
+97,"D25","Toán, Hóa học, Tiếng Trung","[""math"", ""chemistry"", ""chinese""]",97,True
+98,"D26","Toán, Vật lí, Tiếng Đức","[""math"", ""physics"", ""german""]",98,True
+99,"D27","Toán, Vật lí, Tiếng Nga","[""math"", ""physics"", ""russian""]",99,True
+100,"D28","Toán, Vật lí, Tiếng Nhật","[""math"", ""physics"", ""japanese""]",100,True
+101,"D29","Toán, Vật lí, Tiếng Pháp","[""math"", ""physics"", ""french""]",101,True
+102,"D30","Toán, Vật lí, Tiếng Trung","[""math"", ""physics"", ""chinese""]",102,True
+103,"D31","Toán, Sinh học, Tiếng Đức","[""math"", ""biology"", ""german""]",103,True
+104,"D32","Toán, Sinh học, Tiếng Nga","[""math"", ""biology"", ""russian""]",104,True
+105,"D33","Toán, Sinh học, Tiếng Nhật","[""math"", ""biology"", ""japanese""]",105,True
+106,"D34","Toán, Sinh học, Tiếng Pháp","[""math"", ""biology"", ""french""]",106,True
+107,"D35","Toán, Sinh học, Tiếng Trung","[""math"", ""biology"", ""chinese""]",107,True
+108,"D36","Toán, Lịch sử, Tiếng Đức","[""math"", ""history"", ""german""]",108,True
+109,"D37","Toán, Lịch sử, Tiếng Nga","[""math"", ""history"", ""russian""]",109,True
+110,"D38","Toán, Lịch sử, Tiếng Nhật","[""math"", ""history"", ""japanese""]",110,True
+111,"D39","Toán, Lịch sử, Tiếng Pháp","[""math"", ""history"", ""french""]",111,True
+112,"D40","Toán, Lịch sử, Tiếng Trung","[""math"", ""history"", ""chinese""]",112,True
+113,"D41","Ngữ văn, Địa lí, Tiếng Đức","[""literature"", ""geography"", ""german""]",113,True
+114,"D42","Ngữ văn, Địa lí, Tiếng Nga","[""literature"", ""geography"", ""russian""]",114,True
+115,"D43","Ngữ văn, Địa lí, Tiếng Nhật","[""literature"", ""geography"", ""japanese""]",115,True
+116,"D44","Ngữ văn, Địa lí, Tiếng Pháp","[""literature"", ""geography"", ""french""]",116,True
+117,"D45","Ngữ văn, Địa lí, Tiếng Trung","[""literature"", ""geography"", ""chinese""]",117,True
+118,"D46","Ngữ văn, Hóa học, Tiếng Đức","[""literature"", ""chemistry"", ""german""]",118,True
+119,"D47","Ngữ văn, Hóa học, Tiếng Nga","[""literature"", ""chemistry"", ""russian""]",119,True
+120,"D48","Ngữ văn, Hóa học, Tiếng Nhật","[""literature"", ""chemistry"", ""japanese""]",120,True
+121,"D49","Ngữ văn, Hóa học, Tiếng Pháp","[""literature"", ""chemistry"", ""french""]",121,True
+122,"D50","Ngữ văn, Hóa học, Tiếng Trung","[""literature"", ""chemistry"", ""chinese""]",122,True
+123,"D51","Ngữ văn, Vật lí, Tiếng Đức","[""literature"", ""physics"", ""german""]",123,True
+124,"D52","Ngữ văn, Vật lí, Tiếng Nga","[""literature"", ""physics"", ""russian""]",124,True
+125,"D53","Ngữ văn, Vật lí, Tiếng Nhật","[""literature"", ""physics"", ""japanese""]",125,True
+126,"D54","Ngữ văn, Vật lí, Tiếng Pháp","[""literature"", ""physics"", ""french""]",126,True
+127,"D55","Ngữ văn, Vật lí, Tiếng Trung","[""literature"", ""physics"", ""chinese""]",127,True
+128,"D56","Ngữ văn, Sinh học, Tiếng Đức","[""literature"", ""biology"", ""german""]",128,True
+129,"D57","Ngữ văn, Sinh học, Tiếng Nga","[""literature"", ""biology"", ""russian""]",129,True
+130,"D58","Ngữ văn, Sinh học, Tiếng Nhật","[""literature"", ""biology"", ""japanese""]",130,True
+131,"D59","Ngữ văn, Sinh học, Tiếng Pháp","[""literature"", ""biology"", ""french""]",131,True
+132,"D60","Ngữ văn, Sinh học, Tiếng Trung","[""literature"", ""biology"", ""chinese""]",132,True
+133,"D61","Ngữ văn, Lịch sử, Tiếng Đức","[""literature"", ""history"", ""german""]",133,True
+134,"D62","Ngữ văn, Lịch sử, Tiếng Nga","[""literature"", ""history"", ""russian""]",134,True
+135,"D63","Ngữ văn, Lịch sử, Tiếng Nhật","[""literature"", ""history"", ""japanese""]",135,True
+136,"D64","Ngữ văn, Lịch sử, Tiếng Pháp","[""literature"", ""history"", ""french""]",136,True
+137,"D65","Ngữ văn, Lịch sử, Tiếng Trung","[""literature"", ""history"", ""chinese""]",137,True
+138,"D66","Ngữ văn, Giáo dục công dân, Tiếng Anh","[""literature"", ""civic_education"", ""english""]",138,True
+139,"D67","Ngữ văn, Giáo dục công dân, Tiếng Đức","[""literature"", ""civic_education"", ""german""]",139,True
+140,"D68","Ngữ văn, Giáo dục công dân, Tiếng Nga","[""literature"", ""civic_education"", ""russian""]",140,True
+141,"D69","Ngữ văn, Giáo dục công dân, Tiếng Nhật","[""literature"", ""civic_education"", ""japanese""]",141,True
+142,"D70","Ngữ văn, Giáo dục công dân, Tiếng Pháp","[""literature"", ""civic_education"", ""french""]",142,True
+143,"D71","Ngữ văn, Giáo dục công dân, Tiếng Trung","[""literature"", ""civic_education"", ""chinese""]",143,True
+144,"D72","Ngữ văn, Khoa học tự nhiên, Tiếng Anh","[""literature"", ""natural_science"", ""english""]",144,True
+145,"D73","Ngữ văn, Khoa học tự nhiên, Tiếng Đức","[""literature"", ""natural_science"", ""german""]",145,True
+146,"D74","Ngữ văn, Khoa học tự nhiên, Tiếng Nga","[""literature"", ""natural_science"", ""russian""]",146,True
+147,"D75","Ngữ văn, Khoa học tự nhiên, Tiếng Nhật","[""literature"", ""natural_science"", ""japanese""]",147,True
+148,"D76","Ngữ văn, Khoa học tự nhiên, Tiếng Pháp","[""literature"", ""natural_science"", ""french""]",148,True
+149,"D77","Ngữ văn, Khoa học tự nhiên, Tiếng Trung","[""literature"", ""natural_science"", ""chinese""]",149,True
+150,"D78","Ngữ văn, Khoa học xã hội, Tiếng Anh","[""literature"", ""social_science"", ""english""]",150,True
+151,"D79","Ngữ văn, Khoa học xã hội, Tiếng Đức","[""literature"", ""social_science"", ""german""]",151,True
+152,"D80","Ngữ văn, Khoa học xã hội, Tiếng Nga","[""literature"", ""social_science"", ""russian""]",152,True
+153,"D81","Ngữ văn, Khoa học xã hội, Tiếng Nhật","[""literature"", ""social_science"", ""japanese""]",153,True
+154,"D82","Ngữ văn, Khoa học xã hội, Tiếng Pháp","[""literature"", ""social_science"", ""french""]",154,True
+155,"D83","Ngữ văn, Khoa học xã hội, Tiếng Trung","[""literature"", ""social_science"", ""chinese""]",155,True
+156,"D84","Toán, Giáo dục công dân, Tiếng Anh","[""math"", ""civic_education"", ""english""]",156,True
+157,"D85","Toán, Giáo dục công dân, Tiếng Đức","[""math"", ""civic_education"", ""german""]",157,True
+158,"D86","Toán, Giáo dục công dân, Tiếng Nga","[""math"", ""civic_education"", ""russian""]",158,True
+159,"D87","Toán, Giáo dục công dân, Tiếng Pháp","[""math"", ""civic_education"", ""french""]",159,True
+160,"D88","Toán, Giáo dục công dân, Tiếng Nhật","[""math"", ""civic_education"", ""japanese""]",160,True
+161,"D89","Toán, Giáo dục công dân, Tiếng Trung","[""math"", ""civic_education"", ""chinese""]",161,True
+162,"D90","Toán, Khoa học tự nhiên, Tiếng Anh","[""math"", ""natural_science"", ""english""]",162,True
+163,"D91","Toán, Khoa học tự nhiên, Tiếng Pháp","[""math"", ""natural_science"", ""french""]",163,True
+164,"D92","Toán, Khoa học tự nhiên, Tiếng Đức","[""math"", ""natural_science"", ""german""]",164,True
+165,"D93","Toán, Khoa học tự nhiên, Tiếng Nga","[""math"", ""natural_science"", ""russian""]",165,True
+166,"D94","Toán, Khoa học tự nhiên, Tiếng Nhật","[""math"", ""natural_science"", ""japanese""]",166,True
+167,"D95","Toán, Khoa học tự nhiên, Tiếng Trung","[""math"", ""natural_science"", ""chinese""]",167,True
+168,"D96","Toán, Khoa học xã hội, Tiếng Anh","[""math"", ""social_science"", ""english""]",168,True
+169,"D97","Toán, Khoa học xã hội, Tiếng Pháp","[""math"", ""social_science"", ""french""]",169,True
+170,"D98","Toán, Khoa học xã hội, Tiếng Đức","[""math"", ""social_science"", ""german""]",170,True
+171,"D99","Toán, Khoa học xã hội, Tiếng Nga","[""math"", ""social_science"", ""russian""]",171,True
+172,"X01","Toán, Ngữ văn, Giáo dục Kinh tế và pháp luật","[""math"", ""literature"", ""economic_law""]",172,True
+173,"X02","Toán, Ngữ văn, Tin học","[""math"", ""literature"", ""informatics""]",173,True
+174,"X03","Toán, Ngữ văn, Công nghệ công nghiệp","[""math"", ""literature"", ""industrial_tech""]",174,True
+175,"X04","Toán, Ngữ văn, Công nghệ nông nghiệp","[""math"", ""literature"", ""agricultural_tech""]",175,True
+176,"X05","Toán, Vật lí, Giáo dục Kinh tế và pháp luật","[""math"", ""physics"", ""economic_law""]",176,True
+177,"X06","Toán, Vật lí, Tin học","[""math"", ""physics"", ""informatics""]",177,True
+178,"X07","Toán, Vật lí, Công nghệ công nghiệp","[""math"", ""physics"", ""industrial_tech""]",178,True
+179,"X08","Toán, Vật lí, Công nghệ nông nghiệp","[""math"", ""physics"", ""agricultural_tech""]",179,True
+180,"X09","Toán, Hóa học, Giáo dục Kinh tế và pháp luật","[""math"", ""chemistry"", ""economic_law""]",180,True
+181,"X10","Toán, Hóa học, Tin học","[""math"", ""chemistry"", ""informatics""]",181,True
+182,"X11","Toán, Hóa học, Công nghệ công nghiệp","[""math"", ""chemistry"", ""industrial_tech""]",182,True
+183,"X12","Toán, Hóa học, Công nghệ nông nghiệp","[""math"", ""chemistry"", ""agricultural_tech""]",183,True
+184,"X13","Toán, Sinh học, Giáo dục Kinh tế và pháp luật","[""math"", ""biology"", ""economic_law""]",184,True
+185,"X14","Toán, Sinh học, Tin học","[""math"", ""biology"", ""informatics""]",185,True
+186,"X15","Toán, Sinh học, Công nghệ công nghiệp","[""math"", ""biology"", ""industrial_tech""]",186,True
+187,"X16","Toán, Sinh học, Công nghệ nông nghiệp","[""math"", ""biology"", ""agricultural_tech""]",187,True
+188,"X17","Toán, Lịch sử, Giáo dục Kinh tế và pháp luật","[""math"", ""history"", ""economic_law""]",188,True
+189,"X18","Toán, Lịch sử, Tin học","[""math"", ""history"", ""informatics""]",189,True
+190,"X19","Toán, Lịch sử, Công nghệ công nghiệp","[""math"", ""history"", ""industrial_tech""]",190,True
+191,"X20","Toán, Lịch sử, Công nghệ nông nghiệp","[""math"", ""history"", ""agricultural_tech""]",191,True
+192,"X21","Toán, Địa lí, Giáo dục Kinh tế và pháp luật","[""math"", ""geography"", ""economic_law""]",192,True
+193,"X22","Toán, Địa lí, Tin học","[""math"", ""geography"", ""informatics""]",193,True
+194,"X23","Toán, Địa lí, Công nghệ công nghiệp","[""math"", ""geography"", ""industrial_tech""]",194,True
+195,"X24","Toán, Địa lí, Công nghệ nông nghiệp","[""math"", ""geography"", ""agricultural_tech""]",195,True
+196,"X25","Toán, Giáo dục Kinh tế và pháp luật, Tiếng Anh","[""math"", ""economic_law"", ""english""]",196,True
+197,"X26","Toán, Tin học, Tiếng Anh","[""math"", ""informatics"", ""english""]",197,True
+198,"X27","Toán, Công nghệ công nghiệp, Tiếng Anh","[""math"", ""industrial_tech"", ""english""]",198,True
+199,"X28","Toán, Công nghệ nông nghiệp, Tiếng Anh","[""math"", ""agricultural_tech"", ""english""]",199,True
+200,"X29","Toán, Giáo dục Kinh tế và pháp luật, Tiếng Nga","[""math"", ""economic_law"", ""russian""]",200,True
+201,"X30","Toán, Tin học, Tiếng Nga","[""math"", ""informatics"", ""russian""]",201,True
+202,"X31","Toán, Công nghệ công nghiệp, Tiếng Nga","[""math"", ""industrial_tech"", ""russian""]",202,True
+203,"X32","Toán, Công nghệ nông nghiệp, Tiếng Nga","[""math"", ""agricultural_tech"", ""russian""]",203,True
+204,"X33","Toán, Giáo dục Kinh tế và pháp luật, Tiếng Pháp","[""math"", ""economic_law"", ""french""]",204,True
+205,"X34","Toán, Tin học, Tiếng Pháp","[""math"", ""informatics"", ""french""]",205,True
+206,"X35","Toán, Công nghệ công nghiệp, Tiếng Pháp","[""math"", ""industrial_tech"", ""french""]",206,True
+207,"X36","Toán, Công nghệ nông nghiệp, Tiếng Pháp","[""math"", ""agricultural_tech"", ""french""]",207,True
+208,"X37","Toán, Giáo dục Kinh tế và pháp luật, Tiếng Trung","[""math"", ""economic_law"", ""chinese""]",208,True
+209,"X38","Toán, Tin học, Tiếng Trung","[""math"", ""informatics"", ""chinese""]",209,True
+210,"X39","Toán, Công nghệ công nghiệp, Tiếng Trung","[""math"", ""industrial_tech"", ""chinese""]",210,True
+211,"X40","Toán, Công nghệ nông nghiệp, Tiếng Trung","[""math"", ""agricultural_tech"", ""chinese""]",211,True
+212,"X41","Toán, Giáo dục Kinh tế và pháp luật, Tiếng Đức","[""math"", ""economic_law"", ""german""]",212,True
+213,"X42","Toán, Tin học, Tiếng Đức","[""math"", ""informatics"", ""german""]",213,True
+214,"X43","Toán, Công nghệ công nghiệp, Tiếng Đức","[""math"", ""industrial_tech"", ""german""]",214,True
+215,"X44","Toán, Công nghệ nông nghiệp, Tiếng Đức","[""math"", ""agricultural_tech"", ""german""]",215,True
+216,"X45","Toán, Giáo dục Kinh tế và pháp luật, Tiếng Nhật","[""math"", ""economic_law"", ""japanese""]",216,True
+217,"X46","Toán, Tin học, Tiếng Nhật","[""math"", ""informatics"", ""japanese""]",217,True
+218,"X47","Toán, Công nghệ công nghiệp, Tiếng Nhật","[""math"", ""industrial_tech"", ""japanese""]",218,True
+219,"X48","Toán, Công nghệ nông nghiệp, Tiếng Nhật","[""math"", ""agricultural_tech"", ""japanese""]",219,True
+220,"X49","Toán, Giáo dục Kinh tế và pháp luật, Tiếng Hàn","[""math"", ""economic_law"", ""korean""]",220,True
+221,"X50","Toán, Tin học, Tiếng Hàn","[""math"", ""informatics"", ""korean""]",221,True
+222,"X51","Toán, Công nghệ công nghiệp, Tiếng Hàn","[""math"", ""industrial_tech"", ""korean""]",222,True
+223,"X52","Toán, Công nghệ nông nghiệp, Tiếng Hàn","[""math"", ""agricultural_tech"", ""korean""]",223,True
+224,"X53","Toán, Giáo dục Kinh tế và pháp luật, Tin học","[""math"", ""economic_law"", ""informatics""]",224,True
+225,"X54","Toán, Giáo dục Kinh tế và pháp luật, Công nghệ công nghiệp","[""math"", ""economic_law"", ""industrial_tech""]",225,True
+226,"X55","Toán, Giáo dục Kinh tế và pháp luật, Công nghệ nông nghiệp","[""math"", ""economic_law"", ""agricultural_tech""]",226,True
+227,"X56","Toán, Tin học, Công nghệ công nghiệp","[""math"", ""informatics"", ""industrial_tech""]",227,True
+228,"X57","Toán, Tin học, Công nghệ nông nghiệp","[""math"", ""informatics"", ""agricultural_tech""]",228,True
+229,"X58","Ngữ văn, Vật lí, Giáo dục Kinh tế và pháp luật","[""literature"", ""physics"", ""economic_law""]",229,True
+230,"X59","Ngữ văn, Vật lí, Tin học","[""literature"", ""physics"", ""informatics""]",230,True
+231,"X60","Ngữ văn, Vật lí, Công nghệ công nghiệp","[""literature"", ""physics"", ""industrial_tech""]",231,True
+232,"X61","Ngữ văn, Vật lí, Công nghệ nông nghiệp","[""literature"", ""physics"", ""agricultural_tech""]",232,True
+233,"X62","Ngữ văn, Hóa học, Giáo dục Kinh tế và pháp luật","[""literature"", ""chemistry"", ""economic_law""]",233,True
+234,"X63","Ngữ văn, Hóa học, Tin học","[""literature"", ""chemistry"", ""informatics""]",234,True
+235,"X64","Ngữ văn, Hóa học, Công nghệ công nghiệp","[""literature"", ""chemistry"", ""industrial_tech""]",235,True
+236,"X65","Ngữ văn, Hóa học, Công nghệ nông nghiệp","[""literature"", ""chemistry"", ""agricultural_tech""]",236,True
+237,"X66","Ngữ văn, Sinh học, Giáo dục Kinh tế và pháp luật","[""literature"", ""biology"", ""economic_law""]",237,True
+238,"X67","Ngữ văn, Sinh học, Tin học","[""literature"", ""biology"", ""informatics""]",238,True
+239,"X68","Ngữ văn, Sinh học, Công nghệ công nghiệp","[""literature"", ""biology"", ""industrial_tech""]",239,True
+240,"X69","Ngữ văn, Sinh học, Công nghệ nông nghiệp","[""literature"", ""biology"", ""agricultural_tech""]",240,True
+241,"X70","Ngữ văn, Lịch sử, Giáo dục Kinh tế và pháp luật","[""literature"", ""history"", ""economic_law""]",241,True
+242,"X71","Ngữ văn, Lịch sử, Tin học","[""literature"", ""history"", ""informatics""]",242,True
+243,"X72","Ngữ văn, Lịch sử, Công nghệ công nghiệp","[""literature"", ""history"", ""industrial_tech""]",243,True
+244,"X73","Ngữ văn, Lịch sử, Công nghệ nông nghiệp","[""literature"", ""history"", ""agricultural_tech""]",244,True
+245,"X74","Ngữ văn, Địa lí, Giáo dục Kinh tế và pháp luật","[""literature"", ""geography"", ""economic_law""]",245,True
+246,"X75","Ngữ văn, Địa lí, Tin học","[""literature"", ""geography"", ""informatics""]",246,True
+247,"X76","Ngữ văn, Địa lí, Công nghệ công nghiệp","[""literature"", ""geography"", ""industrial_tech""]",247,True
+248,"X77","Ngữ văn, Địa lí, Công nghệ nông nghiệp","[""literature"", ""geography"", ""agricultural_tech""]",248,True
+249,"X78","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tiếng Anh","[""literature"", ""economic_law"", ""english""]",249,True
+250,"X79","Ngữ văn, Tin học, Tiếng Anh","[""literature"", ""informatics"", ""english""]",250,True
+251,"X80","Ngữ văn, Công nghệ công nghiệp, Tiếng Anh","[""literature"", ""industrial_tech"", ""english""]",251,True
+252,"X81","Ngữ văn, Công nghệ nông nghiệp, Tiếng Anh","[""literature"", ""agricultural_tech"", ""english""]",252,True
+253,"X82","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tiếng Nga","[""literature"", ""economic_law"", ""russian""]",253,True
+254,"X83","Ngữ văn, Tin học, Tiếng Nga","[""literature"", ""informatics"", ""russian""]",254,True
+255,"X84","Ngữ văn, Công nghệ công nghiệp, Tiếng Nga","[""literature"", ""industrial_tech"", ""russian""]",255,True
+256,"X85","Ngữ văn, Công nghệ nông nghiệp, Tiếng Nga","[""literature"", ""agricultural_tech"", ""russian""]",256,True
+257,"X86","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tiếng Pháp","[""literature"", ""economic_law"", ""french""]",257,True
+258,"X87","Ngữ văn, Tin học, Tiếng Pháp","[""literature"", ""informatics"", ""french""]",258,True
+259,"X88","Ngữ văn, Công nghệ công nghiệp, Tiếng Pháp","[""literature"", ""industrial_tech"", ""french""]",259,True
+260,"X89","Ngữ văn, Công nghệ nông nghiệp, Tiếng Pháp","[""literature"", ""agricultural_tech"", ""french""]",260,True
+261,"X90","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tiếng Trung","[""literature"", ""economic_law"", ""chinese""]",261,True
+262,"X91","Ngữ văn, Tin học, Tiếng Trung","[""literature"", ""informatics"", ""chinese""]",262,True
+263,"X92","Ngữ văn, Công nghệ công nghiệp, Tiếng Trung","[""literature"", ""industrial_tech"", ""chinese""]",263,True
+264,"X93","Ngữ văn, Công nghệ nông nghiệp, Tiếng Trung","[""literature"", ""agricultural_tech"", ""chinese""]",264,True
+265,"X94","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tiếng Đức","[""literature"", ""economic_law"", ""german""]",265,True
+266,"X95","Ngữ văn, Tin học, Tiếng Đức","[""literature"", ""informatics"", ""german""]",266,True
+267,"X96","Ngữ văn, Công nghệ công nghiệp, Tiếng Đức","[""literature"", ""industrial_tech"", ""german""]",267,True
+268,"X97","Ngữ văn, Công nghệ nông nghiệp, Tiếng Đức","[""literature"", ""agricultural_tech"", ""german""]",268,True
+269,"X98","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tiếng Nhật","[""literature"", ""economic_law"", ""japanese""]",269,True
+270,"X99","Ngữ văn, Tin học, Tiếng Nhật","[""literature"", ""informatics"", ""japanese""]",270,True
+271,"Y01","Ngữ văn, Công nghệ công nghiệp, Tiếng Nhật","[""literature"", ""industrial_tech"", ""japanese""]",271,True
+272,"Y02","Ngữ văn, Công nghệ nông nghiệp, Tiếng Nhật","[""literature"", ""agricultural_tech"", ""japanese""]",272,True
+273,"Y03","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tiếng Hàn","[""literature"", ""economic_law"", ""korean""]",273,True
+274,"Y04","Ngữ văn, Tin học, Tiếng Hàn","[""literature"", ""informatics"", ""korean""]",274,True
+275,"Y05","Ngữ văn, Công nghệ công nghiệp, Tiếng Hàn","[""literature"", ""industrial_tech"", ""korean""]",275,True
+276,"Y06","Ngữ văn, Công nghệ nông nghiệp, Tiếng Hàn","[""literature"", ""agricultural_tech"", ""korean""]",276,True
+277,"Y07","Ngữ văn, Giáo dục Kinh tế và pháp luật, Tin học","[""literature"", ""economic_law"", ""informatics""]",277,True
+278,"Y08","Ngữ văn, Giáo dục Kinh tế và pháp luật, Công nghệ công nghiệp","[""literature"", ""economic_law"", ""industrial_tech""]",278,True
+279,"Y09","Ngữ văn, Giáo dục Kinh tế và pháp luật, Công nghệ nông nghiệp","[""literature"", ""economic_law"", ""agricultural_tech""]",279,True
+280,"Y10","Ngữ văn, Tin học, Công nghệ công nghiệp","[""literature"", ""informatics"", ""industrial_tech""]",280,True
+281,"Y11","Ngữ văn, Tin học, Công nghệ nông nghiệp","[""literature"", ""informatics"", ""agricultural_tech""]",281,True

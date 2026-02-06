@@ -43,10 +43,37 @@ async def import_system_categories(
     """
     content = await file.read()
     result = await config_service.import_system_categories(db, type_key=type, file_content=content)
+    await db.commit()
     return {
         "message": "Import successful",
         "details": result
     }
+
+@router.delete(
+    "/config/categories/{category_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_system_category(
+    category_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = deps.AdminManagerRequired,
+):
+    """
+    Delete a system category by ID.
+    Only Admin/Manager can delete.
+    """
+    from app.repositories.config_repository import SystemCategoryRepository
+    from app.utils.exceptions import ResourceNotFoundError
+    
+    repo = SystemCategoryRepository(db)
+    category = await repo.get_by_id(category_id)
+    
+    if not category:
+        raise ResourceNotFoundError(detail=f"Category with ID {category_id} not found")
+    
+    await repo.delete(category)
+    await db.commit()
+    return None
 
 
 # =============================================================================

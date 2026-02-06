@@ -8,6 +8,8 @@ import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LeadKanbanCard } from "./LeadKanbanCard";
+import { STAGE_COLORS } from "@/types/pipeline.types";
+import { sanitizeColorCode } from "@/lib/utils";
 import type { PipelineStageWithStats } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
@@ -17,53 +19,51 @@ interface PipelineColumnProps {
   isActiveDropZone?: boolean;
 }
 
-const STAGE_COLORS: Record<string, string> = {
-  new_lead: "bg-blue-100 border-blue-300",
-  contacted: "bg-yellow-100 border-yellow-300",
-  consultation_scheduled: "bg-orange-100 border-orange-300",
-  consultation_completed: "bg-green-100 border-green-300",
-  application_submitted: "bg-teal-100 border-teal-300",
-  enrolled: "bg-emerald-100 border-emerald-300",
-  lost: "bg-red-100 border-red-300",
-};
+// Get column background style from hex color
+const getColumnStyle = (hexColor: string) => ({
+  backgroundColor: `${hexColor}15`, // 8% opacity for light background
+  borderColor: `${hexColor}40`, // 25% opacity for border
+});
 
 export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: stage.id,
   });
 
-  const columnColor = STAGE_COLORS[stage.id] || "bg-gray-100 border-gray-300";
+  // Use stage.color_code from database, fallback to centralized STAGE_COLORS
+  const stageHexColor = sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id] || "#6B7280";
+  const columnStyle = getColumnStyle(stageHexColor);
   const leadIds = leads.map((lead) => lead.id);
 
   // Determine conversion trend
   const conversionRate = stage.conversion_rate || 0;
   let TrendIcon = Minus;
-  let trendColor = "text-gray-500";
+  let trendColor = "text-muted-foreground";
   if (conversionRate > 75) {
     TrendIcon = TrendingUp;
-    trendColor = "text-green-600";
+    trendColor = "text-success-600";
   } else if (conversionRate < 40) {
     TrendIcon = TrendingDown;
-    trendColor = "text-red-600";
+    trendColor = "text-error-600";
   }
 
   return (
     <div
       ref={setNodeRef}
-      className={`flex-shrink-0 w-80 ${
+      className={`flex-shrink-0 w-[85vw] sm:w-72 lg:w-80 snap-center lg:snap-align-none ${
         isOver || isActiveDropZone
           ? "ring-2 ring-primary ring-offset-2"
           : ""
-      } transition-all duration-200`}
+      } transition-shadow duration-200`}
     >
-      <Card className={`h-full flex flex-col ${columnColor} border-2`}>
+      <Card className="h-full flex flex-col border-2" style={columnStyle}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold text-base leading-none">
                 {stage.name}
               </h3>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-xs text-muted-foreground mt-1 tabular-nums">
                 {stage.lead_count} {stage.lead_count === 1 ? "lead" : "leads"}
               </p>
             </div>
@@ -76,12 +76,12 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
           <div className="flex items-center gap-2 mt-2 pt-2 border-t">
             <div className="flex items-center gap-1">
               <TrendIcon className={`h-3 w-3 ${trendColor}`} />
-              <span className={`text-xs font-medium ${trendColor}`}>
+              <span className={`text-xs font-medium tabular-nums ${trendColor}`}>
                 {conversionRate.toFixed(0)}%
               </span>
             </div>
             {stage.avg_time_in_stage_days && (
-              <div className="text-xs text-muted-foreground">
+              <div className="text-xs text-muted-foreground tabular-nums">
                 <span className="font-medium">
                   {Math.round(stage.avg_time_in_stage_days)}d
                 </span>{" "}

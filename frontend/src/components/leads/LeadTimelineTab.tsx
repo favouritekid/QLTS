@@ -52,6 +52,10 @@ interface LeadTimelineTabProps {
   leadId: number;
   /** Maximum items to show initially. Set 0 or undefined to show all. */
   maxItems?: number;
+  /** Compact mode - simpler display without date grouping */
+  compact?: boolean;
+  /** Limit number of items (alias for maxItems, used in compact mode) */
+  limit?: number;
 }
 
 // Get icon and color based on event type and method
@@ -62,41 +66,50 @@ const getEventConfig = (eventType: string, method?: string) => {
       case "phone":
         return {
           icon: Phone,
-          color: "text-slate-600",
-          bgColor: "bg-slate-100",
-          ringColor: "ring-slate-200",
+          color: "text-success-600",
+          bgColor: "bg-success-50",
+          ringColor: "ring-success-200",
           label: "Cuộc gọi",
         };
       case "email":
         return {
           icon: Mail,
-          color: "text-slate-600",
-          bgColor: "bg-slate-100",
-          ringColor: "ring-slate-200",
+          color: "text-info-600",
+          bgColor: "bg-info-50",
+          ringColor: "ring-info-200",
           label: "Email",
         };
       case "video":
+      case "video_call":
         return {
           icon: Video,
-          color: "text-slate-600",
-          bgColor: "bg-slate-100",
-          ringColor: "ring-slate-200",
+          color: "text-purple-600",
+          bgColor: "bg-purple-50",
+          ringColor: "ring-purple-200",
           label: "Video call",
         };
       case "in_person":
         return {
           icon: User,
-          color: "text-slate-600",
-          bgColor: "bg-slate-100",
-          ringColor: "ring-slate-200",
+          color: "text-warning-600",
+          bgColor: "bg-warning-50",
+          ringColor: "ring-warning-200",
           label: "Gặp trực tiếp",
+        };
+      case "sms":
+        return {
+          icon: MessageSquare,
+          color: "text-cyan-600",
+          bgColor: "bg-cyan-50",
+          ringColor: "ring-cyan-200",
+          label: "SMS",
         };
       default:
         return {
           icon: MessageSquare,
-          color: "text-slate-600",
-          bgColor: "bg-slate-100",
-          ringColor: "ring-slate-200",
+          color: "text-muted-foreground",
+          bgColor: "bg-muted",
+          ringColor: "ring-border",
           label: "Tư vấn",
         };
     }
@@ -106,9 +119,9 @@ const getEventConfig = (eventType: string, method?: string) => {
   if (eventType === "assignment" || eventType === "assigned") {
     return {
       icon: UserPlus,
-      color: "text-slate-600",
-      bgColor: "bg-slate-100",
-      ringColor: "ring-slate-200",
+      color: "text-indigo-600",
+      bgColor: "bg-indigo-50",
+      ringColor: "ring-indigo-200",
       label: "Phân công",
     };
   }
@@ -116,11 +129,36 @@ const getEventConfig = (eventType: string, method?: string) => {
   // Default
   return {
     icon: Clock,
-    color: "text-slate-600",
-    bgColor: "bg-slate-100",
-    ringColor: "ring-slate-200",
+    color: "text-muted-foreground",
+    bgColor: "bg-muted",
+    ringColor: "ring-border",
     label: "Hoạt động",
   };
+};
+
+// Get outcome type styling
+const getOutcomeStyles = (outcomeType?: string | null) => {
+  switch (outcomeType) {
+    case "positive":
+      return {
+        badgeBg: "bg-success-100",
+        badgeText: "text-success-700",
+        badgeBorder: "border-success-200",
+      };
+    case "negative":
+      return {
+        badgeBg: "bg-error-100",
+        badgeText: "text-error-700",
+        badgeBorder: "border-error-200",
+      };
+    case "neutral":
+    default:
+      return {
+        badgeBg: "bg-info-100",
+        badgeText: "text-info-700",
+        badgeBorder: "border-info-200",
+      };
+  }
 };
 
 // Format date for grouping
@@ -166,8 +204,9 @@ const getInitials = (name: string) => {
     .slice(0, 2);
 };
 
-export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
+export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimelineTabProps) {
   const { data: timeline, isLoading } = useLeadTimeline(leadId);
+  const effectiveLimit = limit ?? maxItems;
   const deleteMutation = useDeleteConsultation();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedConsultationId, setSelectedConsultationId] = useState<number | null>(null);
@@ -187,10 +226,124 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
 
   if (timeline.length === 0) {
     return (
-      <div className="text-center py-12 text-muted-foreground bg-slate-50/50 rounded-lg border border-dashed">
+      <div className="text-center py-12 text-muted-foreground bg-muted/50 rounded-lg border border-dashed">
         <MessageSquare className="h-10 w-10 mx-auto mb-3 opacity-20" />
         <p className="font-medium">Chưa có hoạt động nào</p>
         <p className="text-xs mt-1">Lịch sử tương tác sẽ xuất hiện tại đây</p>
+      </div>
+    );
+  }
+
+  // Compact mode - simpler display for right panel
+  if (compact) {
+    const compactItems = effectiveLimit ? timeline.slice(0, effectiveLimit) : timeline;
+
+    return (
+      <div className="space-y-2">
+        {compactItems.map((event, index) => {
+          const eventType = event.type || "lead_created";
+          const eventData = event.data || {};
+          const isConsultation = eventType === "consultation" || eventType === "consultation_added";
+          const isAssignment = eventType === "assignment" || eventType === "assigned";
+          const config = getEventConfig(
+            eventType,
+            isConsultation ? (eventData as { method?: string }).method : undefined
+          );
+          const Icon = config.icon;
+
+          const consultData = isConsultation ? (eventData as Consultation) : null;
+          const assignData = isAssignment ? (eventData as { officer?: { full_name?: string }; reason?: string }) : null;
+          const statusName = consultData?.consultation_status?.name || event.description || "Hoạt động";
+          const statusColor = consultData?.consultation_status?.color_code;
+          const outcomeType = consultData?.consultation_status?.outcome_type;
+          const outcomeStyles = getOutcomeStyles(outcomeType);
+          const notes = consultData?.notes || "";
+          const actorName = consultData?.officer?.full_name || assignData?.officer?.full_name || "";
+          const scheduledAt = consultData?.scheduled_at;
+
+          return (
+            <div
+              key={`${event.id}-${index}`}
+              className="flex items-start gap-3 p-3 bg-muted hover:bg-muted/80 rounded-xl transition-colors"
+            >
+              {/* Icon */}
+              <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0", config.bgColor)}>
+                <Icon className={cn("w-4 h-4", config.color)} />
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 min-w-0">
+                {/* Row 1: Status + Time */}
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {/* Status badge with color */}
+                    {isConsultation && statusColor ? (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-xs font-medium px-2 py-0.5 border",
+                          outcomeStyles.badgeBg,
+                          outcomeStyles.badgeText,
+                          outcomeStyles.badgeBorder
+                        )}
+                      >
+                        <span
+                          className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+                          style={{ backgroundColor: statusColor }}
+                        />
+                        {statusName}
+                      </Badge>
+                    ) : (
+                      <span className="text-sm font-medium text-foreground truncate">{statusName}</span>
+                    )}
+
+                    {/* Method label */}
+                    {isConsultation && config.label !== "Tư vấn" && (
+                      <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                        {config.label}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Timestamp */}
+                  <span className="text-xs text-muted-foreground flex-shrink-0">
+                    {format(parseISO(event.timestamp || ""), "dd/MM HH:mm")}
+                  </span>
+                </div>
+
+                {/* Row 2: Actor + Notes */}
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {actorName && (
+                    <>
+                      <span className="font-medium">{actorName}</span>
+                      {(notes || scheduledAt) && <span>•</span>}
+                    </>
+                  )}
+                  {scheduledAt && (
+                    <span className="text-info-600 flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      Hẹn {format(parseISO(scheduledAt), "dd/MM HH:mm")}
+                    </span>
+                  )}
+                </div>
+
+                {/* Row 3: Notes (truncated) */}
+                {notes && !notes.startsWith("Ghi nhận:") && (
+                  <p className="text-xs text-muted-foreground truncate mt-1 italic">&quot;{notes}&quot;</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Show more indicator if there are more items */}
+        {effectiveLimit && timeline.length > effectiveLimit && (
+          <div className="text-center pt-1">
+            <span className="text-xs text-muted-foreground">
+              +{timeline.length - effectiveLimit} hoạt động khác
+            </span>
+          </div>
+        )}
       </div>
     );
   }
@@ -290,18 +443,24 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                 let title = "";
                 let subtitle = "";
                 let actorName = "";
-                
+
                 // Type assertion for consultation data (used in JSX below)
                 const consultData = isConsultation ? (eventData as Consultation) : null;
+                const statusColor = consultData?.consultation_status?.color_code;
+                const outcomeType = consultData?.consultation_status?.outcome_type;
+                const outcomeStyles = getOutcomeStyles(outcomeType);
 
                 if (isConsultation && consultData) {
                   const statusName = consultData.consultation_status?.name || "Tư vấn";
                   title = statusName;
 
-                  // Only show notes if it's not the auto-generated "Ghi nhận nhanh: {status}" format
-                  const autoNotePattern = `Ghi nhận nhanh: ${statusName}`;
+                  // Only show notes if it's not the auto-generated pattern
                   const notes = consultData.notes || "";
-                  if (notes && notes !== autoNotePattern) {
+                  const autoPatterns = [
+                    `Ghi nhận nhanh: ${statusName}`,
+                    `Ghi nhận: ${statusName}`,
+                  ];
+                  if (notes && !autoPatterns.includes(notes)) {
                     subtitle = notes;
                   }
 
@@ -310,7 +469,7 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                   // Type assertion for assignment data
                   const assignData = eventData as { reason?: string; officer?: { full_name?: string } };
                   title = "Phân công lead";
-                  subtitle = assignData.reason || "Lead được gán cho officer";
+                  subtitle = assignData.reason || "";
                   actorName = assignData.officer?.full_name || "";
                 }
 
@@ -319,7 +478,7 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                     {/* Timeline Dot (Icon) - smaller and neutral */}
                     <div
                       className={cn(
-                        "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-all ring-1",
+                        "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-shadow ring-1",
                         config.bgColor,
                         config.ringColor
                       )}
@@ -328,21 +487,44 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                     </div>
 
                     {/* Content Block */}
-                    <div className="flex-1 bg-card rounded-lg border shadow-sm transition-all hover:shadow-md hover:border-primary/30">
+                    <div className="flex-1 bg-card rounded-lg border shadow-sm transition-shadow hover:shadow-md hover:border-primary/30">
                       <div className="p-4">
                         {/* Header: Title, Actor, Time, Actions */}
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div className="flex-1 min-w-0">
-                            {/* Title with method badge */}
-                            <div className="flex items-center gap-2 mb-1">
-                              <h4 className="font-semibold text-sm text-foreground">
-                                {title}
-                              </h4>
+                            {/* Title with status color and method badge */}
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              {isConsultation && statusColor ? (
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "text-xs font-semibold px-2 py-0.5 border",
+                                    outcomeStyles.badgeBg,
+                                    outcomeStyles.badgeText,
+                                    outcomeStyles.badgeBorder
+                                  )}
+                                >
+                                  <span
+                                    className="w-2 h-2 rounded-full mr-1.5 flex-shrink-0"
+                                    style={{ backgroundColor: statusColor }}
+                                  />
+                                  {title}
+                                </Badge>
+                              ) : (
+                                <h4 className="font-semibold text-sm text-foreground">
+                                  {title}
+                                </h4>
+                              )}
                               {isConsultation && consultData?.method && (
                                 <Badge
                                   variant="secondary"
-                                  className="text-[10px] px-1.5 py-0 font-normal"
+                                  className={cn(
+                                    "text-[10px] px-1.5 py-0 font-normal",
+                                    config.bgColor,
+                                    config.color
+                                  )}
                                 >
+                                  <Icon className="w-2.5 h-2.5 mr-1" />
                                   {config.label}
                                 </Badge>
                               )}
@@ -411,11 +593,28 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                         {/* Footer: Metadata badges */}
                         {(isConsultation || isAssignment) && (
                           <div className="flex flex-wrap gap-2">
+                            {/* Consultation: Outcome indicator */}
+                            {isConsultation && outcomeType && (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-xs font-normal gap-1",
+                                  outcomeType === "positive" && "border-success-200 bg-success-50 text-success-700",
+                                  outcomeType === "negative" && "border-error-200 bg-error-50 text-error-700",
+                                  outcomeType === "neutral" && "border-border bg-muted text-muted-foreground"
+                                )}
+                              >
+                                {outcomeType === "positive" && "✓ Tích cực"}
+                                {outcomeType === "negative" && "✗ Tiêu cực"}
+                                {outcomeType === "neutral" && "○ Trung lập"}
+                              </Badge>
+                            )}
+
                             {/* Consultation: Scheduled follow-up */}
                             {isConsultation && consultData?.scheduled_at && (
                               <Badge
                                 variant="outline"
-                                className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
+                                className="text-xs font-normal gap-1 border-info-200 bg-info-50 text-info-700"
                               >
                                 <Calendar className="h-3 w-3" />
                                 Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}
@@ -426,7 +625,7 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                             {isConsultation && consultData?.duration_minutes && consultData.duration_minutes > 0 && (
                               <Badge
                                 variant="outline"
-                                className="text-xs font-normal gap-1 border-slate-200 bg-slate-50 text-slate-600"
+                                className="text-xs font-normal gap-1 border-border bg-muted text-muted-foreground"
                               >
                                 <Clock className="h-3 w-3" />
                                 {consultData.duration_minutes} phút
@@ -440,7 +639,7 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                                 className={cn(
                                   "text-xs font-normal gap-1",
                                   (eventData as { method?: string }).method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
-                                  (eventData as { method?: string }).method === "officer_reassign" && "border-blue-200 bg-blue-50 text-blue-700",
+                                  (eventData as { method?: string }).method === "officer_reassign" && "border-info-200 bg-info-50 text-info-700",
                                   (eventData as { method?: string }).method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
                                 )}
                               >
@@ -489,7 +688,7 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Xóa
             </AlertDialogAction>

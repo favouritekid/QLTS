@@ -79,6 +79,7 @@ export function FamilyInfoTab({ form, isEditable }: FamilyInfoTabProps) {
                       size="sm"
                       onClick={() => remove(index)}
                       className="text-destructive hover:text-destructive"
+                      aria-label="Xóa thành viên gia đình"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

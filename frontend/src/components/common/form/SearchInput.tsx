@@ -110,7 +110,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       <div className={cn("relative", containerClassName)}>
         {/* Search icon */}
         {showSearchIcon && (
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search aria-hidden="true" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         )}
 
         {/* Input */}
@@ -132,7 +132,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
         {/* Right side icons */}
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
           {/* Loading spinner */}
-          {isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          {isLoading && <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin text-muted-foreground" />}
 
           {/* Clear button */}
           {!isLoading && showClearButton && hasValue && (

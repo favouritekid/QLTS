@@ -3,12 +3,12 @@
 
 import { useState, useMemo } from "react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -164,19 +164,19 @@ export function OfferingAcademicInfoManagement({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-h-[90vh] sm:max-w-[900px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+      <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+        <ResponsiveDialogContent className="max-h-[90vh] sm:max-w-[900px]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle className="flex items-center gap-2">
               <BookOpen className="h-5 w-5" />
               Quản lý thông tin tuyển sinh
-            </DialogTitle>
-            <DialogDescription>
+            </ResponsiveDialogTitle>
+            <ResponsiveDialogDescription>
               Loại hình: <strong>{offering.offering_type}</strong>
               <br />
               Quản lý thông tin tuyển sinh theo từng năm học
-            </DialogDescription>
-          </DialogHeader>
+            </ResponsiveDialogDescription>
+          </ResponsiveDialogHeader>
 
           <div className="space-y-4">
             {hasData && (
@@ -219,105 +219,194 @@ export function OfferingAcademicInfoManagement({
             )}
 
             {!isLoading && !error && academicInfos.length > 0 && (
-              <div className="overflow-hidden rounded-lg border">
-                <div className="max-h-[500px] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Năm học</TableHead>
-                        <TableHead>Trạng thái</TableHead>
-                        <TableHead>Học phí/năm</TableHead>
-                        <TableHead>Chỉ tiêu</TableHead>
-                        <TableHead>Điểm chuẩn</TableHead>
-                        <TableHead className="text-right">Thao tác</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {academicInfos.map((info) => (
-                        <TableRow key={info.id}>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <Calendar className="text-muted-foreground h-4 w-4" />
-                              <span className="font-medium">{info.academic_year}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex flex-col gap-1">
-                              {info.is_deleted && (
-                                <Badge variant="destructive" className="w-fit">
-                                  Đã xóa
-                                </Badge>
-                              )}
-                              <Badge variant={info.is_published ? "default" : "secondary"}>
-                                {info.is_published ? "Công khai" : "Nháp"}
+              <>
+                {/* Mobile: Card View */}
+                <div className="md:hidden space-y-3 max-h-[400px] overflow-y-auto">
+                  {academicInfos.map((info) => (
+                    <div
+                      key={info.id}
+                      className="rounded-lg border bg-card p-4 space-y-3"
+                    >
+                      {/* Header: Year + Status + Actions */}
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="text-muted-foreground h-4 w-4" />
+                            <span className="font-semibold">{info.academic_year}</span>
+                          </div>
+                          <div className="flex gap-1">
+                            {info.is_deleted && (
+                              <Badge variant="destructive" className="text-xs">
+                                Đã xóa
                               </Badge>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <DollarSign className="text-muted-foreground h-4 w-4" />
-                              <span className="text-sm">
-                                {formatCurrency(info.tuition_fee_per_year)}
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <Users className="text-muted-foreground h-4 w-4" />
-                              <span className="text-sm">{info.annual_admission_quota ?? "—"}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <TrendingUp className="text-muted-foreground h-4 w-4" />
-                              <span className="text-sm">
-                                {info.cutoff_score_previous_year ?? "—"}
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm">
-                                  <MoreVertical className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => handleEdit(info)}>
-                                  <Edit className="mr-2 h-4 w-4" />
-                                  Chỉnh sửa
-                                </DropdownMenuItem>
-                                {info.is_deleted ? (
-                                  <DropdownMenuItem
-                                    onClick={() => handleRestore(info)}
-                                    className="text-green-600"
-                                    disabled={restoreAcademicInfoMutation.isPending}
-                                  >
-                                    <RotateCcw className="mr-2 h-4 w-4" />
-                                    Khôi phục
-                                  </DropdownMenuItem>
-                                ) : (
-                                  <DropdownMenuItem
-                                    onClick={() => handleDeleteClick(info)}
-                                    className="text-red-600"
-                                  >
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    Xóa
-                                  </DropdownMenuItem>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                            )}
+                            <Badge variant={info.is_published ? "default" : "secondary"} className="text-xs">
+                              {info.is_published ? "Công khai" : "Nháp"}
+                            </Badge>
+                          </div>
+                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-10 w-10">
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleEdit(info)}>
+                              <Edit className="mr-2 h-4 w-4" />
+                              Chỉnh sửa
+                            </DropdownMenuItem>
+                            {info.is_deleted ? (
+                              <DropdownMenuItem
+                                onClick={() => handleRestore(info)}
+                                className="text-success-600"
+                                disabled={restoreAcademicInfoMutation.isPending}
+                              >
+                                <RotateCcw className="mr-2 h-4 w-4" />
+                                Khôi phục
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem
+                                onClick={() => handleDeleteClick(info)}
+                                className="text-error-600"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Xóa
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+
+                      {/* Info Fields */}
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="flex items-center gap-2">
+                          <DollarSign className="text-muted-foreground h-4 w-4 flex-shrink-0" />
+                          <div>
+                            <div className="text-muted-foreground text-xs">Học phí/năm</div>
+                            <div>{formatCurrency(info.tuition_fee_per_year)}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Users className="text-muted-foreground h-4 w-4 flex-shrink-0" />
+                          <div>
+                            <div className="text-muted-foreground text-xs">Chỉ tiêu</div>
+                            <div>{info.annual_admission_quota ?? "—"}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 col-span-2">
+                          <TrendingUp className="text-muted-foreground h-4 w-4 flex-shrink-0" />
+                          <div>
+                            <div className="text-muted-foreground text-xs">Điểm chuẩn năm trước</div>
+                            <div>{info.cutoff_score_previous_year ?? "—"}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
+
+                {/* Desktop: Table View */}
+                <div className="hidden md:block overflow-hidden rounded-lg border">
+                  <div className="max-h-[500px] overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Năm học</TableHead>
+                          <TableHead>Trạng thái</TableHead>
+                          <TableHead>Học phí/năm</TableHead>
+                          <TableHead>Chỉ tiêu</TableHead>
+                          <TableHead>Điểm chuẩn</TableHead>
+                          <TableHead className="text-right">Thao tác</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {academicInfos.map((info) => (
+                          <TableRow key={info.id}>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Calendar className="text-muted-foreground h-4 w-4" />
+                                <span className="font-medium">{info.academic_year}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1">
+                                {info.is_deleted && (
+                                  <Badge variant="destructive" className="w-fit">
+                                    Đã xóa
+                                  </Badge>
+                                )}
+                                <Badge variant={info.is_published ? "default" : "secondary"}>
+                                  {info.is_published ? "Công khai" : "Nháp"}
+                                </Badge>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <DollarSign className="text-muted-foreground h-4 w-4" />
+                                <span className="text-sm">
+                                  {formatCurrency(info.tuition_fee_per_year)}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Users className="text-muted-foreground h-4 w-4" />
+                                <span className="text-sm">{info.annual_admission_quota ?? "—"}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <TrendingUp className="text-muted-foreground h-4 w-4" />
+                                <span className="text-sm">
+                                  {info.cutoff_score_previous_year ?? "—"}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="sm">
+                                    <MoreVertical className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onClick={() => handleEdit(info)}>
+                                    <Edit className="mr-2 h-4 w-4" />
+                                    Chỉnh sửa
+                                  </DropdownMenuItem>
+                                  {info.is_deleted ? (
+                                    <DropdownMenuItem
+                                      onClick={() => handleRestore(info)}
+                                      className="text-success-600"
+                                      disabled={restoreAcademicInfoMutation.isPending}
+                                    >
+                                      <RotateCcw className="mr-2 h-4 w-4" />
+                                      Khôi phục
+                                    </DropdownMenuItem>
+                                  ) : (
+                                    <DropdownMenuItem
+                                      onClick={() => handleDeleteClick(info)}
+                                      className="text-error-600"
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      Xóa
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </>
             )}
           </div>
-        </DialogContent>
-      </Dialog>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
 
       {/* ✅ Cập nhật: Truyền existingYears vào Dialog */}
       <OfferingAcademicInfoDialog
@@ -346,7 +435,7 @@ export function OfferingAcademicInfoManagement({
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDelete}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Xóa
             </AlertDialogAction>

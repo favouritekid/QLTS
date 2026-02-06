@@ -4,27 +4,64 @@
  * 
  * Creates a new AdmissionProfile for a Lead.
  * Requires lead_id query parameter.
+ * REFACTORED (Phase 2): Now requires admission_method_id selection
  */
 "use client"
 
-import { useEffect } from "react"
+import { useState, useEffect } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ClipboardCheck, ArrowLeft, Loader2 } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
+import { ClipboardCheck, ArrowLeft, Loader2, AlertCircle } from "lucide-react"
 import { useCreateAdmission } from "@/hooks/admissions"
 import { useLead } from "@/hooks/useLeads"
+import { useQuery } from "@tanstack/react-query"
+import { api } from "@/lib/api/client"
 import { toast } from "sonner"
+import { PageContainer } from "@/components/layouts/PageContainer"
+
+// Type for admission method from backend
+interface AdmissionMethod {
+  id: number
+  code: string
+  name: string
+  description?: string
+  is_active: boolean
+}
+
+interface AdmissionMethodListResponse {
+  methods: AdmissionMethod[]
+  total: number
+}
+
+// Hook to fetch admission methods
+function useAdmissionMethods() {
+  return useQuery({
+    queryKey: ["admission-methods"],
+    queryFn: async (): Promise<AdmissionMethod[]> => {
+      const response = await api.get<AdmissionMethodListResponse>("/api/admission-config/methods")
+      return response.data.methods
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes - methods don't change often
+  })
+}
 
 export default function CreateAdmissionPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const leadId = searchParams.get("lead_id")
   
+  // State for selected admission method
+  const [selectedMethodId, setSelectedMethodId] = useState<number | null>(null)
+  
   const { data: lead, isLoading: isLoadingLead } = useLead(
     leadId ? parseInt(leadId) : 0,
     !!leadId // enabled - only fetch when leadId is present
   )
+  
+  const { data: methods = [], isLoading: isLoadingMethods } = useAdmissionMethods()
   
   const createMutation = useCreateAdmission()
   
@@ -36,27 +73,25 @@ export default function CreateAdmissionPage() {
   }, [leadId, router])
   
   const handleCreate = async () => {
-    if (!leadId) return
+    if (!leadId || !selectedMethodId) return
     
-    try {
-      const result = await createMutation.mutateAsync({
-        lead_id: parseInt(leadId),
-      })
-      
-      toast.success("Đã tạo hồ sơ tuyển sinh")
-      router.push(`/admissions/${result.id}`)
-    } catch (error: unknown) {
-      const errorMessage = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Không thể tạo hồ sơ"
-      toast.error(errorMessage)
-    }
+    // Note: useCreateAdmission hook already handles success toast and navigation
+    // Error is also handled via handleApiError() in the hook
+    await createMutation.mutateAsync({
+      lead_id: parseInt(leadId),
+      admission_method_id: selectedMethodId,
+    })
   }
   
   if (!leadId) {
     return null
   }
   
+  // Filter to only active methods
+  const activeMethods = methods.filter(m => m.is_active)
+  
   return (
-    <div className="container mx-auto py-6 max-w-2xl">
+    <PageContainer maxWidth="sm">
       <Button 
         variant="ghost" 
         size="sm" 
@@ -108,8 +143,57 @@ export default function CreateAdmissionPage() {
                   <span>{lead.offering.program.name}</span>
                 </div>
               )}
+              {lead.offering?.program?.degree_level && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Trình độ:</span>
+                  <span>{lead.offering.program.degree_level}</span>
+                </div>
+              )}
+              {lead.offering?.offering_type && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Hình thức đào tạo:</span>
+                  <span>{lead.offering.offering_type}</span>
+                </div>
+              )}
             </div>
           )}
+          
+          {/* Admission Method Selection - NEW */}
+          <div className="space-y-2">
+            <Label htmlFor="admission-method">
+              Phương thức xét tuyển <span className="text-destructive">*</span>
+            </Label>
+            {isLoadingMethods ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Đang tải phương thức...
+              </div>
+            ) : activeMethods.length === 0 ? (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4" />
+                Không có phương thức xét tuyển khả dụng
+              </div>
+            ) : (
+              <Select
+                value={selectedMethodId?.toString() ?? ""}
+                onValueChange={(value) => setSelectedMethodId(value ? parseInt(value) : null)}
+              >
+                <SelectTrigger id="admission-method">
+                  <SelectValue placeholder="Chọn phương thức xét tuyển" />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeMethods.map((method) => (
+                    <SelectItem key={method.id} value={method.id.toString()}>
+                      {method.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Phương thức xét tuyển xác định quy tắc đánh giá và hồ sơ yêu cầu
+            </p>
+          </div>
           
           <div className="flex gap-3 pt-4">
             <Button 
@@ -122,12 +206,12 @@ export default function CreateAdmissionPage() {
             <Button 
               className="flex-1"
               onClick={handleCreate}
-              disabled={createMutation.isPending || !lead}
+              disabled={createMutation.isPending || !lead || !selectedMethodId}
             >
               {createMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Đang tạo...
+                  Đang tạo…
                 </>
               ) : (
                 <>
@@ -139,6 +223,6 @@ export default function CreateAdmissionPage() {
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   )
 }

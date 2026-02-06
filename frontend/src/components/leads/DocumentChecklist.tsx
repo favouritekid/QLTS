@@ -25,13 +25,23 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { AdmissionCriterion } from "@/types/organization.types";
 import type { ChecklistItem } from "@/types/lead.types";
 import type { ApplicationFormValues } from "./LeadApplicationForm";
 
+// TODO: Refactor to use ResolvedDocumentResponse from admission-paths API
+// instead of the deprecated admission_method.required_documents
+// See: GET /api/admission-config/paths/{id}/documents
+interface AdmissionMethodWithDocs {
+  id: string | number;
+  required_documents?: Array<{
+    code: string;
+    label: string;
+  }> | null;
+}
+
 interface DocumentChecklistProps {
   control: Control<ApplicationFormValues>;
-  admissionMethod: AdmissionCriterion;
+  admissionMethod: AdmissionMethodWithDocs | null;
 }
 
 export function DocumentChecklist({ control, admissionMethod }: DocumentChecklistProps) {
@@ -42,6 +52,12 @@ export function DocumentChecklist({ control, admissionMethod }: DocumentChecklis
 
   // Update checklist when admission method changes
   useEffect(() => {
+    // Handle null case
+    if (!admissionMethod) {
+      replace([]);
+      return;
+    }
+    
     if (admissionMethod.required_documents) {
       const newChecklist: ChecklistItem[] = admissionMethod.required_documents.map((doc) => ({
         code: doc.code,
@@ -54,7 +70,7 @@ export function DocumentChecklist({ control, admissionMethod }: DocumentChecklis
     } else {
       replace([]);
     }
-  }, [admissionMethod.id, admissionMethod.required_documents, replace]);
+  }, [admissionMethod?.id, admissionMethod?.required_documents, replace]);
 
   if (!fields.length) {
     return (

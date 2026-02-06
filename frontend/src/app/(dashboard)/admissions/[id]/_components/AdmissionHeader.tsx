@@ -49,21 +49,21 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
             <p className="text-muted-foreground">CCCD/CMND</p>
-            <p className="font-medium">{profile.citizen_id || "Chưa nhập"}</p>
+            <p className="font-medium">{profile.citizen_id_masked || "Chưa nhập"}</p>
           </div>
           <div>
             <p className="text-muted-foreground">GPA</p>
-            <p className="font-medium">
+            <p className="font-medium tabular-nums">
               {profile.admission_scores?.gpa?.toFixed(2) || "Chưa nhập"}
             </p>
           </div>
           <div>
             <p className="text-muted-foreground">Thành viên gia đình</p>
-            <p className="font-medium">{profile.family_info?.length || 0}</p>
+            <p className="font-medium tabular-nums">{profile.family_info?.length || 0}</p>
           </div>
           <div>
             <p className="text-muted-foreground">Tài liệu</p>
-            <p className="font-medium">
+            <p className="font-medium tabular-nums">
               {profile.documents_checklist?.filter((d) => d.status === "uploaded" || d.status === "verified").length || 0} / {profile.documents_checklist?.length || 0}
             </p>
           </div>

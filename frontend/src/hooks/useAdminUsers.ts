@@ -337,3 +337,44 @@ export function useAdminUserRoles(userId: number) {
     refetchOnMount: true, // Refetch when dialog opens
   });
 }
+// ============================================
+// 👔 ASSIGN/UNASSIGN UNIT MUTATIONS
+// ============================================
+
+import { masterDataApi } from "@/lib/api/master-data";
+
+
+
+export function useAssignUserToUnit() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ userId, unitId }: { userId: number; unitId: number }) => {
+      return masterDataApi.assignUserToUnit(userId, unitId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
+      toast.success("User assigned to unit successfully");
+    },
+    onError: () => {
+      toast.error("Failed to assign user to unit");
+    },
+  });
+}
+
+export function useUnassignUserFromUnit() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ userId, unitId }: { userId: number; unitId: number }) => {
+      return masterDataApi.unassignUserFromUnit(userId, unitId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
+      toast.success("User unassigned from unit successfully");
+    },
+    onError: () => {
+      toast.error("Failed to unassign user from unit");
+    },
+  });
+}

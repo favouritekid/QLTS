@@ -64,7 +64,7 @@ export function EmptyLeadsState({
     return (
       <div className={cn("flex flex-col items-center justify-center gap-4 py-12", className)}>
         <div className="bg-muted/50 rounded-full p-4">
-          <SearchX className="h-10 w-10 text-muted-foreground" />
+          <SearchX aria-hidden="true" className="h-10 w-10 text-muted-foreground" />
         </div>
         <div className="text-center space-y-1">
           <h3 className="font-semibold text-foreground">Không tìm thấy lead</h3>
@@ -81,13 +81,13 @@ export function EmptyLeadsState({
         <div className="flex items-center gap-2">
           {onResetFilters && (
             <Button variant="outline" size="sm" onClick={onResetFilters}>
-              <Filter className="h-4 w-4 mr-1.5" />
+              <Filter aria-hidden="true" className="h-4 w-4 mr-1.5" />
               Xóa bộ lọc
             </Button>
           )}
           {onCreateLead && (
             <Button variant="default" size="sm" onClick={onCreateLead}>
-              <Plus className="h-4 w-4 mr-1.5" />
+              <Plus aria-hidden="true" className="h-4 w-4 mr-1.5" />
               Tạo lead mới
             </Button>
           )}
@@ -101,7 +101,7 @@ export function EmptyLeadsState({
     return (
       <div className={cn("flex flex-col items-center justify-center gap-4 py-12", className)}>
         <div className="bg-primary/10 rounded-full p-4">
-          <Users className="h-10 w-10 text-primary" />
+          <Users aria-hidden="true" className="h-10 w-10 text-primary" />
         </div>
         <div className="text-center space-y-1">
           <h3 className="font-semibold text-foreground">Chưa có lead nào</h3>
@@ -112,7 +112,7 @@ export function EmptyLeadsState({
         <div className="flex items-center gap-2">
           {onCreateLead && (
             <Button variant="default" size="sm" onClick={onCreateLead}>
-              <Plus className="h-4 w-4 mr-1.5" />
+              <Plus aria-hidden="true" className="h-4 w-4 mr-1.5" />
               Tạo lead đầu tiên
             </Button>
           )}
@@ -125,7 +125,7 @@ export function EmptyLeadsState({
   return (
     <div className={cn("flex flex-col items-center justify-center gap-4 py-12", className)}>
       <div className="bg-muted/50 rounded-full p-4">
-        <SearchX className="h-10 w-10 text-muted-foreground" />
+        <SearchX aria-hidden="true" className="h-10 w-10 text-muted-foreground" />
       </div>
       <div className="text-center space-y-1">
         <h3 className="font-semibold text-foreground">Không có dữ liệu</h3>
@@ -135,7 +135,7 @@ export function EmptyLeadsState({
       </div>
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry}>
-          <RefreshCw className="h-4 w-4 mr-1.5" />
+          <RefreshCw aria-hidden="true" className="h-4 w-4 mr-1.5" />
           Thử lại
         </Button>
       )}

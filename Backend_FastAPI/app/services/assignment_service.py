@@ -8,7 +8,6 @@ This ensures notifications are persisted to database AND sent via Socket.IO/Emai
 import logging
 from datetime import datetime, timezone
 
-from celery.exceptions import Retry  # Dùng để retry task
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailableError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +16,7 @@ from .. import models
 from ..core.constants import UserRole
 from ..core.events import SystemEvents
 from ..core.task_constants import AssignmentResult, AssignmentFailureReason
+from ..utils.exceptions import LockContentionError
 from .notification_dispatcher import dispatch
 from .status_helper import StatusHelper, AssignmentStatus
 
@@ -344,10 +344,14 @@ async def automatically_assign_lead(
             or "lock not available" in str(e).lower()
         ):
             log.warning(
-                f"[Lead ID: {lead_id}] Lock contention detected (possibly on Lead row). Retrying task in 5s..."
+                f"[Lead ID: {lead_id}] Lock contention detected (possibly on Lead row). "
+                "Celery will retry automatically via autoretry_for."
             )
-            # Ném lỗi Retry để Celery tự động thử lại task sau
-            raise Retry(exc=e, countdown=5, max_retries=5)  # Giới hạn số lần retry
+            # Raise LockContentionError - Celery's autoretry_for=(Exception,) will handle retry
+            raise LockContentionError(
+                f"Lock contention on lead {lead_id}",
+                context={"lead_id": lead_id, "original_error": str(e)}
+            )
         else:
             # Nếu là lỗi OperationalError khác (vd: mất kết nối), log và ném ra
             log.error(

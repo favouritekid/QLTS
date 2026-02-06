@@ -2,38 +2,32 @@
 /**
  * Weekly Leaderboard Component
  * Shows top officers by consultations for gamification
+ *
+ * Now supports date range and scope filtering to align with dashboard filters.
  */
 
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Trophy, Medal, Crown, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import {
+  Crown,
+  Medal,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Trophy
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api/client";
+import { useDashboardDate } from "@/contexts/DashboardDateContext";
+import { useWeeklyLeaderboard } from "@/hooks/officer/useWeeklyLeaderboard";
 
-interface LeaderboardEntry {
-  rank: number;
-  user_id: number;
-  username: string;
-  full_name: string;
-  consultations: number;
-  is_current_user: boolean;
-  rank_change?: number | null; // +2 = up 2 spots, -1 = down 1, null = new
-}
-
-interface WeeklyLeaderboardData {
-  week_start: string;
-  total_officers: number;
-  current_user_rank: number;
-  leaderboard: LeaderboardEntry[];
-}
-
-async function fetchLeaderboard(): Promise<WeeklyLeaderboardData> {
-  const response = await api.get("/api/officer/leaderboard");
-  return response.data;
+interface WeeklyLeaderboardProps {
+  /** Dashboard scope (affects unit filtering) */
+  scope?: "personal" | "team" | "organization";
+  /** Selected unit ID (for organization scope) */
+  unitId?: number | null;
 }
 
 const getRankIcon = (rank: number) => {
@@ -41,7 +35,7 @@ const getRankIcon = (rank: number) => {
     case 1:
       return <Crown className="h-4 w-4 text-yellow-500" />;
     case 2:
-      return <Medal className="h-4 w-4 text-gray-400" />;
+      return <Medal className="h-4 w-4 text-border" />;
     case 3:
       return <Medal className="h-4 w-4 text-amber-600" />;
     default:
@@ -53,12 +47,12 @@ const getRankIcon = (rank: number) => {
 const getRankTrendIndicator = (rankChange: number | null | undefined) => {
   if (rankChange === null || rankChange === undefined) {
     return (
-      <span className="text-[10px] text-blue-500 font-medium">MỚI</span>
+      <span className="text-[10px] text-info-500 font-medium">MỚI</span>
     );
   }
   if (rankChange > 0) {
     return (
-      <div className="flex items-center text-green-600 dark:text-green-400">
+      <div className="flex items-center text-success-600 dark:text-success-500">
         <TrendingUp className="h-3 w-3" />
         <span className="text-[10px] font-medium ml-0.5">+{rankChange}</span>
       </div>
@@ -66,7 +60,7 @@ const getRankTrendIndicator = (rankChange: number | null | undefined) => {
   }
   if (rankChange < 0) {
     return (
-      <div className="flex items-center text-red-500 dark:text-red-400">
+      <div className="flex items-center text-error-500 dark:text-error-500">
         <TrendingDown className="h-3 w-3" />
         <span className="text-[10px] font-medium ml-0.5">{rankChange}</span>
       </div>
@@ -85,7 +79,7 @@ const getRankBg = (rank: number, isCurrentUser: boolean) => {
     case 1:
       return "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800";
     case 2:
-      return "bg-gray-50 dark:bg-gray-950/30 border-gray-200 dark:border-gray-700";
+      return "bg-border/40 dark:bg-border/20 border-border dark:border-border";
     case 3:
       return "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800";
     default:
@@ -93,12 +87,13 @@ const getRankBg = (rank: number, isCurrentUser: boolean) => {
   }
 };
 
-export function WeeklyLeaderboard() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["officer", "leaderboard"],
-    queryFn: fetchLeaderboard,
-    staleTime: 60000, // 1 minute
-    refetchInterval: 300000, // 5 minutes
+export function WeeklyLeaderboard({ scope, unitId }: WeeklyLeaderboardProps) {
+  const { startDate, endDate } = useDashboardDate();
+  const { data, isLoading, error } = useWeeklyLeaderboard({
+    startDate,
+    endDate,
+    scope,
+    unitId,
   });
 
   if (isLoading) {
@@ -139,14 +134,27 @@ export function WeeklyLeaderboard() {
     return null;
   }
 
+  // Format date range for display
+  const formatDateRange = () => {
+    if (data.week_end && data.week_start !== data.week_end) {
+      return `${data.week_start} → ${data.week_end}`;
+    }
+    return data.week_start;
+  };
+
   return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-medium flex items-center gap-2">
-            <Trophy className="h-5 w-5 text-amber-500" />
-            Bảng xếp hạng tuần
-          </CardTitle>
+          <div>
+            <CardTitle className="text-base font-medium flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-amber-500" />
+              Bảng xếp hạng
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {formatDateRange()}
+            </p>
+          </div>
           <Badge variant="outline" className="text-xs">
             #{data.current_user_rank}/{data.total_officers}
           </Badge>
@@ -168,7 +176,7 @@ export function WeeklyLeaderboard() {
                 )}
                 <div
                   className={cn(
-                    "flex items-center gap-3 p-2.5 rounded-lg border transition-all",
+                    "flex items-center gap-3 p-2.5 rounded-lg border transition-colors",
                     getRankBg(entry.rank, entry.is_current_user)
                   )}
                 >

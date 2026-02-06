@@ -11,7 +11,8 @@ const envSchema = z.object({
 // Parse environment variables (adjust based on your actual .env file)
 // Ensure you have a .env.local file with NEXT_PUBLIC_API_URL defined
 export const env = envSchema.parse({
-  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000", // Backend API base URL
+  // Support both NEXT_PUBLIC_API_URL and NEXT_PUBLIC_API_BASE_URL for backwards compatibility
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000",
   NEXT_PUBLIC_SOCKET_URL: process.env.NEXT_PUBLIC_SOCKET_URL,
   NODE_ENV: process.env.NODE_ENV || "development",
 });
