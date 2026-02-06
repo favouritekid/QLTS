@@ -1302,7 +1302,7 @@ async def officer_import_leads(
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read file: {str(e)}"
+            detail="Failed to read uploaded file. Please check the file format and try again."
         )
 
     # Call service with auto-assign parameters

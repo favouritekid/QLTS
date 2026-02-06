@@ -1,6 +1,6 @@
 # app/config.py
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 from pydantic import ConfigDict, Field  # Thêm Field
 
@@ -53,7 +53,10 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
 
     # JWT Settings với default
-    JWT_ALGORITHM: str = Field(default="HS256", validation_alias="JWT_ALGORITHM")
+    # ✅ SECURITY: Only allow safe JWT algorithms (reject "none" algorithm)
+    JWT_ALGORITHM: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512"] = Field(
+        default="HS256", validation_alias="JWT_ALGORITHM"
+    )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
         default=15, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES"
     )

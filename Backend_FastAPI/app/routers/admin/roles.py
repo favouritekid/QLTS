@@ -740,7 +740,7 @@ async def delete_role_atomic(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete role: {str(e)}",
+            detail="Failed to delete role. Please try again later.",
         )
 
 

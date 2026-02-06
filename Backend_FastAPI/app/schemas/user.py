@@ -31,7 +31,8 @@ def validate_password_strength_logic(v: str) -> str:
 
 # === KẾT THÚC TÁCH LOGIC ===
 
-PasswordStr = constr(min_length=8, strip_whitespace=True)
+# ✅ SECURITY: OWASP ASVS 5.0 recommends minimum 12 characters
+PasswordStr = constr(min_length=12, strip_whitespace=True)
 
 
 class UserBase(BaseModel):
