@@ -80,9 +80,9 @@ export function StatusBanner({
       )}
     >
       {isLoading ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
       ) : (
-        <Icon className="h-4 w-4" />
+        <Icon aria-hidden="true" className="h-4 w-4" />
       )}
       <AlertTitle>{config.label}</AlertTitle>
       <AlertDescription>{message}</AlertDescription>
@@ -173,14 +173,14 @@ function ErrorSection({
         )}
       >
         <div className="flex items-center gap-2">
-          <Icon className="w-4 h-4" />
+          <Icon aria-hidden="true" className="w-4 h-4" />
           <span>{title}</span>
           <span className="text-xs opacity-75">({sectionErrors.length})</span>
         </div>
         {isExpanded ? (
-          <ChevronUp className="w-4 h-4" />
+          <ChevronUp aria-hidden="true" className="w-4 h-4" />
         ) : (
-          <ChevronDown className="w-4 h-4" />
+          <ChevronDown aria-hidden="true" className="w-4 h-4" />
         )}
       </button>
 
@@ -263,7 +263,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
       variant="destructive"
       className={cn("mb-6 border-error-300", className)}
     >
-      <AlertCircle className="h-5 w-5" />
+      <AlertCircle aria-hidden="true" className="h-5 w-5" />
       <AlertTitle className="text-base font-semibold">
         Hồ sơ chưa đủ điều kiện - {errors.length} vấn đề cần hoàn thiện
       </AlertTitle>

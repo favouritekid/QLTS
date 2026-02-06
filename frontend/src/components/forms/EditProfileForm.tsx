@@ -178,6 +178,7 @@ export function EditProfileForm() {
                   <FormControl>
                     <Input
                       placeholder="Nhập họ và tên của bạn"
+                      autoComplete="name"
                       disabled={isUpdatingProfile}
                       {...field}
                     />
@@ -252,7 +253,7 @@ export function EditProfileForm() {
                 {isUpdatingProfile ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Đang lưu...
+                    Đang lưu…
                   </>
                 ) : (
                   "Lưu Thay Đổi"

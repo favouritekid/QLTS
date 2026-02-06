@@ -54,7 +54,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
         isOver || isActiveDropZone
           ? "ring-2 ring-primary ring-offset-2"
           : ""
-      } transition-all duration-200`}
+      } transition-shadow duration-200`}
     >
       <Card className="h-full flex flex-col border-2" style={columnStyle}>
         <CardHeader className="pb-3">
@@ -63,7 +63,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
               <h3 className="font-semibold text-base leading-none">
                 {stage.name}
               </h3>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-xs text-muted-foreground mt-1 tabular-nums">
                 {stage.lead_count} {stage.lead_count === 1 ? "lead" : "leads"}
               </p>
             </div>
@@ -76,12 +76,12 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
           <div className="flex items-center gap-2 mt-2 pt-2 border-t">
             <div className="flex items-center gap-1">
               <TrendIcon className={`h-3 w-3 ${trendColor}`} />
-              <span className={`text-xs font-medium ${trendColor}`}>
+              <span className={`text-xs font-medium tabular-nums ${trendColor}`}>
                 {conversionRate.toFixed(0)}%
               </span>
             </div>
             {stage.avg_time_in_stage_days && (
-              <div className="text-xs text-muted-foreground">
+              <div className="text-xs text-muted-foreground tabular-nums">
                 <span className="font-medium">
                   {Math.round(stage.avg_time_in_stage_days)}d
                 </span>{" "}

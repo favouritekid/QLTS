@@ -683,7 +683,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={deleteMutation.isPending}
             >
-              {deleteMutation.isPending ? "Đang xóa..." : "Xóa"}
+              {deleteMutation.isPending ? "Đang xóa…" : "Xóa"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -706,7 +706,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={bulkDeleteMutation.isPending}
             >
-              {bulkDeleteMutation.isPending ? "Đang xóa..." : "Xóa tất cả"}
+              {bulkDeleteMutation.isPending ? "Đang xóa…" : "Xóa tất cả"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

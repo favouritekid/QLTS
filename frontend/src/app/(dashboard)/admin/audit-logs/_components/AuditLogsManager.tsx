@@ -168,7 +168,7 @@ function SummaryCards() {
           <CardDescription>Tổng số thay đổi</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-2xl font-bold">{summary.total.toLocaleString()}</p>
+          <p className="text-2xl font-bold tabular-nums">{summary.total.toLocaleString()}</p>
         </CardContent>
       </Card>
 
@@ -177,7 +177,7 @@ function SummaryCards() {
           <CardDescription>Lead</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-2xl font-bold">
+          <p className="text-2xl font-bold tabular-nums">
             {(summary.by_entity_type.Lead || 0).toLocaleString()}
           </p>
         </CardContent>
@@ -188,7 +188,7 @@ function SummaryCards() {
           <CardDescription>Tư vấn</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-2xl font-bold">
+          <p className="text-2xl font-bold tabular-nums">
             {(summary.by_entity_type.Consultation || 0).toLocaleString()}
           </p>
         </CardContent>
@@ -199,7 +199,7 @@ function SummaryCards() {
           <CardDescription>Hồ sơ xét tuyển</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-2xl font-bold">
+          <p className="text-2xl font-bold tabular-nums">
             {(summary.by_entity_type.AdmissionProfile || 0).toLocaleString()}
           </p>
         </CardContent>
@@ -580,7 +580,7 @@ export function AuditLogsManager() {
           {/* Pagination */}
           {data && data.total > pageSize && (
             <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground tabular-nums">
                 Hiển thị {(page - 1) * pageSize + 1} -{" "}
                 {Math.min(page * pageSize, data.total)} / {data.total} bản ghi
               </p>
@@ -594,7 +594,7 @@ export function AuditLogsManager() {
                   <ChevronLeft className="h-4 w-4" />
                   Trước
                 </Button>
-                <span className="text-sm">
+                <span className="text-sm tabular-nums">
                   Trang {page} / {Math.ceil(data.total / pageSize)}
                 </span>
                 <Button

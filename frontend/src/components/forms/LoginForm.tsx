@@ -108,7 +108,7 @@ export function LoginForm() {
 
           {/* Nút Submit */}
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Đang đăng nhập..." : "Đăng nhập"}
+            {isLoading ? "Đang đăng nhập…" : "Đăng nhập"}
           </Button>
         </form>
       </Form>

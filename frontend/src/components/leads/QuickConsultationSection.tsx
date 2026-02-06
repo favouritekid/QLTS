@@ -678,7 +678,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   className={cn(
                     "h-7 flex-shrink-0 px-2.5 text-xs",
                     "border border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100",
-                    "transition-all hover:scale-[1.02]",
+                    "transition hover:scale-[1.02]",
                     // Pending highlight
                     pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                   )}
@@ -742,7 +742,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             // ✅ Use outcome_type-based colors (with slate tint for previous stage)
                             getOutcomeColorClasses(status.outcome_type),
                             "opacity-80", // Slightly dimmed to indicate it's a revert
-                            "transition-all hover:scale-[1.02]",
+                            "transition hover:scale-[1.02]",
                             // Pending highlight
                             pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105 opacity-100"
                           )}
@@ -785,7 +785,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                               "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
                               // ✅ Use outcome_type-based colors
                               getOutcomeColorClasses(status.outcome_type, isCurrentStatus),
-                              "transition-all hover:scale-[1.02]",
+                              "transition hover:scale-[1.02]",
                               // Pending highlight
                               pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                             )}
@@ -830,7 +830,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
                             // ✅ Use outcome_type-based colors
                             getOutcomeColorClasses(status.outcome_type),
-                            "transition-all hover:scale-[1.02]",
+                            "transition hover:scale-[1.02]",
                             // Pending highlight
                             pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                           )}
@@ -892,7 +892,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                 <div className="mt-3 overflow-hidden rounded-lg border border-info-200 bg-info-50">
                   {/* Progress bar (shrinks from right to left) */}
                   <div
-                    className="h-1 bg-info-500 transition-all duration-1000 ease-linear"
+                    className="h-1 bg-info-500 transition-[width] duration-1000 ease-linear"
                     style={{ width: `${(countdown / 3) * 100}%` }}
                   />
 

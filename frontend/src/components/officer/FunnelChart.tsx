@@ -32,17 +32,21 @@ import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { 
-  AlertTriangle, 
-  Users, 
-  ArrowDown, 
-  Target, 
+import {
+  AlertTriangle,
+  Users,
+  ArrowDown,
+  Target,
   CheckCircle2,
   XCircle,
   PauseCircle,
   TrendingUp,
   TrendingDown,
-  Minus
+  Minus,
+  Clock,
+  DollarSign,
+  Lightbulb,
+  ExternalLink
 } from "lucide-react";
 
 // ============================================================================
@@ -55,6 +59,58 @@ interface OutcomeBreakdown {
   neutral: number;
 }
 
+/** Phase 2: Loss reason breakdown for funnel analytics */
+interface LossBreakdownItem {
+  reason_code: string;    // e.g., "PRICE_HIGH", "NO_CONTACT"
+  count: number;          // Number of leads lost with this reason
+  percentage: number;     // Percentage of total losses at this stage
+}
+
+/** Phase 2: Stage velocity statistics - time spent in each stage */
+interface VelocityStats {
+  avg_days: number;     // Average days spent in stage
+  min_days: number;     // Minimum days
+  max_days: number;     // Maximum days
+  sample_size: number;  // Number of transitions measured
+}
+
+/** Phase 2: Estimated lost revenue for funnel analytics */
+interface EstimatedLostRevenue {
+  lost_leads_count: number;     // Number of leads lost at this stage
+  avg_tuition: number;          // Average tuition fee (VND)
+  total_lost_revenue: number;   // Total lost revenue = lost_leads × avg_tuition
+  leads_with_tuition: number;   // Leads that have offering with tuition data
+}
+
+/** Format VND currency (compact format for display) */
+const formatVND = (amount: number): string => {
+  if (amount >= 1_000_000_000) {
+    return `${(amount / 1_000_000_000).toFixed(1)}B`;
+  }
+  if (amount >= 1_000_000) {
+    return `${(amount / 1_000_000).toFixed(0)}M`;
+  }
+  if (amount >= 1_000) {
+    return `${(amount / 1_000).toFixed(0)}K`;
+  }
+  return amount.toFixed(0);
+};
+
+/** Format VND currency (full format with thousands separators) */
+const formatVNDFull = (amount: number): string => {
+  return new Intl.NumberFormat('vi-VN').format(amount) + ' ₫';
+};
+
+/** Map loss reason codes to human-readable labels (Vietnamese) */
+const LOSS_REASON_LABELS: Record<string, { label: string; icon: string }> = {
+  PRICE_HIGH: { label: "Học phí", icon: "💰" },
+  LOCATION_FAR: { label: "Xa nhà", icon: "📍" },
+  CHOSE_COMPETITOR: { label: "Trường khác", icon: "🎓" },
+  NO_CONTACT: { label: "K.liên lạc", icon: "📞" },
+  TIMING_BAD: { label: "Chưa sẵn sàng", icon: "⏰" },
+  OTHER: { label: "Khác", icon: "❓" },
+};
+
 interface FunnelStage {
   stage_id: string;
   stage_name: string;
@@ -66,7 +122,44 @@ interface FunnelStage {
   // SPEC 2026-02-04: Early Exit metrics
   early_exit_count?: number;  // FINAL leads (negative) at this stage
   move_forward?: number;      // lead_count - early_exit_count
+  // Phase 2: Loss reason breakdown
+  loss_breakdown?: LossBreakdownItem[] | null;  // Loss reasons for this stage
+  // Phase 2: Velocity - time spent in stage
+  velocity?: VelocityStats | null;
+  // Phase 2: Estimated lost revenue
+  estimated_lost_revenue?: EstimatedLostRevenue | null;
 }
+
+/** Phase 2: AI-powered suggestion for funnel optimization */
+interface FunnelSuggestion {
+  id: string;                          // Unique suggestion ID
+  type: "bottleneck" | "slow_stage" | "high_loss" | "loss_reason";
+  priority: "critical" | "high" | "medium" | "low";
+  stage_id?: string | null;            // Related stage (if applicable)
+  stage_name?: string | null;          // Stage name for display
+  title: string;                       // Short title
+  description: string;                 // Detailed description
+  metric_value?: number | null;        // The metric that triggered this suggestion
+  metric_label?: string | null;        // Label for the metric
+  action_label?: string | null;        // Suggested action button label
+  action_url?: string | null;          // URL for the action
+}
+
+/** Map suggestion type to icon and color */
+const SUGGESTION_STYLES: Record<FunnelSuggestion["type"], { icon: string; color: string; bgColor: string }> = {
+  bottleneck: { icon: "🚧", color: "text-error-600", bgColor: "bg-error-50 dark:bg-error-950/30" },
+  slow_stage: { icon: "🐢", color: "text-amber-600", bgColor: "bg-amber-50 dark:bg-amber-950/30" },
+  high_loss: { icon: "💸", color: "text-rose-600", bgColor: "bg-rose-50 dark:bg-rose-950/30" },
+  loss_reason: { icon: "📊", color: "text-blue-600", bgColor: "bg-blue-50 dark:bg-blue-950/30" },
+};
+
+/** Map priority to badge variant */
+const PRIORITY_STYLES: Record<FunnelSuggestion["priority"], { label: string; color: string }> = {
+  critical: { label: "Cấp bách", color: "bg-error-500 text-white" },
+  high: { label: "Cao", color: "bg-warning-500 text-white" },
+  medium: { label: "TB", color: "bg-blue-500 text-white" },
+  low: { label: "Thấp", color: "bg-muted text-muted-foreground" },
+};
 
 // Funnel configuration interface - allows customization via props
 interface FunnelConfig {
@@ -149,6 +242,8 @@ interface FunnelChartProps {
   unitId?: number | null;
   /** Selected officer ID (for drill-down) */
   officerId?: number | null;
+  /** Phase 2: AI-powered funnel suggestions */
+  suggestions?: FunnelSuggestion[];
 }
 
 // ============================================================================
@@ -257,6 +352,7 @@ export function FunnelChart({
   scope,
   unitId,
   officerId,
+  suggestions = [],
 }: FunnelChartProps) {
   const router = useRouter();
   const { startDate, endDate } = useDashboardDate();
@@ -386,6 +482,36 @@ export function FunnelChart({
     return bottleneckIdx;
   };
   const bottleneckIndex = findBottleneck(stageMetrics, mergedConfig.bottleneckThreshold);
+
+  // Phase 2: Aggregate loss breakdown across all stages
+  const aggregatedLossBreakdown = (() => {
+    const breakdown: Record<string, number> = {};
+    let totalLossReasons = 0;
+
+    // Aggregate from all stages (core + outcome)
+    sortedFunnel.forEach(stage => {
+      if (stage.loss_breakdown) {
+        stage.loss_breakdown.forEach(item => {
+          breakdown[item.reason_code] = (breakdown[item.reason_code] || 0) + item.count;
+          totalLossReasons += item.count;
+        });
+      }
+    });
+
+    // Convert to sorted array with percentages
+    return Object.entries(breakdown)
+      .map(([reason_code, count]) => ({
+        reason_code,
+        count,
+        percentage: totalLossReasons > 0 ? Math.round((count / totalLossReasons) * 100 * 10) / 10 : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+  })();
+
+  // Phase 2: Calculate total lost revenue across all stages
+  const totalLostRevenue = sortedFunnel.reduce((sum, stage) => {
+    return sum + (stage.estimated_lost_revenue?.total_lost_revenue || 0);
+  }, 0);
 
   // Comparison with previous period
   const conversionTrend = previousPeriodConversion !== undefined
@@ -601,14 +727,14 @@ export function FunnelChart({
                       <TooltipTrigger asChild>
                         <button
                           className={cn(
-                            "relative group transition-all duration-200 hover:brightness-110 h-14 w-full flex-1",
+                            "relative group transition-colors duration-200 hover:brightness-110 h-14 w-full flex-1",
                             isBottleneck && "ring-2 ring-error-400/50 ring-offset-1"
                           )}
                           onClick={() => handleStageClick(stage.stage_id)}
                         >
                           {/* Background layer with clip-path */}
                           <div 
-                            className="absolute inset-0 shadow-sm transition-all hover:shadow-lg"
+                            className="absolute inset-0 shadow-sm transition-colors hover:shadow-lg"
                             style={{
                               backgroundColor: stageColor,
                               clipPath: shapeStyle.clipPath,
@@ -642,7 +768,7 @@ export function FunnelChart({
                     </Tooltip>
 
                     {/* Right: Detailed metrics breakdown */}
-                    <div className="w-36 shrink-0">
+                    <div className="w-40 shrink-0">
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <div className="flex flex-col items-end cursor-help text-xs">
@@ -671,9 +797,27 @@ export function FunnelChart({
                                 </span>
                               </div>
                             )}
+                            {/* Phase 2: Velocity - Time in Stage */}
+                            {stage.velocity && stage.velocity.sample_size > 0 && (
+                              <div className="flex items-center gap-1 text-cyan-600 dark:text-cyan-400">
+                                <Clock className="h-3 w-3" />
+                                <span className="tabular-nums font-medium">
+                                  {stage.velocity.avg_days.toFixed(1)}d
+                                </span>
+                              </div>
+                            )}
+                            {/* Phase 2: Estimated Lost Revenue */}
+                            {stage.estimated_lost_revenue && stage.estimated_lost_revenue.total_lost_revenue > 0 && (
+                              <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                                <DollarSign className="h-3 w-3" />
+                                <span className="tabular-nums font-medium">
+                                  {formatVND(stage.estimated_lost_revenue.total_lost_revenue)}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent side="left" className="max-w-[220px]">
+                        <TooltipContent side="left" className="max-w-[240px]">
                           <div className="text-xs space-y-1.5">
                             <p className="font-medium border-b border-white/20 pb-1">
                               {stage.stage_name}
@@ -691,14 +835,77 @@ export function FunnelChart({
                                   </span>
                                 </p>
                               )}
+                              {/* Phase 2: Velocity - Time in Stage */}
+                              {stage.velocity && stage.velocity.sample_size > 0 && (
+                                <div className="text-cyan-300 pt-1 border-t border-white/10">
+                                  <p className="flex items-center gap-1">
+                                    <Clock className="h-3 w-3" />
+                                    <span className="text-white/60">Thời gian TB:</span>{" "}
+                                    <span className="font-semibold">
+                                      {stage.velocity.avg_days.toFixed(1)} ngày
+                                    </span>
+                                  </p>
+                                  <p className="text-white/50 text-[10px] pl-4">
+                                    Min: {stage.velocity.min_days.toFixed(1)}d | Max: {stage.velocity.max_days.toFixed(1)}d
+                                    <br />
+                                    (n={stage.velocity.sample_size} transitions)
+                                  </p>
+                                </div>
+                              )}
+                              {/* Phase 2: Estimated Lost Revenue */}
+                              {stage.estimated_lost_revenue && stage.estimated_lost_revenue.total_lost_revenue > 0 && (
+                                <div className="text-amber-300 pt-1 border-t border-white/10">
+                                  <p className="flex items-center gap-1">
+                                    <DollarSign className="h-3 w-3" />
+                                    <span className="text-white/60">Doanh thu mất:</span>{" "}
+                                    <span className="font-semibold">
+                                      {formatVNDFull(stage.estimated_lost_revenue.total_lost_revenue)}
+                                    </span>
+                                  </p>
+                                  <p className="text-white/50 text-[10px] pl-4">
+                                    {stage.estimated_lost_revenue.lost_leads_count} leads ×{" "}
+                                    {formatVND(stage.estimated_lost_revenue.avg_tuition)} TB
+                                    {stage.estimated_lost_revenue.leads_with_tuition < stage.estimated_lost_revenue.lost_leads_count && (
+                                      <>
+                                        <br />
+                                        ({stage.estimated_lost_revenue.leads_with_tuition}/{stage.estimated_lost_revenue.lost_leads_count} có dữ liệu học phí)
+                                      </>
+                                    )}
+                                  </p>
+                                </div>
+                              )}
                               {stage.early_exit_count !== undefined && stage.early_exit_count > 0 && (
-                                <p className="text-error-300">
-                                  <span className="text-white/60">✖ Early Exit:</span>{" "}
-                                  <span className="font-semibold">{stage.early_exit_count}</span>
-                                  <span className="text-white/50 text-[10px] ml-1">
-                                    (leads kết thúc tại đây)
-                                  </span>
-                                </p>
+                                <div className="text-error-300">
+                                  <p>
+                                    <span className="text-white/60">✖ Early Exit:</span>{" "}
+                                    <span className="font-semibold">{stage.early_exit_count}</span>
+                                    <span className="text-white/50 text-[10px] ml-1">
+                                      (leads kết thúc tại đây)
+                                    </span>
+                                  </p>
+                                  {/* Phase 2: Loss Breakdown */}
+                                  {stage.loss_breakdown && stage.loss_breakdown.length > 0 && (
+                                    <div className="mt-1.5 pt-1.5 border-t border-white/10 space-y-0.5">
+                                      <p className="text-white/60 text-[10px]">Lý do:</p>
+                                      {stage.loss_breakdown.slice(0, 4).map((item) => {
+                                        const reasonInfo = LOSS_REASON_LABELS[item.reason_code] || {
+                                          label: item.reason_code,
+                                          icon: "•"
+                                        };
+                                        return (
+                                          <p key={item.reason_code} className="text-white/80 text-[10px] pl-2">
+                                            {reasonInfo.icon} {reasonInfo.label}: {item.count} ({item.percentage}%)
+                                          </p>
+                                        );
+                                      })}
+                                      {stage.loss_breakdown.length > 4 && (
+                                        <p className="text-white/50 text-[10px] pl-2">
+                                          +{stage.loss_breakdown.length - 4} lý do khác
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
                               )}
                             </div>
                             <p className="text-white/50 pt-1 border-t border-white/20 text-[10px]">
@@ -836,12 +1043,168 @@ export function FunnelChart({
                     </div>
                   )}
                 </div>
-                <span className="text-error-600 font-medium">
-                  Tổng Lost: {totalLost} ({(totalLost / Math.max(totalLeads, 1) * 100).toFixed(0)}%)
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="text-error-600 font-medium cursor-help">
+                      Tổng Lost: {totalLost} ({(totalLost / Math.max(totalLeads, 1) * 100).toFixed(0)}%)
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[280px]">
+                    <div className="text-xs space-y-1.5">
+                      <p className="font-medium border-b border-white/20 pb-1">
+                        Phân tích lý do mất leads
+                      </p>
+                      {aggregatedLossBreakdown.length > 0 ? (
+                        <div className="space-y-1">
+                          {aggregatedLossBreakdown.slice(0, 5).map((item) => {
+                            const reasonInfo = LOSS_REASON_LABELS[item.reason_code] || {
+                              label: item.reason_code,
+                              icon: "•"
+                            };
+                            return (
+                              <div key={item.reason_code} className="flex items-center justify-between">
+                                <span className="text-white/80">
+                                  {reasonInfo.icon} {reasonInfo.label}
+                                </span>
+                                <span className="text-white/60 tabular-nums">
+                                  {item.count} ({item.percentage}%)
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {aggregatedLossBreakdown.length > 5 && (
+                            <p className="text-white/50 text-[10px] pt-1 border-t border-white/10">
+                              +{aggregatedLossBreakdown.length - 5} lý do khác...
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-white/60 italic">
+                          Chưa có dữ liệu lý do. Hãy chọn lý do khi đánh dấu lead là Lost.
+                        </p>
+                      )}
+                      <p className="text-white/40 text-[10px] italic border-t border-white/20 pt-1 mt-1">
+                        * Dựa trên dữ liệu Loss Reason được ghi nhận
+                      </p>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            )}
+            {/* Row 3: Estimated Lost Revenue (Phase 2) */}
+            {totalLostRevenue > 0 && (
+              <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-dashed">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1.5 cursor-help">
+                      <DollarSign className="h-3.5 w-3.5 text-amber-600" />
+                      <span>Doanh thu mất ước tính:</span>
+                      <strong className="text-amber-600 dark:text-amber-400">
+                        {formatVNDFull(totalLostRevenue)}
+                      </strong>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[280px]">
+                    <div className="text-xs space-y-1.5">
+                      <p className="font-medium border-b border-white/20 pb-1">
+                        Doanh thu mất theo giai đoạn
+                      </p>
+                      <div className="space-y-1">
+                        {sortedFunnel
+                          .filter(s => s.estimated_lost_revenue?.total_lost_revenue && s.estimated_lost_revenue.total_lost_revenue > 0)
+                          .slice(0, 5)
+                          .map((stage) => (
+                            <div key={stage.stage_id} className="flex items-center justify-between">
+                              <span className="text-white/80 truncate max-w-[120px]">
+                                {stage.stage_name}
+                              </span>
+                              <span className="text-amber-300 tabular-nums font-medium">
+                                {formatVND(stage.estimated_lost_revenue!.total_lost_revenue)}
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                      <p className="text-white/50 text-[10px] italic border-t border-white/20 pt-1 mt-1">
+                        * Ước tính dựa trên học phí TB của ngành đăng ký
+                      </p>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
               </div>
             )}
           </div>
+
+          {/* === SUGGESTIONS SECTION (Phase 2) === */}
+          {suggestions && suggestions.length > 0 && (
+            <div className="pt-4 border-t">
+              <div className="flex items-center gap-2 mb-3">
+                <Lightbulb className="h-4 w-4 text-amber-500" />
+                <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Gợi ý cải thiện
+                </h4>
+              </div>
+              <div className="space-y-2">
+                {suggestions.slice(0, 3).map((suggestion) => {
+                  const style = SUGGESTION_STYLES[suggestion.type];
+                  const priorityStyle = PRIORITY_STYLES[suggestion.priority];
+
+                  return (
+                    <div
+                      key={suggestion.id}
+                      className={cn(
+                        "p-3 rounded-lg border transition-colors",
+                        style.bgColor,
+                        "hover:shadow-sm"
+                      )}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="text-lg shrink-0">{style.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className={cn("text-sm font-medium", style.color)}>
+                              {suggestion.title}
+                            </p>
+                            <span className={cn(
+                              "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                              priorityStyle.color
+                            )}>
+                              {priorityStyle.label}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground line-clamp-2">
+                            {suggestion.description}
+                          </p>
+                          {suggestion.metric_label && (
+                            <p className="text-xs text-muted-foreground mt-1 font-medium">
+                              {suggestion.metric_label}
+                            </p>
+                          )}
+                          {suggestion.action_url && (
+                            <button
+                              onClick={() => router.push(suggestion.action_url!)}
+                              className={cn(
+                                "mt-2 text-xs font-medium flex items-center gap-1",
+                                "hover:underline",
+                                style.color
+                              )}
+                            >
+                              {suggestion.action_label || "Xem chi tiết"}
+                              <ExternalLink className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {suggestions.length > 3 && (
+                  <p className="text-xs text-muted-foreground text-center pt-1">
+                    +{suggestions.length - 3} gợi ý khác
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </TooltipProvider>

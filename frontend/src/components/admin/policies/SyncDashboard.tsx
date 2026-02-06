@@ -12,6 +12,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
   Table,
@@ -30,6 +40,7 @@ import {
 export function SyncDashboard() {
   // queryClient removed
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
+  const [pendingSync, setPendingSync] = useState<{ type: "all" | "selected"; message: string } | null>(null);
 
   // Fetch sync status
   const {
@@ -49,9 +60,10 @@ export function SyncDashboard() {
   const syncMutation = useSyncPolicies();
 
   const handleSyncAll = () => {
-    if (confirm(`Đồng bộ TẤT CẢ ${syncStatus?.total_users} users từ Casbin về DB?`)) {
-      syncMutation.mutate(null);
-    }
+    setPendingSync({
+      type: "all",
+      message: `Đồng bộ TẤT CẢ ${syncStatus?.total_users} users từ Casbin về DB?`,
+    });
   };
 
   const handleSyncSelected = () => {
@@ -59,9 +71,20 @@ export function SyncDashboard() {
       toast.error("Chọn ít nhất 1 user để đồng bộ!");
       return;
     }
-    if (confirm(`Đồng bộ ${selectedUsers.length} user(s) đã chọn từ Casbin về DB?`)) {
+    setPendingSync({
+      type: "selected",
+      message: `Đồng bộ ${selectedUsers.length} user(s) đã chọn từ Casbin về DB?`,
+    });
+  };
+
+  const confirmSync = () => {
+    if (!pendingSync) return;
+    if (pendingSync.type === "all") {
+      syncMutation.mutate(null);
+    } else {
       syncMutation.mutate(selectedUsers);
     }
+    setPendingSync(null);
   };
 
   const toggleUserSelection = (userId: number) => {
@@ -254,6 +277,24 @@ export function SyncDashboard() {
           </CardContent>
         </Card>
       )}
+
+      {/* Sync Confirmation Dialog */}
+      <AlertDialog open={!!pendingSync} onOpenChange={(open) => !open && setPendingSync(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Đồng bộ users?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingSync?.message}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSync}>
+              Đồng bộ
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

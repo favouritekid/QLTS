@@ -70,7 +70,7 @@ export function AcademicCard({ profile }: AcademicCardProps) {
               <div className="text-xs font-medium text-info-600 mb-1">
                 Điểm Trung Bình (GPA)
               </div>
-              <div className="text-4xl font-bold text-info-700">
+              <div className="text-4xl font-bold text-info-700 tabular-nums">
                 {gpa !== null && gpa !== undefined ? gpa.toFixed(2) : "N/A"}
               </div>
               <div className="text-xs text-muted-foreground mt-1">
@@ -88,13 +88,13 @@ export function AcademicCard({ profile }: AcademicCardProps) {
                   </span>
                 )}
               </div>
-              <div className="text-4xl font-bold text-info-700">
+              <div className="text-4xl font-bold text-info-700 tabular-nums">
                 {totalScore !== null && totalScore !== undefined
                   ? totalScore.toFixed(2)
                   : "N/A"}
               </div>
               {averageScore !== null && averageScore !== undefined && (
-                <div className="text-xs text-muted-foreground mt-1">
+                <div className="text-xs text-muted-foreground mt-1 tabular-nums">
                   Trung bình: {averageScore.toFixed(2)}
                 </div>
               )}

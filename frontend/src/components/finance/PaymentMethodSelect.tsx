@@ -132,7 +132,7 @@ export function PaymentMethodSelect({
     >
       <SelectTrigger
         className={cn(
-          error && "border-destructive focus:ring-destructive",
+          error && "border-destructive focus-visible:ring-destructive",
           className
         )}
       >

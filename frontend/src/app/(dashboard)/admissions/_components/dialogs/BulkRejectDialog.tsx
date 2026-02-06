@@ -105,7 +105,7 @@ export function BulkRejectDialog({
             onClick={handleSubmit}
             disabled={isLoading || reason.trim().length < 10}
           >
-            {isLoading ? "Đang xử lý..." : `Từ chối ${selectedCount} hồ sơ`}
+            {isLoading ? "Đang xử lý…" : `Từ chối ${selectedCount} hồ sơ`}
           </Button>
         </ResponsiveDialogFooter>
       </ResponsiveDialogContent>

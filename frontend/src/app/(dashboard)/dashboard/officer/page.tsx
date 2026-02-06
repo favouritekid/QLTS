@@ -5,13 +5,22 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, Info } from "lucide-react";
+import { AlertCircle, Info, BarChart3, Table2 } from "lucide-react";
 import { WorkloadCard } from "@/components/officer/WorkloadCard";
 
 // ✅ PERFORMANCE: Dynamic import for FunnelChart with complex SVG rendering (~30KB)
 // This defers loading until the component is actually rendered
 const FunnelChart = dynamic(
   () => import("@/components/officer/FunnelChart").then((m) => m.FunnelChart),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-80 w-full rounded-lg" />,
+  }
+);
+
+// ✅ PERFORMANCE: Dynamic import for FunnelTable - tabular alternative to FunnelChart
+const FunnelTable = dynamic(
+  () => import("@/components/officer/FunnelTable").then((m) => m.FunnelTable),
   {
     ssr: false,
     loading: () => <Skeleton className="h-80 w-full rounded-lg" />,
@@ -76,6 +85,9 @@ function DashboardContent() {
   // Secondary filter states
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
   const [selectedOfficerId, setSelectedOfficerId] = useState<number | null>(null);
+
+  // Funnel view mode: "chart" (visual) or "table" (tabular)
+  const [funnelViewMode, setFunnelViewMode] = useState<"chart" | "table">("chart");
 
   // Pass scope and filter options to useDashboardStats hook
   const { stats, teamStats, isLoading, error, refetch } = useDashboardStats({
@@ -158,7 +170,14 @@ function DashboardContent() {
     // SPEC 2026-02-04: Early Exit metrics
     early_exit_count: s.early_exit_count,
     move_forward: s.move_forward,
+    // Phase 2: Advanced funnel analytics
+    loss_breakdown: s.loss_breakdown,
+    velocity: s.velocity,
+    estimated_lost_revenue: s.estimated_lost_revenue,
   }));
+
+  // Phase 2: Funnel suggestions
+  const funnelSuggestions = stats.funnel_suggestions ?? [];
 
   // Quick action handler
   const handleQuickAction = (action: "new_lead" | "log_call" | "schedule") => {
@@ -221,12 +240,55 @@ function DashboardContent() {
               dailyGoal={stats.kpis.consultations_target}
               teamAverage={teamStats?.team_avg_consultations}
             />
-            <FunnelChart
-              funnel={salesFunnel}
-              scope={scope}
-              unitId={selectedUnitId}
-              officerId={selectedOfficerId}
-            />
+            {/* Funnel Visualization with View Toggle */}
+            <div className="space-y-2">
+              {/* View Mode Toggle */}
+              <div className="flex justify-end">
+                <div className="inline-flex items-center rounded-lg border bg-muted p-1 text-muted-foreground">
+                  <button
+                    onClick={() => setFunnelViewMode("chart")}
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                      funnelViewMode === "chart"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "hover:bg-background/50"
+                    }`}
+                  >
+                    <BarChart3 className="h-4 w-4" />
+                    <span className="hidden sm:inline">Chart</span>
+                  </button>
+                  <button
+                    onClick={() => setFunnelViewMode("table")}
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                      funnelViewMode === "table"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "hover:bg-background/50"
+                    }`}
+                  >
+                    <Table2 className="h-4 w-4" />
+                    <span className="hidden sm:inline">Table</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Funnel View */}
+              {funnelViewMode === "chart" ? (
+                <FunnelChart
+                  funnel={salesFunnel}
+                  scope={scope}
+                  unitId={selectedUnitId}
+                  officerId={selectedOfficerId}
+                  suggestions={funnelSuggestions}
+                />
+              ) : (
+                <FunnelTable
+                  funnel={salesFunnel}
+                  scope={scope}
+                  unitId={selectedUnitId}
+                  officerId={selectedOfficerId}
+                  suggestions={funnelSuggestions}
+                />
+              )}
+            </div>
           </div>
           {/* Phase 7: Recommendations Panel */}
           <RecommendationsPanel />

@@ -23,6 +23,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 import {
   useNotifications,
@@ -46,6 +56,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const pageSize = 20;
 
   // Fetch based on current tab
@@ -127,8 +138,10 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
 
   const handleBulkDelete = () => {
     if (selectedIds.length === 0) return;
-    if (!confirm(`Bạn chắc chắn muốn xóa ${selectedIds.length} thông báo?`)) return;
+    setBulkDeleteOpen(true);
+  };
 
+  const confirmBulkDelete = () => {
     // ✅ TECHNICAL DEBT FIX: Use bulk delete API instead of loop
     bulkDeleteNotifications.mutate(
       { notification_ids: selectedIds },
@@ -142,6 +155,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
         },
       }
     );
+    setBulkDeleteOpen(false);
   };
 
   const getNotificationIcon = (type: Notification["type"]) => {
@@ -407,7 +421,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
 
                     <Card
                       className={cn(
-                        "transition-all hover:shadow-md",
+                        "transition-shadow hover:shadow-md",
                         !notification.is_read && "border-l-4 border-l-primary bg-muted/30"
                       )}
                     >
@@ -509,6 +523,26 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
           </div>
         </div>
       )}
+      {/* Bulk Delete Confirmation Dialog */}
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xóa thông báo?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn chắc chắn muốn xóa {selectedIds.length} thông báo?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmBulkDelete}
+            >
+              Xóa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </PageContainer>
   );
 }

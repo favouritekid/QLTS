@@ -62,7 +62,7 @@ export function DashboardLayout({
         {/* Main wrapper - chứa cả Header và Content */}
         <div
           className={cn(
-            "flex flex-1 flex-col transition-all duration-300 ease-in-out",
+            "flex flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
             // Uses CSS vars: --sidebar-width-collapsed (72px), --sidebar-width (256px)
             "lg:ml-[var(--sidebar-width-collapsed)]",
             !isSidebarCollapsed && "lg:ml-[var(--sidebar-width)]"
@@ -77,7 +77,7 @@ export function DashboardLayout({
           {/* Main Content - Dynamic padding top based on header + banner */}
           {/* Added pb-20 on mobile for MobileBottomNav (64px height + safe area) */}
           <div 
-            className="flex-1 transition-all duration-300 ease-in-out pb-20 lg:pb-0"
+            className="flex-1 transition-[margin-top] duration-300 ease-in-out pb-20 lg:pb-0"
             style={{ marginTop: `${totalTopOffset}px` }}
           >
             <Main>{children}</Main>

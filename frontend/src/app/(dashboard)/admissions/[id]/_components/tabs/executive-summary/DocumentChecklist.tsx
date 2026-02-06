@@ -46,6 +46,26 @@ import {
 import { useVerifyDocument, useRejectDocument } from "@/hooks/admissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { API_BASE_URL } from "@/lib/api/client"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
+import { Label } from "@/components/ui/label"
 
 interface DocumentChecklistProps {
   profile: AdmissionProfileResponse
@@ -53,6 +73,7 @@ interface DocumentChecklistProps {
 
 export function DocumentChecklist({ profile }: DocumentChecklistProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const [batchVerifyOpen, setBatchVerifyOpen] = useState(false)
   const verifyMutation = useVerifyDocument(profile.id)
 
   const mandatoryDocs = (profile.documents_checklist ?? []).filter(
@@ -92,11 +113,7 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
   // Batch verify all pending documents
   const handleBatchVerify = async () => {
     if (pendingDocs.length === 0) return
-
-    const confirmed = window.confirm(
-      `Xác nhận kiểm tra ${pendingDocs.length} tài liệu đang chờ?`
-    )
-    if (!confirmed) return
+    setBatchVerifyOpen(false)
 
     try {
       // Verify all documents in parallel using Promise.all
@@ -174,13 +191,13 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
             {pendingDocs.length > 0 && (
               <div className="mt-4 flex justify-end">
                 <Button
-                  onClick={handleBatchVerify}
+                  onClick={() => setBatchVerifyOpen(true)}
                   disabled={verifyMutation.isPending}
                   className="bg-success-600 hover:bg-success-700"
                 >
                   <CheckCircle2 className="w-4 h-4 mr-2" />
                   {verifyMutation.isPending
-                    ? "Đang xác nhận..."
+                    ? "Đang xác nhận\u2026"
                     : `Xác nhận kiểm tra (${pendingDocs.length})`}
                 </Button>
               </div>
@@ -203,6 +220,23 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
             )}
           </div>
         )}
+
+        <AlertDialog open={batchVerifyOpen} onOpenChange={setBatchVerifyOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Xác nhận kiểm tra tài liệu</AlertDialogTitle>
+              <AlertDialogDescription>
+                Xác nhận kiểm tra {pendingDocs.length} tài liệu đang chờ?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Hủy</AlertDialogCancel>
+              <AlertDialogAction onClick={handleBatchVerify}>
+                Xác nhận
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CollapsibleContent>
     </Collapsible>
   )
@@ -224,122 +258,164 @@ function DocumentRow({
 }) {
   const { code, status } = doc
   const rejectMutation = useRejectDocument(profile.id)
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
+  const [rejectReason, setRejectReason] = useState("")
 
   const handleReject = () => {
-    const reason = window.prompt("Nhập lý do từ chối:")
-    if (reason) {
-      rejectMutation.mutate({ docCode: code, reason })
-    }
+    setRejectReason("")
+    setRejectDialogOpen(true)
+  }
+
+  const handleConfirmReject = () => {
+    if (!rejectReason.trim()) return
+    rejectMutation.mutate({ docCode: code, reason: rejectReason })
+    setRejectDialogOpen(false)
   }
 
   // Only show inline select for pending documents
   const isPending = status === "uploaded" || status === "paper_submitted"
 
   return (
-    <TableRow>
-      <TableCell className="font-medium">{doc.label}</TableCell>
+    <>
+      <TableRow>
+        <TableCell className="font-medium">{doc.label}</TableCell>
 
-      <TableCell className="text-center">
-        {status === "verified" ? (
-          <Badge className="bg-success-600 hover:bg-success-700 gap-1">
-            <CheckCircle2 className="w-3 h-3" />
-            Đã xác nhận
-          </Badge>
-        ) : (
-          <Badge
-            variant={getDocumentStatusConfig(status).variant as "default" | "secondary" | "destructive" | "outline"}
-            className="gap-1"
-          >
-            {getDocumentStatusConfig(status).label}
-          </Badge>
-        )}
-      </TableCell>
-
-      <TableCell className="text-center">
-        {isPending ? (
-          // Inline Select for pending documents - Officer can review/correct format
-          <Select
-            value={selectedFormat}
-            onValueChange={(value) => onFormatChange(code, value)}
-          >
-            <SelectTrigger className="w-[180px] h-8">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="original">Bản gốc</SelectItem>
-              <SelectItem value="certified_copy">Bản sao có công chứng</SelectItem>
-              <SelectItem value="photo">Bản photo/scan</SelectItem>
-            </SelectContent>
-          </Select>
-        ) : status === "verified" && doc.verified_format ? (
-          // Show verified format as badge
-          <Badge
-            variant="outline"
-            className="font-normal border-success-200 bg-success-50 text-success-700"
-          >
-            {getFormatLabel(doc.verified_format)}
-          </Badge>
-        ) : doc.actual_submission_format ? (
-          // Show user-declared format
-          <Badge
-            variant="outline"
-            className="font-normal border-info-200 bg-info-50 text-info-700"
-          >
-            {getFormatLabel(doc.actual_submission_format)}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground text-sm">-</span>
-        )}
-      </TableCell>
-
-      <TableCell className="text-right">
-        <div className="flex justify-end gap-1">
-          {/* View Button - Always show if file exists */}
-          {doc.file_path && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-info-600 hover:text-info-700 hover:bg-info-50"
-                    onClick={() => {
-                      const url = getDocumentUrl(doc.file_path)
-                      if (url) window.open(url, "_blank")
-                    }}
-                    aria-label="Xem tài liệu"
-                  >
-                    <Eye className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Xem tài liệu</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+        <TableCell className="text-center">
+          {status === "verified" ? (
+            <Badge className="bg-success-600 hover:bg-success-700 gap-1">
+              <CheckCircle2 className="w-3 h-3" />
+              Đã xác nhận
+            </Badge>
+          ) : (
+            <Badge
+              variant={getDocumentStatusConfig(status).variant as "default" | "secondary" | "destructive" | "outline"}
+              className="gap-1"
+            >
+              {getDocumentStatusConfig(status).label}
+            </Badge>
           )}
+        </TableCell>
 
-          {/* Reject Button - Only show for pending documents */}
-          {isPending && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-error-600 hover:text-error-700 hover:bg-error-50"
-                    onClick={handleReject}
-                    disabled={rejectMutation.isPending}
-                    aria-label="Từ chối tài liệu"
-                  >
-                    <XCircle className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Từ chối tài liệu</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+        <TableCell className="text-center">
+          {isPending ? (
+            // Inline Select for pending documents - Officer can review/correct format
+            <Select
+              value={selectedFormat}
+              onValueChange={(value) => onFormatChange(code, value)}
+            >
+              <SelectTrigger className="w-[180px] h-8">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="original">Bản gốc</SelectItem>
+                <SelectItem value="certified_copy">Bản sao có công chứng</SelectItem>
+                <SelectItem value="photo">Bản photo/scan</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : status === "verified" && doc.verified_format ? (
+            // Show verified format as badge
+            <Badge
+              variant="outline"
+              className="font-normal border-success-200 bg-success-50 text-success-700"
+            >
+              {getFormatLabel(doc.verified_format)}
+            </Badge>
+          ) : doc.actual_submission_format ? (
+            // Show user-declared format
+            <Badge
+              variant="outline"
+              className="font-normal border-info-200 bg-info-50 text-info-700"
+            >
+              {getFormatLabel(doc.actual_submission_format)}
+            </Badge>
+          ) : (
+            <span className="text-muted-foreground text-sm">-</span>
           )}
-        </div>
-      </TableCell>
-    </TableRow>
+        </TableCell>
+
+        <TableCell className="text-right">
+          <div className="flex justify-end gap-1">
+            {/* View Button - Always show if file exists */}
+            {doc.file_path && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 text-info-600 hover:text-info-700 hover:bg-info-50"
+                      onClick={() => {
+                        const url = getDocumentUrl(doc.file_path)
+                        if (url) window.open(url, "_blank")
+                      }}
+                      aria-label="Xem tài liệu"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Xem tài liệu</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
+            {/* Reject Button - Only show for pending documents */}
+            {isPending && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 text-error-600 hover:text-error-700 hover:bg-error-50"
+                      onClick={handleReject}
+                      disabled={rejectMutation.isPending}
+                      aria-label="Từ chối tài liệu"
+                    >
+                      <XCircle className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Từ chối tài liệu</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+
+      {/* Reject Reason Dialog */}
+      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Từ chối tài liệu</DialogTitle>
+            <DialogDescription>
+              Nhập lý do từ chối tài liệu &quot;{doc.label}&quot;.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor={`reject-reason-${code}`}>Lý do từ chối</Label>
+            <Textarea
+              id={`reject-reason-${code}`}
+              value={rejectReason}
+              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setRejectReason(e.target.value)}
+              placeholder="Nhập lý do từ chối\u2026"
+              rows={3}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>
+              Hủy
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmReject}
+              disabled={!rejectReason.trim() || rejectMutation.isPending}
+            >
+              {rejectMutation.isPending ? "Đang từ chối\u2026" : "Từ chối"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

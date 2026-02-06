@@ -168,7 +168,7 @@ export function RoleDeleteDialog({
             onClick={onDeleteRole}
             disabled={isDeletingRole || loadingUsers || (userCount > 0 && !forceDelete)}
           >
-            {isDeletingRole ? "Đang xóa..." : "Xóa Vai trò"}
+            {isDeletingRole ? "Đang xóa…" : "Xóa Vai trò"}
           </Button>
         </DialogFooter>
       </DialogContent>

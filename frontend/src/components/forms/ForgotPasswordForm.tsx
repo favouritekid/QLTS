@@ -58,6 +58,7 @@ export function ForgotPasswordForm() {
                   <Input
                     type="email"
                     placeholder="email@example.com"
+                    autoComplete="email"
                     disabled={isLoading}
                     {...field}
                   />
@@ -67,7 +68,7 @@ export function ForgotPasswordForm() {
             )}
           />
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Đang gửi..." : "Gửi Liên Kết Đặt Lại"}
+            {isLoading ? "Đang gửi…" : "Gửi Liên Kết Đặt Lại"}
           </Button>
         </form>
       </Form>

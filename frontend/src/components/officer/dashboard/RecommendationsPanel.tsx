@@ -104,13 +104,13 @@ export function RecommendationsPanel({ limit = 5, className }: RecommendationsPa
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <Lightbulb className="h-4 w-4 text-amber-500" />
+            <Lightbulb aria-hidden="true" className="h-4 w-4 text-amber-500" />
             Khuyến nghị hôm nay
           </CardTitle>
           <div className="flex items-center gap-1.5">
             {criticalCount > 0 && (
               <Badge variant="destructive" className="text-xs h-5 px-1.5">
-                <AlertTriangle className="h-3 w-3 mr-0.5" />
+                <AlertTriangle aria-hidden="true" className="h-3 w-3 mr-0.5" />
                 {criticalCount}
               </Badge>
             )}
@@ -131,7 +131,7 @@ export function RecommendationsPanel({ limit = 5, className }: RecommendationsPa
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
-            <AlertTriangle className="h-8 w-8 text-muted-foreground mb-2" />
+            <AlertTriangle aria-hidden="true" className="h-8 w-8 text-muted-foreground mb-2" />
             <p className="text-sm text-muted-foreground">Không thể tải khuyến nghị</p>
           </div>
         ) : recommendations.length === 0 ? (
@@ -169,7 +169,7 @@ function RecommendationCard({ recommendation }: { recommendation: Recommendation
   return (
     <div
       className={cn(
-        "rounded-lg border p-3 transition-all hover:shadow-sm",
+        "rounded-lg border p-3 transition-colors hover:shadow-sm",
         config.bgColor
       )}
     >
@@ -199,7 +199,7 @@ function RecommendationCard({ recommendation }: { recommendation: Recommendation
           </p>
           {recommendation.expected_impact && (
             <p className="text-[10px] text-muted-foreground mt-1.5 flex items-center gap-1">
-              <TrendingUp className="h-3 w-3" />
+              <TrendingUp aria-hidden="true" className="h-3 w-3" />
               {recommendation.expected_impact}
             </p>
           )}

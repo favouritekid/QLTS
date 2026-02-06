@@ -100,7 +100,7 @@ export const PriorityActionCard = memo(function PriorityActionCard({
   return (
     <div
       className={cn(
-        "group p-3 rounded-lg border bg-card transition-all duration-200",
+        "group p-3 rounded-lg border bg-card transition-colors duration-200",
         "hover:border-primary/30 hover:bg-muted/50",
         action.priority === "urgent" && "border-l-2 border-l-error-500"
       )}

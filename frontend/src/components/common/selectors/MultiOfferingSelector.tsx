@@ -197,7 +197,7 @@ export function MultiOfferingSelector({
   if (isLoading) {
     return (
       <div className={cn("text-muted-foreground text-sm", className)}>
-        Đang tải...
+        Đang tải…
       </div>
     );
   }

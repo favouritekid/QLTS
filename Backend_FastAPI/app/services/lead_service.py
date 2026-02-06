@@ -450,6 +450,7 @@ async def _log_lead_state_change(
     new_state: dict,
     changed_by: Optional[models.User] = None,
     reason: str = "State updated",
+    loss_reason_code: Optional[str] = None,
 ):
     """
     Hàm helper tập trung để ghi lại bất kỳ thay đổi trạng thái nào của Lead.
@@ -495,12 +496,15 @@ async def _log_lead_state_change(
         new_consultation_status_id=new_state.get("consultation_status_id"),
         new_pipeline_stage_id=new_state.get("pipeline_stage_id"),
         new_assigned_officer_id=new_state.get("assigned_officer_id"),
+        # Loss Reason - for final negative status transitions
+        loss_reason_code=loss_reason_code,
     )
     db.add(history_entry)
     log.info(
         "Lead state change history logged",
         lead_id=lead.id,
         reason=reason,
+        loss_reason_code=loss_reason_code,
         old=old_state,
         new=new_state,
     )
@@ -1700,6 +1704,13 @@ async def add_consultation(
             # Lấy trạng thái Lead mới
             new_state = _get_current_lead_state(lead)
 
+            # ✅ LOSS REASON VALIDATION: Require loss_reason_code for final negative status
+            if new_status.is_final and new_status.outcome_type == "negative":
+                if not data.loss_reason_code:
+                    raise BadRequest(
+                        detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
+                    )
+
             # Ghi log lịch sử thay đổi trạng thái Lead (chỉ khi có thay đổi thực sự)
             if new_status.updates_pipeline and old_state != new_state:
                 await _log_lead_state_change(
@@ -1708,7 +1719,8 @@ async def add_consultation(
                     old_state,
                     new_state,
                     changed_by=officer,
-                    reason=f"Consultation added: {data.method}",
+                    reason=data.loss_reason_note or f"Consultation added: {data.method}",
+                    loss_reason_code=data.loss_reason_code if (new_status.is_final and new_status.outcome_type == "negative") else None,
                 )
 
             # Không cần commit ở đây, `async with` sẽ xử lý
@@ -2538,6 +2550,14 @@ async def update_consultation(
                                 to_status=new_status_id,
                             )
 
+                # ✅ LOSS REASON VALIDATION: Require loss_reason_code for final negative status
+                if validated_status.is_final and validated_status.outcome_type == "negative":
+                    loss_reason_code = update_data.get("loss_reason_code")
+                    if not loss_reason_code:
+                        raise BadRequest(
+                            detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
+                        )
+
             for field, value in update_data.items():
                 if field == "status_id":
                     # Đặt consultation_status_id (already validated above)
@@ -2591,13 +2611,21 @@ async def update_consultation(
 
             # Ghi log lịch sử thay đổi trạng thái Lead (nếu có thay đổi)
             if status_changed:
+                # Get loss_reason for final negative status
+                loss_reason_for_log = None
+                loss_reason_note_for_log = None
+                if validated_status and validated_status.is_final and validated_status.outcome_type == "negative":
+                    loss_reason_for_log = update_data.get("loss_reason_code")
+                    loss_reason_note_for_log = update_data.get("loss_reason_note")
+
                 await _log_lead_state_change(
                     db,
                     lead,
                     old_state,
                     new_state,
                     changed_by=current_user,
-                    reason=f"Updated consultation ID {consultation_id}",
+                    reason=loss_reason_note_for_log or f"Updated consultation ID {consultation_id}",
+                    loss_reason_code=loss_reason_for_log,
                 )
 
             # Flush to get changes ready (commit handled by begin_nested context)

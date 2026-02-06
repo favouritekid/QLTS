@@ -98,7 +98,7 @@ export function AdmissionReadinessChecklist({
       {/* Header with progress */}
       <div className="px-3 py-2.5 border-b flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ClipboardCheck className="h-4 w-4 text-muted-foreground" />
+          <ClipboardCheck aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Tiến độ tuyển sinh</span>
         </div>
         <div className="flex items-center gap-2">
@@ -108,7 +108,7 @@ export function AdmissionReadinessChecklist({
           <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
             <div
               className={cn(
-                "h-full transition-all duration-300",
+                "h-full transition-[width] duration-300",
                 progressPercent === 100 ? "bg-success-500" : "bg-info-500"
               )}
               style={{ width: `${progressPercent}%` }}
@@ -131,10 +131,10 @@ export function AdmissionReadinessChecklist({
             <div className="mt-0.5 shrink-0">
               {item.completed ? (
                 <div className="h-4 w-4 rounded-full bg-success-100 flex items-center justify-center">
-                  <Check className="h-2.5 w-2.5 text-success-600" />
+                  <Check aria-hidden="true" className="h-2.5 w-2.5 text-success-600" />
                 </div>
               ) : (
-                <Circle className="h-4 w-4 text-muted-foreground/50" />
+                <Circle aria-hidden="true" className="h-4 w-4 text-muted-foreground/50" />
               )}
             </div>
 
@@ -170,7 +170,7 @@ export function AdmissionReadinessChecklist({
         <div className="px-3 pb-3 pt-1">
           <div className="p-2.5 rounded-lg bg-muted/50 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <ArrowRight className="h-3.5 w-3.5" />
+              <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
               <span>Bước tiếp theo: {nextStep.label}</span>
             </div>
 

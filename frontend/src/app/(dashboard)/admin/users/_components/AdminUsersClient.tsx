@@ -762,7 +762,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={bulkActionMutation.isPending}
             >
-              {bulkActionMutation.isPending ? "Đang xoá..." : "Xoá tất cả"}
+              {bulkActionMutation.isPending ? "Đang xoá…" : "Xoá tất cả"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

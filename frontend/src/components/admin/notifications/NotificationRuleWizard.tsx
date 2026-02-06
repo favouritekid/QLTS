@@ -585,7 +585,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
             <div className="flex flex-col items-center flex-1">
               <div
                 className={`
-                  flex items-center justify-center w-10 h-10 rounded-full border-2 transition-all
+                  flex items-center justify-center w-10 h-10 rounded-full border-2 transition-colors
                   ${isActive ? "border-primary bg-primary text-primary-foreground" : ""}
                   ${isCompleted ? "border-success-500 bg-success-500 text-white" : ""}
                   ${!isActive && !isCompleted ? "border-muted-foreground/30 text-muted-foreground" : ""}
@@ -607,7 +607,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
             {index < steps.length - 1 && (
               <div
                 className={`
-                  h-0.5 flex-1 mx-2 mb-6 transition-all
+                  h-0.5 flex-1 mx-2 mb-6 transition-colors
                   ${isCompleted ? "bg-success-500" : "bg-muted-foreground/20"}
                 `}
               />
@@ -1028,7 +1028,7 @@ export function NotificationRuleWizard({
                                             <div
                                               key={event.value}
                                               className={`
-                                                flex items-start space-x-3 rounded-lg border p-3 cursor-pointer transition-all
+                                                flex items-start space-x-3 rounded-lg border p-3 cursor-pointer transition-colors
                                                 ${field.value === event.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"}
                                               `}
                                               onClick={() => field.onChange(event.value)}
@@ -1099,7 +1099,7 @@ export function NotificationRuleWizard({
                                   <Card
                                     key={option.value}
                                     className={`
-                                      cursor-pointer transition-all
+                                      cursor-pointer transition-colors
                                       ${field.value === option.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"}
                                     `}
                                     onClick={() => {
@@ -1787,7 +1787,7 @@ export function NotificationRuleWizard({
                         {isPending ? (
                           <>
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            {isEditMode ? "Đang cập nhật..." : "Đang tạo..."}
+                            {isEditMode ? "Đang cập nhật…" : "Đang tạo…"}
                           </>
                         ) : (
                           <>

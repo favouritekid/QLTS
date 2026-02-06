@@ -380,31 +380,31 @@ export function OrganizationTreeView({
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Tổng đơn vị</div>
-                <div className="text-2xl font-bold">{overallStats.totalUnits}</div>
+                <div className="text-2xl font-bold tabular-nums">{overallStats.totalUnits}</div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Tổng ngành học</div>
-                <div className="text-2xl font-bold">{overallStats.totalMajors}</div>
+                <div className="text-2xl font-bold tabular-nums">{overallStats.totalMajors}</div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Tổng chỉ tiêu</div>
-                <div className="text-2xl font-bold">{overallStats.totalQuota}</div>
+                <div className="text-2xl font-bold tabular-nums">{overallStats.totalQuota}</div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí TB</div>
-                <div className="text-sm font-semibold">
+                <div className="text-sm font-semibold tabular-nums">
                   {formatCurrency(overallStats.avgTuition)}
                 </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí thấp nhất</div>
-                <div className="text-sm font-semibold text-success-600">
+                <div className="text-sm font-semibold text-success-600 tabular-nums">
                   {formatCurrency(overallStats.minTuition)}
                 </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí cao nhất</div>
-                <div className="text-sm font-semibold text-error-600">
+                <div className="text-sm font-semibold text-error-600 tabular-nums">
                   {formatCurrency(overallStats.maxTuition)}
                 </div>
               </div>

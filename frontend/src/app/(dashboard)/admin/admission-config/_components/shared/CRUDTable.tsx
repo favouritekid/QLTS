@@ -20,6 +20,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Plus, Pencil, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { CRUDDialog } from "./CRUDDialog";
 import type { BaseEntity, CRUDTableColumn } from "./types";
 
@@ -93,6 +103,8 @@ export function CRUDTable<T extends CRUDEntity, TFormValues>({
   const [editItem, setEditItem] = useState<T | null>(null);
   const [formData, setFormData] = useState<TFormValues>(initialFormData());
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ id: number; label: string } | null>(null);
 
   // ============================================
   // HANDLERS
@@ -110,15 +122,22 @@ export function CRUDTable<T extends CRUDEntity, TFormValues>({
     setDialogOpen(true);
   };
 
-  const handleDelete = async (id: number, name?: string) => {
+  const handleDelete = (id: number, name?: string) => {
     const itemLabel = name || `item #${id}`;
-    if (confirm(`Bạn có chắc chắn muốn xóa "${itemLabel}"?`)) {
+    setPendingDelete({ id, label: itemLabel });
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (pendingDelete) {
       try {
-        if (onDelete) await onDelete(id, name);
+        if (onDelete) await onDelete(pendingDelete.id, pendingDelete.label);
       } catch (error) {
         console.error("Delete failed:", error);
       }
     }
+    setDeleteConfirmOpen(false);
+    setPendingDelete(null);
   };
 
   const handleCloseDialog = () => {
@@ -291,6 +310,27 @@ export function CRUDTable<T extends CRUDEntity, TFormValues>({
       >
         {renderForm(editItem, formData, setFormData, !!editItem)}
       </CRUDDialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xác nhận xóa</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn có chắc chắn muốn xóa &quot;{pendingDelete?.label}&quot;?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleConfirmDelete}
+            >
+              Xóa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

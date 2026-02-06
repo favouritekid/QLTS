@@ -91,7 +91,7 @@ export function BulkAssignDialog({
               disabled={usersLoading}
             >
               <SelectTrigger>
-                <SelectValue placeholder={usersLoading ? "Đang tải..." : "Chọn cán bộ"} />
+                <SelectValue placeholder={usersLoading ? "Đang tải…" : "Chọn cán bộ"} />
               </SelectTrigger>
               <SelectContent>
                 {officers.length === 0 ? (

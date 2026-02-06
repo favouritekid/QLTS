@@ -214,7 +214,316 @@ class OfficerRepository(BaseRepository[models.User]):
                 }
 
         return stage_data
-    
+
+    async def get_loss_reason_breakdown_by_stage(
+        self,
+        officer_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get loss reason breakdown aggregated by pipeline stage.
+
+        SPEC: LOSS_REASON_UX_SPEC.md / FUNNEL_FEASIBILITY_ANALYSIS.md Phase 2
+
+        Returns:
+            Dict[stage_id, [
+                {"reason_code": "PRICE_HIGH", "count": 10, "percentage": 25.0},
+                {"reason_code": "NO_CONTACT", "count": 8, "percentage": 20.0},
+                ...
+            ]]
+        """
+        # Build conditions
+        conditions = [
+            models.LeadStatusHistory.loss_reason_code.isnot(None),
+            models.Lead.deleted_at.is_(None),
+        ]
+
+        # Filter by officer or units
+        if officer_id:
+            conditions.append(models.Lead.assigned_officer_id == officer_id)
+        elif unit_ids:
+            conditions.append(models.Lead.unit_id.in_(unit_ids))
+
+        # Optional date filter
+        if start_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) >= start_date)
+        if end_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) <= end_date)
+
+        # Query: aggregate loss_reason_code by pipeline_stage_id
+        query = (
+            select(
+                models.LeadStatusHistory.new_pipeline_stage_id.label("stage_id"),
+                models.LeadStatusHistory.loss_reason_code,
+                func.count().label("count"),
+            )
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
+            .where(*conditions)
+            .group_by(
+                models.LeadStatusHistory.new_pipeline_stage_id,
+                models.LeadStatusHistory.loss_reason_code,
+            )
+            .order_by(
+                models.LeadStatusHistory.new_pipeline_stage_id,
+                func.count().desc(),
+            )
+        )
+
+        result = await self.db.execute(query)
+        rows = result.fetchall()
+
+        # Build stage -> loss breakdown dict
+        stage_breakdown: Dict[str, List[Dict[str, Any]]] = {}
+        stage_totals: Dict[str, int] = {}
+
+        # First pass: calculate totals per stage
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                stage_totals[stage_id] = stage_totals.get(stage_id, 0) + row.count
+
+        # Second pass: build breakdown with percentages
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                if stage_id not in stage_breakdown:
+                    stage_breakdown[stage_id] = []
+
+                total = stage_totals.get(stage_id, 1)
+                percentage = round((row.count / total) * 100, 1) if total > 0 else 0.0
+
+                stage_breakdown[stage_id].append({
+                    "reason_code": row.loss_reason_code,
+                    "count": row.count,
+                    "percentage": percentage,
+                })
+
+        return stage_breakdown
+
+    async def get_stage_velocity_stats(
+        self,
+        officer_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Calculate average time spent in each pipeline stage.
+
+        SPEC: FUNNEL_FEASIBILITY_ANALYSIS.md - Velocity / Time in Stage
+
+        Uses LeadStatusHistory to calculate time between stage transitions.
+        For each stage, calculates:
+        - avg_days: Average days spent in stage before moving to next
+        - median_days: Median days (approximated)
+        - min_days: Minimum days
+        - max_days: Maximum days
+        - sample_size: Number of transitions measured
+
+        Returns:
+            Dict[stage_id, {
+                "avg_days": 2.5,
+                "min_days": 0.5,
+                "max_days": 7.0,
+                "sample_size": 45
+            }]
+        """
+        # Build base conditions
+        conditions = [
+            models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.old_pipeline_stage_id != models.LeadStatusHistory.new_pipeline_stage_id,
+            models.Lead.deleted_at.is_(None),
+        ]
+
+        # Filter by officer or units
+        if officer_id:
+            conditions.append(models.Lead.assigned_officer_id == officer_id)
+        elif unit_ids:
+            conditions.append(models.Lead.unit_id.in_(unit_ids))
+
+        # Optional date filter
+        if start_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) >= start_date)
+        if end_date:
+            conditions.append(func.date(models.LeadStatusHistory.changed_at) <= end_date)
+
+        # Subquery: Get each transition with time to next transition
+        # Using a self-join approach to find "next transition" for each lead
+        # This calculates time_in_stage = next_changed_at - changed_at
+
+        # Step 1: Get all stage transitions with their timestamps
+        history_alias = models.LeadStatusHistory.__table__.alias("h2")
+
+        # Query to get stage durations by finding the next transition for each entry
+        # We use a correlated subquery to find the minimum changed_at that is > current changed_at
+        next_change_subq = (
+            select(func.min(history_alias.c.changed_at))
+            .where(
+                history_alias.c.lead_id == models.LeadStatusHistory.lead_id,
+                history_alias.c.changed_at > models.LeadStatusHistory.changed_at,
+            )
+            .correlate(models.LeadStatusHistory)
+            .scalar_subquery()
+        )
+
+        # Main query: Calculate duration in days for each transition
+        # duration = (next_changed_at - changed_at) in days
+        duration_expr = func.extract(
+            'epoch',
+            next_change_subq - models.LeadStatusHistory.changed_at
+        ) / 86400.0  # Convert seconds to days
+
+        query = (
+            select(
+                models.LeadStatusHistory.old_pipeline_stage_id.label("stage_id"),
+                func.avg(duration_expr).label("avg_days"),
+                func.min(duration_expr).label("min_days"),
+                func.max(duration_expr).label("max_days"),
+                func.count().label("sample_size"),
+            )
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
+            .where(
+                *conditions,
+                next_change_subq.isnot(None),  # Only count transitions that have a "next" transition
+            )
+            .group_by(models.LeadStatusHistory.old_pipeline_stage_id)
+        )
+
+        result = await self.db.execute(query)
+        rows = result.fetchall()
+
+        # Build result dict
+        velocity_stats: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                avg_days = float(row.avg_days) if row.avg_days else 0.0
+                min_days = float(row.min_days) if row.min_days else 0.0
+                max_days = float(row.max_days) if row.max_days else 0.0
+
+                velocity_stats[stage_id] = {
+                    "avg_days": round(avg_days, 2),
+                    "min_days": round(min_days, 2),
+                    "max_days": round(max_days, 2),
+                    "sample_size": row.sample_size or 0,
+                }
+
+        return velocity_stats
+
+    async def get_estimated_lost_revenue_by_stage(
+        self,
+        officer_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        academic_year: Optional[int] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Calculate estimated lost revenue per pipeline stage.
+
+        SPEC: FUNNEL_FEASIBILITY_ANALYSIS.md - Estimated Lost Revenue
+
+        For each stage, calculates revenue from leads that dropped out (negative outcome).
+        Uses tuition_fee_per_year from OfferingAcademicInfo based on Lead's offering_id.
+
+        Formula: lost_revenue = COUNT(lost_leads) * AVG(tuition_fee_per_year)
+
+        Args:
+            officer_id: Filter by specific officer
+            unit_ids: Filter by unit IDs (if officer_id not provided)
+            start_date: Filter leads created after this date
+            end_date: Filter leads created before this date
+            academic_year: Specific academic year for tuition lookup (default: current year)
+
+        Returns:
+            Dict[stage_id, {
+                "lost_leads_count": 10,
+                "avg_tuition": 15000000.0,
+                "total_lost_revenue": 150000000.0,
+                "leads_with_tuition": 8  # leads that have offering with tuition data
+            }]
+        """
+        from datetime import datetime as dt
+
+        # Default to current academic year if not specified
+        if academic_year is None:
+            academic_year = dt.now().year
+
+        # Build base conditions
+        conditions = [
+            models.Lead.deleted_at.is_(None),
+            models.Lead.pipeline_stage_id.isnot(None),
+            # Filter for negative outcomes (lost leads)
+            models.ConsultationStatus.outcome_type == "negative",
+            models.ConsultationStatus.is_final == True,
+        ]
+
+        # Filter by officer or units
+        if officer_id:
+            conditions.append(models.Lead.assigned_officer_id == officer_id)
+        elif unit_ids:
+            conditions.append(models.Lead.unit_id.in_(unit_ids))
+
+        # Optional date filter
+        if start_date:
+            conditions.append(func.date(models.Lead.created_at) >= start_date)
+        if end_date:
+            conditions.append(func.date(models.Lead.created_at) <= end_date)
+
+        # Query: Group lost leads by stage with tuition info
+        # JOIN: Lead -> ProgramOffering -> OfferingAcademicInfo
+        query = (
+            select(
+                models.Lead.pipeline_stage_id.label("stage_id"),
+                func.count(models.Lead.id).label("lost_leads_count"),
+                func.avg(models.OfferingAcademicInfo.tuition_fee_per_year).label("avg_tuition"),
+                func.sum(models.OfferingAcademicInfo.tuition_fee_per_year).label("total_lost_revenue"),
+                func.count(models.OfferingAcademicInfo.tuition_fee_per_year).label("leads_with_tuition"),
+            )
+            .join(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id
+            )
+            .outerjoin(
+                models.ProgramOffering,
+                models.Lead.offering_id == models.ProgramOffering.id
+            )
+            .outerjoin(
+                models.OfferingAcademicInfo,
+                and_(
+                    models.OfferingAcademicInfo.offering_id == models.ProgramOffering.id,
+                    models.OfferingAcademicInfo.academic_year == academic_year,
+                    models.OfferingAcademicInfo.is_published == True,
+                    models.OfferingAcademicInfo.is_deleted == False,
+                )
+            )
+            .where(*conditions)
+            .group_by(models.Lead.pipeline_stage_id)
+        )
+
+        result = await self.db.execute(query)
+        rows = result.fetchall()
+
+        # Build result dict
+        revenue_stats: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            stage_id = row.stage_id
+            if stage_id:
+                avg_tuition = float(row.avg_tuition) if row.avg_tuition else 0.0
+                total_revenue = float(row.total_lost_revenue) if row.total_lost_revenue else 0.0
+
+                revenue_stats[stage_id] = {
+                    "lost_leads_count": row.lost_leads_count or 0,
+                    "avg_tuition": round(avg_tuition, 0),
+                    "total_lost_revenue": round(total_revenue, 0),
+                    "leads_with_tuition": row.leads_with_tuition or 0,
+                }
+
+        return revenue_stats
+
     async def get_stage_transition_rates(
         self,
         officer_id: int,
@@ -222,7 +531,7 @@ class OfficerRepository(BaseRepository[models.User]):
     ) -> Dict[str, Dict[str, int]]:
         """
         Get transition counts between stages for conversion rate calculation.
-        
+
         Returns:
             Dict[from_stage_id, Dict[to_stage_id, count]]
         """

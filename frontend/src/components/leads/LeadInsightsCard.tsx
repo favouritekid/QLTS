@@ -94,7 +94,7 @@ function ScoreIndicator({
       </div>
       <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
         <div 
-          className={cn("h-full rounded-full transition-all duration-500", getColor())}
+          className={cn("h-full rounded-full transition-[width] duration-500", getColor())}
           style={{ width: `${percentage}%` }}
         />
       </div>

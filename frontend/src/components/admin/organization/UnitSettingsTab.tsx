@@ -83,7 +83,7 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold flex items-center gap-2">
-              <Settings className="h-5 w-5" />
+              <Settings aria-hidden="true" className="h-5 w-5" />
               Cài đặt đơn vị
             </h3>
             <p className="text-sm text-muted-foreground">
@@ -137,7 +137,7 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
                       Đơn vị cha
                     </label>
                     <div className="text-sm mt-1 flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      <Building2 aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                       ID: {unit.parent_id}
                     </div>
                   </div>
@@ -194,13 +194,13 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex items-center gap-2 text-sm">
-                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <Calendar aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <span className="text-muted-foreground">Tạo lúc:</span>
                 <span>{formatDate(unit.created_at)}</span>
               </div>
 
               <div className="flex items-center gap-2 text-sm">
-                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <Calendar aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <span className="text-muted-foreground">Cập nhật:</span>
                 <span>{formatDate(unit.updated_at)}</span>
               </div>

@@ -151,18 +151,20 @@ describe("AdmissionMethodPanel", () => {
   });
 
   it("should call delete mutation when delete is confirmed", async () => {
-    vi.spyOn(window, "confirm").mockImplementation(() => true);
-
     render(<AdmissionMethodPanel />);
 
     // Delete "Xét điểm thi THPT QG" (Row 2)
     const row = screen.getByText("Xét điểm thi THPT QG").closest("tr");
     const buttons = row?.querySelectorAll("button");
-    const deleteButton = buttons?.[1]; 
-    
+    const deleteButton = buttons?.[1];
+
     fireEvent.click(deleteButton!);
 
-    expect(window.confirm).toHaveBeenCalled();
+    // Wait for AlertDialog to appear and confirm deletion
+    const alertDialog = await screen.findByRole("alertdialog");
+    const confirmBtn = within(alertDialog).getByRole("button", { name: /xóa/i });
+    fireEvent.click(confirmBtn);
+
     await waitFor(() => {
       expect(mockDeleteMutate).toHaveBeenCalledWith(2);
     });

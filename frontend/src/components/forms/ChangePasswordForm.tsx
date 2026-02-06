@@ -181,6 +181,7 @@ export function ChangePasswordForm() {
                   <Input
                     type="password"
                     placeholder="••••••••"
+                    autoComplete="current-password"
                     disabled={isChangingPassword}
                     {...field}
                   />
@@ -199,6 +200,7 @@ export function ChangePasswordForm() {
                   <Input
                     type="password"
                     placeholder="••••••••"
+                    autoComplete="new-password"
                     disabled={isChangingPassword}
                     {...field}
                   />
@@ -219,6 +221,7 @@ export function ChangePasswordForm() {
                   <Input
                     type="password"
                     placeholder="••••••••"
+                    autoComplete="new-password"
                     disabled={isChangingPassword}
                     {...field}
                   />
@@ -228,7 +231,7 @@ export function ChangePasswordForm() {
             )}
           />
           <Button type="submit" disabled={isChangingPassword} className="mt-4">
-            {isChangingPassword ? "Đang đổi..." : "Đổi Mật Khẩu"}
+            {isChangingPassword ? "Đang đổi…" : "Đổi Mật Khẩu"}
           </Button>
         </form>
       </Form>
@@ -253,7 +256,7 @@ export function ChangePasswordForm() {
               disabled={isChangingPassword}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isChangingPassword ? "Đang đổi..." : "Có, Đổi Mật Khẩu"}
+              {isChangingPassword ? "Đang đổi…" : "Có, Đổi Mật Khẩu"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

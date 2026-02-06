@@ -200,7 +200,7 @@ export function LeadActionSuggestions({
     <Card className={className}>
       <CardHeader className="px-4 py-3">
         <CardTitle className="flex items-center gap-2 text-sm font-medium">
-          <Lightbulb className="h-4 w-4 text-amber-500" />
+          <Lightbulb aria-hidden="true" className="h-4 w-4 text-amber-500" />
           Gợi ý hành động
         </CardTitle>
       </CardHeader>

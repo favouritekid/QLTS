@@ -120,6 +120,7 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
                         onClick={() => setShowPassword(!showPassword)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         disabled={isPending}
+                        aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
                       >
                         {showPassword ? (
                           <EyeOff className="h-4 w-4" />
@@ -158,6 +159,7 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
                         onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         disabled={isPending}
+                        aria-label={showConfirmPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
                       >
                         {showConfirmPassword ? (
                           <EyeOff className="h-4 w-4" />
@@ -186,7 +188,7 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
                 Hủy
               </Button>
               <Button type="submit" disabled={isPending}>
-                {isPending ? "Đang đặt..." : "Đặt Mật Khẩu"}
+                {isPending ? "Đang đặt…" : "Đặt Mật Khẩu"}
               </Button>
             </DialogFooter>
           </form>

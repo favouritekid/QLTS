@@ -40,7 +40,7 @@ export function Breadcrumbs({ className }: BreadcrumbsProps) {
             style={{ animationDelay: `${index * 50}ms` }}
           >
             {index > 0 && (
-              <ChevronRight className="mx-1 h-4 w-4 text-muted-foreground opacity-60" />
+              <ChevronRight aria-hidden="true" className="mx-1 h-4 w-4 text-muted-foreground opacity-60" />
             )}
             {isLast ? (
               <span className="font-semibold text-foreground px-2 py-1 rounded-md bg-muted/50">
@@ -51,7 +51,7 @@ export function Breadcrumbs({ className }: BreadcrumbsProps) {
                 href={crumb.path}
                 className={cn(
                   "text-muted-foreground hover:text-foreground",
-                  "transition-all duration-200 ease-in-out",
+                  "transition-colors duration-200 ease-in-out",
                   "px-2 py-1 rounded-md hover:bg-muted/50",
                   "hover:scale-105 active:scale-95"
                 )}

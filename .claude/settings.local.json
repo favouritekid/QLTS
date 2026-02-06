@@ -32,7 +32,12 @@
       "Bash(git diff:*)",
       "Bash(npm run lint:fix:*)",
       "Bash(findstr:*)",
-      "Bash(npm run test:*)"
+      "Bash(npm run test:*)",
+      "Bash(git -C \"D:/QLTS\" status --short)",
+      "Bash(cat:*)",
+      "Bash(pushd:*)",
+      "Bash(source:*)",
+      "Bash(git status:*)"
     ]
   }
 }

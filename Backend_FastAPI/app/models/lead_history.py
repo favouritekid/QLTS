@@ -50,6 +50,15 @@ class LeadStatusHistory(Base):
     # 4. Nhân viên phụ trách (lead.assigned_officer_id)
     old_assigned_officer_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)  # ✅ FIX: Added index
     new_assigned_officer_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)  # ✅ FIX: Added index
+
+    # 5. Loss Reason - Required when transitioning to final negative status
+    # SPEC: LOSS_REASON_UX_SPEC.md
+    loss_reason_code = Column(
+        String(50),
+        nullable=True,
+        index=True,
+        comment="Structured loss reason code (e.g., PRICE_HIGH, NO_CONTACT)"
+    )
     # === KẾT THÚC MỞ RỘNG ===
 
     # Relationships

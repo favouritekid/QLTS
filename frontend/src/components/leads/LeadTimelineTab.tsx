@@ -478,7 +478,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                     {/* Timeline Dot (Icon) - smaller and neutral */}
                     <div
                       className={cn(
-                        "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-all ring-1",
+                        "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-shadow ring-1",
                         config.bgColor,
                         config.ringColor
                       )}
@@ -487,7 +487,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                     </div>
 
                     {/* Content Block */}
-                    <div className="flex-1 bg-card rounded-lg border shadow-sm transition-all hover:shadow-md hover:border-primary/30">
+                    <div className="flex-1 bg-card rounded-lg border shadow-sm transition-shadow hover:shadow-md hover:border-primary/30">
                       <div className="p-4">
                         {/* Header: Title, Actor, Time, Actions */}
                         <div className="flex items-start justify-between gap-3 mb-2">

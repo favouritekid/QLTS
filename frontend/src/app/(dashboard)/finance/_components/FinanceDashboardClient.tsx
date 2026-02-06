@@ -106,7 +106,7 @@ interface QuickActionProps {
 function QuickAction({ title, description, icon, href }: QuickActionProps) {
   return (
     <Link href={href}>
-      <Card className="hover:shadow-md hover:border-primary/50 transition-all cursor-pointer h-full">
+      <Card className="hover:shadow-md hover:border-primary/50 transition-shadow cursor-pointer h-full">
         <CardContent className="p-4 flex items-center gap-4">
           <div className="p-3 rounded-lg bg-primary/10 text-primary shrink-0">
             {icon}

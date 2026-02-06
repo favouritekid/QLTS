@@ -92,7 +92,7 @@ export function RegisterForm() {
               <FormItem>
                 <FormLabel>Tên đăng nhập</FormLabel>
                 <FormControl>
-                  <Input placeholder="Tên đăng nhập" disabled={isLoading} {...field} />
+                  <Input placeholder="Tên đăng nhập" autoComplete="username" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -109,6 +109,7 @@ export function RegisterForm() {
                   <Input
                     type="email"
                     placeholder="email@example.com"
+                    autoComplete="email"
                     disabled={isLoading}
                     {...field}
                   />
@@ -125,7 +126,7 @@ export function RegisterForm() {
               <FormItem>
                 <FormLabel>Họ và tên (Tùy chọn)</FormLabel>
                 <FormControl>
-                  <Input placeholder="Nguyễn Văn A" disabled={isLoading} {...field} />
+                  <Input placeholder="Nguyễn Văn A" autoComplete="name" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -139,7 +140,7 @@ export function RegisterForm() {
               <FormItem>
                 <FormLabel>Mật khẩu</FormLabel>
                 <FormControl>
-                  <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
+                  <Input type="password" placeholder="••••••••" autoComplete="new-password" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -153,7 +154,7 @@ export function RegisterForm() {
               <FormItem>
                 <FormLabel>Xác nhận mật khẩu</FormLabel>
                 <FormControl>
-                  <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
+                  <Input type="password" placeholder="••••••••" autoComplete="new-password" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -161,7 +162,7 @@ export function RegisterForm() {
           />
 
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Đang đăng ký..." : "Đăng ký"}
+            {isLoading ? "Đang đăng ký…" : "Đăng ký"}
           </Button>
         </form>
       </Form>

@@ -120,7 +120,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                     <TableCell className="font-medium">
                       {getSubjectLabel(subjectCode)}
                     </TableCell>
-                    <TableCell className="text-right text-lg font-semibold">
+                    <TableCell className="text-right text-lg font-semibold tabular-nums">
                       {score !== null && score !== undefined
                         ? score.toFixed(1)
                         : "N/A"}
@@ -143,7 +143,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
               {/* Total Row */}
               <TableRow className="bg-info-50 font-bold border-t-2">
                 <TableCell>Tổng điểm</TableCell>
-                <TableCell className="text-right text-xl text-info-700">
+                <TableCell className="text-right text-xl text-info-700 tabular-nums">
                   {totalScore !== null && totalScore !== undefined
                     ? totalScore.toFixed(2)
                     : "N/A"}
@@ -169,7 +169,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
               {/* Min Score Info */}
               {minScore !== null && minScore !== undefined && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-xs text-muted-foreground text-center pt-2">
+                  <TableCell colSpan={3} className="text-xs text-muted-foreground text-center pt-2 tabular-nums">
                     Điểm chuẩn tối thiểu: {minScore.toFixed(2)}
                     {minSubjectScore !== null && minSubjectScore !== undefined && (
                       <> • Điểm liệt: {minSubjectScore.toFixed(1)}</>

@@ -142,7 +142,7 @@ export function AdaptiveAddressSelect({
             ]}
             placeholder="Quận/Huyện"
             searchPlaceholder="Tìm quận/huyện..."
-            emptyText={loadingDistricts ? "Đang tải..." : "Không tìm thấy"}
+            emptyText={loadingDistricts ? "Đang tải…" : "Không tìm thấy"}
             disabled={disabled || !selectedProvinceCode || loadingDistricts}
           />
           {selectedProvinceCode && hasDistricts && (
@@ -160,7 +160,7 @@ export function AdaptiveAddressSelect({
             options={wardOptions}
             placeholder="Phường/Xã"
             searchPlaceholder="Tìm phường/xã..."
-            emptyText={loadingWards ? "Đang tải..." : "Không tìm thấy"}
+            emptyText={loadingWards ? "Đang tải…" : "Không tìm thấy"}
             disabled={disabled || !selectedProvinceCode || loadingWards}
           />
         </div>

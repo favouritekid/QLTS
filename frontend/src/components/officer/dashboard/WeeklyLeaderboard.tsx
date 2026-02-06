@@ -176,7 +176,7 @@ export function WeeklyLeaderboard({ scope, unitId }: WeeklyLeaderboardProps) {
                 )}
                 <div
                   className={cn(
-                    "flex items-center gap-3 p-2.5 rounded-lg border transition-all",
+                    "flex items-center gap-3 p-2.5 rounded-lg border transition-colors",
                     getRankBg(entry.rank, entry.is_current_user)
                   )}
                 >

@@ -332,7 +332,7 @@ export function PaymentListClient() {
               disabled={verifyMutation.isPending}
               className="bg-success-600 hover:bg-success-700"
             >
-              {verifyMutation.isPending ? "Đang xử lý..." : "Xác minh"}
+              {verifyMutation.isPending ? "Đang xử lý…" : "Xác minh"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -389,7 +389,7 @@ export function PaymentListClient() {
               disabled={rejectMutation.isPending || !rejectionReason.trim()}
               className="bg-destructive hover:bg-destructive/90"
             >
-              {rejectMutation.isPending ? "Đang xử lý..." : "Từ chối"}
+              {rejectMutation.isPending ? "Đang xử lý…" : "Từ chối"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

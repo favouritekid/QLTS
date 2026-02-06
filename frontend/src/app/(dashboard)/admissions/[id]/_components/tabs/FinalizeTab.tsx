@@ -68,7 +68,7 @@ export function FinalizeTab({
               {isRejecting ? (  // ✅ CHANGED
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Đang xử lý...
+                  Đang xử lý…
                 </>
               ) : (
                 <>
@@ -87,7 +87,7 @@ export function FinalizeTab({
               {isApproving ? (  // ✅ CHANGED - was isSubmitting
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Đang xử lý...
+                  Đang xử lý…
                 </>
               ) : (
                 <>
@@ -118,7 +118,7 @@ export function FinalizeTab({
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Đang xử lý...
+                Đang xử lý…
               </>
             ) : (
               <>

@@ -113,7 +113,7 @@ export function AppSidebar() {
         // Base styles
         "bg-background fixed inset-y-0 left-0 z-50 flex h-full flex-col border-r",
         // Smooth transition
-        "transition-all duration-300 ease-in-out",
+        "transition-[width,transform] duration-300 ease-in-out",
         // Width based on collapsed state - uses CSS vars
         isSidebarCollapsed ? "w-[var(--sidebar-width-collapsed)]" : "w-[var(--sidebar-width)]",
         // Mobile: Slide in/out from left

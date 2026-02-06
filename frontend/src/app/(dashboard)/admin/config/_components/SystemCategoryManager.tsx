@@ -25,6 +25,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -154,6 +164,8 @@ export function SystemCategoryManager() {
   const [selectedType, setSelectedType] = useState<string>("ethnicity");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editItem, setEditItem] = useState<SystemCategory | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [formData, setFormData] = useState<CategoryFormData>({
     code: "",
     name: "",
@@ -228,9 +240,16 @@ export function SystemCategoryManager() {
   };
 
   const handleDelete = (id: number) => {
-    if (confirm("Are you sure you want to delete this category?")) {
-      deleteMutation.mutate(id);
+    setPendingDeleteId(id);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (pendingDeleteId !== null) {
+      deleteMutation.mutate(pendingDeleteId);
     }
+    setDeleteConfirmOpen(false);
+    setPendingDeleteId(null);
   };
 
   const handleCloseDialog = () => {
@@ -457,6 +476,27 @@ export function SystemCategoryManager() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Delete</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this category?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleConfirmDelete}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

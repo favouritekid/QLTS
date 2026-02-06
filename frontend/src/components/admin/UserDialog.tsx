@@ -284,6 +284,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   onClick={() => fileInputRef.current?.click()}
                   className="bg-primary text-primary-foreground hover:bg-primary/90 absolute bottom-0 right-0 rounded-full p-1.5 shadow-md transition-colors"
                   disabled={isPending}
+                  aria-label="Thay đổi ảnh đại diện"
                 >
                   <Camera className="h-3 w-3" />
                 </button>
@@ -319,7 +320,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   <FormItem>
                     <FormLabel>Tên đăng nhập *</FormLabel>
                     <FormControl>
-                      <Input placeholder="nguyenvana" disabled={isPending} {...field} />
+                      <Input placeholder="nguyenvana" autoComplete="username" disabled={isPending} {...field} />
                     </FormControl>
                     <FormDescription>
                       Phải duy nhất. Chỉ chứa chữ cái, số, dấu gạch ngang và gạch dưới.
@@ -338,7 +339,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 <FormItem>
                   <FormLabel>Họ và tên</FormLabel>
                   <FormControl>
-                    <Input placeholder="Nguyễn Văn A" disabled={isPending} {...field} />
+                    <Input placeholder="Nguyễn Văn A" autoComplete="name" disabled={isPending} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -356,6 +357,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                     <Input
                       type="email"
                       placeholder="john.doe@example.com"
+                      autoComplete="email"
                       disabled={isPending}
                       {...field}
                     />
@@ -377,6 +379,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                       <Input
                         type="tel"
                         placeholder="+1 (555) 123-4567"
+                        autoComplete="tel"
                         disabled={isPending}
                         {...field}
                       />
@@ -399,6 +402,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                       <Input
                         type="password"
                         placeholder="••••••••"
+                        autoComplete="new-password"
                         disabled={isPending}
                         {...field}
                         onChange={(e) => {
@@ -428,13 +432,13 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder={rolesLoading ? "Đang tải vai trò..." : "Chọn vai trò"} />
+                        <SelectValue placeholder={rolesLoading ? "Đang tải vai trò…" : "Chọn vai trò"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {rolesLoading ? (
                         <SelectItem value="" disabled>
-                          Đang tải vai trò...
+                          Đang tải vai trò…
                         </SelectItem>
                       ) : availableRoles.length === 0 ? (
                         <SelectItem value="" disabled>
@@ -504,7 +508,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 {isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {isCreate ? "Đang tạo..." : "Đang lưu..."}
+                    {isCreate ? "Đang tạo…" : "Đang lưu…"}
                   </>
                 ) : (
                   <>{isCreate ? "Tạo Người dùng" : "Lưu thay đổi"}</>

@@ -435,7 +435,7 @@ export function LoginHistoryClient() {
               onClick={handleSecureConfirm}
               disabled={secureMutation.isPending}
             >
-              {secureMutation.isPending ? "Đang xử lý..." : "Bảo mật ngay"}
+              {secureMutation.isPending ? "Đang xử lý…" : "Bảo mật ngay"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -81,7 +81,7 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Gần đây
         </h4>
-        <Clock className="h-3.5 w-3.5 text-muted-foreground/70" />
+        <Clock aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground/70" />
       </div>
 
       {/* Recent items list */}
@@ -98,12 +98,12 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
                 href={page.path}
                 className={cn(
                   "flex-1 flex items-center gap-2 px-3 py-2 rounded-md",
-                  "transition-all duration-200 ease-in-out",
+                  "transition-colors duration-200 ease-in-out",
                   "text-sm text-muted-foreground hover:text-foreground hover:bg-muted",
                   "hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]"
                 )}
               >
-                <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+                <Clock aria-hidden="true" className="h-3.5 w-3.5 flex-shrink-0" />
                 <span className="flex-1 truncate">{page.label}</span>
               </Link>
 
@@ -117,7 +117,7 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
                 }}
                 className={cn(
                   "absolute right-1 h-6 w-6 opacity-0 group-hover:opacity-100",
-                  "transition-all duration-200 ease-in-out",
+                  "transition-colors duration-200 ease-in-out",
                   "hover:bg-destructive hover:text-destructive-foreground hover:scale-110"
                 )}
                 aria-label={`Remove ${page.label} from recent`}

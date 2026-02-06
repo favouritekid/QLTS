@@ -317,7 +317,7 @@ export function FileUpload({
               {/* File info */}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">{fileItem.file.name}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground tabular-nums">
                   {formatFileSize(fileItem.file.size)}
                 </p>
                 {fileItem.status === "error" && fileItem.error && (

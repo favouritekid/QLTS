@@ -81,7 +81,7 @@ export function DocumentTypesSelector({
           >
             <span className="flex items-center gap-2">
               <Plus className="h-4 w-4" />
-              {isLoading ? "Đang tải..." : "Thêm hồ sơ bắt buộc"}
+              {isLoading ? "Đang tải…" : "Thêm hồ sơ bắt buộc"}
             </span>
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
@@ -162,6 +162,7 @@ export function DocumentTypesSelector({
                   onClick={() => handleRemoveDocument(doc.code)}
                   disabled={disabled}
                   className="text-destructive hover:text-destructive hover:bg-destructive/10 h-7 w-7 shrink-0 p-0"
+                  aria-label="Xóa"
                 >
                   <X className="h-4 w-4" />
                 </Button>

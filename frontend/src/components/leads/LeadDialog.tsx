@@ -404,7 +404,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                       <FormControl>
                         <div className="relative">
                           <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input className="pl-10" placeholder="Nguyễn Văn A" {...field} />
+                          <Input className="pl-10" placeholder="Nguyễn Văn A" autoComplete="name" {...field} />
                         </div>
                       </FormControl>
                       <FormMessage />
@@ -430,6 +430,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                               duplicateValidation.phone.state === "invalid" && "border-destructive"
                             )}
                             placeholder="0901234567"
+                            autoComplete="tel"
                             {...field}
                           />
                           {duplicateValidation.phone.state === "checking" && (
@@ -550,7 +551,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   {isLoadingPreview ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Đang tải...
+                      Đang tải…
                     </div>
                   ) : distributionPreview?.has_config ? (
                     <div className="text-sm">
@@ -631,6 +632,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                                 className="pl-10"
                                 type="email"
                                 placeholder="email@example.com"
+                                autoComplete="email"
                                 {...field}
                                 value={field.value ?? ""}
                               />
@@ -652,7 +654,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         <FormItem>
                           <FormLabel>SĐT phụ</FormLabel>
                           <FormControl>
-                            <Input placeholder="0901234567" {...field} value={field.value ?? ""} />
+                            <Input placeholder="0901234567" autoComplete="tel" {...field} value={field.value ?? ""} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -701,7 +703,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                             Địa chỉ
                           </FormLabel>
                           <FormControl>
-                            <Input placeholder="TP.HCM" {...field} value={field.value ?? ""} />
+                            <Input placeholder="TP.HCM" autoComplete="address-level1" {...field} value={field.value ?? ""} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>

@@ -18,9 +18,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { 
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle 
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle
 } from "@/components/ui/dialog"
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -135,6 +139,9 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
     file?: File
   } | null>(null)
   const [selectedFormat, setSelectedFormat] = useState<string>("")
+
+  // Reset/Undo Confirmation Dialog State
+  const [pendingResetDoc, setPendingResetDoc] = useState<{code: string, label: string} | null>(null)
 
   // Rejection Dialog State
   const [rejectItem, setRejectItem] = useState<{code: string, label: string} | null>(null)
@@ -293,7 +300,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
             <div className="flex items-center gap-2">
               <div className="w-32 h-2 bg-muted rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-primary transition-all duration-300"
+                  className="h-full bg-primary transition-[width] duration-300"
                   style={{
                     width: documents.length > 0
                       ? `${(completedCount / documents.length) * 100}%`
@@ -405,11 +412,12 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                     <div className="w-32 flex-shrink-0 flex items-center justify-end gap-2">
                       {/* View button for uploaded documents */}
                       {hasFile && (
-                        <Button 
-                          size="sm" 
+                        <Button
+                          size="sm"
                           variant="ghost"
                           onClick={() => handleViewDocument(doc.file_path!)}
                           title="Xem tài liệu"
+                          aria-label="Xem tài liệu"
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
@@ -422,6 +430,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                           variant="outline"
                           onClick={() => handleUploadClick(doc.code, doc.label, doc.submission_format ?? undefined)}
                           disabled={uploadMutation.isPending}
+                          aria-label="Tải lên"
                         >
                           {isUploading ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -463,6 +472,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                           className="text-error-600 hover:text-error-700 hover:bg-error-50"
                           onClick={() => handleRejectClick(doc.code, doc.label)}
                           title="Từ chối tài liệu"
+                          aria-label="Từ chối"
                         >
                           <Ban className="h-4 w-4" />
                         </Button>
@@ -478,13 +488,10 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                           size="sm"
                           variant="ghost"
                           className="text-warning-600 hover:text-warning-700 hover:bg-warning-50"
-                          onClick={() => {
-                            if (confirm(`Hoàn tác tài liệu "${doc.label}"?\n\nTài liệu sẽ về trạng thái "Chưa nộp" và file sẽ bị xóa (nếu có).`)) {
-                              resetMutation.mutate(doc.code)
-                            }
-                          }}
+                          onClick={() => setPendingResetDoc({ code: doc.code, label: doc.label })}
                           disabled={resetMutation.isPending}
                           title="Hoàn tác (đưa về trạng thái chưa nộp)"
+                          aria-label="Đặt lại"
                         >
                           {resetMutation.isPending && resetMutation.variables === doc.code ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -611,6 +618,33 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Reset/Undo Document Confirmation Dialog */}
+      <AlertDialog open={!!pendingResetDoc} onOpenChange={(open) => !open && setPendingResetDoc(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hoàn tác tài liệu?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hoàn tác tài liệu &ldquo;{pendingResetDoc?.label}&rdquo;?
+              {"\n\n"}Tài liệu sẽ về trạng thái &ldquo;Chưa nộp&rdquo; và file sẽ bị xóa (nếu có).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (pendingResetDoc) {
+                  resetMutation.mutate(pendingResetDoc.code)
+                }
+                setPendingResetDoc(null)
+              }}
+            >
+              Hoàn tác
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

@@ -188,7 +188,7 @@ function Step({
       {/* Icon Circle */}
       <div
         className={cn(
-          "flex items-center justify-center rounded-full border-2 transition-all",
+          "flex items-center justify-center rounded-full border-2 transition-colors",
           compact ? "h-8 w-8" : "h-10 w-10",
           // State-based styling using semantic tokens
           state === "completed" &&
@@ -361,7 +361,7 @@ export function MiniStepper({ currentStatus, className }: MiniStepperProps) {
                 <div
                   key={step.id}
                   className={cn(
-                    "h-2 w-2 rounded-full transition-all",
+                    "h-2 w-2 rounded-full transition-colors",
                     state === "completed" && "bg-admission-approved-fg",
                     state === "current" && "bg-admission-submitted-fg ring-1 ring-offset-1 ring-admission-submitted-fg",
                     state === "pending" && "bg-admission-draft-border",

@@ -164,7 +164,7 @@ export function InsightsHelperDrawer({ trigger }: InsightsHelperDrawerProps) {
       <SheetContent side="right" className="w-[420px] sm:w-[520px] overflow-y-auto">
         <SheetHeader className="mb-6">
           <SheetTitle className="flex items-center gap-2 text-lg">
-            <HelpCircle className="h-5 w-5 text-primary" />
+            <HelpCircle aria-hidden="true" className="h-5 w-5 text-primary" />
             Hướng dẫn Lead Insights
           </SheetTitle>
           <p className="text-sm text-muted-foreground mt-1">
@@ -242,7 +242,7 @@ export function InsightsHelperDrawer({ trigger }: InsightsHelperDrawerProps) {
                 {doc.tips && (
                   <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                     <div className="flex items-center gap-1.5 mb-2">
-                      <Lightbulb className="h-4 w-4 text-amber-600" />
+                      <Lightbulb aria-hidden="true" className="h-4 w-4 text-amber-600" />
                       <p className="text-xs font-semibold text-amber-700 uppercase">Mẹo tăng điểm</p>
                     </div>
                     <ul className="space-y-1">

@@ -227,14 +227,14 @@ export function ProgramOfferingDialog({
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder={
-                          offeringTypesLoading ? "Đang tải..." : "Chọn loại hình đào tạo"
+                          offeringTypesLoading ? "Đang tải…" : "Chọn loại hình đào tạo"
                         } />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {offeringTypesLoading ? (
                         <SelectItem value="loading" disabled>
-                          Đang tải...
+                          Đang tải…
                         </SelectItem>
                       ) : offeringTypes.length === 0 ? (
                         <SelectItem value="empty" disabled>

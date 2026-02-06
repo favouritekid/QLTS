@@ -62,6 +62,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                 size="sm"
                                 onClick={() => remove(index)}
                                 className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 -mr-2"
+                                aria-label="Xóa lịch sử học tập"
                                 >
                                 <Trash2 className="h-4 w-4" />
                                 </Button>

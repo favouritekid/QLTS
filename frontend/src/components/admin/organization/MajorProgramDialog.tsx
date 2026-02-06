@@ -236,14 +236,14 @@ export function MajorProgramDialog({
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder={
-                          degreeLevelsLoading ? "Đang tải..." : "Chọn trình độ đào tạo"
+                          degreeLevelsLoading ? "Đang tải…" : "Chọn trình độ đào tạo"
                         } />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {degreeLevelsLoading ? (
                         <SelectItem value="loading" disabled>
-                          Đang tải...
+                          Đang tải…
                         </SelectItem>
                       ) : degreeLevels.length === 0 ? (
                         <SelectItem value="empty" disabled>

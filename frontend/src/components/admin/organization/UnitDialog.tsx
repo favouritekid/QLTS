@@ -248,7 +248,7 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
                     <SelectContent>
                       {typesLoading ? (
                         <SelectItem value="loading" disabled>
-                          Đang tải...
+                          Đang tải…
                         </SelectItem>
                       ) : unitTypes.length === 0 ? (
                         <SelectItem value="empty" disabled>

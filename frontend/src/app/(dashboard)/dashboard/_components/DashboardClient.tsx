@@ -117,7 +117,7 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
           userStats.map((stat, index) => (
             <Card
               key={index}
-              className={`transition-all hover:shadow-md ${
+              className={`transition-shadow hover:shadow-md ${
                 "highlight" in stat && stat.highlight ? "border-warning-500 bg-warning-50/30 dark:bg-warning-950/20" : ""
               }`}
             >
@@ -126,7 +126,7 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
                 <stat.icon className="text-muted-foreground h-4 w-4" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{stat.value}</div>
+                <div className="text-2xl font-bold tabular-nums">{stat.value}</div>
                 {"change" in stat && stat.change && (
                   <p className="text-muted-foreground mt-1 text-xs">
                     {stat.change}

@@ -302,7 +302,7 @@ export function MajorProgramPanel() {
                 id="is_heavy"
                 checked={formData.is_heavy}
                 onChange={(e) => updateForm({ is_heavy: e.target.checked })}
-                className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                className="h-4 w-4 rounded border-border text-primary focus-visible:ring-primary"
               />
               <Label htmlFor="is_heavy" className="cursor-pointer">
                 Ngành nặng nhọc, độc hại

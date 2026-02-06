@@ -127,9 +127,6 @@ describe("OfferingTypePanel", () => {
   });
 
   it("should call delete mutation when delete is confirmed", async () => {
-    // Mock window.confirm
-    vi.spyOn(window, "confirm").mockImplementation(() => true);
-
     render(<OfferingTypePanel />);
 
     // Find Delete button for "Part-time"
@@ -140,8 +137,12 @@ describe("OfferingTypePanel", () => {
 
     fireEvent.click(deleteButton!);
 
+    // Wait for AlertDialog to appear and confirm deletion
+    const alertDialog = await screen.findByRole("alertdialog");
+    const confirmBtn = within(alertDialog).getByRole("button", { name: /xóa/i });
+    fireEvent.click(confirmBtn);
+
     // Check Mutation
-    expect(window.confirm).toHaveBeenCalled();
     await waitFor(() => {
       expect(mockDeleteMutate).toHaveBeenCalledWith(2); // Part-time ID is 2
     });

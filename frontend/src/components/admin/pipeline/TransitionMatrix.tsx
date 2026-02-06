@@ -126,7 +126,7 @@ export function TransitionMatrix() {
                           key={status.id}
                           onClick={() => setSelectedFromId(status.id)}
                           className={cn(
-                            "flex w-full items-center justify-between rounded-md p-2 text-sm transition-all",
+                            "flex w-full items-center justify-between rounded-md p-2 text-sm transition-colors",
                             selectedFromId === status.id
                               ? "bg-primary text-primary-foreground shadow-md"
                               : "hover:bg-muted text-foreground"
@@ -215,7 +215,7 @@ export function TransitionMatrix() {
                             <div
                               key={toStatus.id}
                               className={cn(
-                                "flex items-center space-x-3 rounded-md border p-3 transition-all",
+                                "flex items-center space-x-3 rounded-md border p-3 transition-colors",
                                 isAllowed
                                   ? "border-success-200 bg-success-50 dark:border-success-900 dark:bg-success-900/20"
                                   : "bg-background hover:bg-accent",

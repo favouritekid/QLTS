@@ -131,7 +131,7 @@ export const LeadListItem = React.memo(function LeadListItem({
     <div
       onClick={() => onSelect(lead)}
       className={cn(
-        "group relative p-3 border-b cursor-pointer transition-all",
+        "group relative p-3 border-b cursor-pointer transition-colors",
         "hover:bg-accent/50",
         isSelected && "bg-accent border-l-2 border-l-primary",
         // Activity urgency indicators

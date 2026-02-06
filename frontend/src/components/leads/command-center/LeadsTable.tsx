@@ -745,7 +745,7 @@ export function LeadsTable({
       <div className="flex h-full flex-col">
         {/* Mobile Header */}
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-muted-foreground text-sm">
+          <span className="text-muted-foreground text-sm tabular-nums">
             {selectedLeads.length > 0 ? (
               <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
             ) : (
@@ -779,7 +779,7 @@ export function LeadsTable({
 
         {/* Mobile Pagination */}
         <div className="flex items-center justify-between border-t px-3 py-2">
-          <span className="text-muted-foreground text-xs">
+          <span className="text-muted-foreground text-xs tabular-nums">
             {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-{Math.min(page * pageSize, totalCount)} / {totalCount}
           </span>
           <div className="flex items-center gap-1">
@@ -792,7 +792,7 @@ export function LeadsTable({
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className="text-muted-foreground min-w-[60px] text-center text-xs">
+            <span className="text-muted-foreground min-w-[60px] text-center text-xs tabular-nums">
               {page}/{totalPages || 1}
             </span>
             <Button
@@ -829,7 +829,7 @@ export function LeadsTable({
     <div className="flex h-full flex-col" ref={tableContainerRef} tabIndex={0}>
       {/* Toolbar */}
       <div className="bg-muted/30 flex shrink-0 items-center justify-between border-b px-4 py-2">
-        <span className="text-muted-foreground text-sm">
+        <span className="text-muted-foreground text-sm tabular-nums">
           {selectedLeads.length > 0 ? (
             <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
           ) : (
@@ -939,7 +939,7 @@ export function LeadsTable({
                         });
                       }}
                       className={cn(
-                        "cursor-pointer transition-all duration-150",
+                        "cursor-pointer transition duration-150",
                         "border-b border-border/50", // Consistent row dividers
                         "hover:bg-muted/50",
                         // Zebra stripes for better readability
@@ -980,7 +980,7 @@ export function LeadsTable({
 
       {/* Footer with Pagination */}
       <div className="bg-muted/30 flex shrink-0 items-center justify-between border-t px-4 py-2">
-        <div className="text-muted-foreground text-sm">
+        <div className="text-muted-foreground text-sm tabular-nums">
           Hiển thị {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-
           {Math.min(page * pageSize, totalCount)} / {totalCount.toLocaleString()} lead
         </div>
@@ -994,7 +994,7 @@ export function LeadsTable({
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <span className="text-muted-foreground min-w-[100px] text-center text-sm">
+          <span className="text-muted-foreground min-w-[100px] text-center text-sm tabular-nums">
             Trang {page} / {totalPages || 1}
           </span>
           <Button

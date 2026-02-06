@@ -442,7 +442,7 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="font-medium">
+                        <TableCell className="font-medium tabular-nums">
                           {policy.discount_type === "percentage"
                             ? `${policy.discount_value}%`
                             : formatCurrency(policy.discount_value)}

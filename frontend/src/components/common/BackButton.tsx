@@ -44,6 +44,7 @@ export function BackButton({
       size={size}
       onClick={goBack}
       className={cn("gap-2", className)}
+      {...(!buttonLabel ? { "aria-label": "Quay lại" } : {})}
     >
       <ArrowLeft className="h-4 w-4" />
       {buttonLabel && <span>{buttonLabel}</span>}

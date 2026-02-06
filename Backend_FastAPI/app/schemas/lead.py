@@ -25,6 +25,17 @@ class ConsultationCreate(ConsultationBase):
     status_id: str
     consultation_date: Optional[datetime] = None  # Optional, defaults to NOW
     scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
+    # Loss Reason - required for final negative status (validated in service)
+    loss_reason_code: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Structured loss reason code (e.g., PRICE_HIGH, NO_CONTACT)"
+    )
+    loss_reason_note: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Additional note for loss reason"
+    )
 
 
 class ConsultationUpdate(BaseModel):
@@ -37,6 +48,17 @@ class ConsultationUpdate(BaseModel):
     duration_minutes: Optional[int] = None
     status_id: Optional[str] = None
     scheduled_at: Optional[datetime] = None
+    # Loss Reason - required for final negative status (validated in service)
+    loss_reason_code: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Structured loss reason code (e.g., PRICE_HIGH, NO_CONTACT)"
+    )
+    loss_reason_note: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Additional note for loss reason"
+    )
 
 
 class Consultation(ConsultationBase):

@@ -17,7 +17,7 @@ export default function ResetPasswordPage() {
   // <<< BỌC ResetPasswordContent trong Suspense >>>
   // Vì ResetPasswordForm dùng useSearchParams, nó cần Suspense bao bọc
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<div role="status">Loading…</div>}>
       <ResetPasswordContent />
     </Suspense>
   );

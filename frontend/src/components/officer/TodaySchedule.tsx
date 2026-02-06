@@ -167,7 +167,7 @@ function MiniCalendar({
             onClick={() => day !== null && onDateSelect(new Date(year, month, day))}
             className={cn(
               "relative h-7 w-7 text-xs rounded-full transition-colors disabled:invisible",
-              "hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20",
+              "hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
               // Fix: Safe null checks instead of non-null assertions
               day !== null && isToday(day) && !isSelected(day) && "bg-primary/10 text-primary font-semibold",
               day !== null && isSelected(day) && "bg-primary text-primary-foreground font-semibold",

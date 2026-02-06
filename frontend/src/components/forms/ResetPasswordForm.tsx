@@ -105,7 +105,7 @@ export function ResetPasswordForm() {
               <FormItem>
                 <FormLabel>Mật khẩu mới</FormLabel>
                 <FormControl>
-                  <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
+                  <Input type="password" placeholder="••••••••" autoComplete="new-password" disabled={isLoading} {...field} />
                 </FormControl>
                 {/* ✅ UX FIX: Show password strength indicator */}
                 {newPassword && <PasswordStrengthIndicator password={newPassword} />}
@@ -120,14 +120,14 @@ export function ResetPasswordForm() {
               <FormItem>
                 <FormLabel>Xác nhận mật khẩu mới</FormLabel>
                 <FormControl>
-                  <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
+                  <Input type="password" placeholder="••••••••" autoComplete="new-password" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
             )}
           />
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Đang đặt lại..." : "Đặt Lại Mật Khẩu"}
+            {isLoading ? "Đang đặt lại…" : "Đặt Lại Mật Khẩu"}
           </Button>
         </form>
       </Form>

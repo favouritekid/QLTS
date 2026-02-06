@@ -172,10 +172,10 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
         {/* Main stats */}
         <div className="flex items-baseline justify-between">
           <div>
-            <span className="text-3xl font-bold">{progress.achieved_ytd}</span>
-            <span className="text-lg text-muted-foreground ml-1">/ {progress.annual_target}</span>
+            <span className="text-3xl font-bold tabular-nums">{progress.achieved_ytd}</span>
+            <span className="text-lg text-muted-foreground ml-1 tabular-nums">/ {progress.annual_target}</span>
           </div>
-          <div className={cn("text-2xl font-semibold", config.color)}>
+          <div className={cn("text-2xl font-semibold tabular-nums", config.color)}>
             {progress.progress_pct.toFixed(1)}%
           </div>
         </div>
@@ -208,11 +208,11 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             </div>
             <div className="font-medium">
               {progress.status === "completed" ? (
-                <span className="text-success-600 dark:text-success-500">
+                <span className="text-success-600 dark:text-success-500 tabular-nums">
                   +{progress.surplus} vượt chỉ tiêu
                 </span>
               ) : (
-                <span>{progress.remaining} {kpiName.toLowerCase()}</span>
+                <span className="tabular-nums">{progress.remaining} {kpiName.toLowerCase()}</span>
               )}
             </div>
           </div>
@@ -228,10 +228,10 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
                 <span className="text-success-600 dark:text-success-500">—</span>
               ) : (
                 <>
-                  <span className={cn(!progress.on_track && "text-warning-600 dark:text-warning-500")}>
+                  <span className={cn("tabular-nums", !progress.on_track && "text-warning-600 dark:text-warning-500")}>
                     {progress.monthly_target.toFixed(1)}
                   </span>
-                  <span className="text-xs text-muted-foreground ml-1">
+                  <span className="text-xs text-muted-foreground ml-1 tabular-nums">
                     × {progress.months_left} tháng
                   </span>
                 </>

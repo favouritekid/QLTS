@@ -194,7 +194,7 @@ export function OnlinePaymentDialog({
                           {methodsLoading ? (
                             <span className="flex items-center gap-2 text-muted-foreground">
                               <Loader2 className="h-4 w-4 animate-spin" />
-                              Đang tải...
+                              Đang tải…
                             </span>
                           ) : (
                             <SelectValue placeholder="Chọn cổng thanh toán..." />
@@ -293,7 +293,7 @@ export function OnlinePaymentDialog({
                   {createIntentMutation.isPending ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Đang xử lý...
+                      Đang xử lý…
                     </>
                   ) : (
                     <>

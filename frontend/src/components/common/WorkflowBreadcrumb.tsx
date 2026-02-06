@@ -148,7 +148,7 @@ function PhaseItem({
   const content = (
     <div
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 rounded-md transition-all",
+        "flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors",
         isClickable && "cursor-pointer",
         // State-based styling
         state === "completed" && "bg-success-50 text-success-700",
@@ -291,7 +291,7 @@ export function MiniBreadcrumb({ currentPhase, className }: MiniBreadcrumbProps)
                 <div
                   key={phase.id}
                   className={cn(
-                    "h-2 w-2 rounded-full transition-all",
+                    "h-2 w-2 rounded-full transition-colors",
                     state === "completed" && "bg-success-500",
                     state === "current" && "bg-info-500 ring-1 ring-offset-1 ring-info-400",
                     state === "pending" && "bg-muted-foreground/30"

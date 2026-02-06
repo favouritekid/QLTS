@@ -330,7 +330,7 @@ export function ConsultationStatusDialog({
                       <SelectContent>
                         {stagesLoading ? (
                           <SelectItem value="loading" disabled>
-                            Đang tải...
+                            Đang tải…
                           </SelectItem>
                         ) : stages.length === 0 ? (
                           <SelectItem value="empty" disabled>

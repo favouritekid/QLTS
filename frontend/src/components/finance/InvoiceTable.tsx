@@ -163,10 +163,10 @@ export function InvoiceTable({
                 className="cursor-pointer hover:bg-muted/50"
                 onClick={() => handleRowClick(invoice)}
               >
-                <TableCell className="font-mono text-sm">
+                <TableCell className="font-mono text-sm tabular-nums">
                   {invoice.invoice_number}
                 </TableCell>
-                <TableCell>Đợt {invoice.installment_no}</TableCell>
+                <TableCell className="tabular-nums">Đợt {invoice.installment_no}</TableCell>
                 <TableCell>
                   <InvoiceStatusBadge status={invoice.status} size="sm" />
                 </TableCell>

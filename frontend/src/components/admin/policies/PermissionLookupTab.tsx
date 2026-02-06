@@ -137,7 +137,7 @@ export function PermissionLookupTab() {
 
             <Button type="submit" disabled={isLoading}>
               <Search className="mr-2 h-4 w-4" />
-              {isLoading ? "Searching..." : "Find Who Can Access"}
+              {isLoading ? "Searching…" : "Find Who Can Access"}
             </Button>
           </form>
         </Form>

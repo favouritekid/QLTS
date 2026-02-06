@@ -70,7 +70,7 @@ export function SubjectGroupAssignment() {
     return (
       <Card>
         <CardContent className="py-12">
-          <p className="text-center text-muted-foreground">Đang tải...</p>
+          <p className="text-center text-muted-foreground">Đang tải…</p>
         </CardContent>
       </Card>
     );

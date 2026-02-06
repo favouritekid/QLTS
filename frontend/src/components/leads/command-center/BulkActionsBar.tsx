@@ -72,6 +72,7 @@ export function BulkActionsBar({
           size="sm"
           onClick={onClearSelection}
           className="h-6 w-6 p-0"
+          aria-label="Bỏ chọn tất cả"
         >
           <X className="h-4 w-4" />
         </Button>

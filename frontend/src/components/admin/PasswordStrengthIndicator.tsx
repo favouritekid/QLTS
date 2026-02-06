@@ -80,9 +80,9 @@ function RequirementItem({ met, text }: { met: boolean; text: string }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       {met ? (
-        <Check className="h-3 w-3 text-success-500" />
+        <Check aria-hidden="true" className="h-3 w-3 text-success-500" />
       ) : (
-        <X className="h-3 w-3 text-muted-foreground" />
+        <X aria-hidden="true" className="h-3 w-3 text-muted-foreground" />
       )}
       <span className={met ? "text-success-600" : "text-muted-foreground"}>{text}</span>
     </div>

@@ -42,7 +42,7 @@ export function Header() {
         // Base styles - z-index cao để luôn ở trên main content
         "bg-background/95 fixed right-0 z-40 flex h-14 items-center gap-4 border-b px-4 backdrop-blur-sm md:px-6",
         // Smooth transition
-        "transition-all duration-300 ease-in-out",
+        "transition-colors duration-300 ease-in-out",
         // Left position based on sidebar state
         "left-0",
         "lg:left-[72px]",
@@ -75,7 +75,7 @@ export function Header() {
           onClick={open}
           className={cn(
             "relative h-9 w-9 p-0 md:w-auto md:px-3 md:justify-start md:gap-2 text-sm text-muted-foreground",
-            "transition-all duration-200 ease-in-out",
+            "transition-colors duration-200 ease-in-out",
             "hover:scale-105 hover:shadow-md active:scale-95",
             "group"
           )}
@@ -87,7 +87,7 @@ export function Header() {
           <kbd className={cn(
             "pointer-events-none ml-auto hidden h-5 select-none items-center gap-1",
             "rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-100 md:inline-flex",
-            "transition-all duration-200 group-hover:bg-accent group-hover:scale-110"
+            "transition-colors duration-200 group-hover:bg-accent group-hover:scale-110"
           )}>
             <span className="text-xs">⌘</span>K
           </kbd>

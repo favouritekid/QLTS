@@ -187,6 +187,7 @@ export function DateRangeFilter() {
                       onClick={handleResetSelection}
                       className="h-6 w-6 p-0 ml-1 text-muted-foreground hover:text-foreground"
                       title="Chọn lại ngày bắt đầu"
+                      aria-label="Đặt lại bộ lọc"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
                     </Button>

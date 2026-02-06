@@ -75,7 +75,7 @@ export function BulkDeleteDialog({
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2 text-error-600">
-            <AlertTriangle className="h-5 w-5" />
+            <AlertTriangle aria-hidden="true" className="h-5 w-5" />
             Xóa {count} lead?
           </AlertDialogTitle>
           {/* Using asChild to avoid p-in-p hydration error */}
@@ -124,8 +124,8 @@ export function BulkDeleteDialog({
           >
             {bulkDeleteMutation.isPending ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Đang xóa...
+                <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />
+                Đang xóa…
               </>
             ) : (
               <>

@@ -62,7 +62,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
             <div>
               <label className="text-sm font-medium text-muted-foreground">Địa chỉ</label>
               <div className="flex items-center gap-2">
-                <MapPin className="h-4 w-4 text-muted-foreground" />
+                <MapPin aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <p className="text-base">{lead.location}</p>
               </div>
             </div>
@@ -81,7 +81,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
             <div>
               <label className="text-sm font-medium text-muted-foreground">Trình độ học vấn</label>
               <div className="flex items-center gap-2">
-                <GraduationCap className="h-4 w-4 text-muted-foreground" />
+                <GraduationCap aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <p className="text-base">
                   {getEducationLevelLabel(lead.education_level)}
                 </p>
@@ -130,7 +130,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
           <div>
             <label className="text-sm font-medium text-muted-foreground">Ngày tạo</label>
             <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-muted-foreground" />
+              <Calendar aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
               <p className="text-base">
                 {new Date(lead.created_at).toLocaleString("vi-VN")}
               </p>
@@ -139,7 +139,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
           <div>
             <label className="text-sm font-medium text-muted-foreground">Cập nhật lần cuối</label>
             <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-muted-foreground" />
+              <Calendar aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
               <p className="text-base">
                 {new Date(lead.updated_at).toLocaleString("vi-VN")}
               </p>
@@ -162,7 +162,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
                   Tư vấn viên phụ trách
                 </label>
                 <div className="flex items-center gap-2">
-                  <User className="h-4 w-4 text-muted-foreground" />
+                  <User aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                   <p className="text-base">Tư vấn viên #{lead.assigned_officer_id}</p>
                 </div>
               </div>
@@ -172,7 +172,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
                     Ngày phân công
                   </label>
                   <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <Calendar aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                     <p className="text-base">
                       {new Date(lead.assigned_at).toLocaleString("vi-VN")}
                     </p>
@@ -189,7 +189,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
           <div>
             <label className="text-sm font-medium text-muted-foreground">Đơn vị</label>
             <div className="flex items-center gap-2">
-              <Building className="h-4 w-4 text-muted-foreground" />
+              <Building aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
               <p className="text-base">Đơn vị #{lead.unit_id}</p>
             </div>
           </div>

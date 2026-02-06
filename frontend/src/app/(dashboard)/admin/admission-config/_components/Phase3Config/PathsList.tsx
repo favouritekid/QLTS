@@ -12,6 +12,16 @@
 
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -52,6 +62,8 @@ interface PathsListProps {
 
 export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
   const [processingPathId, setProcessingPathId] = useState<number | null>(null);
+  const [deactivateConfirmOpen, setDeactivateConfirmOpen] = useState(false);
+  const [pendingDeactivateId, setPendingDeactivateId] = useState<number | null>(null);
 
   const { data: pathsData, isLoading } = useAdmissionPathsByAcademicInfo(context.academicInfoId);
   const activateMutation = useActivateAdmissionPath();
@@ -74,20 +86,25 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
   };
 
   // Handle deactivate
-  const handleDeactivate = async (pathId: number) => {
-    if (!confirm("Bạn có chắc chắn muốn ngưng hoạt động đợt tuyển sinh này?")) {
-      return;
-    }
+  const handleDeactivate = (pathId: number) => {
+    setPendingDeactivateId(pathId);
+    setDeactivateConfirmOpen(true);
+  };
 
-    setProcessingPathId(pathId);
+  const handleConfirmDeactivate = async () => {
+    if (pendingDeactivateId === null) return;
+
+    setDeactivateConfirmOpen(false);
+    setProcessingPathId(pendingDeactivateId);
     try {
-      await deactivateMutation.mutateAsync(pathId);
+      await deactivateMutation.mutateAsync(pendingDeactivateId);
       toast.success("Đã ngưng hoạt động đợt tuyển sinh thành công");
     } catch (error) {
       const axiosError = error as AxiosError<{ detail?: string }>;
       toast.error(axiosError.response?.data?.detail || "Ngưng hoạt động thất bại");
     } finally {
       setProcessingPathId(null);
+      setPendingDeactivateId(null);
     }
   };
 
@@ -282,6 +299,27 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Deactivate Confirmation Dialog */}
+      <AlertDialog open={deactivateConfirmOpen} onOpenChange={setDeactivateConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xác nhận ngưng hoạt động</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn có chắc chắn muốn ngưng hoạt động đợt tuyển sinh này?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleConfirmDeactivate}
+            >
+              Ngưng hoạt động
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -129,7 +129,9 @@ function ResponsiveActionMenu({
       {isMobile ? (
         <>
           {/* Mobile: Trigger opens the sheet */}
-          <div onClick={() => onOpenChange(true)}>{trigger}</div>
+          {React.isValidElement(trigger)
+            ? React.cloneElement(trigger as React.ReactElement<{ onClick?: () => void }>, { onClick: () => onOpenChange(true) })
+            : trigger}
           <MobileActionSheet
             open={open}
             onOpenChange={onOpenChange}

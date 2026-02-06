@@ -57,6 +57,44 @@ export interface TrendPoint {
   converted: number;
 }
 
+/** Phase 2: Loss reason breakdown item */
+export interface LossBreakdownItem {
+  reason_code: string;
+  count: number;
+  percentage: number;
+}
+
+/** Phase 2: Stage velocity statistics */
+export interface VelocityStats {
+  avg_days: number;
+  min_days: number;
+  max_days: number;
+  sample_size: number;
+}
+
+/** Phase 2: Estimated lost revenue */
+export interface EstimatedLostRevenue {
+  lost_leads_count: number;
+  avg_tuition: number;
+  total_lost_revenue: number;
+  leads_with_tuition: number;
+}
+
+/** Phase 2: AI-powered funnel suggestion */
+export interface FunnelSuggestion {
+  id: string;
+  type: "bottleneck" | "slow_stage" | "high_loss" | "loss_reason";
+  priority: "critical" | "high" | "medium" | "low";
+  stage_id?: string | null;
+  stage_name?: string | null;
+  title: string;
+  description: string;
+  metric_value?: number | null;
+  metric_label?: string | null;
+  action_label?: string | null;
+  action_url?: string | null;
+}
+
 export interface FunnelStage {
   stage_id: string;
   stage_name: string;
@@ -73,6 +111,10 @@ export interface FunnelStage {
   // SPEC 2026-02-04: Early Exit metrics
   early_exit_count?: number;  // FINAL leads (negative) at this stage
   move_forward?: number;      // lead_count - early_exit_count
+  // Phase 2: Advanced funnel analytics
+  loss_breakdown?: LossBreakdownItem[] | null;
+  velocity?: VelocityStats | null;
+  estimated_lost_revenue?: EstimatedLostRevenue | null;
 }
 
 export interface LeadPreview {
@@ -106,6 +148,8 @@ export interface EnhancedOfficerStats {
   performance_trends: TrendPoint[];
   sales_funnel: FunnelStage[];
   actionable_lists: ActionableLists;
+  // Phase 2: AI-powered funnel suggestions
+  funnel_suggestions?: FunnelSuggestion[];
   // Phase 6: Annual progress (rolling targets)
   annual_progress?: AnnualProgressInfo | null;
 }

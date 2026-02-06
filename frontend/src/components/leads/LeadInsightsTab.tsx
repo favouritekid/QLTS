@@ -90,7 +90,7 @@ function MetricCard({ metricKey, value, isMain }: MetricCardProps) {
 
   return (
     <div className={cn(
-      "rounded-lg border p-3 transition-all",
+      "rounded-lg border p-3 transition-colors",
       isMain 
         ? "bg-gradient-to-br from-violet-50 to-purple-50 border-violet-200 shadow-sm" 
         : "bg-card/50 hover:bg-card hover:shadow-sm dark:bg-card/30",

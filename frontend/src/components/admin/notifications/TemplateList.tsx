@@ -406,7 +406,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
               {deleteMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Deleting...
+                  Deleting…
                 </>
               ) : (
                 "Delete Template"

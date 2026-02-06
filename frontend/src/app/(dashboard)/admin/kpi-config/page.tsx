@@ -560,7 +560,7 @@ export default function KpiConfigPage() {
                         {KPI_CODES.find((k) => k.value === config.kpi_code)?.label ||
                           config.kpi_code}
                       </TableCell>
-                      <TableCell className="font-mono">
+                      <TableCell className="font-mono tabular-nums">
                         {config.target_value}
                       </TableCell>
                       <TableCell className="capitalize">{config.period_type}</TableCell>
@@ -691,21 +691,21 @@ export default function KpiConfigPage() {
                             <span className="text-sm">{getScopeLabel(target)}</span>
                           </div>
                         </TableCell>
-                        <TableCell className="font-mono">
+                        <TableCell className="font-mono tabular-nums">
                           {target.annual_target.toLocaleString()}
                         </TableCell>
-                        <TableCell className="font-mono">
+                        <TableCell className="font-mono tabular-nums">
                           {target.achieved_ytd.toLocaleString()}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <div className="flex-1 bg-muted rounded-full h-2 max-w-24">
                               <div
-                                className="bg-primary h-2 rounded-full transition-all"
+                                className="bg-primary h-2 rounded-full transition-[width]"
                                 style={{ width: `${Math.min(progress, 100)}%` }}
                               />
                             </div>
-                            <span className="text-sm font-medium">{progress}%</span>
+                            <span className="text-sm font-medium tabular-nums">{progress}%</span>
                           </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground text-sm">

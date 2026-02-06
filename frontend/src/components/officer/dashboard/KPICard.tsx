@@ -64,7 +64,7 @@ export const KPICard = memo(function KPICard({
   return (
     <Card
       className={cn(
-        "relative overflow-hidden transition-all duration-200",
+        "relative overflow-hidden transition-shadow duration-200",
         "bg-card border hover:border-primary/20",
         onClick && "cursor-pointer hover:shadow-sm"
       )}

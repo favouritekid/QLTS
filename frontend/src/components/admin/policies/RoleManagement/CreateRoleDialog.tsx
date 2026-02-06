@@ -100,7 +100,7 @@ export function CreateRoleDialog({
             onClick={handleCreate}
             disabled={isPending || !newRoleName.trim()}
           >
-            {isPending ? "Đang tạo..." : "Tạo Vai trò"}
+            {isPending ? "Đang tạo…" : "Tạo Vai trò"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -109,7 +109,7 @@ export function PipelineSidebar({
                 onClick={() => !isLocked && onStepChange(step.id)}
                 disabled={isLocked}
                 className={cn(
-                    "relative w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all duration-200",
+                    "relative w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors duration-200",
                     // Active step: full highlight
                     isActive
                         ? "bg-primary/10 text-primary hover:bg-primary/15 font-semibold"

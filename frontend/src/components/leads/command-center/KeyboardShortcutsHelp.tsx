@@ -88,6 +88,7 @@ export function KeyboardShortcutsHelp({ className }: KeyboardShortcutsHelpProps)
                 variant="ghost"
                 size="sm"
                 className={className}
+                aria-label="Phím tắt"
               >
                 <Keyboard className="h-4 w-4" />
               </Button>

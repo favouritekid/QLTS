@@ -77,7 +77,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <Briefcase className="h-4 w-4" />
+            <Briefcase aria-hidden="true" className="h-4 w-4" />
             Khối lượng công việc
           </CardTitle>
           <Badge
@@ -87,7 +87,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
               isAvailable && "bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400"
             )}
           >
-            <CircleDot className="h-3 w-3 mr-1" />
+            <CircleDot aria-hidden="true" className="h-3 w-3 mr-1" />
             {isAvailable ? "Sẵn sàng" : "Bận"}
           </Badge>
         </div>
@@ -115,7 +115,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
                 fill="none"
                 strokeWidth="10"
                 strokeLinecap="round"
-                className={cn("transition-all duration-500", strokeColor)}
+                className={cn("transition-[stroke-dashoffset] duration-500", strokeColor)}
                 style={{
                   strokeDasharray: circumference,
                   strokeDashoffset: strokeDashoffset,
@@ -124,7 +124,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
             </svg>
             {/* Center text */}
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className={cn("text-2xl font-bold", utilizationColor)}>
+              <span className={cn("text-2xl font-bold tabular-nums", utilizationColor)}>
                 {utilizationPercentage.toFixed(0)}%
               </span>
             </div>
@@ -134,18 +134,18 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
           <div className="flex-1 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Đang xử lý</span>
-              <span className="text-lg font-semibold">
+              <span className="text-lg font-semibold tabular-nums">
                 {statusOverview.current_workload}/{statusOverview.max_capacity}
               </span>
             </div>
             <Progress value={utilizationPercentage} className="h-2" />
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground flex items-center gap-1">
-                <Users className="h-3.5 w-3.5" />
+                <Users aria-hidden="true" className="h-3.5 w-3.5" />
                 Còn trống
               </span>
               <span className={cn(
-                "font-medium",
+                "font-medium tabular-nums",
                 remainingCapacity <= 5 ? "text-warning-600" : "text-success-600"
               )}>
                 {remainingCapacity} leads

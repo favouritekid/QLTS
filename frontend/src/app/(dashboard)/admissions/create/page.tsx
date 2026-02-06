@@ -211,7 +211,7 @@ export default function CreateAdmissionPage() {
               {createMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Đang tạo...
+                  Đang tạo…
                 </>
               ) : (
                 <>

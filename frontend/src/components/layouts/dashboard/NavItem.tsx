@@ -105,7 +105,7 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className={cn(
-            "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-3 rounded-lg px-3 py-2 transition-all w-full",
+            "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-3 rounded-lg px-3 py-2 transition-colors w-full",
             isActive && "text-primary font-medium"
           )}
         >
@@ -117,6 +117,7 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
             </Badge>
           )}
           <ChevronDown
+            aria-hidden="true"
             className={cn(
               "h-4 w-4 transition-transform",
               isExpanded && "transform rotate-180"
@@ -134,7 +135,7 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
                   key={child.href}
                   href={child.href}
                   className={cn(
-                    "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-2 lg:gap-3 rounded-lg px-2 lg:px-3 py-2 transition-all text-sm",
+                    "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-2 lg:gap-3 rounded-lg px-2 lg:px-3 py-2 transition-colors text-sm",
                     isChildActive &&
                       "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground font-medium"
                   )}
@@ -160,7 +161,7 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
     <Link
       href={link.href}
       className={cn(
-        "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
+        "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-3 rounded-lg px-3 py-2 transition-colors",
         isActive &&
           "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
       )}

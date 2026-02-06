@@ -293,6 +293,7 @@ export function PoliciesTab() {
                             size="sm"
                             onClick={() => handleDeleteClick(policy)}
                             disabled={deletePolicyMutation.isPending}
+                            aria-label="Xóa policy"
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
@@ -371,7 +372,7 @@ export function PoliciesTab() {
               Cancel
             </Button>
             <Button onClick={handleAddPolicy} disabled={addPolicyMutation.isPending}>
-              {addPolicyMutation.isPending ? "Adding..." : "Add Policy"}
+              {addPolicyMutation.isPending ? "Adding…" : "Add Policy"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -406,7 +407,7 @@ export function PoliciesTab() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={deletePolicyMutation.isPending}
             >
-              {deletePolicyMutation.isPending ? "Deleting..." : "Delete"}
+              {deletePolicyMutation.isPending ? "Deleting…" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -295,7 +295,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             </div>
             <Button
               size="default"
-              className="bg-gradient-to-r from-success-500 to-success-600 hover:from-success-600 hover:to-success-700 text-white font-semibold rounded-xl shadow-lg shadow-success-200 hover:shadow-success-300 transition-all hover:scale-105 active:scale-95 md:size-lg shrink-0"
+              className="bg-gradient-to-r from-success-500 to-success-600 hover:from-success-600 hover:to-success-700 text-white font-semibold rounded-xl shadow-lg shadow-success-200 hover:shadow-success-300 transition-colors hover:scale-105 active:scale-95 md:size-lg shrink-0"
               onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
             >
               <PhoneCall className="mr-1.5 md:mr-2 h-4 w-4 md:h-5 md:w-5" />
@@ -402,7 +402,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             {/* Quick Consultation Form */}
             <Card
               id="quick-consultation-section"
-              className="rounded-2xl border-border transition-all duration-300"
+              className="rounded-2xl border-border transition-colors duration-300"
             >
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-3">
@@ -501,7 +501,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
               disabled={deleteMutation.isPending}
               className="bg-error-600 hover:bg-error-700"
             >
-              {deleteMutation.isPending ? "Đang xoá..." : "Xoá Lead"}
+              {deleteMutation.isPending ? "Đang xoá…" : "Xoá Lead"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

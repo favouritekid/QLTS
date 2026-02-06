@@ -6,6 +6,28 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import { Label } from "@/components/ui/label"
+
 // T3.3 Fix: Use ViewModel hook instead of separate hooks
 import {
   useAdmissionViewModel,
@@ -92,6 +114,10 @@ export function AdmissionDetailClient({
   // 5. Navigation State
   // =========================================================================
   const [currentStep, setCurrentStep] = useState(1)
+  const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false)
+  const [pendingStep, setPendingStep] = useState<number | null>(null)
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
+  const [rejectReason, setRejectReason] = useState("")
 
   // =========================================================================
   // 6. Form Setup
@@ -224,16 +250,21 @@ export function AdmissionDetailClient({
   // =========================================================================
   const handleStepChange = useCallback((newStep: number) => {
     if (isDirty) {
-      const confirmed = window.confirm(
-        "Bạn có thay đổi chưa lưu. Bạn có chắc muốn chuyển sang bước khác?\n\nNhấn OK để tiếp tục (thay đổi sẽ bị mất)\nNhấn Cancel để ở lại và lưu"
-      )
-      if (!confirmed) return
+      setPendingStep(newStep)
+      setUnsavedDialogOpen(true)
+      return
     }
-
-    // Reset dirty state when changing steps (since we're losing changes)
-    form.reset(form.getValues(), { keepValues: true })
     setCurrentStep(newStep)
-  }, [isDirty, form])
+  }, [isDirty])
+
+  const handleConfirmStepChange = useCallback(() => {
+    if (pendingStep !== null) {
+      form.reset(form.getValues(), { keepValues: true })
+      setCurrentStep(pendingStep)
+      setPendingStep(null)
+    }
+    setUnsavedDialogOpen(false)
+  }, [pendingStep, form])
 
   const handleSave = () => {
     // Phase 4: Save draft without validation
@@ -288,26 +319,24 @@ export function AdmissionDetailClient({
    * Validation handled by Zod schema in mutation hook
    */
   const handleReject = () => {
-    const reason = window.prompt(
-      "Nhập lý do từ chối (tối thiểu 10 ký tự):"
-    )
-    
-    if (!reason) return // User cancelled
-    
-    if (reason.length < 10) {
+    setRejectReason("")
+    setRejectDialogOpen(true)
+  }
+
+  const handleConfirmReject = () => {
+    if (rejectReason.length < 10) {
       toast.error("Lý do từ chối phải có ít nhất 10 ký tự")
       return
     }
-    
     if (!vm?.version) {
       toast.error("Không thể từ chối: thiếu version")
       return
     }
-    
     rejectMutation.mutate({
-      reason,
+      reason: rejectReason,
       version: vm.version,
     })
+    setRejectDialogOpen(false)
   }
 
   // Phase 7: Delete Handler
@@ -378,6 +407,61 @@ export function AdmissionDetailClient({
           onCheckCondition={handleCheckCondition}
         />
       </AdmissionLayout>
+
+      {/* Unsaved Changes Dialog */}
+      <AlertDialog open={unsavedDialogOpen} onOpenChange={setUnsavedDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Thay đổi chưa lưu</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn có thay đổi chưa lưu. Bạn có chắc muốn chuyển sang bước khác? Thay đổi sẽ bị mất.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Ở lại và lưu</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmStepChange}>
+              Tiếp tục
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reject Reason Dialog */}
+      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Từ chối hồ sơ</DialogTitle>
+            <DialogDescription>
+              Nhập lý do từ chối (tối thiểu 10 ký tự).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="reject-reason">Lý do từ chối</Label>
+            <Textarea
+              id="reject-reason"
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Nhập lý do từ chối…"
+              rows={3}
+            />
+            {rejectReason.length > 0 && rejectReason.length < 10 && (
+              <p className="text-sm text-destructive">Tối thiểu 10 ký tự ({rejectReason.length}/10)</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>
+              Hủy
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmReject}
+              disabled={rejectReason.length < 10 || rejectMutation.isPending}
+            >
+              {rejectMutation.isPending ? "Đang từ chối…" : "Từ chối"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </FormProvider>
   )
 }

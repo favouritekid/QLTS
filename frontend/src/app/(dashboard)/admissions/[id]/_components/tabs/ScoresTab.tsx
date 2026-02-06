@@ -438,7 +438,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                     >
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder={isLoadingGroups ? "Đang tải..." : "Chọn tổ hợp môn"} />
+                          <SelectValue placeholder={isLoadingGroups ? "Đang tải…" : "Chọn tổ hợp môn"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -592,11 +592,11 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                           )}
                         </span>
                         {isDataComplete ? (
-                          <span className="text-lg font-bold text-primary">
+                          <span className="text-lg font-bold text-primary tabular-nums">
                             {totalScore !== null ? `${totalScore.toFixed(1)} / 30` : "—"}
                           </span>
                         ) : (
-                          <span className="text-lg font-bold text-amber-600">
+                          <span className="text-lg font-bold text-amber-600 tabular-nums">
                             — / 30
                             <span className="text-xs font-normal ml-1">
                               (chưa đủ {filledSubjectCount}/{requiredSubjectCount} môn)
@@ -667,7 +667,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                   
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Điểm đạt được:</span>
-                    <span className="font-bold text-lg text-right">
+                    <span className="font-bold text-lg text-right tabular-nums">
                       {isGpaOnlyMethod
                         ? (currentGpa !== null ? currentGpa.toFixed(2) : "—")
                         : (totalScore !== null ? totalScore.toFixed(2) : "—")}
@@ -686,7 +686,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                           {Array.from(highlightedSubjects).map(subjCode => (
                               <div key={subjCode} className="flex justify-between items-center bg-success-50/50 px-2 py-1 rounded border border-success-100">
                                   <span>{SUBJECT_LABELS[subjCode] || subjCode}</span>
-                                  <span className="font-bold text-success-700">
+                                  <span className="font-bold text-success-700 tabular-nums">
                                       {profile?.admission_scores?.subject_scores?.[subjCode] ?? "—"}
                                   </span>
                               </div>
@@ -712,7 +712,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                           : "text-error-700"
                     }>
                       {isQualified === null 
-                        ? "Đang xử lý..." 
+                        ? "Đang xử lý…"
                         : isQualified 
                           ? "ĐẠT" 
                           : "CHƯA ĐẠT"}

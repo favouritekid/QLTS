@@ -102,8 +102,9 @@ export function OfficerRatingInput({
                   onMouseEnter={() => setHoverRating(star)}
                   onMouseLeave={() => setHoverRating(null)}
                   disabled={updateLead.isPending}
+                  aria-label={`Đánh giá ${star} trên 5`}
                   className={cn(
-                    "p-0.5 transition-colors focus:outline-none focus:ring-1 focus:ring-amber-400 rounded",
+                    "p-0.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400 rounded",
                     updateLead.isPending && "opacity-50 cursor-not-allowed"
                   )}
                 >

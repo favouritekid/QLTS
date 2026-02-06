@@ -165,7 +165,7 @@ function InteractiveStatusBadge() {
             key={key}
             onClick={() => setStatus(key)}
             className={cn(
-              "px-3 py-1.5 rounded-md text-sm font-medium transition-all",
+              "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
               status === key
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted hover:bg-muted/80"
@@ -237,7 +237,7 @@ function InteractiveWorkflow() {
               key={step.id}
               onClick={() => setCurrentStep(index)}
               className={cn(
-                "w-8 h-8 rounded-full flex items-center justify-center transition-all border-2",
+                "w-8 h-8 rounded-full flex items-center justify-center transition-colors border-2",
                 index <= currentStep
                   ? "bg-primary border-primary text-primary-foreground"
                   : "bg-background border-muted-foreground/30 text-muted-foreground"
@@ -320,7 +320,7 @@ function RolePermissionMatrix() {
             key={role}
             onClick={() => setSelectedRole(role)}
             className={cn(
-              "px-4 py-2 rounded-lg font-medium transition-all capitalize",
+              "px-4 py-2 rounded-lg font-medium transition-colors capitalize",
               selectedRole === role
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted hover:bg-muted/80"
@@ -880,7 +880,7 @@ export default function GuidelinePage() {
         {/* Sidebar */}
         <aside
           className={cn(
-            "sticky top-14 h-[calc(100vh-3.5rem)] border-r border-border transition-all duration-300",
+            "sticky top-14 h-[calc(100vh-3.5rem)] border-r border-border transition-[width] duration-300",
             sidebarCollapsed ? "w-0 overflow-hidden lg:w-64" : "w-64"
           )}
         >
@@ -890,7 +890,7 @@ export default function GuidelinePage() {
                 key={item.id}
                 onClick={() => setActiveSection(item.id)}
                 className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all",
+                  "w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
                   activeSection === item.id
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
