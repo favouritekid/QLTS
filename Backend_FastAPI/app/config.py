@@ -179,6 +179,22 @@ class Settings(BaseSettings):
         validation_alias="DEVICE_FINGERPRINT_SALT"
     )
 
+    # -- Security: MFA (Multi-Factor Authentication) --
+    # Fernet key for encrypting TOTP secrets at rest
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    MFA_ENCRYPTION_KEY: str = Field(
+        default="", validation_alias="MFA_ENCRYPTION_KEY"
+    )
+    MFA_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=5, validation_alias="MFA_TOKEN_EXPIRE_MINUTES"
+    )  # Short-lived MFA challenge token
+    MFA_MAX_ATTEMPTS: int = Field(
+        default=5, validation_alias="MFA_MAX_ATTEMPTS"
+    )  # Max OTP attempts per 5-minute window
+    MFA_ATTEMPT_WINDOW_MINUTES: int = Field(
+        default=5, validation_alias="MFA_ATTEMPT_WINDOW_MINUTES"
+    )  # Window for MFA attempt tracking
+
     def _validate_production_secrets(self):
         """Fail-fast validation for production environment secrets."""
         if self.APP_ENV != "production":

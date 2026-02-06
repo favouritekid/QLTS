@@ -170,6 +170,7 @@ class User(UserBase):
     skills: Optional[List[str]] = None
     availability_status: Optional[str] = None
     password_reset_required: Optional[bool] = False  # Security: True when user needs to change password
+    mfa_enabled: bool = False  # MFA: Whether TOTP MFA is enabled
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -264,3 +265,47 @@ class SyncUsersRequest(BaseModel):
     """Schema cho request body của POST /admin/sync/users endpoint."""
 
     user_ids: Optional[List[int]] = None  # None hoặc empty list = sync all users
+
+
+# =============================================================================
+# MFA (Multi-Factor Authentication) Schemas
+# =============================================================================
+
+
+class MfaVerifySchema(BaseModel):
+    """Schema for verifying MFA code during login."""
+    mfa_token: str
+    code: str = Field(..., min_length=6, max_length=8)  # 6-digit TOTP or 8-char backup
+
+
+class MfaSetupResponse(BaseModel):
+    """Response from /mfa/setup with QR code and secret."""
+    secret: str          # Base32 secret for manual entry
+    qr_code: str         # Base64 data URI of QR code
+    provisioning_uri: str
+
+
+class MfaEnableRequest(BaseModel):
+    """Request to enable MFA (must provide valid TOTP code)."""
+    code: str = Field(..., min_length=6, max_length=6)  # Must use TOTP to enable
+
+
+class MfaDisableRequest(BaseModel):
+    """Request to disable MFA (requires password verification)."""
+    password: str
+
+
+class MfaStatusResponse(BaseModel):
+    """Response from /mfa/status."""
+    mfa_enabled: bool
+    has_backup_codes: bool
+
+
+class MfaBackupCodesResponse(BaseModel):
+    """Response containing backup codes (shown ONCE only)."""
+    backup_codes: List[str]
+
+
+class MfaBackupCodesRequest(BaseModel):
+    """Request to regenerate backup codes (requires password)."""
+    password: str

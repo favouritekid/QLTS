@@ -17,7 +17,7 @@ import type {
   ChangePasswordSchema,
   UserUpdateProfile,
 } from "@/types/api.types";
-import { useEffect } from "react";
+import React, { useEffect } from "react";
 import { AxiosError } from "axios";
 import { triggerBannerCheck } from "@/components/layouts/SecurityBanner";
 
@@ -39,66 +39,59 @@ export function useAuth(options?: UseAuthOptions) {
     logout: logoutStore,
   } = useAuthStore();
 
+  // MFA callback ref - set by LoginForm to intercept MFA responses
+  const mfaCallbackRef = React.useRef<{
+    onSuccess?: (response: LoginResponse) => void;
+  }>({});
+
   const loginMutation = useMutation<
-    LoginResponse, // <-- Sửa 1: Chỉ trả về LoginResponse
+    LoginResponse,
     AxiosError<ApiErrorResponse>,
     LoginRequest
   >({
     mutationFn: async (credentials: LoginRequest) => {
-      // ⚠️ SECURITY: Never log credentials!
       const params = new URLSearchParams();
       params.append("username", credentials.username);
       params.append("password", credentials.password);
-
-      // const loginRes = await api.post<LoginResponse>(API_ENDPOINTS.AUTH.LOGIN, params, {
-      //   headers: { "Content-Type": "application/x-form-urlencoded" },
-      //   withCredentials: true,
-      // });
 
       const loginRes = await api.post<LoginResponse>(API_ENDPOINTS.AUTH.LOGIN, params.toString(), {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         withCredentials: true,
       });
 
-      // ✅ Sửa 2: Chỉ cần trả về data (LoginResponse)
       return loginRes.data;
     },
     onSuccess: async (loginResponse: LoginResponse) => {
-      // ✅ SECURITY FIX: Token is now in httpOnly cookie (set by backend)
-      // We only need to store user info in Zustand
+      // MFA REQUIRED: Don't complete login, let LoginForm handle MFA step
+      if (loginResponse.mfa_required && loginResponse.mfa_token) {
+        mfaCallbackRef.current.onSuccess?.(loginResponse);
+        return; // Stop here - don't setAuth or redirect
+      }
 
       const { user, login_notification } = loginResponse;
 
-      setAuth(user); // No longer pass token
-
-      // Trigger security banner check immediately after login
-      // This ensures banner appears without requiring page refresh
+      setAuth(user);
       triggerBannerCheck(user.password_reset_required);
-
       toast.success("Login successful!");
 
-      // R1+R2: Show suspicious login warning immediately (no socket needed)
       if (login_notification) {
         const locationInfo = login_notification.location || "Unknown location";
         const deviceInfo = login_notification.device || "Unknown device";
-        
+
         toast.warning(
-          `⚠️ Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
-          { 
-            duration: 15000,  // 15 giây - quan trọng, cần user đọc
-            id: `suspicious-login-${login_notification.login_id}`,  // Unique ID để tránh trùng lắp
+          `Phat hien dang nhap dang ngo\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
+          {
+            duration: 15000,
+            id: `suspicious-login-${login_notification.login_id}`,
             action: {
-              label: "Xem chi tiết",
+              label: "Xem chi tiet",
               onClick: async () => {
-                // R1+R2: Mark notification as read BEFORE navigating (updates bell icon)
                 if (login_notification.notification_id) {
                   try {
                     await api.post(API_ENDPOINTS.NOTIFICATIONS.MARK_AS_READ, {
                       notification_ids: [login_notification.notification_id],
                     });
-                    // Refresh notifications to update badge count
                     queryClient.invalidateQueries({ queryKey: ["notifications"] });
-                    console.log("[useAuth] Marked suspicious login notification as read:", login_notification.notification_id);
                   } catch (err) {
                     console.error("[useAuth] Failed to mark notification as read:", err);
                   }
@@ -108,17 +101,12 @@ export function useAuth(options?: UseAuthOptions) {
             },
           }
         );
-        
-        console.log("[useAuth] Suspicious login detected:", login_notification);
       }
 
-      // ✅ PHASE 7: Role-based redirect
-      // Officers go to /dashboard/officer, others go to /dashboard
       const redirect = new URLSearchParams(window.location.search).get("redirect");
       const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
       router.push(redirect || defaultPath);
     },
-    // <<< KẾT THÚC SỬA onSuccess >>>
     onError: (error) => {
       const displayMessage = "Login failed. Please check your credentials.";
       const errorData = error.response?.data;
@@ -126,6 +114,43 @@ export function useAuth(options?: UseAuthOptions) {
         /* ... code xử lý displayMessage ... */
       }
       toast.error(displayMessage);
+    },
+  });
+
+  // MFA verification mutation
+  const verifyMfaMutation = useMutation<
+    LoginResponse,
+    AxiosError<ApiErrorResponse>,
+    { mfa_token: string; code: string }
+  >({
+    mutationFn: async (data) => {
+      const res = await api.post<LoginResponse>(API_ENDPOINTS.AUTH.VERIFY_MFA, data, {
+        withCredentials: true,
+      });
+      return res.data;
+    },
+    onSuccess: async (loginResponse: LoginResponse) => {
+      const { user, login_notification } = loginResponse;
+
+      setAuth(user);
+      triggerBannerCheck(user.password_reset_required);
+      toast.success("Login successful!");
+
+      if (login_notification) {
+        toast.warning(
+          `Phat hien dang nhap dang ngo\nIP: ${login_notification.ip_address}`,
+          { duration: 15000 }
+        );
+      }
+
+      const redirect = new URLSearchParams(window.location.search).get("redirect");
+      const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
+      router.push(redirect || defaultPath);
+    },
+    onError: (error) => {
+      const errorDetail = error.response?.data?.detail;
+      const message = typeof errorDetail === "string" ? errorDetail : "Invalid verification code.";
+      toast.error(message);
     },
   });
 
@@ -450,6 +475,7 @@ export function useAuth(options?: UseAuthOptions) {
     resetPasswordMutation.isPending ||
     changePasswordMutation.isPending ||
     updateProfileMutation.isPending ||
+    verifyMfaMutation.isPending ||
     isUserLoading ||
     isUserFetching;
 
@@ -457,8 +483,15 @@ export function useAuth(options?: UseAuthOptions) {
     user: currentUser ?? userFromStore,
     isAuthenticated: isAuthenticated && !isUserError, // ✅ SECURITY FIX: No longer check token from localStorage
     isLoading,
-    login: loginMutation.mutate,
+    login: (
+      credentials: LoginRequest,
+      options?: { onSuccess?: (response: LoginResponse) => void }
+    ) => {
+      mfaCallbackRef.current.onSuccess = options?.onSuccess;
+      loginMutation.mutate(credentials);
+    },
     loginAsync: loginMutation.mutateAsync,
+    verifyMfa: verifyMfaMutation.mutate,
     logout: logoutMutation.mutate,
 
     registerUser: registerMutation.mutate,
@@ -478,6 +511,7 @@ export function useAuth(options?: UseAuthOptions) {
       resetPasswordMutation.error ||
       changePasswordMutation.error ||
       updateProfileMutation.error ||
+      verifyMfaMutation.error ||
       userError,
   };
 }

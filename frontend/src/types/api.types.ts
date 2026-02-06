@@ -16,6 +16,7 @@ export interface User {
   availability_status?: string | null; // Availability status
   max_capacity?: number | null; // Max capacity
   password_reset_required?: boolean; // Security: Set true after "Secure Account" action
+  mfa_enabled?: boolean; // MFA: Whether TOTP MFA is enabled
 }
 
 // Kiểu dữ liệu cho request body khi login (khớp schemas/user.py -> LoginSchema)
@@ -48,6 +49,9 @@ export interface LoginResponse {
   user: User; // ✅ User object now returned directly from /login
   login_notification?: LoginNotification | null;  // R1+R2: Optional suspicious login notification
   // refresh_token removed - now in HttpOnly cookie
+  // MFA fields (present when mfa_required=true)
+  mfa_required?: boolean;
+  mfa_token?: string;
 }
 
 // Kiểu dữ liệu cho response từ /users/me

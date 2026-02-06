@@ -174,6 +174,29 @@ async def login_for_access_token(
     # ✅ SECURITY FIX: Reset attempts counter on successful login
     await AccountLockoutService.reset_attempts(form_data.username)
 
+    # ===== MFA CHECK =====
+    # If user has MFA enabled, return mfa_token instead of full login
+    if getattr(user, "mfa_enabled", False):
+        from ..services import mfa_service
+
+        mfa_token = mfa_service.create_mfa_token(
+            username=user.username, user_id=user.id
+        )
+        log.info("MFA required for login", user_id=user.id, event="mfa.challenge_issued")
+        return JSONResponse(
+            content={
+                "mfa_required": True,
+                "mfa_token": mfa_token,
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "mfa_enabled": True,
+                },
+            },
+            status_code=200,
+        )
+    # ===== END MFA CHECK =====
+
     try:
         await user_service.remove_user_from_global_blacklist(user.id)
     except Exception as e:
@@ -415,6 +438,7 @@ async def login_for_access_token(
                 "role": user.role,
                 "status": user.status,
                 "password_reset_required": user.password_reset_required,  # Security: For banner display
+                "mfa_enabled": user.mfa_enabled,  # MFA: For frontend UI
             },
             # R1+R2: Include suspicious login notification in response (optional field)
             "login_notification": login_notification_data,
@@ -977,3 +1001,372 @@ async def refresh_access_token(
             "Unhandled exception in refresh token endpoint", error=str(e), exc_info=True
         )
         raise HTTPException(status_code=500, detail="An unexpected error occurred")
+
+
+# =============================================================================
+# MFA (Multi-Factor Authentication) ENDPOINTS
+# =============================================================================
+
+
+@router.post("/verify-mfa")
+@limiter.limit(RateLimits.AUTH_LOGIN)  # 5/min - IP-based rate limit (Layer 1)
+async def verify_mfa(
+    request: Request,
+    mfa_data: schemas.MfaVerifySchema,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Verify MFA code after successful password authentication.
+
+    Security (defense in depth):
+    - Layer 1: IP-based rate limit (5/min via slowapi)
+    - Layer 2: Per-user Redis counter (5 attempts / 5 min)
+    - Layer 3: AccountLockoutService (cumulative lockout)
+    """
+    from ..services import mfa_service
+    from ..security.account_lockout import AccountLockoutService
+
+    # 1. Decode mfa_token (verify type="mfa")
+    payload = mfa_service.decode_mfa_token(mfa_data.mfa_token)
+    username = payload.get("sub")
+    user_id = payload.get("user_id")
+
+    if not username or not user_id:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+
+    # 2. Check per-user MFA attempt limit (Layer 2)
+    attempt_key = f"mfa_attempts:{username}"
+    try:
+        attempts_str = await safe_redis_get(attempt_key)
+        attempts = int(attempts_str) if attempts_str else 0
+        if attempts >= settings.MFA_MAX_ATTEMPTS:
+            log.warning(
+                "mfa_rate_limited", user_id=user_id, username=username,
+                attempts=attempts, event="mfa.rate_limited",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many MFA attempts. Please try again later.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Redis MFA attempt check failed", error=str(e))
+
+    # 3. Load user
+    user = await user_service.get_user_by_username(db, username=username)
+    if not user or user.id != user_id:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+
+    # 4. Verify MFA code
+    is_valid = await mfa_service.verify_mfa_code(db, user, mfa_data.code)
+
+    if not is_valid:
+        # Increment per-user counter (Layer 2)
+        try:
+            window = settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
+            current = await safe_redis_get(attempt_key)
+            new_count = (int(current) if current else 0) + 1
+            await safe_redis_set(attempt_key, str(new_count), ex=window)
+        except Exception as e:
+            log.error("Redis MFA attempt increment failed", error=str(e))
+
+        # Feed into AccountLockoutService (Layer 3)
+        await AccountLockoutService.record_failed_attempt(
+            db=db,
+            username=username,
+            ip_address=request.client.host if request.client else None,
+        )
+
+        log.warning(
+            "mfa_failed", user_id=user.id, event="mfa.verify_failed",
+        )
+        raise HTTPException(status_code=401, detail="Invalid verification code")
+
+    # 5. MFA verified - reset attempt counters
+    try:
+        await safe_redis_delete(attempt_key)
+    except Exception:
+        pass
+    await AccountLockoutService.reset_attempts(username)
+
+    # 6. Continue with full login flow (same as non-MFA login)
+    try:
+        await user_service.remove_user_from_global_blacklist(user.id)
+    except Exception as e:
+        log.error("Failed to remove user from blacklist", user_id=user.id, error=str(e))
+
+    # Create tokens
+    refresh_token = security.create_refresh_token(data={"sub": user.username})
+    refresh_jti, refresh_ttl = security.decode_token_for_invalidation(refresh_token)
+
+    if not refresh_jti or refresh_ttl is None:
+        raise HTTPException(status_code=500, detail="Could not process tokens")
+
+    access_token = security.create_access_token(
+        data={"sub": user.username, "user_id": user.id, "role": user.role},
+        refresh_jti=refresh_jti,
+    )
+    access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
+
+    if not access_jti:
+        raise HTTPException(status_code=500, detail="Could not process tokens")
+
+    # Store session in Redis
+    try:
+        await safe_redis_set(f"session:{refresh_jti}", str(user.id), ex=refresh_ttl)
+    except Exception as e:
+        log.error("Failed to set session in Redis", user_id=user.id, error=str(e))
+        raise HTTPException(status_code=500, detail="Could not process session")
+
+    # Create DB session
+    post_commit_callbacks = []
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        ip_address = request.client.host if request.client else None
+        user_agent_string = request.headers.get("User-Agent")
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+        )
+        session, session_callback = await session_service.create_session(
+            db=db,
+            user_id=user.id,
+            refresh_jti=refresh_jti,
+            ip_address=ip_address,
+            user_agent_string=user_agent_string,
+            expires_at=expires_at,
+        )
+        if session_callback:
+            post_commit_callbacks.append(session_callback)
+    except Exception as session_error:
+        log.error("Failed to create session", user_id=user.id, error=str(session_error))
+
+    # Record login history
+    login_notification_data = None
+    try:
+        login_record, login_history_callback = await login_history_service.record_login(
+            db=db,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent_string,
+            country=session.country if 'session' in dir() else None,
+            city=session.city if 'session' in dir() else None,
+            email_to=user.email,
+            username=user.username,
+            refresh_jti=refresh_jti,
+        )
+        if login_history_callback:
+            post_commit_callbacks.append(login_history_callback)
+
+        if login_record.is_suspicious:
+            login_notification_data = {
+                "type": "SUSPICIOUS_LOGIN",
+                "login_id": login_record.id,
+                "ip_address": ip_address or "unknown",
+                "risk_score": login_record.risk_score,
+            }
+    except Exception as history_error:
+        log.error("Failed to record login history", user_id=user.id, error=str(history_error))
+
+    # Commit and execute callbacks
+    try:
+        await db.commit()
+        for callback in post_commit_callbacks:
+            try:
+                await callback()
+            except Exception as cb_e:
+                log.error("Post-commit callback failed", error=str(cb_e))
+    except Exception as e:
+        await db.rollback()
+        try:
+            await safe_redis_delete(f"session:{refresh_jti}")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Could not save session")
+
+    log.info("mfa_login_complete", user_id=user.id, event="mfa.verify_success")
+
+    # Build response
+    response = JSONResponse(
+        content={
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": user.role,
+                "status": user.status,
+                "password_reset_required": user.password_reset_required,
+                "mfa_enabled": user.mfa_enabled,
+            },
+            "login_notification": login_notification_data,
+        },
+        status_code=200,
+    )
+
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=settings.APP_ENV == "production",
+        samesite="lax",
+        max_age=int(access_ttl) if access_ttl else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.APP_ENV == "production",
+        samesite="strict",
+        max_age=int(refresh_ttl),
+        path="/api",
+    )
+    set_csrf_cookie(response)
+
+    return response
+
+
+@router.post("/mfa/setup", response_model=schemas.MfaSetupResponse)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_setup(
+    request: Request,
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """
+    Initiate MFA setup. Returns QR code and secret.
+    Secret is stored temporarily in Redis (10min TTL), NOT in DB.
+    """
+    from ..services import mfa_service
+
+    if current_user.mfa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is already enabled. Disable it first to re-setup.",
+        )
+
+    setup_data, _ = await mfa_service.setup_mfa(
+        user_id=current_user.id, username=current_user.username
+    )
+
+    return setup_data
+
+
+@router.post("/mfa/enable", response_model=schemas.MfaBackupCodesResponse)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_enable(
+    request: Request,
+    enable_data: schemas.MfaEnableRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+    refresh_token_cookie: str = Cookie(None, alias="refresh_token"),
+):
+    """
+    Enable MFA after verifying TOTP code from authenticator app.
+    Returns one-time backup codes. Revokes all other sessions.
+    """
+    from ..services import mfa_service
+
+    if current_user.mfa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is already enabled.",
+        )
+
+    # Get current session ID to preserve it during session revocation
+    current_session_id = None
+    if refresh_token_cookie:
+        try:
+            payload = security.decode_token(refresh_token_cookie)
+            current_refresh_jti = payload.get("jti")
+            if current_refresh_jti:
+                from ..repositories.session_repository import SessionRepository
+                session_repo = SessionRepository(db)
+                session_record = await session_repo.get_by_refresh_jti_and_user(
+                    current_refresh_jti, current_user.id
+                )
+                if session_record:
+                    current_session_id = session_record.id
+        except Exception:
+            pass  # Continue without preserving current session
+
+    backup_codes, callback = await mfa_service.enable_mfa(
+        db=db,
+        user=current_user,
+        code=enable_data.code,
+        current_session_id=current_session_id,
+    )
+
+    await db.commit()
+
+    if callback:
+        await callback()
+
+    return schemas.MfaBackupCodesResponse(backup_codes=backup_codes)
+
+
+@router.post("/mfa/disable", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_disable(
+    request: Request,
+    disable_data: schemas.MfaDisableRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """Disable MFA. Requires password verification."""
+    from ..services import mfa_service
+
+    if not current_user.mfa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is not enabled.",
+        )
+
+    result, callback = await mfa_service.disable_mfa(
+        db=db, user=current_user, password=disable_data.password
+    )
+
+    await db.commit()
+
+    if callback:
+        await callback()
+
+    return {"message": "MFA disabled successfully."}
+
+
+@router.get("/mfa/status", response_model=schemas.MfaStatusResponse)
+@limiter.limit(RateLimits.DATA_READ)
+async def mfa_status(
+    request: Request,
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """Get MFA status for current user."""
+    return schemas.MfaStatusResponse(
+        mfa_enabled=current_user.mfa_enabled,
+        has_backup_codes=bool(current_user.backup_codes_hashed),
+    )
+
+
+@router.post("/mfa/backup-codes", response_model=schemas.MfaBackupCodesResponse)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_regenerate_backup_codes(
+    request: Request,
+    regen_data: schemas.MfaBackupCodesRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """Regenerate backup codes. Invalidates all old codes. Requires password."""
+    from ..services import mfa_service
+
+    new_codes, callback = await mfa_service.regenerate_backup_codes(
+        db=db, user=current_user, password=regen_data.password
+    )
+
+    await db.commit()
+
+    if callback:
+        await callback()
+
+    return schemas.MfaBackupCodesResponse(backup_codes=new_codes)

@@ -88,8 +88,10 @@ pydantic==2.12.2
 pydantic-settings==2.11.0
 pydantic_core==2.41.4
 pyflakes==3.4.0
+Pillow==12.1.0
 Pygments==2.19.2
 pymdown-extensions==10.16.1
+pyotp==2.9.0
 pytest==8.4.2
 pytest-asyncio==1.2.0
 pytest-dotenv==0.5.2
@@ -104,6 +106,7 @@ python-socketio==5.14.3
 pytokens==0.2.0
 pytz==2025.2
 PyYAML==6.0.3
+qrcode==8.2
 pyyaml_env_tag==1.1
 redis==6.4.0
 regex==2025.9.18

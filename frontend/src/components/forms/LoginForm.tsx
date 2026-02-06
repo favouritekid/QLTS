@@ -1,6 +1,7 @@
 // src/components/forms/LoginForm.tsx
-"use client"; // Cần thiết vì sử dụng hooks (useForm, useAuth)
+"use client";
 
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -16,35 +17,61 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { useAuth } from "@/hooks/useAuth"; // Import hook useAuth
-import type { LoginRequest } from "@/types/api.types"; // Import kiểu LoginRequest
+import { useAuth } from "@/hooks/useAuth";
+import { MfaVerifyForm } from "./MfaVerifyForm";
+import type { LoginRequest } from "@/types/api.types";
 
-// Định nghĩa Zod schema khớp với LoginRequest và yêu cầu backend
 const loginSchema = z.object({
   username: z.string().min(1, { message: "Tên đăng nhập là bắt buộc" }),
   password: z.string().min(6, { message: "Mật khẩu phải có ít nhất 6 ký tự" }),
 });
 
-// Suy luận kiểu TypeScript từ Zod schema
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 export function LoginForm() {
-  const { login, isLoading } = useAuth(); // Lấy hàm login và trạng thái loading từ hook
+  const { login, verifyMfa, isLoading } = useAuth();
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
 
-  // 1. Định nghĩa form với react-hook-form
   const form = useForm<LoginFormValues>({
-    resolver: zodResolver(loginSchema), // Sử dụng Zod để validation
+    resolver: zodResolver(loginSchema),
     defaultValues: {
       username: "",
       password: "",
     },
   });
 
-  // 2. Định nghĩa hàm xử lý submit
   function onSubmit(values: LoginFormValues) {
-    // Gọi hàm login từ useAuth hook với dữ liệu form đã validate
-    // Lưu ý: Backend dùng username, nên values.username là đúng
-    login(values as LoginRequest); // Ép kiểu sang LoginRequest nếu cần
+    login(values as LoginRequest, {
+      onSuccess: (response) => {
+        if (response?.mfa_required && response?.mfa_token) {
+          setMfaRequired(true);
+          setMfaToken(response.mfa_token);
+        }
+      },
+    });
+  }
+
+  function handleMfaSubmit(code: string) {
+    if (mfaToken) {
+      verifyMfa({ mfa_token: mfaToken, code });
+    }
+  }
+
+  function handleMfaCancel() {
+    setMfaRequired(false);
+    setMfaToken(null);
+  }
+
+  // Show MFA verification form
+  if (mfaRequired && mfaToken) {
+    return (
+      <MfaVerifyForm
+        onSubmit={handleMfaSubmit}
+        onCancel={handleMfaCancel}
+        isLoading={isLoading}
+      />
+    );
   }
 
   return (
@@ -56,7 +83,6 @@ export function LoginForm() {
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          {/* Trường Username */}
           <FormField
             control={form.control}
             name="username"
@@ -67,16 +93,15 @@ export function LoginForm() {
                   <Input
                     placeholder="Tên đăng nhập"
                     autoComplete="username"
-                    disabled={isLoading} // Vô hiệu hóa khi đang loading
-                    {...field} // Kết nối input với react-hook-form
+                    disabled={isLoading}
+                    {...field}
                   />
                 </FormControl>
-                <FormMessage /> {/* Hiển thị lỗi validation */}
+                <FormMessage />
               </FormItem>
             )}
           />
 
-          {/* Trường Password */}
           <FormField
             control={form.control}
             name="password"
@@ -84,7 +109,6 @@ export function LoginForm() {
               <FormItem>
                 <div className="flex items-center justify-between">
                   <FormLabel>Mật khẩu</FormLabel>
-                  {/* Link Forgot Password */}
                   <Link
                     href="/forgot-password"
                     className="text-primary text-sm hover:underline"
@@ -106,14 +130,12 @@ export function LoginForm() {
             )}
           />
 
-          {/* Nút Submit */}
           <Button type="submit" className="w-full" disabled={isLoading}>
             {isLoading ? "Đang đăng nhập…" : "Đăng nhập"}
           </Button>
         </form>
       </Form>
 
-      {/* Link Sign Up */}
       <p className="text-muted-foreground mt-4 text-center text-sm">
         Chưa có tài khoản?{" "}
         <Link

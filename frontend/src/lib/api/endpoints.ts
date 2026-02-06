@@ -13,6 +13,12 @@ export const API_ENDPOINTS = {
     FORGOT_PASSWORD: "/api/auth/forgot-password",
     RESET_PASSWORD: "/api/auth/reset-password",
     CHECK_STATUS: "/api/auth/check-status",
+    VERIFY_MFA: "/api/auth/verify-mfa",
+    MFA_SETUP: "/api/auth/mfa/setup",
+    MFA_ENABLE: "/api/auth/mfa/enable",
+    MFA_DISABLE: "/api/auth/mfa/disable",
+    MFA_STATUS: "/api/auth/mfa/status",
+    MFA_BACKUP_CODES: "/api/auth/mfa/backup-codes",
   },
   SESSIONS: {
     LIST: "/api/sessions",
