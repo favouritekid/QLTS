@@ -1681,7 +1681,11 @@ async def add_consultation(
                 )
 
             # Chuẩn bị dữ liệu để tạo Consultation
-            create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
+            # Exclude fields that don't belong to Consultation model:
+            # - status_id: mapped to consultation_status_id
+            # - consultation_date: handled separately with fallback to NOW
+            # - loss_reason_code/loss_reason_note: belong to LeadStatusHistory, not Consultation
+            create_consult_data = data.model_dump(exclude={"status_id", "consultation_date", "loss_reason_code", "loss_reason_note"})
             # (Đã xóa .strip() vì Pydantic xử lý)
 
             # Handle consultation_date: use provided value or default to NOW
@@ -2558,8 +2562,13 @@ async def update_consultation(
                             detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
                         )
 
+            # Fields that belong to LeadStatusHistory, not Consultation model
+            NON_CONSULTATION_FIELDS = {"loss_reason_code", "loss_reason_note"}
+
             for field, value in update_data.items():
-                if field == "status_id":
+                if field in NON_CONSULTATION_FIELDS:
+                    continue  # Skip fields not in Consultation model
+                elif field == "status_id":
                     # Đặt consultation_status_id (already validated above)
                     consultation.consultation_status_id = value
                 else:

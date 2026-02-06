@@ -53,43 +53,57 @@ async def seed_lead_dependencies(setup_test_database):
     unit_data = TestOrgData.UNIT_1
     major_data = TestOrgData.MAJOR_1
 
-    # Lấy ID mặc định từ settings
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID  # TTHV000
-    stage_a_id = "STAGE_A"  # ID của Stage chứa TTHV000 và STATUS_A1
+    # Sử dụng status ID thực từ PHASE_STATUSES consultation phase
+    # Consultation phase: {"sts00", "sts02", "sts03", "sts04", "sts05", "sts06"}
+    initial_status_id = "sts00"  # Chưa liên hệ (Not Contacted)
+    contacted_status_id = "sts02"  # Đã liên hệ (Contacted) - for consultation test
+    stage_a_id = "stg01"  # Stage tư vấn
 
-    # 1. Định nghĩa Stage MẶC ĐỊNH
-    stage_data = {"id": stage_a_id, "name": "Initial Stage", "order": 10}
+    # 1. Định nghĩa Stage
+    stage_data = {"id": stage_a_id, "name": "Tư vấn", "order": 10}
 
-    # 2. Định nghĩa Status TTHV000 (HỆ THỐNG CẦN)
+    # 2. Định nghĩa Status sts00 (Initial - Chưa liên hệ)
     initial_status_data = {
         "id": initial_status_id,
-        "name": "New Lead Status (System Default)",
+        "name": "Chưa liên hệ",
         "color_code": "#0000FF",
-        "stage_id": stage_a_id,  # Liên kết với Stage A
+        "stage_id": stage_a_id,
+        "phase": "consultation",
+        "updates_pipeline": True,
+        "legacy_status": "new",  # Required by StatusHelper.get_initial_status()
+        "is_final_status": False,  # Required by StatusHelper.get_initial_status()
     }
 
-    # 3. Định nghĩa STATUS_A1 (cần cho các test khác)
-    # Lấy data gốc từ constants và ghi đè stage_id
-    status_a1_data = TestPipelineData.STATUS_A1.copy()  # Tạo bản sao để sửa đổi
-    status_a1_data["stage_id"] = stage_a_id
+    # 3. Định nghĩa Status sts02 (Contacted - for consultation test)
+    contacted_status_data = {
+        "id": contacted_status_id,
+        "name": "Đã liên hệ",
+        "color_code": "#AAAAAA",
+        "stage_id": stage_a_id,
+        "phase": "consultation",
+        "updates_pipeline": True,
+    }
 
-    # (Tùy chọn) Thêm Stage và Status cho LOST nếu cần test reject
-    lost_status_id = settings.DEFAULT_LOST_LEAD_STATUS_ID
-    lost_stage_id = "STAGE_LOST"
-    lost_stage_data = {"id": lost_stage_id, "name": "Lost Stage", "order": 999}
+    # 4. Thêm Stage và Status cho LOST (reject test)
+    lost_status_id = "sts04"  # Từ chối tư vấn (in consultation phase)
+    lost_stage_id = "stg02"
+    lost_stage_data = {"id": lost_stage_id, "name": "Từ chối", "order": 999}
     lost_status_data = {
         "id": lost_status_id,
-        "name": "Lost Status",
+        "name": "Từ chối tư vấn",
         "color_code": "#FF0000",
         "stage_id": lost_stage_id,
+        "phase": "consultation",
+        "is_final": True,
+        "outcome_type": "negative",
     }
 
     log.info("--- [FIXTURE] Seeding lead dependencies ---")
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            # A. Tạo Org/Major (FK cho Lead)
+            # A. Tạo Org/MajorProgram (FK cho Lead)
             unit1 = models.OrganizationUnit(**unit_data)
-            major1 = models.Major(**major_data)
+            major1 = models.MajorProgram(**major_data)
             session.add_all([unit1, major1])
 
             # B. Tạo Pipeline Stages
@@ -97,26 +111,36 @@ async def seed_lead_dependencies(setup_test_database):
             stage_lost = models.PipelineStage(**lost_stage_data)
             session.add_all([stage_a, stage_lost])
 
-            # C. Tạo STATUS MẶC ĐỊNH (TTHV000)
-            status_tthv000 = models.ConsultationStatus(**initial_status_data)
-            session.add(status_tthv000)
+            # C. Tạo Status Initial (sts00 - Chưa liên hệ)
+            status_initial = models.ConsultationStatus(**initial_status_data)
+            session.add(status_initial)
 
-            # D. Tạo STATUS_A1 (từ constants)
-            status_a1 = models.ConsultationStatus(**status_a1_data)
-            session.add(status_a1)
+            # D. Tạo Status Contacted (sts02 - Đã liên hệ)
+            status_contacted = models.ConsultationStatus(**contacted_status_data)
+            session.add(status_contacted)
 
-            # E. Tạo LOST Status
+            # E. Tạo LOST Status (sts04 - Từ chối tư vấn)
             status_lost = models.ConsultationStatus(**lost_status_data)
             session.add(status_lost)
+
+            # F. Tạo AllowedTransitions (cần cho workflow validation)
+            transition_1 = models.AllowedTransition(
+                from_status_id=initial_status_id,
+                to_status_id=contacted_status_id,
+            )
+            transition_2 = models.AllowedTransition(
+                from_status_id=initial_status_id,
+                to_status_id=lost_status_id,
+            )
+            session.add_all([transition_1, transition_2])
 
     log.info("--- [FIXTURE] Lead dependencies seeded ---")
     return {
         "unit_id": unit_data["id"],
         "major_id": major_data["id"],
-        "initial_status_id": initial_status_id,  # TTHV000
-        "status_a1_id": status_a1_data[
-            "id"
-        ],  # Thêm ID này để test add_consultation dùng
+        "initial_status_id": initial_status_id,  # sts00
+        "contacted_status_id": contacted_status_id,  # sts02 - for add_consultation test
+        "lost_status_id": lost_status_id,  # sts04
         "stage_id": stage_a_id,
     }
 
@@ -145,7 +169,6 @@ async def seeded_lead(
                 phone=payload_data["phone"],
                 source=payload_data["source"],
                 unit_id=unit_id,
-                major_id=major_id,
                 status=initial_status_id,  # Bắt đầu với status mặc định
                 consultation_status_id=initial_status_id,  # Bắt đầu với status mặc định
                 pipeline_stage_id=stage_id,
@@ -216,10 +239,9 @@ async def test_create_lead_success_and_celery_call(
     assert "id" in data, "Response should contain lead ID"
     lead_id = data["id"]
     assert data["email"] == payload["email"]
-    assert (
-        data["status"] == seed_lead_dependencies["initial_status_id"]
-    ), f"Expected initial status {seed_lead_dependencies['initial_status_id']}, got {data['status']}"
-    assert data["consultation_status_id"] == seed_lead_dependencies["initial_status_id"]
+    # status field contains legacy_status ("new"), consultation_status_id contains actual ID
+    assert data["consultation_status_id"] == seed_lead_dependencies["initial_status_id"], \
+        f"Expected consultation_status_id={seed_lead_dependencies['initial_status_id']}, got {data['consultation_status_id']}"
     assert data["pipeline_stage_id"] == seed_lead_dependencies["stage_id"]
     log.info(f"Lead created successfully (ID: {lead_id}). Response content verified.")
 
@@ -231,7 +253,7 @@ async def test_create_lead_success_and_celery_call(
     async with AsyncSessionLocal() as session:
         db_lead = await session.get(models.Lead, lead_id)
         assert db_lead is not None, "Lead not found in DB after creation"
-        assert db_lead.status == seed_lead_dependencies["initial_status_id"]
+        assert db_lead.consultation_status_id == seed_lead_dependencies["initial_status_id"]
     log.info("DB state verified.")
     log.info("--- Finished: test_create_lead_success_and_celery_call ---")
 
@@ -294,21 +316,20 @@ async def test_get_lead_detail_success_officer(
 async def test_get_lead_detail_permission_denied(
     client: AsyncClient, regular_user_token_headers: dict, seeded_lead: dict
 ):
-    """Test GET /leads/{id} - User thường bị từ chối (403)."""
+    """Test GET /leads/{id} - User thường bị từ chối (404 - IDOR protection)."""
     log.info("--- Running: test_get_lead_detail_permission_denied ---")
     lead_id = seeded_lead["id"]
     response = await client.get(
         LeadsURLs.LEAD_DETAIL(lead_id), headers=regular_user_token_headers
     )
 
-    # 1. Assert Response
-    assert response.status_code == 403, f"Resp: {response.text}"
+    # 1. Assert Response - Returns 404 (not 403) per IDOR protection policy
+    # Architecture rule: never leak resource existence to unauthorized users
+    assert response.status_code == 404, f"Resp: {response.text}"
     error_data = response.json()
     assert "detail" in error_data
-    # Kiểm tra message lỗi cụ thể từ dependency get_lead_for_user
-    assert error_data["detail"] == "You do not have permission to access this lead."
     log.info(
-        "Permission denied for regular user correctly (403) with specific message."
+        "Permission denied for regular user correctly (404 - IDOR protection)."
     )
     log.info("--- Finished: test_get_lead_detail_permission_denied ---")
 
@@ -323,13 +344,12 @@ async def test_add_consultation_success_officer(
     """Test POST /leads/{id}/consultations - Officer được gán thêm consultation."""
     log.info("--- Running: test_add_consultation_success_officer ---")
     lead_id = seeded_lead["id"]
-    new_status_id = seed_lead_dependencies["status_a1_id"]
+    new_status_id = seed_lead_dependencies["contacted_status_id"]
     assert new_status_id != seeded_lead["initial_status_id"]
 
     consultation_payload = {
         "method": "call",
         "notes": "New note from officer",
-        "outcome": "successful",
         "duration_minutes": 20,
         "status_id": new_status_id,
     }
@@ -386,7 +406,8 @@ async def test_officer_action_reassign_success(
     data = response.json()
     assert isinstance(data, dict)
     assert data.get("id") == lead_id
-    assert data["status"] == settings.DEFAULT_REASSIGN_LEAD_STATUS
+    # reassign_pending is in assignment_status, not status (which reflects consultation)
+    assert data["assignment_status"] == "reassign_pending"
     assert data["assigned_officer_id"] is None
     assert data.get("assigned_officer") is None
     log.info("Officer reassign successful (200). Response verified.")
@@ -427,7 +448,6 @@ async def test_get_lead_timeline_success(
                 officer_id=officer_id,
                 method="call_manual",
                 notes="Manually added timeline note",
-                outcome="successful",
                 duration_minutes=15,
                 consultation_date=datetime.now(timezone.utc)
                 - timedelta(minutes=5),  # Gần đây hơn assignment log

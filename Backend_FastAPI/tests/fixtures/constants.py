@@ -290,7 +290,7 @@ class TestLeadData:
     LEAD_1 = {
         "full_name": "Test Lead 1",
         "email": "lead1@example.com",
-        "phone": "111111111",
+        "phone": "0901111111",
         "source": "website",
         "unit_id": TestOrgData.UNIT_1["id"],
         "major_id": TestOrgData.MAJOR_1["id"],
@@ -302,10 +302,9 @@ class TestLeadData:
     LEAD_CREATE_PAYLOAD = {
         "full_name": "New Lead Payload",
         "email": "new_lead@example.com",
-        "phone": "999888777",
+        "phone": "0909888777",
         "source": "event",
         "unit_id": TestOrgData.UNIT_1["id"],
-        "major_id": TestOrgData.MAJOR_1["id"],
     }
 
 
