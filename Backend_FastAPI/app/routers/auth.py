@@ -182,7 +182,7 @@ async def login_for_access_token(
         mfa_token = mfa_service.create_mfa_token(
             username=user.username, user_id=user.id
         )
-        log.info("MFA required for login", user_id=user.id, event="mfa.challenge_issued")
+        log.info("MFA required for login", user_id=user.id, action="mfa.challenge_issued")
         return JSONResponse(
             content={
                 "mfa_required": True,
@@ -1042,7 +1042,7 @@ async def verify_mfa(
         if attempts >= settings.MFA_MAX_ATTEMPTS:
             log.warning(
                 "mfa_rate_limited", user_id=user_id, username=username,
-                attempts=attempts, event="mfa.rate_limited",
+                attempts=attempts, action="mfa.rate_limited",
             )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1079,7 +1079,7 @@ async def verify_mfa(
         )
 
         log.warning(
-            "mfa_failed", user_id=user.id, event="mfa.verify_failed",
+            "mfa_failed", user_id=user.id, action="mfa.verify_failed",
         )
         raise HTTPException(status_code=401, detail="Invalid verification code")
 
@@ -1185,7 +1185,7 @@ async def verify_mfa(
             pass
         raise HTTPException(status_code=500, detail="Could not save session")
 
-    log.info("mfa_login_complete", user_id=user.id, event="mfa.verify_success")
+    log.info("mfa_login_complete", user_id=user.id, action="mfa.verify_success")
 
     # Build response
     response = JSONResponse(

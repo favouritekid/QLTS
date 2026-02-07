@@ -162,7 +162,7 @@ async def setup_mfa(
     ttl = settings.MFA_ATTEMPT_WINDOW_MINUTES * 2 * 60  # 10 min default
     await safe_redis_set(redis_key, secret, ex=ttl)
 
-    log.info("mfa_setup_initiated", user_id=user_id, event="mfa.setup")
+    log.info("mfa_setup_initiated", user_id=user_id, action="mfa.setup")
 
     return {
         "secret": secret,
@@ -200,7 +200,7 @@ async def enable_mfa(
 
     # 2. Verify TOTP code
     if not verify_totp(secret, code):
-        log.warning("mfa_enable_failed", user_id=user.id, event="mfa.enable_failed",
+        log.warning("mfa_enable_failed", user_id=user.id, action="mfa.enable_failed",
                      reason="invalid_totp_code")
         raise InvalidCredentials(detail="Invalid verification code. Please try again.")
 
@@ -229,7 +229,7 @@ async def enable_mfa(
         )
 
     log.info(
-        "mfa_enabled", user_id=user.id, event="mfa.enable",
+        "mfa_enabled", user_id=user.id, action="mfa.enable",
         sessions_revoked=revoked_count,
     )
 
@@ -252,7 +252,7 @@ async def disable_mfa(
     from ..security import verify_password
 
     if not verify_password(password, user.password_hash):
-        log.warning("mfa_disable_failed", user_id=user.id, event="mfa.disable_failed",
+        log.warning("mfa_disable_failed", user_id=user.id, action="mfa.disable_failed",
                      reason="invalid_password")
         raise InvalidCredentials(detail="Invalid password.")
 
@@ -262,7 +262,7 @@ async def disable_mfa(
     db.add(user)
     await db.flush()
 
-    log.info("mfa_disabled", user_id=user.id, event="mfa.disable")
+    log.info("mfa_disabled", user_id=user.id, action="mfa.disable")
 
     return True, None
 
@@ -277,7 +277,7 @@ async def verify_mfa_code(
     If backup code is used, it is consumed (removed from hash list).
     """
     if not user.totp_secret_encrypted:
-        log.warning("mfa_verify_no_secret", user_id=user.id, event="mfa.verify_failed")
+        log.warning("mfa_verify_no_secret", user_id=user.id, action="mfa.verify_failed")
         return False
 
     secret = decrypt_secret(user.totp_secret_encrypted)
@@ -285,7 +285,7 @@ async def verify_mfa_code(
     # Try TOTP first (6-digit codes)
     if len(code) == 6 and code.isdigit():
         if verify_totp(secret, code):
-            log.info("mfa_verified", user_id=user.id, method="totp", event="mfa.verify_success")
+            log.info("mfa_verified", user_id=user.id, method="totp", action="mfa.verify_success")
             return True
 
     # Try backup codes (8 hex char codes)
@@ -299,11 +299,11 @@ async def verify_mfa_code(
             remaining = len(json.loads(updated_json)) if updated_json else 0
             log.info(
                 "backup_code_used", user_id=user.id, remaining_codes=remaining,
-                event="mfa.backup_used",
+                action="mfa.backup_used",
             )
             return True
 
-    log.warning("mfa_failed", user_id=user.id, event="mfa.verify_failed")
+    log.warning("mfa_failed", user_id=user.id, action="mfa.verify_failed")
     return False
 
 
@@ -329,7 +329,7 @@ async def regenerate_backup_codes(
     db.add(user)
     await db.flush()
 
-    log.info("backup_codes_regenerated", user_id=user.id, event="mfa.backup_regen")
+    log.info("backup_codes_regenerated", user_id=user.id, action="mfa.backup_regen")
 
     return plaintext_codes, None
 
