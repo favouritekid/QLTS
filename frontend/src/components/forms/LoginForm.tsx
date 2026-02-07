@@ -30,20 +30,18 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
-function getLoginErrorMessage(
-  error: unknown,
-  isRateLimited: boolean,
-): string | undefined {
+function getLoginErrorMessage(error: unknown): string | undefined {
   if (!error) return undefined;
 
-  if (isRateLimited) {
-    return "Quá nhiều lần thử đăng nhập. Vui lòng đợi trước khi thử lại.";
-  }
-
-  const axiosError = error as { response?: { status?: number; data?: { detail?: unknown } } };
+  const axiosError = error as {
+    response?: { status?: number; data?: { detail?: string } };
+  };
   const status = axiosError.response?.status;
+  const detail = axiosError.response?.data?.detail;
 
   if (status === 429) {
+    // Backend sends Vietnamese message with remaining time for account lockout
+    if (typeof detail === "string" && detail.length > 0) return detail;
     return "Quá nhiều lần thử đăng nhập. Vui lòng đợi trước khi thử lại.";
   }
   if (status === 401) {
@@ -51,6 +49,14 @@ function getLoginErrorMessage(
   }
 
   return "Đã xảy ra lỗi. Vui lòng thử lại.";
+}
+
+function formatCountdown(totalSeconds: number): string {
+  if (totalSeconds <= 0) return "0s";
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
 }
 
 function getMfaErrorMessage(error: unknown): string | undefined {
@@ -171,7 +177,7 @@ export function LoginForm() {
         isLoading={isLoading}
         errorMessage={
           mfaCountdown.isActive
-            ? `Bạn đã nhập sai quá nhiều lần. Thử lại sau ${mfaCountdown.seconds}s.`
+            ? `Bạn đã nhập sai quá nhiều lần. Thử lại sau ${formatCountdown(mfaCountdown.seconds)}.`
             : getMfaErrorMessage(verifyMfaError)
         }
         isRateLimited={isMfaRateLimited}
@@ -182,7 +188,7 @@ export function LoginForm() {
   const isLoginRateLimited =
     (loginError as { response?: { status?: number } })?.response?.status === 429 ||
     loginCountdown.isActive;
-  const loginErrorMessage = getLoginErrorMessage(loginError, loginCountdown.isActive);
+  const loginErrorMessage = getLoginErrorMessage(loginError);
 
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
@@ -267,7 +273,7 @@ export function LoginForm() {
               )}
               <span>
                 {isLoginRateLimited && loginCountdown.isActive
-                  ? `Quá nhiều lần thử đăng nhập. Thử lại sau ${loginCountdown.seconds}s.`
+                  ? `Tài khoản tạm bị khóa. Thử lại sau ${formatCountdown(loginCountdown.seconds)}.`
                   : loginErrorMessage}
               </span>
             </div>

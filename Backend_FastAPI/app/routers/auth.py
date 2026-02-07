@@ -142,6 +142,8 @@ async def login_for_access_token(
         import asyncio
         await asyncio.sleep(2)
 
+        remaining_minutes = max(1, (lockout_ttl + 59) // 60)  # Round up
+
         log.warning(
             "Login attempt blocked: Account is locked",
             username=form_data.username,
@@ -149,10 +151,13 @@ async def login_for_access_token(
             ip_address=request.client.host if request.client else None,
         )
 
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Account temporarily locked due to too many failed login attempts. "
-                   f"Please try again in {lockout_ttl // 60} minutes.",
+            content={
+                "detail": f"Tài khoản tạm thời bị khóa do nhập sai quá nhiều lần. "
+                          f"Vui lòng thử lại sau {remaining_minutes} phút.",
+            },
+            headers={"Retry-After": str(lockout_ttl)},
         )
 
     # Attempt authentication
