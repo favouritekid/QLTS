@@ -126,7 +126,8 @@ api.interceptors.response.use(
       !originalRequest.url?.includes("/auth/register") &&
       !originalRequest.url?.includes("/auth/refresh") &&
       !originalRequest.url?.includes("/auth/forgot-password") &&
-      !originalRequest.url?.includes("/auth/reset-password")
+      !originalRequest.url?.includes("/auth/reset-password") &&
+      !originalRequest.url?.includes("/auth/verify-mfa")
     ) {
       const currentPath = typeof window !== "undefined" ? window.location.pathname : "";
 

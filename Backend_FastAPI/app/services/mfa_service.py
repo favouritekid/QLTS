@@ -303,7 +303,10 @@ async def verify_mfa_code(
             )
             return True
 
-    log.warning("mfa_failed", user_id=user.id, action="mfa.verify_failed")
+    log.warning(
+        "mfa_failed", user_id=user.id, action="mfa.verify_failed",
+        code_len=len(code), code_is_digit=code.isdigit(),
+    )
     return False
 
 
