@@ -107,14 +107,7 @@ export function useAuth(options?: UseAuthOptions) {
       const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
       router.push(redirect || defaultPath);
     },
-    onError: (error) => {
-      const displayMessage = "Login failed. Please check your credentials.";
-      const errorData = error.response?.data;
-      if (errorData) {
-        /* ... code xử lý displayMessage ... */
-      }
-      toast.error(displayMessage);
-    },
+    // No toast here - LoginForm shows inline error via loginError
   });
 
   // MFA verification mutation
@@ -490,6 +483,8 @@ export function useAuth(options?: UseAuthOptions) {
     verifyMfa: verifyMfaMutation.mutate,
     verifyMfaError: verifyMfaMutation.error,
     resetVerifyMfa: verifyMfaMutation.reset,
+    loginError: loginMutation.error,
+    resetLogin: loginMutation.reset,
     logout: logoutMutation.mutate,
 
     registerUser: registerMutation.mutate,

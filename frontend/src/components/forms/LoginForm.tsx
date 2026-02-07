@@ -1,11 +1,12 @@
 // src/components/forms/LoginForm.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import Link from "next/link";
+import { AlertCircle, Clock } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
+import { useCountdown } from "@/hooks/useCountdown";
 import { MfaVerifyForm } from "./MfaVerifyForm";
 import type { LoginRequest } from "@/types/api.types";
 
@@ -28,6 +30,29 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
+function getLoginErrorMessage(
+  error: unknown,
+  isRateLimited: boolean,
+): string | undefined {
+  if (!error) return undefined;
+
+  if (isRateLimited) {
+    return "Quá nhiều lần thử đăng nhập. Vui lòng đợi trước khi thử lại.";
+  }
+
+  const axiosError = error as { response?: { status?: number; data?: { detail?: unknown } } };
+  const status = axiosError.response?.status;
+
+  if (status === 429) {
+    return "Quá nhiều lần thử đăng nhập. Vui lòng đợi trước khi thử lại.";
+  }
+  if (status === 401) {
+    return "Tên đăng nhập hoặc mật khẩu không đúng.";
+  }
+
+  return "Đã xảy ra lỗi. Vui lòng thử lại.";
+}
+
 function getMfaErrorMessage(error: unknown): string | undefined {
   if (!error) return undefined;
 
@@ -35,7 +60,7 @@ function getMfaErrorMessage(error: unknown): string | undefined {
   const status = axiosError.response?.status;
 
   if (status === 429) {
-    return "Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau.";
+    return "Bạn đã nhập sai quá nhiều lần. Vui lòng đợi trước khi thử lại.";
   }
   if (status === 401) {
     return "Mã xác thực không đúng. Vui lòng kiểm tra và thử lại.";
@@ -45,9 +70,60 @@ function getMfaErrorMessage(error: unknown): string | undefined {
 }
 
 export function LoginForm() {
-  const { login, verifyMfa, verifyMfaError, resetVerifyMfa, isLoading } = useAuth();
+  const {
+    login,
+    verifyMfa,
+    verifyMfaError,
+    resetVerifyMfa,
+    loginError,
+    resetLogin,
+    isLoading,
+  } = useAuth();
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaToken, setMfaToken] = useState<string | null>(null);
+
+  const loginCountdown = useCountdown(60);
+  const mfaCountdown = useCountdown(60);
+
+  // Start countdown when login gets rate limited
+  useEffect(() => {
+    if (!loginError) return;
+    const axiosError = loginError as { response?: { status?: number; headers?: Record<string, string> } };
+    if (axiosError.response?.status === 429) {
+      const retryAfter = axiosError.response.headers?.["retry-after"];
+      loginCountdown.start(retryAfter);
+    }
+  }, [loginError]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Start countdown when MFA gets rate limited
+  useEffect(() => {
+    if (!verifyMfaError) return;
+    const axiosError = verifyMfaError as { response?: { status?: number; headers?: Record<string, string> } };
+    if (axiosError.response?.status === 429) {
+      const retryAfter = axiosError.response.headers?.["retry-after"];
+      mfaCountdown.start(retryAfter);
+    }
+  }, [verifyMfaError]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-clear login error when countdown finishes
+  useEffect(() => {
+    if (!loginCountdown.isActive && loginError) {
+      const axiosError = loginError as { response?: { status?: number } };
+      if (axiosError.response?.status === 429) {
+        resetLogin();
+      }
+    }
+  }, [loginCountdown.isActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-clear MFA error when countdown finishes
+  useEffect(() => {
+    if (!mfaCountdown.isActive && verifyMfaError) {
+      const axiosError = verifyMfaError as { response?: { status?: number } };
+      if (axiosError.response?.status === 429) {
+        resetVerifyMfa();
+      }
+    }
+  }, [mfaCountdown.isActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -58,6 +134,7 @@ export function LoginForm() {
   });
 
   function onSubmit(values: LoginFormValues) {
+    resetLogin();
     login(values as LoginRequest, {
       onSuccess: (response) => {
         if (response?.mfa_required && response?.mfa_token) {
@@ -79,26 +156,41 @@ export function LoginForm() {
     setMfaRequired(false);
     setMfaToken(null);
     resetVerifyMfa();
+    mfaCountdown.reset();
   }
 
   // Show MFA verification form
   if (mfaRequired && mfaToken) {
+    const isMfaRateLimited =
+      verifyMfaError?.response?.status === 429 || mfaCountdown.isActive;
+
     return (
       <MfaVerifyForm
         onSubmit={handleMfaSubmit}
         onCancel={handleMfaCancel}
         isLoading={isLoading}
-        errorMessage={getMfaErrorMessage(verifyMfaError)}
-        isRateLimited={verifyMfaError?.response?.status === 429}
+        errorMessage={
+          mfaCountdown.isActive
+            ? `Bạn đã nhập sai quá nhiều lần. Thử lại sau ${mfaCountdown.seconds}s.`
+            : getMfaErrorMessage(verifyMfaError)
+        }
+        isRateLimited={isMfaRateLimited}
       />
     );
   }
+
+  const isLoginRateLimited =
+    (loginError as { response?: { status?: number } })?.response?.status === 429 ||
+    loginCountdown.isActive;
+  const loginErrorMessage = getLoginErrorMessage(loginError, loginCountdown.isActive);
 
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
         <h1 className="text-3xl font-bold font-display">Chào mừng trở lại</h1>
-        <p className="text-muted-foreground">Nhập thông tin đăng nhập để truy cập tài khoản của bạn</p>
+        <p className="text-muted-foreground">
+          Nhập thông tin đăng nhập để truy cập tài khoản của bạn
+        </p>
       </div>
 
       <Form {...form}>
@@ -113,8 +205,12 @@ export function LoginForm() {
                   <Input
                     placeholder="Tên đăng nhập"
                     autoComplete="username"
-                    disabled={isLoading}
+                    disabled={isLoading || isLoginRateLimited}
                     {...field}
+                    onChange={(e) => {
+                      field.onChange(e);
+                      if (loginError) resetLogin();
+                    }}
                   />
                 </FormControl>
                 <FormMessage />
@@ -141,8 +237,12 @@ export function LoginForm() {
                     type="password"
                     placeholder="••••••••"
                     autoComplete="current-password"
-                    disabled={isLoading}
+                    disabled={isLoading || isLoginRateLimited}
                     {...field}
+                    onChange={(e) => {
+                      field.onChange(e);
+                      if (loginError) resetLogin();
+                    }}
                   />
                 </FormControl>
                 <FormMessage />
@@ -150,7 +250,34 @@ export function LoginForm() {
             )}
           />
 
-          <Button type="submit" className="w-full" disabled={isLoading}>
+          {/* Inline error message */}
+          {loginErrorMessage && (
+            <div
+              role="alert"
+              className={`flex items-center gap-2 rounded-md px-3 py-2.5 text-sm ${
+                isLoginRateLimited
+                  ? "bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-300"
+                  : "bg-destructive/10 text-destructive"
+              }`}
+            >
+              {isLoginRateLimited ? (
+                <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              )}
+              <span>
+                {isLoginRateLimited && loginCountdown.isActive
+                  ? `Quá nhiều lần thử đăng nhập. Thử lại sau ${loginCountdown.seconds}s.`
+                  : loginErrorMessage}
+              </span>
+            </div>
+          )}
+
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={isLoading || isLoginRateLimited}
+          >
             {isLoading ? "Đang đăng nhập…" : "Đăng nhập"}
           </Button>
         </form>
