@@ -138,6 +138,35 @@ class TestTotpHelpers:
         assert mfa_service.verify_totp(secret, "12345") is False
         assert mfa_service.verify_totp(secret, "1234567") is False
 
+    def test_verify_totp_with_counter_returns_counter(self):
+        """verify_totp_with_counter should return matched time counter."""
+        secret = mfa_service.generate_totp_secret()
+        totp = pyotp.TOTP(secret)
+        code = totp.now()
+        is_valid, counter = mfa_service.verify_totp_with_counter(secret, code)
+        assert is_valid is True
+        assert counter is not None
+        assert isinstance(counter, int)
+
+    def test_verify_totp_with_counter_invalid_returns_none(self):
+        """Invalid code should return (False, None)."""
+        secret = mfa_service.generate_totp_secret()
+        is_valid, counter = mfa_service.verify_totp_with_counter(secret, "000000")
+        assert is_valid is False
+        assert counter is None
+
+    def test_verify_totp_with_counter_previous_step(self):
+        """Code from previous time step should still be accepted (valid_window=1)."""
+        import time
+        secret = mfa_service.generate_totp_secret()
+        totp = pyotp.TOTP(secret)
+        # Generate code for previous time step
+        prev_counter = totp.timecode(time.time()) - 1
+        prev_code = totp.generate_otp(prev_counter)
+        is_valid, counter = mfa_service.verify_totp_with_counter(secret, prev_code)
+        assert is_valid is True
+        assert counter == prev_counter
+
 
 # =============================================================================
 # UNIT TESTS: ENCRYPTION

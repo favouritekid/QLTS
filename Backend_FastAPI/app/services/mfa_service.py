@@ -18,6 +18,7 @@ import base64
 import io
 import json
 import secrets
+import time
 from typing import List, Optional, Tuple
 
 import pyotp
@@ -67,9 +68,28 @@ def generate_qr_code_base64(uri: str) -> str:
 
 
 def verify_totp(secret: str, code: str) -> bool:
-    """Verify a 6-digit TOTP code with +-1 time window."""
+    """Verify a 6-digit TOTP code with +-1 time window (no replay protection)."""
     totp = pyotp.TOTP(secret)
     return totp.verify(code, valid_window=1)
+
+
+def verify_totp_with_counter(secret: str, code: str) -> Tuple[bool, Optional[int]]:
+    """
+    Verify TOTP code and return the matched time counter.
+
+    Returns:
+        (is_valid, matched_counter): counter is the TOTP time step that matched.
+        Used for replay protection (RFC 6238 Section 5.2).
+    """
+    totp = pyotp.TOTP(secret)
+    current_counter = totp.timecode(time.time())
+
+    for offset in [-1, 0, 1]:  # valid_window=1
+        counter = current_counter + offset
+        if totp.generate_otp(counter) == code:
+            return True, counter
+
+    return False, None
 
 
 # =============================================================================
@@ -284,9 +304,24 @@ async def verify_mfa_code(
 
     # Try TOTP first (6-digit codes)
     if len(code) == 6 and code.isdigit():
-        if verify_totp(secret, code):
-            log.info("mfa_verified", user_id=user.id, method="totp", action="mfa.verify_success")
-            return True
+        is_valid, matched_counter = verify_totp_with_counter(secret, code)
+
+        if is_valid and matched_counter is not None:
+            # Replay protection (RFC 6238 §5.2): reject if this time step already used
+            replay_key = f"totp_used:{user.id}"
+            last_counter_str = await safe_redis_get(replay_key)
+
+            if last_counter_str and int(last_counter_str) >= matched_counter:
+                log.warning(
+                    "totp_replay_rejected", user_id=user.id,
+                    action="mfa.replay_rejected", matched_counter=matched_counter,
+                )
+                # Fall through to backup codes / fail (do NOT return True)
+            else:
+                # Accept and record this counter (TTL 180s covers 3 valid_window cycles)
+                await safe_redis_set(replay_key, str(matched_counter), ex=180)
+                log.info("mfa_verified", user_id=user.id, method="totp", action="mfa.verify_success")
+                return True
 
     # Try backup codes (8 hex char codes)
     if user.backup_codes_hashed:
