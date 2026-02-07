@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { AlertCircle, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -13,16 +14,28 @@ interface MfaVerifyFormProps {
   onSubmit: (code: string) => void;
   onCancel: () => void;
   isLoading: boolean;
+  errorMessage?: string;
+  isRateLimited?: boolean;
 }
 
 export function MfaVerifyForm({
   onSubmit,
   onCancel,
   isLoading,
+  errorMessage,
+  isRateLimited,
 }: MfaVerifyFormProps) {
   const [code, setCode] = useState("");
   const [useBackupCode, setUseBackupCode] = useState(false);
   const [backupCode, setBackupCode] = useState("");
+
+  // Clear OTP input when error occurs so user can re-enter
+  useEffect(() => {
+    if (errorMessage) {
+      setCode("");
+      setBackupCode("");
+    }
+  }, [errorMessage]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,6 +44,8 @@ export function MfaVerifyForm({
       onSubmit(value);
     }
   }
+
+  const isDisabled = isLoading || isRateLimited;
 
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
@@ -51,7 +66,7 @@ export function MfaVerifyForm({
               value={backupCode}
               onChange={(e) => setBackupCode(e.target.value)}
               maxLength={8}
-              disabled={isLoading}
+              disabled={isDisabled}
               autoComplete="one-time-code"
               className="text-center font-mono text-lg tracking-widest"
             />
@@ -62,7 +77,7 @@ export function MfaVerifyForm({
               maxLength={6}
               value={code}
               onChange={setCode}
-              disabled={isLoading}
+              disabled={isDisabled}
               autoFocus
             >
               <InputOTPGroup>
@@ -77,11 +92,30 @@ export function MfaVerifyForm({
           </div>
         )}
 
+        {/* Inline error message */}
+        {errorMessage && (
+          <div
+            role="alert"
+            className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
+              isRateLimited
+                ? "bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-300"
+                : "bg-destructive/10 text-destructive"
+            }`}
+          >
+            {isRateLimited ? (
+              <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
+            ) : (
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+            )}
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
         <Button
           type="submit"
           className="w-full"
           disabled={
-            isLoading ||
+            isDisabled ||
             (useBackupCode ? backupCode.trim().length < 6 : code.length < 6)
           }
         >
@@ -98,7 +132,7 @@ export function MfaVerifyForm({
             setBackupCode("");
           }}
           className="text-primary text-sm hover:underline"
-          disabled={isLoading}
+          disabled={isDisabled}
         >
           {useBackupCode
             ? "Sử dụng mã từ ứng dụng xác thực"

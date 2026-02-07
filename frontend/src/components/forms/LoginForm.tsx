@@ -28,8 +28,24 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
+function getMfaErrorMessage(error: unknown): string | undefined {
+  if (!error) return undefined;
+
+  const axiosError = error as { response?: { status?: number } };
+  const status = axiosError.response?.status;
+
+  if (status === 429) {
+    return "Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau.";
+  }
+  if (status === 401) {
+    return "Mã xác thực không đúng. Vui lòng kiểm tra và thử lại.";
+  }
+
+  return "Đã xảy ra lỗi. Vui lòng thử lại.";
+}
+
 export function LoginForm() {
-  const { login, verifyMfa, isLoading } = useAuth();
+  const { login, verifyMfa, verifyMfaError, resetVerifyMfa, isLoading } = useAuth();
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaToken, setMfaToken] = useState<string | null>(null);
 
@@ -54,6 +70,7 @@ export function LoginForm() {
 
   function handleMfaSubmit(code: string) {
     if (mfaToken) {
+      resetVerifyMfa();
       verifyMfa({ mfa_token: mfaToken, code });
     }
   }
@@ -61,6 +78,7 @@ export function LoginForm() {
   function handleMfaCancel() {
     setMfaRequired(false);
     setMfaToken(null);
+    resetVerifyMfa();
   }
 
   // Show MFA verification form
@@ -70,6 +88,8 @@ export function LoginForm() {
         onSubmit={handleMfaSubmit}
         onCancel={handleMfaCancel}
         isLoading={isLoading}
+        errorMessage={getMfaErrorMessage(verifyMfaError)}
+        isRateLimited={verifyMfaError?.response?.status === 429}
       />
     );
   }

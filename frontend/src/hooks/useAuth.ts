@@ -147,11 +147,7 @@ export function useAuth(options?: UseAuthOptions) {
       const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
       router.push(redirect || defaultPath);
     },
-    onError: (error) => {
-      const errorDetail = error.response?.data?.detail;
-      const message = typeof errorDetail === "string" ? errorDetail : "Invalid verification code.";
-      toast.error(message);
-    },
+    // No toast here - LoginForm shows inline error via verifyMfaError
   });
 
   const logoutMutation = useMutation<void, AxiosError<ApiErrorResponse>>({
@@ -492,6 +488,8 @@ export function useAuth(options?: UseAuthOptions) {
     },
     loginAsync: loginMutation.mutateAsync,
     verifyMfa: verifyMfaMutation.mutate,
+    verifyMfaError: verifyMfaMutation.error,
+    resetVerifyMfa: verifyMfaMutation.reset,
     logout: logoutMutation.mutate,
 
     registerUser: registerMutation.mutate,
