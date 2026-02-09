@@ -158,6 +158,22 @@ async def safe_redis_lrange(key: str, start: int, end: int):
         return []
 
 
+async def safe_redis_ttl(key: str) -> int:
+    """
+    Get remaining TTL (time-to-live) of a key in seconds.
+
+    Returns:
+        Positive int: seconds remaining
+        -1: key exists but has no expiry
+        -2: key does not exist
+    """
+    try:
+        return await redis_breaker.call_async(redis_client.ttl, key)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis TTL failed", key=key, exc_info=True)
+        return -2
+
+
 async def safe_redis_expire(key: str, seconds: int):
     """
     Set expiration time for a key (safe with circuit breaker).

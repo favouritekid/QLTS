@@ -14,7 +14,8 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 # ✅ PHASE 2: Removed direct sqlalchemy import (Router → Service → Repository pattern)
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +35,7 @@ from ..database import (
     safe_redis_get,
     safe_redis_pipeline,
     safe_redis_set,
+    safe_redis_ttl,
 )
 from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate limits module
 from ..services import session_service, user_service
@@ -45,6 +47,201 @@ from ..core.events import SystemEvents  # Security: Event registry
 
 router = APIRouter(tags=["Authentication"])
 log = structlog.get_logger(__name__)
+
+
+# =============================================================================
+# SHARED HELPER: Complete login flow (tokens, session, history, cookies)
+# Used by both /login (non-MFA) and /verify-mfa to avoid code duplication.
+# =============================================================================
+
+async def _complete_login_flow(
+    user: "models.User",
+    request: Request,
+    db: "AsyncSession",
+) -> JSONResponse:
+    """
+    Complete the login flow after authentication is fully verified.
+
+    Creates tokens, session, login history, handles suspicious login detection,
+    and returns a JSONResponse with httpOnly cookies.
+
+    Used by:
+    - /login (after password auth, when MFA is NOT enabled)
+    - /verify-mfa (after both password + MFA code verified)
+    """
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        await user_service.remove_user_from_global_blacklist(user.id)
+    except Exception as e:
+        log.error("Failed to remove user from global blacklist", user_id=user.id, error=str(e))
+
+    # 1. Create tokens
+    refresh_token = security.create_refresh_token(data={"sub": user.username})
+    refresh_jti, refresh_ttl = security.decode_token_for_invalidation(refresh_token)
+    if not refresh_jti or refresh_ttl is None:
+        raise HTTPException(status_code=500, detail="Could not process tokens")
+
+    access_token = security.create_access_token(
+        data={"sub": user.username, "user_id": user.id, "role": user.role},
+        refresh_jti=refresh_jti,
+    )
+    access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
+    if not access_jti:
+        raise HTTPException(status_code=500, detail="Could not process tokens")
+
+    # 2. Store session in Redis
+    try:
+        await safe_redis_set(f"session:{refresh_jti}", str(user.id), ex=refresh_ttl)
+    except Exception as e:
+        await db.rollback()
+        log.error("Failed to set session in Redis", user_id=user.id, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not process session")
+
+    # 3. Create DB session + login history
+    post_commit_callbacks = []
+    ip_address = request.client.host if request.client else None
+    user_agent_string = request.headers.get("User-Agent")
+    session = None
+
+    try:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        session, session_callback = await session_service.create_session(
+            db=db,
+            user_id=user.id,
+            refresh_jti=refresh_jti,
+            ip_address=ip_address,
+            user_agent_string=user_agent_string,
+            expires_at=expires_at,
+        )
+        if session_callback:
+            post_commit_callbacks.append(session_callback)
+    except Exception as session_error:
+        log.error("Failed to create session", user_id=user.id, error=str(session_error), exc_info=True)
+
+    # 4. Record login history + suspicious login detection
+    login_notification_data = None
+    try:
+        login_record, login_history_callback = await login_history_service.record_login(
+            db=db,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent_string,
+            country=session.country if session else None,
+            city=session.city if session else None,
+            email_to=user.email,
+            username=user.username,
+            refresh_jti=refresh_jti,
+        )
+        if login_history_callback:
+            post_commit_callbacks.append(login_history_callback)
+
+        if login_record.is_suspicious:
+            log.warning(
+                "Login recorded with security flags",
+                user_id=user.id,
+                is_new_ip=login_record.is_new_ip,
+                is_new_device=login_record.is_new_device,
+                is_new_location=login_record.is_new_location,
+                risk_score=login_record.risk_score,
+            )
+            anomalies = []
+            if login_record.is_new_ip:
+                anomalies.append("new_ip")
+            if login_record.is_new_device:
+                anomalies.append("new_device")
+            if login_record.is_new_location:
+                anomalies.append("new_location")
+
+            login_notification_data = {
+                "type": "SUSPICIOUS_LOGIN",
+                "login_id": login_record.id,
+                "ip_address": ip_address or "unknown",
+                "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", ") or None,
+                "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip() or None,
+                "browser": login_record.browser,
+                "os": login_record.os,
+                "risk_score": login_record.risk_score,
+                "anomalies": anomalies,
+            }
+            # Sync is_suspicious to UserSession
+            if session:
+                session.is_suspicious = True
+                db.add(session)
+            # Dispatch notification
+            try:
+                notification_ids, notif_callback = await notification_dispatcher.dispatch(
+                    db=db,
+                    event=SystemEvents.SUSPICIOUS_LOGIN,
+                    payload={
+                        "user_id": user.id,
+                        "user_ids": [user.id],
+                        "login_history_id": login_record.id,
+                        "ip_address": ip_address or "unknown",
+                        "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", "),
+                        "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip(),
+                        "risk_score": login_record.risk_score,
+                        "anomalies": anomalies,
+                        "actor_id": user.id,
+                    },
+                )
+                if notif_callback:
+                    post_commit_callbacks.append(notif_callback)
+                if notification_ids and len(notification_ids) > 0:
+                    login_notification_data["notification_id"] = notification_ids[0]
+            except Exception as notif_error:
+                log.error("Failed to dispatch suspicious login notification", user_id=user.id, error=str(notif_error))
+    except Exception as history_error:
+        log.error("Failed to record login history", user_id=user.id, error=str(history_error), exc_info=True)
+
+    # 5. Commit and execute callbacks
+    try:
+        await db.commit()
+        for callback in post_commit_callbacks:
+            try:
+                await callback()
+            except Exception as cb_e:
+                log.error("Post-commit callback failed", error=str(cb_e))
+    except Exception as e:
+        await db.rollback()
+        try:
+            await safe_redis_delete(f"session:{refresh_jti}")
+        except Exception:
+            pass
+        log.error("Failed to commit DB changes during login", user_id=user.id, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not save session")
+
+    # 6. Build response with httpOnly cookies
+    response = JSONResponse(
+        content={
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": user.role,
+                "status": user.status,
+                "password_reset_required": user.password_reset_required,
+                "mfa_enabled": user.mfa_enabled,
+            },
+            "login_notification": login_notification_data,
+        },
+        status_code=200,
+    )
+    response.set_cookie(
+        key="access_token", value=access_token,
+        httponly=True, secure=settings.APP_ENV == "production",
+        samesite="lax", max_age=int(access_ttl) if access_ttl else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+    response.set_cookie(
+        key="refresh_token", value=refresh_token,
+        httponly=True, secure=settings.APP_ENV == "production",
+        samesite="strict", max_age=int(refresh_ttl), path="/api",
+    )
+    set_csrf_cookie(response)
+    return response
 
 
 @router.post(
@@ -142,6 +339,8 @@ async def login_for_access_token(
         import asyncio
         await asyncio.sleep(2)
 
+        remaining_minutes = max(1, (lockout_ttl + 59) // 60)  # Round up
+
         log.warning(
             "Login attempt blocked: Account is locked",
             username=form_data.username,
@@ -149,10 +348,13 @@ async def login_for_access_token(
             ip_address=request.client.host if request.client else None,
         )
 
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Account temporarily locked due to too many failed login attempts. "
-                   f"Please try again in {lockout_ttl // 60} minutes.",
+            content={
+                "detail": f"Tài khoản tạm thời bị khóa do nhập sai quá nhiều lần. "
+                          f"Vui lòng thử lại sau {remaining_minutes} phút.",
+            },
+            headers={"Retry-After": str(lockout_ttl)},
         )
 
     # Attempt authentication
@@ -171,282 +373,36 @@ async def login_for_access_token(
         # Re-raise original error (don't reveal lockout info to attacker)
         raise auth_error
 
-    # ✅ SECURITY FIX: Reset attempts counter on successful login
+    # ===== MFA CHECK =====
+    # If user has MFA enabled, return mfa_token instead of full login.
+    # CRITICAL: Do NOT reset_attempts here. Password correct ≠ auth complete.
+    # Counter only resets after BOTH factors verified (in /verify-mfa).
+    if getattr(user, "mfa_enabled", False):
+        from ..services import mfa_service
+
+        mfa_token = mfa_service.create_mfa_token(
+            username=user.username, user_id=user.id
+        )
+        log.info("MFA required for login", user_id=user.id, action="mfa.challenge_issued")
+        return JSONResponse(
+            content={
+                "mfa_required": True,
+                "mfa_token": mfa_token,
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "mfa_enabled": True,
+                },
+            },
+            status_code=200,
+        )
+    # ===== END MFA CHECK =====
+
+    # Reset attempts counter only when auth is fully complete (no MFA)
     await AccountLockoutService.reset_attempts(form_data.username)
 
-    try:
-        await user_service.remove_user_from_global_blacklist(user.id)
-    except Exception as e:
-        log.error(
-            "Failed to remove user from global blacklist during login",
-            user_id=user.id,
-            error=str(e),
-        )
-
-    # ✅ SECURITY REFACTOR: Allow multiple concurrent sessions
-    # Previous: revoke_all_other_sessions() → victim kicked before seeing notification
-    # New: Victim receives real-time alert, then decides action
-    # 
-    # Revoke ONLY happens when:
-    # - User clicks "Không phải tôi" (Secure Account) 
-    # - User manually revokes in Settings > Sessions
-    # - Admin force revokes
-    #
-    # This follows Google/Microsoft/GitHub security best practices
-
-    # ✅ BƯỚC 2: SỬA HÀM LOGIN
-
-    # 1. Tạo Refresh Token TRƯỚC
-    refresh_token = security.create_refresh_token(data={"sub": user.username})
-    refresh_jti, refresh_ttl = security.decode_token_for_invalidation(refresh_token)
-
-    if not refresh_jti or refresh_ttl is None:
-        log.error("Failed to decode REFRESH token during login", user_id=user.id)
-        raise HTTPException(status_code=500, detail="Could not process tokens")
-
-    # 2. Tạo Access Token, truyền refresh_jti vào
-    # ✅ SECURITY FIX: Embed user_id and role in JWT for middleware authorization
-    access_token = security.create_access_token(
-        data={"sub": user.username, "user_id": user.id, "role": user.role},
-        refresh_jti=refresh_jti,
-    )
-    access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
-
-    if not access_jti:
-        log.error("Failed to decode ACCESS token during login", user_id=user.id)
-        raise HTTPException(status_code=500, detail="Could not process tokens")
-
-    # (Đã xóa logic active_jti)
-
-    try:
-        await safe_redis_set(f"session:{refresh_jti}", str(user.id), ex=refresh_ttl)
-        log.info(
-            "Refresh JTI stored in Redis for session",
-            user_id=user.id,
-            refresh_jti=refresh_jti[:8] + "...",
-        )
-    except Exception as e:
-        await db.rollback()
-        log.error(
-            "Failed to set refresh JTI in Redis during login",
-            user_id=user.id,
-            error=str(e),
-            exc_info=True,
-        )
-        raise HTTPException(status_code=500, detail="Could not process session")
-
-    # (Giữ nguyên logic tạo session)
-    post_commit_callbacks = []
-    try:
-        from datetime import datetime, timedelta, timezone
-
-        ip_address = request.client.host if request.client else None
-        user_agent_string = request.headers.get("User-Agent")
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            days=settings.REFRESH_TOKEN_EXPIRE_DAYS
-        )
-        session, session_callback = await session_service.create_session(
-            db=db,
-            user_id=user.id,
-            refresh_jti=refresh_jti,
-            ip_address=ip_address,
-            user_agent_string=user_agent_string,
-            expires_at=expires_at,
-        )
-        if session_callback:
-            post_commit_callbacks.append(session_callback)
-
-        # PHASE 1 MERGE: AnomalyDetector removed - detection now in login_history_service
-        # session.is_suspicious will be synced from login_record after record_login() call below
-    except Exception as session_error:
-        log.error(
-            "Failed to create session tracking record",
-            user_id=user.id,
-            error=str(session_error),
-            exc_info=True,
-        )
-
-    # ✅ PHASE 1: Record login history for persistent audit trail
-    # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
-    # for security auditing and suspicious login detection
-    # ✅ PHASE 1: Record login history for persistent audit trail
-    # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
-    # for security auditing and suspicious login detection
-    
-    login_notification_data = None  # R1+R2: Will be set if login is suspicious
-    
-    # Add record_login callback if provided
-    if "login_history_callback" in locals() and login_history_callback:
-        post_commit_callbacks.append(login_history_callback)
-        
-    try:
-        # PHASE 1 MERGE: Pass email/username for consolidated email alert (replaces AnomalyDetector email)
-        login_record, login_history_callback = await login_history_service.record_login(
-            db=db,
-            user_id=user.id,
-            ip_address=ip_address,
-            user_agent=user_agent_string,
-            country=session.country if 'session' in dir() else None,
-            city=session.city if 'session' in dir() else None,
-            email_to=user.email,  # Phase 1: For email alert
-            username=user.username,  # Phase 1: For email personalization
-            refresh_jti=refresh_jti,  # R1+R2 FIX: For pending notification storage
-        )
-        if login_history_callback:
-            post_commit_callbacks.append(login_history_callback)
-
-        if login_record.is_suspicious:
-            log.warning(
-                "Login recorded with security flags",
-                user_id=user.id,
-                is_new_ip=login_record.is_new_ip,
-                is_new_device=login_record.is_new_device,
-                is_new_location=login_record.is_new_location,
-                risk_score=login_record.risk_score,
-            )
-            # R1+R2: Build notification data for immediate response
-            anomalies = []
-            if login_record.is_new_ip:
-                anomalies.append("new_ip")
-            if login_record.is_new_device:
-                anomalies.append("new_device")
-            if login_record.is_new_location:
-                anomalies.append("new_location")
-            
-            login_notification_data = {
-                "type": "SUSPICIOUS_LOGIN",
-                "login_id": login_record.id,
-                "ip_address": ip_address or "unknown",
-                "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", ") or None,
-                "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip() or None,
-                "browser": login_record.browser,
-                "os": login_record.os,
-                "risk_score": login_record.risk_score,
-                "anomalies": anomalies,
-            }
-            # PHASE 1: Sync is_suspicious to UserSession for consistency
-            if 'session' in dir() and session:
-                session.is_suspicious = True
-                db.add(session)
-            # ✅ PHASE 3: Dispatch notification for suspicious login
-            anomalies = []
-            if login_record.is_new_ip:
-                anomalies.append("new_ip")
-            if login_record.is_new_device:
-                anomalies.append("new_device")
-            if login_record.is_new_location:
-                anomalies.append("new_location")
-            
-            try:
-                notification_ids, notif_callback = await notification_dispatcher.dispatch(
-                    db=db,
-                    event=SystemEvents.SUSPICIOUS_LOGIN,
-                    payload={
-                        "user_id": user.id,
-                        "user_ids": [user.id],  # For SpecificUsersResolver
-                        "login_history_id": login_record.id,
-                        "ip_address": ip_address or "unknown",
-                        "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", "),
-                        "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip(),
-                        "risk_score": login_record.risk_score,
-                        "anomalies": anomalies,
-                        "actor_id": user.id,
-                    },
-                )
-                if notif_callback:
-                    post_commit_callbacks.append(notif_callback)
-                # R1+R2: Add notification_id to login_notification_data for frontend markAsRead
-                if notification_ids and len(notification_ids) > 0:
-                    login_notification_data["notification_id"] = notification_ids[0]
-                log.info("Suspicious login notification dispatched", user_id=user.id, notification_id=notification_ids[0] if notification_ids else None)
-            except Exception as notif_error:
-                log.error(
-                    "Failed to dispatch suspicious login notification",
-                    user_id=user.id,
-                    error=str(notif_error),
-                )
-    except Exception as history_error:
-        log.error(
-            "Failed to record login history",
-            user_id=user.id,
-            error=str(history_error),
-            exc_info=True,
-        )
-        # Don't fail login if history recording fails
-
-    # ✅ (Giữ nguyên logic commit và response)
-    try:
-        await db.commit()
-        # Execute post-commit callbacks
-        for callback in post_commit_callbacks:
-            try:
-                await callback()
-            except Exception as cb_e:
-                log.error("Post-commit callback failed", error=str(cb_e))
-    except Exception as e:
-        await db.rollback()
-        try:
-            await safe_redis_delete(f"session:{refresh_jti}")
-        except Exception as redis_del_e:
-            log.error(
-                "Failed to delete session JTI from Redis after DB commit failure",
-                user_id=user.id,
-                error=str(redis_del_e),
-            )
-        log.error(
-            "Failed to commit DB changes during login",
-            user_id=user.id,
-            error=str(e),
-            exc_info=True,
-        )
-        raise HTTPException(status_code=500, detail="Could not save session")
-
-    # ✅ SECURITY FIX: Tokens are ONLY in httpOnly cookies (not in response body)
-    # This prevents XSS attacks from stealing tokens via JavaScript
-    response = JSONResponse(
-        content={
-            # "access_token": access_token,  # REMOVED - httpOnly cookies only
-            "token_type": "bearer",
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
-                "role": user.role,
-                "status": user.status,
-                "password_reset_required": user.password_reset_required,  # Security: For banner display
-            },
-            # R1+R2: Include suspicious login notification in response (optional field)
-            "login_notification": login_notification_data,
-        },
-        status_code=200,
-    )
-
-    # ✅ SECURITY FIX: Set access_token in httpOnly cookie
-    response.set_cookie(
-        key="access_token",
-        value=access_token,
-        httponly=True,
-        secure=settings.APP_ENV == "production",
-        samesite="lax",  # Allow cookie to be sent on navigation from external sites
-        max_age=int(access_ttl) if access_ttl else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        path="/",  # Available to all routes (middleware needs to read it)
-    )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=settings.APP_ENV == "production",
-        samesite="strict",
-        max_age=int(refresh_ttl),
-        path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
-    )
-
-    # ✅ CSRF Protection: Set CSRF token cookie (readable by JS for header submission)
-    set_csrf_cookie(response)
-
-    return response
+    # Complete login flow (shared helper: tokens, session, history, cookies)
+    return await _complete_login_flow(user, request, db)
 
 
 @router.post("/logout")
@@ -977,3 +933,269 @@ async def refresh_access_token(
             "Unhandled exception in refresh token endpoint", error=str(e), exc_info=True
         )
         raise HTTPException(status_code=500, detail="An unexpected error occurred")
+
+
+# =============================================================================
+# MFA (Multi-Factor Authentication) ENDPOINTS
+# =============================================================================
+
+
+@router.post("/verify-mfa")
+@limiter.limit(RateLimits.AUTH_LOGIN)  # 5/min - IP-based rate limit (Layer 1)
+async def verify_mfa(
+    request: Request,
+    mfa_data: schemas.MfaVerifySchema,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Verify MFA code after successful password authentication.
+
+    Security (defense in depth):
+    - Layer 1: IP-based rate limit (5/min via slowapi)
+    - Layer 2: Per-user Redis counter (5 attempts / 5 min)
+    - Layer 3: AccountLockoutService (cumulative lockout)
+    """
+    from ..services import mfa_service
+    from ..security.account_lockout import AccountLockoutService
+
+    # 1. Decode mfa_token (verify type="mfa")
+    payload = mfa_service.decode_mfa_token(mfa_data.mfa_token)
+    username = payload.get("sub")
+    user_id = payload.get("user_id")
+
+    if not username or not user_id:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+
+    # 1b. Check if this mfa_token was already used (prevent reuse within 5min window)
+    mfa_jti = payload.get("jti")
+    if mfa_jti:
+        try:
+            already_used = await safe_redis_exists(f"mfa_used:{mfa_jti}")
+            if already_used:
+                raise HTTPException(status_code=401, detail="MFA token already used. Please login again.")
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error("Redis MFA token blacklist check failed", error=str(e))
+
+    # 2. Check per-user MFA attempt limit (Layer 2)
+    attempt_key = f"mfa_attempts:{username}"
+    try:
+        attempts_str = await safe_redis_get(attempt_key)
+        attempts = int(attempts_str) if attempts_str else 0
+        if attempts >= settings.MFA_MAX_ATTEMPTS:
+            # Get remaining TTL from Redis for Retry-After header
+            attempt_ttl = await safe_redis_ttl(attempt_key)
+            retry_after = max(attempt_ttl, 60) if attempt_ttl > 0 else settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
+            log.warning(
+                "mfa_rate_limited", user_id=user_id, username=username,
+                attempts=attempts, retry_after=retry_after, action="mfa.rate_limited",
+            )
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "detail": "Quá nhiều lần thử xác thực. Vui lòng thử lại sau.",
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Redis MFA attempt check failed", error=str(e))
+
+    # 3. Load user
+    user = await user_service.get_user_by_username(db, username=username)
+    if not user or user.id != user_id:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+
+    # 4. Verify MFA code
+    is_valid = await mfa_service.verify_mfa_code(db, user, mfa_data.code)
+
+    if not is_valid:
+        # Increment per-user MFA counter (Layer 2)
+        l2_blocked = False
+        try:
+            window = settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
+            current = await safe_redis_get(attempt_key)
+            new_count = (int(current) if current else 0) + 1
+            await safe_redis_set(attempt_key, str(new_count), ex=window)
+            l2_blocked = new_count >= settings.MFA_MAX_ATTEMPTS
+        except Exception as e:
+            log.error("Redis MFA attempt increment failed", error=str(e))
+
+        # Feed into AccountLockoutService (Layer 3) only if L2 hasn't already blocked.
+        # Avoids double-punish: L2 blocks fast OTP brute-force, L3 tracks cumulative auth failures.
+        if not l2_blocked:
+            await AccountLockoutService.record_failed_attempt(
+                db=db,
+                username=username,
+                ip_address=request.client.host if request.client else None,
+            )
+
+        log.warning(
+            "mfa_failed", user_id=user.id, action="mfa.verify_failed",
+        )
+        raise HTTPException(status_code=401, detail="Invalid verification code")
+
+    # 5. MFA verified - blacklist this mfa_token to prevent reuse
+    if mfa_jti:
+        try:
+            mfa_ttl = settings.MFA_TOKEN_EXPIRE_MINUTES * 60
+            await safe_redis_set(f"mfa_used:{mfa_jti}", "1", ex=mfa_ttl)
+        except Exception as e:
+            log.error("Failed to blacklist used mfa_token", error=str(e))
+
+    # 6. Reset attempt counters
+    try:
+        await safe_redis_delete(attempt_key)
+    except Exception:
+        pass
+    await AccountLockoutService.reset_attempts(username)
+
+    log.info("mfa_login_complete", user_id=user.id, action="mfa.verify_success")
+
+    # 7. Complete login flow (shared helper: tokens, session, history, cookies)
+    return await _complete_login_flow(user, request, db)
+
+
+@router.post("/mfa/setup", response_model=schemas.MfaSetupResponse)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_setup(
+    request: Request,
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """
+    Initiate MFA setup. Returns QR code and secret.
+    Secret is stored temporarily in Redis (10min TTL), NOT in DB.
+    """
+    from ..services import mfa_service
+
+    if current_user.mfa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is already enabled. Disable it first to re-setup.",
+        )
+
+    setup_data, _ = await mfa_service.setup_mfa(
+        user_id=current_user.id, username=current_user.username
+    )
+
+    return setup_data
+
+
+@router.post("/mfa/enable", response_model=schemas.MfaBackupCodesResponse)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_enable(
+    request: Request,
+    enable_data: schemas.MfaEnableRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+    refresh_token_cookie: str = Cookie(None, alias="refresh_token"),
+):
+    """
+    Enable MFA after verifying TOTP code from authenticator app.
+    Returns one-time backup codes. Revokes all other sessions.
+    """
+    from ..services import mfa_service
+
+    if current_user.mfa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is already enabled.",
+        )
+
+    # Get current session ID to preserve it during session revocation
+    current_session_id = None
+    if refresh_token_cookie:
+        try:
+            payload = security.decode_token(refresh_token_cookie)
+            current_refresh_jti = payload.get("jti")
+            if current_refresh_jti:
+                from ..repositories.session_repository import SessionRepository
+                session_repo = SessionRepository(db)
+                session_record = await session_repo.get_by_refresh_jti_and_user(
+                    current_refresh_jti, current_user.id
+                )
+                if session_record:
+                    current_session_id = session_record.id
+        except Exception:
+            pass  # Continue without preserving current session
+
+    backup_codes, callback = await mfa_service.enable_mfa(
+        db=db,
+        user=current_user,
+        code=enable_data.code,
+        current_session_id=current_session_id,
+    )
+
+    await db.commit()
+
+    if callback:
+        await callback()
+
+    return schemas.MfaBackupCodesResponse(backup_codes=backup_codes)
+
+
+@router.post("/mfa/disable", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_disable(
+    request: Request,
+    disable_data: schemas.MfaDisableRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """Disable MFA. Requires password verification."""
+    from ..services import mfa_service
+
+    if not current_user.mfa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is not enabled.",
+        )
+
+    result, callback = await mfa_service.disable_mfa(
+        db=db, user=current_user, password=disable_data.password
+    )
+
+    await db.commit()
+
+    if callback:
+        await callback()
+
+    return {"message": "MFA disabled successfully."}
+
+
+@router.get("/mfa/status", response_model=schemas.MfaStatusResponse)
+@limiter.limit(RateLimits.DATA_READ)
+async def mfa_status(
+    request: Request,
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """Get MFA status for current user."""
+    return schemas.MfaStatusResponse(
+        mfa_enabled=current_user.mfa_enabled,
+        has_backup_codes=bool(current_user.backup_codes_hashed),
+    )
+
+
+@router.post("/mfa/backup-codes", response_model=schemas.MfaBackupCodesResponse)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def mfa_regenerate_backup_codes(
+    request: Request,
+    regen_data: schemas.MfaBackupCodesRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """Regenerate backup codes. Invalidates all old codes. Requires password."""
+    from ..services import mfa_service
+
+    new_codes, callback = await mfa_service.regenerate_backup_codes(
+        db=db, user=current_user, password=regen_data.password
+    )
+
+    await db.commit()
+
+    if callback:
+        await callback()
+
+    return schemas.MfaBackupCodesResponse(backup_codes=new_codes)

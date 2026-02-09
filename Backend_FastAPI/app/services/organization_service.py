@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models, schemas
@@ -24,6 +24,7 @@ from ..config import settings
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set, redis_distributed_lock
 from ..repositories import OrganizationRepository
 from ..socket_manager import emit_to_all
+from ..core.constants import UserRole
 from ..utils.exceptions import BadRequest, DuplicateResourceError, ForbiddenError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
@@ -173,6 +174,44 @@ async def _check_unit_access(
     )
 
 
+async def _get_managed_unit_ids(db: AsyncSession, user_id: int) -> List[int]:
+    """Get list of unit IDs that a user manages (via UserRepository)."""
+    from ..repositories import UserRepository
+
+    repo = UserRepository(db)
+    return await repo.get_managed_unit_ids(user_id)
+
+
+def _filter_tree_by_managed_units(
+    tree: List[dict], managed_ids: set
+) -> List[dict]:
+    """
+    Filter organization tree to only show units managed by the user.
+
+    Walks the tree and extracts subtrees rooted at managed units.
+    Descendants of managed units are included automatically (nested structure).
+
+    Args:
+        tree: List of root-level org unit dicts with nested 'children'
+        managed_ids: Set of unit IDs the Manager directly manages
+
+    Returns:
+        Filtered list of org unit dicts
+    """
+    result = []
+    for node in tree:
+        if node.get("id") in managed_ids:
+            # Include this node with all its children (user manages it)
+            result.append(node)
+        else:
+            # Recurse into children to find managed units deeper in tree
+            children = node.get("children", [])
+            if children:
+                filtered = _filter_tree_by_managed_units(children, managed_ids)
+                result.extend(filtered)
+    return result
+
+
 # =============================================================================
 # ORGANIZATION UNIT SERVICES
 # =============================================================================
@@ -243,9 +282,16 @@ def _add_user_counts_to_tree(units_data: List[dict], user_counts: dict) -> List[
     return units_data
 
 
-async def get_all_organization_units(db: AsyncSession) -> List[dict]:
+async def get_all_organization_units(
+    db: AsyncSession,
+    current_user=None,
+) -> List[dict]:
     """
     Get all organization units as a tree structure with caching support.
+
+    Args:
+        db: Database session
+        current_user: If provided, filters tree by user's role/managed units (M12 fix)
 
     Returns:
         List of root organization units with nested children, major_programs, and user_count
@@ -257,7 +303,9 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         cached_data = await safe_redis_get(ORG_UNITS_CACHE_KEY)
         if cached_data:
             log.debug("Cache hit for organization units")
-            return json.loads(cached_data)
+            units_data = json.loads(cached_data)
+            # ✅ M12 FIX: Filter by role after cache read
+            return await _apply_unit_scoping(db, units_data, current_user)
     except Exception as e:
         log.error("Failed to get from cache", error=str(e))
 
@@ -271,7 +319,8 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
             cached_data = await safe_redis_get(ORG_UNITS_CACHE_KEY)
             if cached_data:
                 log.debug("Cache hit after lock")
-                return json.loads(cached_data)
+                units_data = json.loads(cached_data)
+                return await _apply_unit_scoping(db, units_data, current_user)
         except Exception:
             pass
 
@@ -301,7 +350,7 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         # Add user counts to each unit in the tree
         units_data = _add_user_counts_to_tree(units_data, user_counts)
 
-        # Cache the result
+        # Cache the result (full tree, filtering happens per-request)
         try:
             await safe_redis_set(
                 ORG_UNITS_CACHE_KEY,
@@ -312,7 +361,91 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         except Exception as e:
             log.error("Failed to cache organization tree", error=str(e))
 
+        # ✅ M12 FIX: Filter by role before returning
+        return await _apply_unit_scoping(db, units_data, current_user)
+
+
+async def _apply_unit_scoping(
+    db: AsyncSession, units_data: List[dict], current_user=None
+) -> List[dict]:
+    """
+    Filter organization tree by user's role and managed units (M12 fix).
+
+    - Admin: full access (no filtering)
+    - Manager: only managed units and their subtrees
+    - Officer: only their own unit subtree
+    - Other: no filtering (Casbin handles endpoint access)
+    """
+    if current_user is None:
         return units_data
+
+    role = getattr(current_user, "role", None)
+
+    if role == UserRole.ADMIN:
+        return units_data
+
+    if role == UserRole.MANAGER:
+        managed_ids = await _get_managed_unit_ids(db, current_user.id)
+        if not managed_ids:
+            return []
+        filtered = _filter_tree_by_managed_units(units_data, set(managed_ids))
+        log.debug(
+            "Filtered org tree for Manager",
+            user_id=current_user.id,
+            managed_ids=managed_ids,
+            result_count=len(filtered),
+        )
+        return filtered
+
+    if role == UserRole.OFFICER:
+        unit_id = getattr(current_user, "unit_id", None)
+        if not unit_id:
+            return []
+        filtered = _filter_tree_by_managed_units(units_data, {unit_id})
+        return filtered
+
+    # Other roles: return full tree (Casbin controls endpoint access)
+    return units_data
+
+
+async def _get_allowed_unit_ids_for_user(
+    db: AsyncSession, current_user
+) -> Optional[set]:
+    """
+    Get set of unit IDs the user is allowed to see (including descendants).
+
+    Returns:
+        None = full access (Admin or no user context)
+        set() = no access
+        set({1,2,3}) = restricted to these unit IDs
+    """
+    if current_user is None:
+        return None
+
+    role = getattr(current_user, "role", None)
+    if role == UserRole.ADMIN:
+        return None
+
+    repo = OrganizationRepository(db)
+
+    if role == UserRole.MANAGER:
+        managed_ids = await _get_managed_unit_ids(db, current_user.id)
+        if not managed_ids:
+            return set()
+        allowed = set()
+        for mid in managed_ids:
+            descendants = await repo.get_descendant_unit_ids(mid)
+            allowed.update(descendants)
+        return allowed
+
+    if role == UserRole.OFFICER:
+        unit_id = getattr(current_user, "unit_id", None)
+        if unit_id:
+            descendants = await repo.get_descendant_unit_ids(unit_id)
+            return set(descendants)
+        return set()
+
+    return None  # Other roles: no filtering (Casbin controls endpoint access)
 
 
 async def get_organization_unit_by_id(
@@ -1435,7 +1568,8 @@ async def restore_academic_info(
 async def get_organization_tree_with_aggregation(
     db: AsyncSession,
     academic_year: Optional[int] = None,
-    include_inactive: bool = False
+    include_inactive: bool = False,
+    current_user=None,
 ) -> List[schemas.OrganizationTreeNodeWithAggregation]:
     """
     Get organization tree with aggregated statistics for 3-tier architecture.
@@ -1621,7 +1755,35 @@ async def get_organization_tree_with_aggregation(
     except Exception as e:
         log.error("Failed to cache organization tree aggregation", error=str(e))
 
+    # ✅ M12 FIX: Filter aggregation tree by user's managed units
+    if current_user is not None:
+        role = getattr(current_user, "role", None)
+        if role == UserRole.MANAGER:
+            managed_ids = set(await _get_managed_unit_ids(db, current_user.id))
+            root_nodes = _filter_agg_tree_by_managed_units(root_nodes, managed_ids)
+        elif role == UserRole.OFFICER:
+            unit_id = getattr(current_user, "unit_id", None)
+            if unit_id:
+                root_nodes = _filter_agg_tree_by_managed_units(root_nodes, {unit_id})
+            else:
+                root_nodes = []
+
     return root_nodes
+
+
+def _filter_agg_tree_by_managed_units(
+    nodes: List[schemas.OrganizationTreeNodeWithAggregation],
+    managed_ids: set,
+) -> List[schemas.OrganizationTreeNodeWithAggregation]:
+    """Filter aggregation tree (Pydantic models) to only show managed unit subtrees."""
+    result = []
+    for node in nodes:
+        if node.id in managed_ids:
+            result.append(node)
+        elif node.children:
+            filtered = _filter_agg_tree_by_managed_units(node.children, managed_ids)
+            result.extend(filtered)
+    return result
 
 
 # =============================================================================
@@ -1631,29 +1793,60 @@ async def get_organization_tree_with_aggregation(
 async def get_programs_by_unit_tree(
     db: AsyncSession,
     unit_id: Optional[int] = None,
-    search_term: Optional[str] = None
+    search_term: Optional[str] = None,
+    current_user=None,
 ) -> List[models.MajorProgram]:
     """
     Get all programs belonging to a unit and all its descendants.
     If unit_id is None, returns ALL programs (flat list).
-    
+
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    ✅ M12 FIX: Filters by Manager's managed units.
     """
     repo = OrganizationRepository(db)
 
-    # If no unit specified, return ALL programs
-    if not unit_id:
-        return await repo.get_all_major_programs(search_term=search_term)
-    
-    # Get all related unit IDs using recursive CTE
-    all_related_unit_ids = await repo.get_descendant_unit_ids(unit_id)
+    # ✅ M12 FIX: Determine allowed unit IDs based on role
+    allowed_unit_ids = None
+    if current_user is not None:
+        role = getattr(current_user, "role", None)
+        if role == UserRole.MANAGER:
+            managed_ids = await _get_managed_unit_ids(db, current_user.id)
+            if not managed_ids:
+                return []
+            # Expand managed IDs to include all descendants
+            allowed_unit_ids = set()
+            for mid in managed_ids:
+                descendant_ids = await repo.get_descendant_unit_ids(mid)
+                allowed_unit_ids.update(descendant_ids)
+        elif role == UserRole.OFFICER:
+            own_unit = getattr(current_user, "unit_id", None)
+            if own_unit:
+                allowed_unit_ids = set(await repo.get_descendant_unit_ids(own_unit))
+            else:
+                return []
 
-    # Query programs in these units
-    return await repo.search_programs_in_hierarchy(
-        unit_ids=all_related_unit_ids,
-        search_term=search_term,
-        limit=20
-    )
+    # If unit_id specified, validate it's in allowed scope
+    if unit_id:
+        if allowed_unit_ids is not None and unit_id not in allowed_unit_ids:
+            return []  # Unit not in scope - return empty (not 404 to avoid enumeration)
+        all_related_unit_ids = await repo.get_descendant_unit_ids(unit_id)
+        return await repo.search_programs_in_hierarchy(
+            unit_ids=all_related_unit_ids,
+            search_term=search_term,
+            limit=20
+        )
+
+    # No unit specified
+    if allowed_unit_ids is not None:
+        # Manager/Officer: filter to their allowed units
+        return await repo.search_programs_in_hierarchy(
+            unit_ids=list(allowed_unit_ids),
+            search_term=search_term,
+            limit=20
+        )
+
+    # Admin or no user context: return all
+    return await repo.get_all_major_programs(search_term=search_term)
 
 
 # =============================================================================
@@ -1665,27 +1858,40 @@ async def get_all_program_offerings(
     is_active: Optional[bool] = None,
     skip: int = 0,
     limit: int = 1000,
+    current_user=None,
 ) -> List[models.ProgramOffering]:
     """
     Get all program offerings as flat list for dropdowns.
 
     Uses OrganizationRepository with eager loading for program name display.
+    ✅ M12 FIX: Filters by Manager's managed units.
 
     Args:
         db: Database session
         is_active: Filter by active status (None = all)
         skip: Offset for pagination
         limit: Maximum results
+        current_user: If provided, filters by user's role/managed units
 
     Returns:
         List of ProgramOffering with program loaded
     """
     repo = OrganizationRepository(db)
-    return await repo.get_all_offerings(
+    offerings = await repo.get_all_offerings(
         is_active=is_active,
         skip=skip,
         limit=limit
     )
+
+    # ✅ M12 FIX: Filter by allowed unit IDs
+    allowed_unit_ids = await _get_allowed_unit_ids_for_user(db, current_user)
+    if allowed_unit_ids is not None:
+        offerings = [
+            o for o in offerings
+            if o.program and o.program.unit_id in allowed_unit_ids
+        ]
+
+    return offerings
 
 
 async def get_all_academic_infos(
@@ -1693,6 +1899,7 @@ async def get_all_academic_infos(
     is_active: Optional[bool] = None,
     skip: int = 0,
     limit: int = 1000,
+    current_user=None,
 ) -> List[schemas.OfferingAcademicInfo]:
     repo = OrganizationRepository(db)
     # Receive list of tuples (model, path_count)
@@ -1701,6 +1908,25 @@ async def get_all_academic_infos(
         skip=skip,
         limit=limit
     )
+
+    # ✅ M12 FIX: Filter by allowed unit IDs
+    allowed_unit_ids = await _get_allowed_unit_ids_for_user(db, current_user)
+    if allowed_unit_ids is not None:
+        # Pre-fetch offering_id → unit_id mapping via program chain
+        offering_query = (
+            select(models.ProgramOffering.id)
+            .join(
+                models.MajorProgram,
+                models.ProgramOffering.program_id == models.MajorProgram.id,
+            )
+            .where(models.MajorProgram.unit_id.in_(allowed_unit_ids))
+        )
+        result = await db.execute(offering_query)
+        allowed_offering_ids = set(result.scalars().all())
+        results = [
+            (info, count) for info, count in results
+            if info.offering_id in allowed_offering_ids
+        ]
 
     response = []
     for info_model, path_count in results:

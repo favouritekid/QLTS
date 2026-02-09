@@ -20,7 +20,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..database import safe_redis_delete, safe_redis_exists, safe_redis_get, safe_redis_set
+from ..database import safe_redis_delete, safe_redis_exists, safe_redis_get, safe_redis_set, safe_redis_ttl
 from ..models import UserActivityLog
 
 log = structlog.get_logger(__name__)
@@ -58,9 +58,11 @@ class AccountLockoutService:
             is_locked = await safe_redis_exists(lockout_key)
 
             if is_locked:
-                # Get remaining TTL
-                ttl_str = await safe_redis_get(f"{lockout_key}:ttl")
-                remaining_seconds = int(ttl_str) if ttl_str else settings.ACCOUNT_LOCKOUT_DURATION_MINUTES * 60
+                # Get actual remaining TTL from Redis (counts down automatically)
+                remaining_seconds = await safe_redis_ttl(lockout_key)
+                if remaining_seconds < 0:
+                    # Key exists but no TTL or expired - treat as unlocked
+                    return False, None
 
                 log.warning(
                     "Account lockout check: Account is locked",
@@ -131,11 +133,6 @@ class AccountLockoutService:
                 # Lock the account
                 lockout_duration_seconds = settings.ACCOUNT_LOCKOUT_DURATION_MINUTES * 60
                 await safe_redis_set(lockout_key, "1", ex=lockout_duration_seconds)
-                await safe_redis_set(
-                    f"{lockout_key}:ttl",
-                    str(lockout_duration_seconds),
-                    ex=lockout_duration_seconds,
-                )
 
                 # Reset attempts counter (start fresh after lockout expires)
                 await safe_redis_delete(attempts_key)
@@ -241,7 +238,6 @@ class AccountLockoutService:
             if was_locked:
                 # Remove lockout
                 await safe_redis_delete(lockout_key)
-                await safe_redis_delete(f"{lockout_key}:ttl")
                 await safe_redis_delete(attempts_key)
 
                 log.warning(

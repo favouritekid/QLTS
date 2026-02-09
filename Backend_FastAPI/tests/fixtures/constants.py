@@ -20,6 +20,14 @@ class AuthURLs:
     RESET_PASSWORD = "/api/auth/reset-password"
     REGISTER = "/api/auth/register"  # Thêm URL đăng ký nếu có test
 
+    # MFA endpoints
+    VERIFY_MFA = "/api/auth/verify-mfa"
+    MFA_SETUP = "/api/auth/mfa/setup"
+    MFA_ENABLE = "/api/auth/mfa/enable"
+    MFA_DISABLE = "/api/auth/mfa/disable"
+    MFA_STATUS = "/api/auth/mfa/status"
+    MFA_BACKUP_CODES = "/api/auth/mfa/backup-codes"
+
 
 class AdminURLs:
     """URLs cho các endpoint /api/admin."""

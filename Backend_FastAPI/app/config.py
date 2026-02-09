@@ -170,6 +170,13 @@ class Settings(BaseSettings):
         default=60, validation_alias="SOCKET_MAX_CONN_PER_MINUTE"
     )  # Max WebSocket connections per minute per IP
 
+    # -- Security: HIBP Breached Password Check --
+    # Checks passwords against Have I Been Pwned database (OWASP ASVS §2.1.7)
+    # Disabled in test mode to avoid external API calls and test password rejections
+    HIBP_CHECK_ENABLED: bool = Field(
+        default=True, validation_alias="HIBP_CHECK_ENABLED"
+    )
+
     # -- Security: Device Fingerprint --
     # Server-side salt to prevent fingerprint spoofing
     # IMPORTANT: This should be a random string, set in .env
@@ -178,6 +185,25 @@ class Settings(BaseSettings):
         default="CHANGE_ME_IN_PRODUCTION",
         validation_alias="DEVICE_FINGERPRINT_SALT"
     )
+
+    # -- Security: MFA (Multi-Factor Authentication) --
+    # Fernet key for encrypting TOTP secrets at rest
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    MFA_ENCRYPTION_KEY: str = Field(
+        default="", validation_alias="MFA_ENCRYPTION_KEY"
+    )
+    MFA_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=5, validation_alias="MFA_TOKEN_EXPIRE_MINUTES"
+    )  # Short-lived MFA challenge token
+    MFA_MAX_ATTEMPTS: int = Field(
+        default=5, validation_alias="MFA_MAX_ATTEMPTS"
+    )  # Max OTP attempts per 5-minute window
+    MFA_ATTEMPT_WINDOW_MINUTES: int = Field(
+        default=5, validation_alias="MFA_ATTEMPT_WINDOW_MINUTES"
+    )  # Window for MFA attempt tracking
+    MFA_ENFORCE_ROLES: List[str] = Field(
+        default=["admin", "manager"], validation_alias="MFA_ENFORCE_ROLES"
+    )  # Roles that MUST enable MFA (OWASP ASVS 5.0)
 
     def _validate_production_secrets(self):
         """Fail-fast validation for production environment secrets."""
@@ -211,6 +237,31 @@ class Settings(BaseSettings):
                 "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."
             )
 
+        # ✅ C1: Reject localhost/default DB URLs in production
+        db_url_lower = self.DATABASE_URL.lower()
+        if "localhost" in db_url_lower or "127.0.0.1" in db_url_lower:
+            raise RuntimeError(
+                "CRITICAL: DATABASE_URL points to localhost in production. "
+                "Use a remote database with proper credentials."
+            )
+
+        # ✅ H6: Warn about missing TLS for DB connections
+        if "asyncpg://" in db_url_lower and "sslmode=" not in db_url_lower:
+            print(
+                "WARNING [config.py]: DATABASE_URL does not specify sslmode. "
+                "Add ?sslmode=require for encrypted connections in production."
+            )
+
+        # ✅ H6: Warn about missing TLS for Redis connections
+        redis_urls = [self.REDIS_URL, self.CELERY_BROKER_URL, self.CELERY_RESULT_BACKEND_URL]
+        for url in redis_urls:
+            if url.startswith("redis://") and not url.startswith("rediss://"):
+                print(
+                    f"WARNING [config.py]: Redis URL uses unencrypted redis:// protocol: {url[:30]}... "
+                    "Consider using rediss:// for TLS in production."
+                )
+                break  # One warning is enough
+
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
         "consultation_count_multiplier": 5,
@@ -240,6 +291,23 @@ class Settings(BaseSettings):
         "officer_rating_multiplier": 20,
         "officer_rating_weight": 0.1,
     }
+
+    # -- Sentry Error Tracking (H12+M10) --
+    # Set SENTRY_DSN in .env to enable. Leave empty to disable.
+    SENTRY_DSN: str = Field(default="", validation_alias="SENTRY_DSN")
+    SENTRY_TRACES_SAMPLE_RATE: float = Field(
+        default=0.1, validation_alias="SENTRY_TRACES_SAMPLE_RATE"
+    )  # 10% of transactions sampled by default
+
+    # -- Log File Rotation (L2) --
+    # Set LOG_FILE to enable file logging with rotation.
+    LOG_FILE: str = Field(default="", validation_alias="LOG_FILE")
+    LOG_FILE_MAX_BYTES: int = Field(
+        default=10_485_760, validation_alias="LOG_FILE_MAX_BYTES"
+    )  # 10 MB
+    LOG_FILE_BACKUP_COUNT: int = Field(
+        default=5, validation_alias="LOG_FILE_BACKUP_COUNT"
+    )  # Keep 5 rotated files
 
     # -- Config Cache --
     CONFIG_CACHE_TTL_SECONDS: int = Field(
@@ -344,6 +412,14 @@ try:
     settings = Settings()
     # ✅ SECURITY: Fail-fast validation for production secrets
     settings._validate_production_secrets()
+
+    # ✅ SECURITY: Warn about insecure defaults in development
+    if settings.APP_ENV != "production" and settings.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
+        print(
+            "WARNING [config.py]: DEVICE_FINGERPRINT_SALT is using the default value. "
+            "Set a random value in .env: openssl rand -base64 32"
+        )
+
     print(
         f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}, DB_URL={settings.DATABASE_URL[:30]}..."
     )  # Log một phần DB_URL

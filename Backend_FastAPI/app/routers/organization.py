@@ -27,7 +27,7 @@ async def get_all_organization_units(
     current_user: schemas.User = CasbinAuth,  # ✅ SECURITY FIX: Casbin RBAC enforcement
 ):
     """Lấy danh sách tất cả các đơn vị với cấu trúc 3-tier."""
-    return await organization_service.get_all_organization_units(db)
+    return await organization_service.get_all_organization_units(db, current_user=current_user)
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -52,7 +52,8 @@ async def get_organization_tree_with_aggregation(
     - Thống kê tổng hợp được tổng hợp từ các đơn vị con lên đơn vị cha
     """
     return await organization_service.get_organization_tree_with_aggregation(
-        db, academic_year=academic_year, include_inactive=include_inactive
+        db, academic_year=academic_year, include_inactive=include_inactive,
+        current_user=current_user,
     )
 
 
@@ -72,7 +73,8 @@ async def get_filtered_programs(
     Đây là endpoint mới thay thế cho /majors trong kiến trúc 3-tier.
     """
     return await organization_service.get_programs_by_unit_tree(
-        db, unit_id=unitId, search_term=search
+        db, unit_id=unitId, search_term=search,
+        current_user=current_user,
     )
 
 
@@ -222,7 +224,8 @@ async def get_all_program_offerings(
     Dùng cho các Dropdown chọn Offering.
     """
     return await organization_service.get_all_program_offerings(
-        db, is_active=is_active, skip=skip, limit=limit
+        db, is_active=is_active, skip=skip, limit=limit,
+        current_user=current_user,
     )
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -240,7 +243,8 @@ async def get_all_academic_infos(
     Dùng cho các bảng quản lý Academic Info.
     """
     return await organization_service.get_all_academic_infos(
-        db, is_active=is_active, skip=skip, limit=limit
+        db, is_active=is_active, skip=skip, limit=limit,
+        current_user=current_user,
     )
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

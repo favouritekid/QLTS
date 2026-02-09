@@ -557,7 +557,7 @@ async def test_fix3_force_logout_batch_event(test_server,
 
     # Extract r_jti from token
     from app.security import decode_token
-    from jose import jwt
+    import jwt
     payload = jwt.decode(
         access_token,
         settings.JWT_SECRET_KEY,

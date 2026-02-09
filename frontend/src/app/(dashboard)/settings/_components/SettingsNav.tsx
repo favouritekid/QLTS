@@ -10,9 +10,8 @@ const navItems = [
   { name: "Password", href: "/settings" },
   { name: "Sessions", href: "/settings/sessions" },
   { name: "Login History", href: "/settings/login-history" }, // ✅ LOGIN SECURITY: Phase 5
+  { name: "Two-Factor Auth", href: "/settings/mfa" },
   { name: "Notifications", href: "/settings/notifications" },
-  // Bạn có thể dễ dàng thêm các tab khác ở đây trong tương lai
-  // { name: "Profile", href: "/settings/profile" },
 ];
 
 export function SettingsNav() {

@@ -53,6 +53,7 @@ EXEMPT_PATHS: List[str] = [
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
     "/api/auth/refresh",
+    "/api/auth/verify-mfa",  # MFA verification before login completes (no csrf_token cookie yet)
     "/api/public/",
     "/api/webhooks/",
     "/docs",

@@ -11,6 +11,7 @@ Uses Jinja2 for template rendering with support for:
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape as html_escape
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -265,7 +266,21 @@ To manage your notification preferences, visit your Settings page.
     def _render_notification_html(
         self, user_name: str, notification: models.Notification
     ) -> str:
-        """Render notification email HTML."""
+        """Render notification email HTML.
+
+        SECURITY: All user-controlled inputs are HTML-escaped to prevent XSS.
+        """
+        # ✅ SECURITY FIX (M6): Escape all user-controlled inputs
+        safe_name = html_escape(user_name)
+        safe_type = html_escape(notification.type)
+        safe_title = html_escape(notification.title)
+        safe_message = html_escape(notification.message)
+        safe_link = html_escape(notification.link) if notification.link else ""
+
+        link_html = ""
+        if safe_link:
+            link_html = f'<a href="{safe_link}" class="button">View Details</a>'
+
         return f"""
 <!DOCTYPE html>
 <html>
@@ -309,11 +324,11 @@ To manage your notification preferences, visit your Settings page.
             <h1>QLTS Notification</h1>
         </div>
         <div class="content">
-            <p>Hi {user_name},</p>
-            <span class="notification-type type-{notification.type}">{notification.type.upper()}</span>
-            <div class="title">{notification.title}</div>
-            <div class="message">{notification.message}</div>
-            {f'<a href="{notification.link}" class="button">View Details</a>' if notification.link else ''}
+            <p>Hi {safe_name},</p>
+            <span class="notification-type type-{safe_type}">{safe_type.upper()}</span>
+            <div class="title">{safe_title}</div>
+            <div class="message">{safe_message}</div>
+            {link_html}
         </div>
         <div class="footer">
             <p>You received this email because you have notifications enabled in your QLTS account.</p>

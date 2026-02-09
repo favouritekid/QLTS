@@ -605,7 +605,7 @@ class TestCookieSecurity:
         test_redis_client
     ):
         """Test expired/invalidated session cookie is rejected."""
-        from jose import jwt
+        import jwt
         from app.config import settings
         
         username = regular_user_in_db["username"]

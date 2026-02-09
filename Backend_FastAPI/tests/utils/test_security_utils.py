@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 
 # Import các hàm cần test và settings
 from app import security
@@ -279,7 +280,7 @@ def test_verify_password_reset_token_invalid_string():
 
 
 @patch(
-    "jose.jwt.decode", side_effect=JWTError("Simulated Token has expired")
+    "jwt.decode", side_effect=JWTError("Simulated Token has expired")
 )  # Mock lỗi decode
 def test_verify_password_reset_token_expired(mock_decode):
     """Kiểm tra xác thực token reset mật khẩu đã hết hạn (mock JWTError)."""

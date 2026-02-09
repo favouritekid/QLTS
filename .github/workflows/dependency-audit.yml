@@ -1,0 +1,127 @@
+# Dependency Vulnerability Audit
+# ===============================
+# Scans Python and Node.js dependencies for known vulnerabilities
+# OWASP A06:2021 - Vulnerable and Outdated Components
+
+name: Dependency Audit
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'Backend_FastAPI/requirements.txt'
+      - 'frontend/package-lock.json'
+      - 'frontend/package.json'
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run weekly on Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+
+jobs:
+  python-audit:
+    name: Python Dependencies
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: Backend_FastAPI
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: |
+          echo "🔍 Auditing Python dependencies..."
+          pip-audit -r requirements.txt --format json --output audit-results.json || true
+
+          # Parse results
+          VULNS=$(python -c "
+          import json
+          with open('audit-results.json') as f:
+              data = json.load(f)
+          vulns = data.get('dependencies', [])
+          count = sum(len(d.get('vulns', [])) for d in vulns)
+          print(count)
+          ")
+
+          echo "📊 Found $VULNS vulnerability(ies)"
+
+          # Show human-readable output
+          pip-audit -r requirements.txt --desc || true
+
+          if [ "$VULNS" -gt "0" ]; then
+            echo "⚠️ Vulnerabilities found in Python dependencies!"
+            exit 1
+          fi
+
+          echo "✅ Python dependency audit passed!"
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-audit-results
+          path: Backend_FastAPI/audit-results.json
+
+  node-audit:
+    name: Node.js Dependencies
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        run: |
+          echo "🔍 Auditing Node.js dependencies..."
+          npm audit --json > audit-results.json 2>&1 || true
+
+          # Parse results
+          VULNS=$(node -e "
+          const data = require('./audit-results.json');
+          const meta = data.metadata || {};
+          const total = (meta.vulnerabilities || {});
+          const count = (total.high || 0) + (total.critical || 0);
+          console.log(count);
+          ")
+
+          echo "📊 Found $VULNS high/critical vulnerability(ies)"
+
+          # Show human-readable output
+          npm audit --omit=dev || true
+
+          if [ "$VULNS" -gt "0" ]; then
+            echo "⚠️ High/critical vulnerabilities found in Node.js dependencies!"
+            exit 1
+          fi
+
+          echo "✅ Node.js dependency audit passed!"
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-audit-results
+          path: frontend/audit-results.json

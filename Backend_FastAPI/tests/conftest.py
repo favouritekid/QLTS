@@ -92,6 +92,11 @@ except ImportError as e:
     pytest.fail(f"ImportError during app import: {e}")
 print("INFO [conftest.py]: App components imported successfully.")
 
+# --- DISABLE MFA ENFORCEMENT IN TESTS ---
+# Tests don't have MFA enabled for admin/manager fixtures by default.
+# Individual tests can re-enable via monkeypatch if needed.
+settings.MFA_ENFORCE_ROLES = []
+
 
 # --- IMPORT CONSTANTS ---
 try:

@@ -1,5 +1,5 @@
 # app/models/user.py
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
@@ -53,6 +53,25 @@ class User(Base):
         server_default="false",
         default=False,
         comment="Forces password change on next login when True"
+    )
+
+    # ===== MFA (Multi-Factor Authentication) =====
+    mfa_enabled = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        default=False,
+        comment="Whether TOTP MFA is enabled for this user"
+    )
+    totp_secret_encrypted = Column(
+        String(256),
+        nullable=True,
+        comment="Fernet-encrypted TOTP secret (base32)"
+    )
+    backup_codes_hashed = Column(
+        Text,
+        nullable=True,
+        comment="JSON array of bcrypt-hashed backup codes"
     )
 
     # Lead assignment fields

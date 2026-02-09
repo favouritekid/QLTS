@@ -28,8 +28,13 @@ class SocketService {
   private onReconnectCallback: (() => void) | null = null;
 
   connect() {
-    if (this.socket && this.socket.connected) {
-      console.log("[SocketService] Already connected.");
+    // Guard: if socket already exists (connected OR connecting/reconnecting), skip
+    if (this.socket) {
+      if (this.socket.connected) {
+        return; // Already connected, no action needed
+      }
+      // Socket exists but not connected yet (still reconnecting via socket.io)
+      // Don't create a duplicate socket — let built-in reconnection handle it
       return;
     }
 
@@ -89,12 +94,14 @@ class SocketService {
 
     this.socket.on("connect_error", (error) => {
       this.reconnectAttempts++;
-      console.error(
-        `[SocketService] Connection Error (Attempt ${this.reconnectAttempts}):`,
-        error.message
-      );
+      // Only log the first failure and when giving up — avoid console spam
+      if (this.reconnectAttempts === 1) {
+        console.warn(
+          `[SocketService] Connection failed: ${error.message}. Will retry up to ${this.maxReconnectAttempts} times.`
+        );
+      }
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        console.error("[SocketService] Max reconnection attempts reached. Stopping.");
+        console.warn("[SocketService] Max reconnection attempts reached. Stopping.");
         this.disconnect();
       }
     });
