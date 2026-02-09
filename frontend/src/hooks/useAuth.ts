@@ -203,6 +203,8 @@ export function useAuth(options?: UseAuthOptions) {
     queryFn: async () => {
       // ✅ SECURITY FIX: Token is in httpOnly cookie, no need to check localStorage
       const { data } = await api.get<MeResponse>(API_ENDPOINTS.USERS.ME);
+      // React Query v5 requires queryFn to never return undefined
+      if (data === undefined) throw new Error("No user data returned");
       return data;
     },
     enabled: isAuthenticated, // Only check if user is marked as authenticated
@@ -435,7 +437,7 @@ export function useAuth(options?: UseAuthOptions) {
 
   useEffect(() => {
     if (isUserError && userError) {
-      console.error("Failed to fetch current user:", userError.response?.data || userError.message);
+      console.warn("[useAuth] Failed to fetch current user:", userError.response?.status, userError.message);
       if (userError.response?.status === 401) {
         toast.error("Your session has expired. Please log in again.");
         logoutStore();

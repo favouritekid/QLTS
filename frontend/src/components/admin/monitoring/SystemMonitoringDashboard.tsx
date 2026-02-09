@@ -86,40 +86,48 @@ export function SystemMonitoringDashboard() {
   } = useQuery<SystemOverview>({
     queryKey: ["system-overview"],
     queryFn: async () => {
-      const response = await api.get("/api/monitoring/system/overview");
-      return response.data;
+      const { data } = await api.get<SystemOverview>("/api/monitoring/system/overview");
+      if (data === undefined) throw new Error("Empty response from system overview");
+      return data;
     },
     refetchInterval: autoRefresh ? refreshInterval : false,
+    retry: 1,
   });
 
   // Celery Workers Query
   const { data: celeryWorkers, isLoading: celeryLoading } = useQuery({
     queryKey: ["celery-workers"],
     queryFn: async () => {
-      const response = await api.get("/api/monitoring/celery/workers");
-      return response.data;
+      const { data } = await api.get("/api/monitoring/celery/workers");
+      if (data === undefined) throw new Error("Empty response from celery workers");
+      return data;
     },
     refetchInterval: autoRefresh ? refreshInterval : false,
+    retry: 1,
   });
 
   // Redis Info Query
   const { data: redisInfo, isLoading: redisLoading } = useQuery<RedisInfo>({
     queryKey: ["redis-info"],
     queryFn: async () => {
-      const response = await api.get("/api/monitoring/redis/info");
-      return response.data;
+      const { data } = await api.get<RedisInfo>("/api/monitoring/redis/info");
+      if (data === undefined) throw new Error("Empty response from redis info");
+      return data;
     },
     refetchInterval: autoRefresh ? refreshInterval : false,
+    retry: 1,
   });
 
   // Socket Connections Query
   const { data: socketConnections, isLoading: socketLoading } = useQuery({
     queryKey: ["socket-connections"],
     queryFn: async () => {
-      const response = await api.get("/api/monitoring/socket/connections");
-      return response.data;
+      const { data } = await api.get("/api/monitoring/socket/connections");
+      if (data === undefined) throw new Error("Empty response from socket connections");
+      return data;
     },
     refetchInterval: autoRefresh ? refreshInterval : false,
+    retry: 1,
   });
 
   const getStatusIcon = (status: string) => {
