@@ -237,6 +237,31 @@ class Settings(BaseSettings):
                 "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."
             )
 
+        # ✅ C1: Reject localhost/default DB URLs in production
+        db_url_lower = self.DATABASE_URL.lower()
+        if "localhost" in db_url_lower or "127.0.0.1" in db_url_lower:
+            raise RuntimeError(
+                "CRITICAL: DATABASE_URL points to localhost in production. "
+                "Use a remote database with proper credentials."
+            )
+
+        # ✅ H6: Warn about missing TLS for DB connections
+        if "asyncpg://" in db_url_lower and "sslmode=" not in db_url_lower:
+            print(
+                "WARNING [config.py]: DATABASE_URL does not specify sslmode. "
+                "Add ?sslmode=require for encrypted connections in production."
+            )
+
+        # ✅ H6: Warn about missing TLS for Redis connections
+        redis_urls = [self.REDIS_URL, self.CELERY_BROKER_URL, self.CELERY_RESULT_BACKEND_URL]
+        for url in redis_urls:
+            if url.startswith("redis://") and not url.startswith("rediss://"):
+                print(
+                    f"WARNING [config.py]: Redis URL uses unencrypted redis:// protocol: {url[:30]}... "
+                    "Consider using rediss:// for TLS in production."
+                )
+                break  # One warning is enough
+
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
         "consultation_count_multiplier": 5,
@@ -266,6 +291,23 @@ class Settings(BaseSettings):
         "officer_rating_multiplier": 20,
         "officer_rating_weight": 0.1,
     }
+
+    # -- Sentry Error Tracking (H12+M10) --
+    # Set SENTRY_DSN in .env to enable. Leave empty to disable.
+    SENTRY_DSN: str = Field(default="", validation_alias="SENTRY_DSN")
+    SENTRY_TRACES_SAMPLE_RATE: float = Field(
+        default=0.1, validation_alias="SENTRY_TRACES_SAMPLE_RATE"
+    )  # 10% of transactions sampled by default
+
+    # -- Log File Rotation (L2) --
+    # Set LOG_FILE to enable file logging with rotation.
+    LOG_FILE: str = Field(default="", validation_alias="LOG_FILE")
+    LOG_FILE_MAX_BYTES: int = Field(
+        default=10_485_760, validation_alias="LOG_FILE_MAX_BYTES"
+    )  # 10 MB
+    LOG_FILE_BACKUP_COUNT: int = Field(
+        default=5, validation_alias="LOG_FILE_BACKUP_COUNT"
+    )  # Keep 5 rotated files
 
     # -- Config Cache --
     CONFIG_CACHE_TTL_SECONDS: int = Field(

@@ -80,6 +80,22 @@ from .socket_manager import load_rate_limit_script, sio
 # ✅ PHASE 1: Import centralized exception handler registration
 from .middleware import register_exception_handlers
 
+# === ✅ H12+M10: Sentry Error Tracking (auto-activates when SENTRY_DSN is set) ===
+if settings.SENTRY_DSN:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.APP_ENV,
+            traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+            send_default_pii=False,  # GDPR: don't send PII by default
+        )
+        print(f"INFO [main.py]: ✅ Sentry initialized (env={settings.APP_ENV}, sample_rate={settings.SENTRY_TRACES_SAMPLE_RATE})")
+    except ImportError:
+        print("WARNING [main.py]: SENTRY_DSN is set but sentry-sdk is not installed. Run: pip install sentry-sdk[fastapi]")
+    except Exception as e:
+        print(f"WARNING [main.py]: Failed to initialize Sentry: {e}")
+
 # === Cấu hình Structured Logging ===
 structlog.configure(
     processors=[
@@ -109,6 +125,19 @@ root_logger = logging.getLogger()
 root_logger.handlers.clear()
 root_logger.addHandler(log_handler)
 root_logger.setLevel(settings.LOG_LEVEL.upper())
+
+# ✅ L2: Optional file logging with rotation (set LOG_FILE in .env to enable)
+if settings.LOG_FILE:
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        settings.LOG_FILE,
+        maxBytes=settings.LOG_FILE_MAX_BYTES,     # Default: 10 MB
+        backupCount=settings.LOG_FILE_BACKUP_COUNT,  # Default: 5 files
+        encoding="utf-8",
+    )
+    file_handler.setLevel(settings.LOG_LEVEL.upper())
+    root_logger.addHandler(file_handler)
+    print(f"INFO [main.py]: ✅ File logging enabled: {settings.LOG_FILE} (max={settings.LOG_FILE_MAX_BYTES//1024//1024}MB, backups={settings.LOG_FILE_BACKUP_COUNT})")
 
 # === ✅ BẮT ĐẦU TẮT TIẾNG LOG THỪA ===
 

@@ -112,6 +112,7 @@ redis==6.4.0
 regex==2025.9.18
 requests==2.32.5
 rsa==4.9.1
+sentry-sdk==2.22.0
 setuptools==80.9.0
 simple-websocket==1.1.0
 simpleeval==1.0.3
