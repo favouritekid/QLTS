@@ -44,6 +44,13 @@ def _set_mfa_encryption_key(monkeypatch):
     """Ensure MFA_ENCRYPTION_KEY is set for all tests in this module."""
     monkeypatch.setattr(settings, "MFA_ENCRYPTION_KEY", _TEST_MFA_KEY)
 
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_redis_between_tests(test_redis_client):
+    """Flush all Redis keys before each test to prevent state leakage."""
+    await test_redis_client.flushall()
+    yield
+
 @pytest_asyncio.fixture
 async def mfa_test_user(db: AsyncSession) -> models.User:
     """Create a user for MFA tests (MFA disabled by default)."""
@@ -866,3 +873,1131 @@ class TestMfaSessionRevocation:
         assert "user" in data
         assert "mfa_enabled" in data["user"]
         assert data["user"]["mfa_enabled"] is False
+
+
+# =============================================================================
+# SECTION A: LOGIN WITHOUT MFA – ACCOUNT LOCKOUT FLOWS
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestLoginAccountLockout:
+    """A1-A6: Login lockout flows for non-MFA users."""
+
+    async def test_a1_correct_password_no_lockout(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """A1: Correct password → 200, no lockout counter set."""
+        res = await client.post("/api/auth/login", data={
+            "username": regular_user_in_db["username"],
+            "password": regular_user_in_db["password"],
+        })
+        assert res.status_code == 200
+
+        # No lockout key should exist
+        lockout_key = f"account_lockout:{regular_user_in_db['username']}"
+        is_locked = await test_redis_client.exists(lockout_key)
+        assert is_locked == 0
+
+    async def test_a2_wrong_password_increments_counter(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """A2: Wrong password → 401, counter incremented."""
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": regular_user_in_db["username"],
+                "password": "WrongPassword!",
+            })
+        assert res.status_code == 401
+
+        attempts_key = f"login_attempts:{regular_user_in_db['username']}"
+        count = await test_redis_client.get(attempts_key)
+        assert count is not None
+        assert int(count) == 1
+
+    async def test_a3_four_wrong_then_correct_resets(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """A3: 4 wrong + 1 correct → counter reset, no lockout."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        from app.main import fastapi_app
+        # 4 wrong attempts
+        for _ in range(4):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/login", data={
+                    "username": username, "password": "WrongPass!",
+                })
+
+        attempts_key = f"login_attempts:{username}"
+        count = await test_redis_client.get(attempts_key)
+        assert int(count) == 4
+
+        # Correct login resets counter
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.status_code == 200
+
+        count_after = await test_redis_client.get(attempts_key)
+        assert count_after is None  # Counter deleted
+
+    async def test_a4_fifth_wrong_locks_account(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """A4: 5th wrong password → account locked, returns 429."""
+        username = regular_user_in_db["username"]
+        from app.main import fastapi_app
+
+        # 5 wrong attempts
+        last_res = None
+        for _ in range(5):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                last_res = await c.post("/api/auth/login", data={
+                    "username": username, "password": "WrongPass!",
+                })
+
+        # 5th attempt triggers lockout; next attempt should see 429
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            locked_res = await c.post("/api/auth/login", data={
+                "username": username, "password": "WrongPass!",
+            })
+
+        assert locked_res.status_code == 429
+        assert "Retry-After" in locked_res.headers
+
+        # Lockout key exists in Redis
+        lockout_key = f"account_lockout:{username}"
+        is_locked = await test_redis_client.exists(lockout_key)
+        assert is_locked == 1
+
+    async def test_a5_locked_account_rejects_correct_password(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """A5: Locked account rejects even correct password with 429."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        from app.main import fastapi_app
+
+        # Lock the account via 5 wrong attempts
+        for _ in range(5):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/login", data={
+                    "username": username, "password": "WrongPass!",
+                })
+
+        # Now try correct password
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.status_code == 429
+
+    async def test_a6_lockout_expires_allows_login(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """A6: After lockout TTL expires, correct password works again."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Simulate lockout by setting Redis key directly
+        lockout_key = f"account_lockout:{username}"
+        await test_redis_client.set(lockout_key, "1", ex=1)  # 1 second TTL
+
+        import asyncio
+        await asyncio.sleep(1.5)  # Wait for expiry
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.status_code == 200
+
+
+# =============================================================================
+# SECTION B: LOGIN WITH MFA – LOCKOUT INTERACTION
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestMfaLoginLockoutInteraction:
+    """B1-B4: How account lockout interacts with MFA login flow."""
+
+    async def _enable_mfa_for_user(
+        self, client: AsyncClient, username: str, password: str, test_redis_client
+    ) -> tuple:
+        """Helper: enable MFA and return (secret, backup_codes)."""
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        enable_res = await client.post("/api/auth/mfa/enable", json={"code": code})
+        backup_codes = enable_res.json()["backup_codes"]
+        await client.post("/api/auth/logout")
+        return secret, backup_codes
+
+    async def test_b1_mfa_login_correct_password_returns_mfa_token(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """B1: Correct password on MFA user → mfa_required, no session created."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, _ = await self._enable_mfa_for_user(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.status_code == 200
+        assert res.json()["mfa_required"] is True
+        assert "access_token" not in res.cookies
+
+    async def test_b2_locked_account_cannot_get_mfa_token(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """B2: Locked account returns 429 even before MFA check."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        await self._enable_mfa_for_user(
+            client, username, password, test_redis_client
+        )
+
+        # Lock account
+        lockout_key = f"account_lockout:{username}"
+        await test_redis_client.set(lockout_key, "1", ex=900)
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.status_code == 429
+
+    async def test_b3_password_wrong_counter_preserved_across_mfa_challenge(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """B3: Password failures before MFA are NOT reset by correct password + MFA challenge."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, _ = await self._enable_mfa_for_user(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+        attempts_key = f"login_attempts:{username}"
+
+        # 3 wrong password attempts
+        for _ in range(3):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/login", data={
+                    "username": username, "password": "WrongPass!",
+                })
+
+        count = await test_redis_client.get(attempts_key)
+        assert int(count) == 3
+
+        # Correct password → gets mfa_token, but counter is NOT reset (MFA still pending)
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.json()["mfa_required"] is True
+
+        # Counter should still be 3 (not reset until MFA completes)
+        count_after = await test_redis_client.get(attempts_key)
+        assert count_after is not None
+        assert int(count_after) == 3
+
+    async def test_b4_successful_mfa_resets_lockout_counter(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """B4: Full MFA login success (password + TOTP) resets all counters."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, _ = await self._enable_mfa_for_user(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+        attempts_key = f"login_attempts:{username}"
+
+        # 2 wrong passwords first
+        for _ in range(2):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/login", data={
+                    "username": username, "password": "WrongPass!",
+                })
+
+        # Now correct password → mfa_token
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+
+            # Verify MFA with correct TOTP
+            fresh_code = pyotp.TOTP(secret).now()
+            verify_res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": fresh_code,
+            })
+        assert verify_res.status_code == 200
+
+        # All counters should be reset
+        count = await test_redis_client.get(attempts_key)
+        assert count is None
+
+        mfa_attempts_key = f"mfa_attempts:{username}"
+        mfa_count = await test_redis_client.get(mfa_attempts_key)
+        assert mfa_count is None
+
+
+# =============================================================================
+# SECTION C: MFA VERIFICATION – RATE LIMITING DETAILS
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestMfaVerificationRateLimiting:
+    """C1-C4: Per-user MFA attempt counter (Layer 2) and L3 interaction."""
+
+    async def _setup_mfa_and_get_token(
+        self, client: AsyncClient, username: str, password: str, test_redis_client
+    ) -> tuple:
+        """Helper: enable MFA, logout, re-login, return (secret, mfa_token, backup_codes)."""
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        enable_res = await client.post("/api/auth/mfa/enable", json={"code": code})
+        backup_codes = enable_res.json()["backup_codes"]
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        mfa_token = login_res.json()["mfa_token"]
+        return secret, mfa_token, backup_codes
+
+    async def test_c1_wrong_mfa_code_increments_l2_counter(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """C1: Each wrong MFA code increments per-user Redis counter."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, mfa_token, _ = await self._setup_mfa_and_get_token(
+            client, username, password, test_redis_client
+        )
+
+        attempt_key = f"mfa_attempts:{username}"
+        from app.main import fastapi_app
+
+        # Send 3 wrong codes
+        for i in range(3):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": "000000",
+                })
+            count = await test_redis_client.get(attempt_key)
+            assert int(count) == i + 1
+
+    async def test_c2_fifth_mfa_fail_returns_429(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """C2: 5th wrong MFA code → 429 with Retry-After."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, mfa_token, _ = await self._setup_mfa_and_get_token(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+
+        # Send 5 wrong codes (fills L2 counter)
+        for _ in range(5):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": "000000",
+                })
+
+        # 6th attempt should be blocked by L2
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": "000000",
+            })
+        assert res.status_code == 429
+        assert "Retry-After" in res.headers
+
+    async def test_c3_l2_block_does_not_double_punish_l3(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """C3: When L2 blocks (5th MFA fail), L3 counter is NOT incremented for that attempt."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, mfa_token, _ = await self._setup_mfa_and_get_token(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+        l3_key = f"login_attempts:{username}"
+
+        # Send 4 wrong codes (L3 gets 4 increments, L2 also at 4)
+        for _ in range(4):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": "000000",
+                })
+
+        l3_count_before = await test_redis_client.get(l3_key)
+        l3_before = int(l3_count_before) if l3_count_before else 0
+
+        # 5th wrong code → L2 blocks, L3 should NOT increment
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": "000000",
+            })
+
+        l3_count_after = await test_redis_client.get(l3_key)
+        l3_after = int(l3_count_after) if l3_count_after else 0
+
+        # L3 should NOT have been incremented on the 5th attempt
+        assert l3_after == l3_before
+
+    async def test_c4_correct_code_after_some_failures_succeeds(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """C4: Correct MFA code after <5 failures still works."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, mfa_token, _ = await self._setup_mfa_and_get_token(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+
+        # 3 wrong codes
+        for _ in range(3):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": "000000",
+                })
+
+        # Correct code should still work
+        fresh_code = pyotp.TOTP(secret).now()
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": fresh_code,
+            })
+        assert res.status_code == 200
+        assert "access_token" in res.cookies
+
+
+# =============================================================================
+# SECTION D: BACKUP CODE EDGE CASES
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestBackupCodeEdgeCases:
+    """D1-D4: Backup code consumption, reuse, and exhaustion."""
+
+    async def _setup_mfa_and_get_token(
+        self, client: AsyncClient, username: str, password: str, test_redis_client
+    ) -> tuple:
+        """Helper: enable MFA, logout, re-login, return (secret, mfa_token, backup_codes)."""
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        enable_res = await client.post("/api/auth/mfa/enable", json={"code": code})
+        backup_codes = enable_res.json()["backup_codes"]
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        mfa_token = login_res.json()["mfa_token"]
+        return secret, mfa_token, backup_codes
+
+    async def test_d1_backup_code_consumed_after_use(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client, db: AsyncSession
+    ):
+        """D1: Using a backup code consumes it (cannot reuse)."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, mfa_token, backup_codes = await self._setup_mfa_and_get_token(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+
+        # Use first backup code
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": backup_codes[0],
+            })
+        assert res.status_code == 200
+
+        # Verify code was consumed in DB
+        from app.services import user_service
+        user = await user_service.get_user_by_username(db, username=username)
+        remaining_hashes = json.loads(user.backup_codes_hashed)
+        assert len(remaining_hashes) == 7  # One consumed
+
+    async def test_d2_second_backup_code_works(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """D2: Different backup codes work for subsequent logins."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, mfa_token, backup_codes = await self._setup_mfa_and_get_token(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+
+        # Use first backup code
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res1 = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": backup_codes[0],
+            })
+        assert res1.status_code == 200
+
+        # Login again, use second backup code
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token2 = login_res.json()["mfa_token"]
+            res2 = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token2, "code": backup_codes[1],
+            })
+        assert res2.status_code == 200
+
+    async def test_d3_reused_backup_code_rejected(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """D3: Already-used backup code is rejected on second use."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, mfa_token, backup_codes = await self._setup_mfa_and_get_token(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+        used_code = backup_codes[0]
+
+        # Use first backup code
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": used_code,
+            })
+        assert res.status_code == 200
+
+        # Login again, try same backup code
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token2 = login_res.json()["mfa_token"]
+            res2 = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token2, "code": used_code,
+            })
+        assert res2.status_code == 401
+
+    async def test_d4_all_backup_codes_exhausted(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client, db: AsyncSession
+    ):
+        """D4: After all 8 backup codes used, only TOTP works."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA and get backup codes
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        enable_res = await client.post("/api/auth/mfa/enable", json={"code": code})
+        backup_codes = enable_res.json()["backup_codes"]
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+
+        # Use all 8 backup codes
+        for i, bc in enumerate(backup_codes):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                login_res = await c.post("/api/auth/login", data={
+                    "username": username, "password": password,
+                })
+                mfa_token = login_res.json()["mfa_token"]
+                res = await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": bc,
+                })
+            assert res.status_code == 200, f"Backup code {i} failed"
+
+        # All used. Try a random backup code → should fail
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": backup_codes[0],
+            })
+        assert res.status_code == 401
+
+        # TOTP should still work
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+            fresh_code = pyotp.TOTP(secret).now()
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": fresh_code,
+            })
+        assert res.status_code == 200
+
+
+# =============================================================================
+# SECTION E: MIXED / ABUSE SCENARIOS
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestMixedAbuseScenarios:
+    """E1-E3: Cross-flow abuse patterns."""
+
+    async def _enable_mfa_for_user(
+        self, client: AsyncClient, username: str, password: str, test_redis_client
+    ) -> tuple:
+        """Helper: enable MFA and return (secret, backup_codes)."""
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        enable_res = await client.post("/api/auth/mfa/enable", json={"code": code})
+        backup_codes = enable_res.json()["backup_codes"]
+        await client.post("/api/auth/logout")
+        return secret, backup_codes
+
+    async def test_e1_password_fail_then_mfa_fail_cumulative(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """E1: 4 password fails → correct password → 1 MFA fail → L3 counter = 5 → lockout."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, _ = await self._enable_mfa_for_user(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+        l3_key = f"login_attempts:{username}"
+
+        # 4 wrong passwords (L3 = 4)
+        for _ in range(4):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                await c.post("/api/auth/login", data={
+                    "username": username, "password": "WrongPass!",
+                })
+
+        l3_count = await test_redis_client.get(l3_key)
+        assert int(l3_count) == 4
+
+        # Correct password → get mfa_token (counter NOT reset)
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+
+            # 1 wrong MFA → L3 becomes 5 → triggers lockout
+            await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": "000000",
+            })
+
+        lockout_key = f"account_lockout:{username}"
+        is_locked = await test_redis_client.exists(lockout_key)
+        assert is_locked == 1
+
+    async def test_e2_cycling_login_mfa_fail_cumulative_lockout(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """E2: Cycling login→MFA fail→login→MFA fail accumulates L3 counter."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+        secret, _ = await self._enable_mfa_for_user(
+            client, username, password, test_redis_client
+        )
+
+        from app.main import fastapi_app
+        l3_key = f"login_attempts:{username}"
+
+        # Each cycle: correct password → wrong MFA code
+        for _ in range(4):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                login_res = await c.post("/api/auth/login", data={
+                    "username": username, "password": password,
+                })
+                mfa_token = login_res.json()["mfa_token"]
+                await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": "000000",
+                })
+
+        # L3 should be 4 (one MFA fail per cycle)
+        l3_count = await test_redis_client.get(l3_key)
+        assert l3_count is not None
+        assert int(l3_count) == 4
+
+    async def test_e3_expired_mfa_token_no_side_effects(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """E3: Submitting code with expired mfa_token → 401, no counter changes."""
+        from jose import jwt as jose_jwt
+
+        username = regular_user_in_db["username"]
+        user_id = regular_user_in_db["id"]
+
+        # Create an expired MFA token
+        expired_payload = {
+            "sub": username,
+            "user_id": user_id,
+            "type": "mfa",
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+            "jti": "expired-test-jti",
+        }
+        expired_token = jose_jwt.encode(
+            expired_payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+        )
+
+        attempt_key = f"mfa_attempts:{username}"
+        l3_key = f"login_attempts:{username}"
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": expired_token, "code": "123456",
+            })
+        assert res.status_code == 401
+
+        # No counters should have been touched
+        mfa_count = await test_redis_client.get(attempt_key)
+        assert mfa_count is None
+        l3_count = await test_redis_client.get(l3_key)
+        assert l3_count is None
+
+
+# =============================================================================
+# SECTION F: MFA SETUP / MANAGEMENT EDGE CASES
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestMfaSetupEdgeCases:
+    """F1-F4: Setup flow edge cases."""
+
+    async def test_f1_setup_without_enable_login_normal(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """F1: Setup MFA but don't enable → login works normally (no MFA challenge)."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login and setup MFA (but don't enable)
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        assert setup_res.status_code == 200
+        await client.post("/api/auth/logout")
+
+        # Login again → should work normally (no MFA challenge)
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.status_code == 200
+        data = res.json()
+        assert "mfa_required" not in data or data.get("mfa_required") is not True
+        assert "access_token" in res.cookies
+
+    async def test_f2_enable_mfa_with_expired_setup_secret(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """F2: Trying to enable MFA after Redis setup key expired → 400."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        await client.post("/api/auth/mfa/setup")
+
+        # Delete the Redis setup key to simulate expiration
+        redis_key = f"mfa_setup:{regular_user_in_db['id']}"
+        await test_redis_client.delete(redis_key)
+
+        # Try to enable → should fail
+        res = await client.post("/api/auth/mfa/enable", json={"code": "123456"})
+        assert res.status_code == 400
+
+    async def test_f3_disable_mfa_then_login_normal(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """F3: Enable then disable MFA → login works normally."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        await client.post("/api/auth/mfa/enable", json={"code": code})
+
+        # Disable MFA
+        await client.post("/api/auth/mfa/disable", json={"password": password})
+
+        await client.post("/api/auth/logout")
+
+        # Login should not require MFA
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+        assert res.status_code == 200
+        assert "access_token" in res.cookies
+
+    async def test_f4_regenerate_backup_codes_invalidates_old(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """F4: After regenerating backup codes, old codes no longer work."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        enable_res = await client.post("/api/auth/mfa/enable", json={"code": code})
+        old_codes = enable_res.json()["backup_codes"]
+
+        # Regenerate backup codes
+        regen_res = await client.post("/api/auth/mfa/backup-codes", json={
+            "password": password,
+        })
+        assert regen_res.status_code == 200
+        new_codes = regen_res.json()["backup_codes"]
+
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+
+        # Try old backup code → should fail
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": old_codes[0],
+            })
+        assert res.status_code == 401
+
+        # New backup code should work
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+            res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": new_codes[0],
+            })
+        assert res.status_code == 200
+
+
+# =============================================================================
+# SECTION G: TOTP REPLAY PROTECTION
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestTotpReplayProtection:
+    """G1-G2: TOTP replay and near-boundary behavior."""
+
+    async def test_g1_same_totp_code_rejected_on_second_use(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """G1: Same TOTP code used twice within same time step → second use rejected."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        await client.post("/api/auth/mfa/enable", json={"code": code})
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+
+        # First login with TOTP
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+            fresh_code = pyotp.TOTP(secret).now()
+            res1 = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": fresh_code,
+            })
+        assert res1.status_code == 200
+
+        # Second login, try same code immediately (replay)
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res2 = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token2 = login_res2.json()["mfa_token"]
+            # Use the same code (if time step hasn't changed, should be rejected)
+            same_code = fresh_code
+            res2 = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token2, "code": same_code,
+            })
+
+        # TOTP replay protection rejects reused time step codes
+        assert res2.status_code == 401
+
+
+# =============================================================================
+# SECTION H: OBSERVABILITY / LOGGING
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestMfaObservability:
+    """H: Verify structured log output for security-critical MFA events."""
+
+    async def test_h1_mfa_enable_emits_structured_log(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client, caplog
+    ):
+        """H1: Enabling MFA emits 'mfa_enabled' structured log."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+
+        with caplog.at_level(logging.INFO):
+            await client.post("/api/auth/mfa/enable", json={"code": code})
+
+        # Check that structured log was emitted
+        assert any("mfa_enabled" in record.message or "mfa.enable" in str(getattr(record, 'msg', ''))
+                    for record in caplog.records)
+
+    async def test_h2_mfa_failed_verification_emits_warning(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client, caplog
+    ):
+        """H2: Failed MFA verification emits warning log."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        await client.post("/api/auth/mfa/enable", json={"code": code})
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+
+            with caplog.at_level(logging.WARNING):
+                await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": "000000",
+                })
+
+        assert any("mfa_failed" in record.message or "mfa.verify_failed" in str(getattr(record, 'msg', ''))
+                    for record in caplog.records)
+
+    async def test_h3_mfa_disable_emits_log(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client, caplog
+    ):
+        """H3: Disabling MFA emits 'mfa_disabled' log."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        await client.post("/api/auth/mfa/enable", json={"code": code})
+
+        with caplog.at_level(logging.INFO):
+            await client.post("/api/auth/mfa/disable", json={"password": password})
+
+        assert any("mfa_disabled" in record.message or "mfa.disable" in str(getattr(record, 'msg', ''))
+                    for record in caplog.records)
+
+    async def test_h4_backup_code_used_emits_log(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client, caplog
+    ):
+        """H4: Using a backup code emits 'backup_code_used' log with remaining count."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        enable_res = await client.post("/api/auth/mfa/enable", json={"code": code})
+        backup_codes = enable_res.json()["backup_codes"]
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+
+            with caplog.at_level(logging.INFO):
+                await c.post("/api/auth/verify-mfa", json={
+                    "mfa_token": mfa_token, "code": backup_codes[0],
+                })
+
+        assert any("backup_code_used" in record.message or "mfa.backup_used" in str(getattr(record, 'msg', ''))
+                    for record in caplog.records)
