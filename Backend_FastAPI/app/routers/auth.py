@@ -177,11 +177,10 @@ async def login_for_access_token(
         # Re-raise original error (don't reveal lockout info to attacker)
         raise auth_error
 
-    # ✅ SECURITY FIX: Reset attempts counter on successful login
-    await AccountLockoutService.reset_attempts(form_data.username)
-
     # ===== MFA CHECK =====
-    # If user has MFA enabled, return mfa_token instead of full login
+    # If user has MFA enabled, return mfa_token instead of full login.
+    # CRITICAL: Do NOT reset_attempts here. Password correct ≠ auth complete.
+    # Counter only resets after BOTH factors verified (in /verify-mfa).
     if getattr(user, "mfa_enabled", False):
         from ..services import mfa_service
 
@@ -202,6 +201,9 @@ async def login_for_access_token(
             status_code=200,
         )
     # ===== END MFA CHECK =====
+
+    # Reset attempts counter only when auth is fully complete (no MFA)
+    await AccountLockoutService.reset_attempts(form_data.username)
 
     try:
         await user_service.remove_user_from_global_blacklist(user.id)
@@ -1074,21 +1076,25 @@ async def verify_mfa(
     is_valid = await mfa_service.verify_mfa_code(db, user, mfa_data.code)
 
     if not is_valid:
-        # Increment per-user counter (Layer 2)
+        # Increment per-user MFA counter (Layer 2)
+        l2_blocked = False
         try:
             window = settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
             current = await safe_redis_get(attempt_key)
             new_count = (int(current) if current else 0) + 1
             await safe_redis_set(attempt_key, str(new_count), ex=window)
+            l2_blocked = new_count >= settings.MFA_MAX_ATTEMPTS
         except Exception as e:
             log.error("Redis MFA attempt increment failed", error=str(e))
 
-        # Feed into AccountLockoutService (Layer 3)
-        await AccountLockoutService.record_failed_attempt(
-            db=db,
-            username=username,
-            ip_address=request.client.host if request.client else None,
-        )
+        # Feed into AccountLockoutService (Layer 3) only if L2 hasn't already blocked.
+        # Avoids double-punish: L2 blocks fast OTP brute-force, L3 tracks cumulative auth failures.
+        if not l2_blocked:
+            await AccountLockoutService.record_failed_attempt(
+                db=db,
+                username=username,
+                ip_address=request.client.host if request.client else None,
+            )
 
         log.warning(
             "mfa_failed", user_id=user.id, action="mfa.verify_failed",
