@@ -157,11 +157,11 @@ class TestTotpHelpers:
 
     def test_verify_totp_with_counter_previous_step(self):
         """Code from previous time step should still be accepted (valid_window=1)."""
-        import time
+        from datetime import datetime, timezone
         secret = mfa_service.generate_totp_secret()
         totp = pyotp.TOTP(secret)
         # Generate code for previous time step
-        prev_counter = totp.timecode(time.time()) - 1
+        prev_counter = totp.timecode(datetime.now(timezone.utc)) - 1
         prev_code = totp.generate_otp(prev_counter)
         is_valid, counter = mfa_service.verify_totp_with_counter(secret, prev_code)
         assert is_valid is True

@@ -18,7 +18,7 @@ import base64
 import io
 import json
 import secrets
-import time
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 import pyotp
@@ -82,7 +82,7 @@ def verify_totp_with_counter(secret: str, code: str) -> Tuple[bool, Optional[int
         Used for replay protection (RFC 6238 Section 5.2).
     """
     totp = pyotp.TOTP(secret)
-    current_counter = totp.timecode(time.time())
+    current_counter = totp.timecode(datetime.now(timezone.utc))
 
     for offset in [-1, 0, 1]:  # valid_window=1
         counter = current_counter + offset
