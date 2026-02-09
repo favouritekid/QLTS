@@ -25,17 +25,14 @@ import pyotp
 import qrcode
 import structlog
 from cryptography.fernet import Fernet, InvalidToken as FernetInvalidToken
-from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
+from ..security import pwd_context as _pwd_context  # Shared bcrypt context (rounds=15)
 from ..utils.exceptions import BusinessRuleViolation, InvalidCredentials
 
 log = structlog.get_logger(__name__)
-
-# Reuse bcrypt context from security module for backup codes
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
 
 # =============================================================================
@@ -132,7 +129,7 @@ def generate_backup_codes(count: int = 8) -> Tuple[List[str], List[str]]:
     Returns:
         (plaintext_codes, bcrypt_hashes): Plaintext shown once to user, hashes stored in DB.
     """
-    plaintext_codes = [secrets.token_hex(4) for _ in range(count)]  # 8 hex chars each
+    plaintext_codes = [secrets.token_hex(5) for _ in range(count)]  # 10 hex chars, 40-bit entropy
     bcrypt_hashes = [_pwd_context.hash(code) for code in plaintext_codes]
     return plaintext_codes, bcrypt_hashes
 

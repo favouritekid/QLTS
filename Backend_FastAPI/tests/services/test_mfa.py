@@ -214,10 +214,10 @@ class TestBackupCodes:
         assert len(hashes) == 8
 
     def test_generate_backup_codes_format(self):
-        """Codes should be 8-char hex strings."""
+        """Codes should be 10-char hex strings (40-bit entropy)."""
         plaintext, _ = mfa_service.generate_backup_codes(count=4)
         for code in plaintext:
-            assert len(code) == 8
+            assert len(code) == 10
             int(code, 16)  # Should be valid hex
 
     def test_backup_codes_are_unique(self):
@@ -2001,3 +2001,133 @@ class TestMfaObservability:
 
         assert any("backup_code_used" in record.message or "mfa.backup_used" in str(getattr(record, 'msg', ''))
                     for record in caplog.records)
+
+
+# =============================================================================
+# SECTION I: MFA ENFORCEMENT FOR PRIVILEGED ACCOUNTS
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestMfaEnforcement:
+    """B4: Privileged accounts (admin/manager) must have MFA enabled."""
+
+    async def test_i1_admin_without_mfa_blocked_on_business_endpoint(
+        self, client: AsyncClient, admin_user_in_db: dict, test_redis_client, monkeypatch
+    ):
+        """I1: Admin without MFA → 403 on business endpoints when enforcement is enabled."""
+        monkeypatch.setattr(settings, "MFA_ENFORCE_ROLES", ["admin", "manager"])
+
+        # Login (auth endpoints use get_current_user, not get_current_active_user)
+        login_res = await client.post("/api/auth/login", data={
+            "username": admin_user_in_db["username"],
+            "password": admin_user_in_db["password"],
+        })
+        assert login_res.status_code == 200
+
+        # Try a business endpoint (uses get_current_active_user → MFA check)
+        profile_res = await client.get("/api/profile")
+        assert profile_res.status_code == 403
+        assert "MFA" in profile_res.json()["detail"]
+
+    async def test_i2_admin_can_still_access_mfa_setup(
+        self, client: AsyncClient, admin_user_in_db: dict, test_redis_client, monkeypatch
+    ):
+        """I2: Admin without MFA can still access /mfa/setup to enable it."""
+        monkeypatch.setattr(settings, "MFA_ENFORCE_ROLES", ["admin", "manager"])
+
+        login_res = await client.post("/api/auth/login", data={
+            "username": admin_user_in_db["username"],
+            "password": admin_user_in_db["password"],
+        })
+        assert login_res.status_code == 200
+
+        # MFA endpoints use get_current_user (not get_current_active_user)
+        status_res = await client.get("/api/auth/mfa/status")
+        assert status_res.status_code == 200
+        assert status_res.json()["mfa_enabled"] is False
+
+        setup_res = await client.post("/api/auth/mfa/setup")
+        assert setup_res.status_code == 200
+        assert "secret" in setup_res.json()
+
+    async def test_i3_admin_with_mfa_enabled_passes_enforcement(
+        self, client: AsyncClient, admin_user_in_db: dict, test_redis_client, monkeypatch
+    ):
+        """I3: Admin with MFA enabled → business endpoints work normally."""
+        monkeypatch.setattr(settings, "MFA_ENFORCE_ROLES", ["admin", "manager"])
+
+        # Login and enable MFA
+        await client.post("/api/auth/login", data={
+            "username": admin_user_in_db["username"],
+            "password": admin_user_in_db["password"],
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        await client.post("/api/auth/mfa/enable", json={"code": code})
+
+        # Business endpoint should work now
+        profile_res = await client.get("/api/profile")
+        assert profile_res.status_code == 200
+
+    async def test_i4_regular_user_not_affected_by_enforcement(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client, monkeypatch
+    ):
+        """I4: Regular user (not in enforce list) works without MFA."""
+        monkeypatch.setattr(settings, "MFA_ENFORCE_ROLES", ["admin", "manager"])
+
+        login_res = await client.post("/api/auth/login", data={
+            "username": regular_user_in_db["username"],
+            "password": regular_user_in_db["password"],
+        })
+        assert login_res.status_code == 200
+
+        # Regular user should not be blocked
+        profile_res = await client.get("/api/profile")
+        assert profile_res.status_code == 200
+
+    async def test_i5_mfa_token_blacklisted_after_use(
+        self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
+    ):
+        """I5: Used mfa_token is blacklisted and cannot be reused."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Enable MFA
+        await client.post("/api/auth/login", data={
+            "username": username, "password": password,
+        })
+        setup_res = await client.post("/api/auth/mfa/setup")
+        secret = setup_res.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        await client.post("/api/auth/mfa/enable", json={"code": code})
+        await client.post("/api/auth/logout")
+
+        from app.main import fastapi_app
+
+        # Login and get mfa_token
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            login_res = await c.post("/api/auth/login", data={
+                "username": username, "password": password,
+            })
+            mfa_token = login_res.json()["mfa_token"]
+
+            # Use the mfa_token with valid TOTP
+            fresh_code = pyotp.TOTP(secret).now()
+            verify_res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": fresh_code,
+            })
+        assert verify_res.status_code == 200
+
+        # Try to reuse the same mfa_token (should be blacklisted)
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            reuse_res = await c.post("/api/auth/verify-mfa", json={
+                "mfa_token": mfa_token, "code": "123456",
+            })
+        assert reuse_res.status_code == 401
+        assert "already used" in reuse_res.json()["detail"]

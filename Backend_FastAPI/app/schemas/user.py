@@ -275,7 +275,7 @@ class SyncUsersRequest(BaseModel):
 class MfaVerifySchema(BaseModel):
     """Schema for verifying MFA code during login."""
     mfa_token: str
-    code: str = Field(..., min_length=6, max_length=8)  # 6-digit TOTP or 8-char backup
+    code: str = Field(..., min_length=6, max_length=10)  # 6-digit TOTP or 10-char backup
 
 
 class MfaSetupResponse(BaseModel):

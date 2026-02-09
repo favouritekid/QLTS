@@ -72,7 +72,7 @@ export function MfaVerifyForm({
               placeholder="Nhập mã backup"
               value={backupCode}
               onChange={(e) => setBackupCode(e.target.value)}
-              maxLength={8}
+              maxLength={10}
               disabled={isDisabled}
               autoComplete="one-time-code"
               className="text-center font-mono text-lg tracking-widest"

@@ -194,6 +194,9 @@ class Settings(BaseSettings):
     MFA_ATTEMPT_WINDOW_MINUTES: int = Field(
         default=5, validation_alias="MFA_ATTEMPT_WINDOW_MINUTES"
     )  # Window for MFA attempt tracking
+    MFA_ENFORCE_ROLES: List[str] = Field(
+        default=["admin", "manager"], validation_alias="MFA_ENFORCE_ROLES"
+    )  # Roles that MUST enable MFA (OWASP ASVS 5.0)
 
     def _validate_production_secrets(self):
         """Fail-fast validation for production environment secrets."""

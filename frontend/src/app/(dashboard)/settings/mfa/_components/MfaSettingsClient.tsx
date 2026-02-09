@@ -65,7 +65,7 @@ export function MfaSettingsClient() {
     onError: (error) => {
       const msg = typeof error.response?.data?.detail === "string"
         ? error.response.data.detail
-        : "Failed to start MFA setup.";
+        : "Không thể bắt đầu cài đặt MFA.";
       toast.error(msg);
     },
   });
@@ -89,12 +89,12 @@ export function MfaSettingsClient() {
       setVerifyCode("");
       queryClient.invalidateQueries({ queryKey: ["mfa", "status"] });
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
-      toast.success("MFA enabled successfully!");
+      toast.success("Đã bật xác thực hai lớp!");
     },
     onError: (error) => {
       const msg = typeof error.response?.data?.detail === "string"
         ? error.response.data.detail
-        : "Invalid code. Please try again.";
+        : "Mã không hợp lệ. Vui lòng thử lại.";
       toast.error(msg);
     },
   });
@@ -113,12 +113,12 @@ export function MfaSettingsClient() {
       setSetupStep("idle");
       queryClient.invalidateQueries({ queryKey: ["mfa", "status"] });
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
-      toast.success("MFA disabled.");
+      toast.success("Đã tắt xác thực hai lớp.");
     },
     onError: (error) => {
       const msg = typeof error.response?.data?.detail === "string"
         ? error.response.data.detail
-        : "Failed to disable MFA.";
+        : "Không thể tắt MFA.";
       toast.error(msg);
     },
   });
@@ -140,23 +140,23 @@ export function MfaSettingsClient() {
       setBackupCodes(data.backup_codes);
       setSetupStep("backup_codes");
       setRegenPassword("");
-      toast.success("New backup codes generated.");
+      toast.success("Đã tạo mã dự phòng mới.");
     },
     onError: (error) => {
       const msg = typeof error.response?.data?.detail === "string"
         ? error.response.data.detail
-        : "Failed to regenerate codes.";
+        : "Không thể tạo lại mã dự phòng.";
       toast.error(msg);
     },
   });
 
   function copyBackupCodes() {
     navigator.clipboard.writeText(backupCodes.join("\n"));
-    toast.success("Backup codes copied to clipboard.");
+    toast.success("Đã sao chép mã dự phòng.");
   }
 
   if (isStatusLoading) {
-    return <div className="py-8 text-center text-muted-foreground">Loading MFA status…</div>;
+    return <div className="py-8 text-center text-muted-foreground">Đang tải trạng thái MFA…</div>;
   }
 
   const isEnabled = mfaStatus?.mfa_enabled ?? false;
@@ -167,11 +167,11 @@ export function MfaSettingsClient() {
       <div className="space-y-6">
         <div className="rounded-lg border bg-amber-50 p-4 dark:bg-amber-950/20">
           <h3 className="font-semibold text-amber-800 dark:text-amber-200">
-            Backup Codes
+            Mã dự phòng
           </h3>
           <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-            Luu cac ma nay o noi an toan. Moi ma chi su dung duoc mot lan.
-            Day la lan duy nhat ban thay cac ma nay.
+            Lưu các mã này ở nơi an toàn. Mỗi mã chỉ sử dụng được một lần.
+            Đây là lần duy nhất bạn thấy các mã này.
           </p>
         </div>
 
@@ -186,10 +186,10 @@ export function MfaSettingsClient() {
         <div className="flex gap-2">
           <Button variant="outline" onClick={copyBackupCodes}>
             <Copy className="mr-2 h-4 w-4" aria-hidden="true" />
-            Copy
+            Sao chép
           </Button>
           <Button onClick={() => { setSetupStep("idle"); setBackupCodes([]); }}>
-            Done
+            Xong
           </Button>
         </div>
       </div>
@@ -201,9 +201,9 @@ export function MfaSettingsClient() {
     return (
       <div className="space-y-6">
         <div className="space-y-2">
-          <h3 className="text-lg font-semibold">Setup Two-Factor Authentication</h3>
+          <h3 className="text-lg font-semibold">Cài đặt xác thực hai lớp</h3>
           <p className="text-sm text-muted-foreground">
-            Scan ma QR bang ung dung xac thuc (Google Authenticator, Authy, etc.)
+            Quét mã QR bằng ứng dụng xác thực (Google Authenticator, Authy, v.v.)
           </p>
         </div>
 
@@ -211,20 +211,20 @@ export function MfaSettingsClient() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={setupData.qr_code}
-            alt="MFA QR Code"
+            alt="Mã QR xác thực hai lớp"
             className="h-48 w-48 rounded border"
           />
         </div>
 
         <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">Nhap thu cong:</p>
+          <p className="text-xs text-muted-foreground">Nhập thủ công:</p>
           <code className="block rounded bg-muted p-2 text-center font-mono text-sm break-all select-all">
             {setupData.secret}
           </code>
         </div>
 
         <div className="space-y-2">
-          <p className="text-sm font-medium">Nhap ma 6 chu so tu ung dung:</p>
+          <p className="text-sm font-medium">Nhập mã 6 chữ số từ ứng dụng:</p>
           <div className="flex justify-center">
             <InputOTP
               maxLength={6}
@@ -251,13 +251,13 @@ export function MfaSettingsClient() {
             onClick={() => { setSetupStep("idle"); setSetupData(null); setVerifyCode(""); }}
             disabled={enableMutation.isPending}
           >
-            Cancel
+            Hủy
           </Button>
           <Button
             onClick={() => enableMutation.mutate({ code: verifyCode })}
             disabled={verifyCode.length < 6 || enableMutation.isPending}
           >
-            {enableMutation.isPending ? "Verifying…" : "Enable MFA"}
+            {enableMutation.isPending ? "Đang xác minh…" : "Bật MFA"}
           </Button>
         </div>
       </div>
@@ -275,12 +275,12 @@ export function MfaSettingsClient() {
         )}
         <div>
           <h3 className="text-lg font-semibold">
-            Two-Factor Authentication
+            Xác thực hai lớp
           </h3>
           <p className="text-sm text-muted-foreground">
             {isEnabled
-              ? "MFA is enabled. Your account is protected with TOTP."
-              : "MFA is not enabled. Add an extra layer of security to your account."}
+              ? "MFA đã bật. Tài khoản của bạn được bảo vệ bằng TOTP."
+              : "MFA chưa bật. Thêm lớp bảo mật cho tài khoản của bạn."}
           </p>
         </div>
       </div>
@@ -289,10 +289,10 @@ export function MfaSettingsClient() {
         <div className="space-y-4">
           {/* Disable MFA */}
           <div className="rounded-lg border p-4 space-y-3">
-            <h4 className="font-medium">Disable MFA</h4>
+            <h4 className="font-medium">Tắt MFA</h4>
             <Input
               type="password"
-              placeholder="Enter your password"
+              placeholder="Nhập mật khẩu của bạn"
               value={disablePassword}
               onChange={(e) => setDisablePassword(e.target.value)}
               autoComplete="current-password"
@@ -303,19 +303,19 @@ export function MfaSettingsClient() {
               onClick={() => disableMutation.mutate({ password: disablePassword })}
               disabled={!disablePassword || disableMutation.isPending}
             >
-              {disableMutation.isPending ? "Disabling…" : "Disable MFA"}
+              {disableMutation.isPending ? "Đang tắt…" : "Tắt MFA"}
             </Button>
           </div>
 
           {/* Regenerate backup codes */}
           <div className="rounded-lg border p-4 space-y-3">
-            <h4 className="font-medium">Regenerate Backup Codes</h4>
+            <h4 className="font-medium">Tạo lại mã dự phòng</h4>
             <p className="text-sm text-muted-foreground">
-              This will invalidate all existing backup codes.
+              Thao tác này sẽ vô hiệu hóa tất cả mã dự phòng hiện tại.
             </p>
             <Input
               type="password"
-              placeholder="Enter your password"
+              placeholder="Nhập mật khẩu của bạn"
               value={regenPassword}
               onChange={(e) => setRegenPassword(e.target.value)}
               autoComplete="current-password"
@@ -327,7 +327,7 @@ export function MfaSettingsClient() {
               disabled={!regenPassword || regenMutation.isPending}
             >
               <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
-              {regenMutation.isPending ? "Generating…" : "Regenerate Codes"}
+              {regenMutation.isPending ? "Đang tạo…" : "Tạo lại mã dự phòng"}
             </Button>
           </div>
         </div>
@@ -337,7 +337,7 @@ export function MfaSettingsClient() {
           disabled={setupMutation.isPending}
         >
           <ShieldCheck className="mr-2 h-4 w-4" aria-hidden="true" />
-          {setupMutation.isPending ? "Starting setup…" : "Enable MFA"}
+          {setupMutation.isPending ? "Đang cài đặt…" : "Bật MFA"}
         </Button>
       )}
     </div>

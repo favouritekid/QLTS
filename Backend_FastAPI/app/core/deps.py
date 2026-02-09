@@ -292,11 +292,25 @@ async def get_current_active_user(
 ) -> models.User:
     """
     Dependency to check if user is active.
+    Also enforces MFA for privileged roles (admin, manager) per OWASP ASVS 5.0.
     """
+    from ..config import settings
+
     if current_user.status != "active":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user"
         )
+
+    # OWASP ASVS 5.0: Enforce MFA for privileged accounts
+    if (
+        current_user.role in settings.MFA_ENFORCE_ROLES
+        and not getattr(current_user, "mfa_enabled", False)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="MFA is required for privileged accounts. Please enable MFA in Settings.",
+        )
+
     return current_user
 
 
