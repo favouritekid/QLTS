@@ -14,7 +14,8 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 # ✅ PHASE 2: Removed direct sqlalchemy import (Router → Service → Repository pattern)
 from sqlalchemy.ext.asyncio import AsyncSession
 

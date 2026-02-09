@@ -303,7 +303,7 @@ class TestMfaToken:
 
     def test_decode_mfa_token_rejects_expired(self):
         """Expired MFA token should raise InvalidCredentials."""
-        from jose import jwt as jose_jwt
+        import jwt as jose_jwt
 
         expired_payload = {
             "sub": "testuser",
@@ -655,7 +655,7 @@ class TestMfaLoginFlow:
         self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
     ):
         """Expired MFA token should be rejected."""
-        from jose import jwt as jose_jwt
+        import jwt as jose_jwt
 
         # Create expired MFA token
         expired_payload = {
@@ -1641,7 +1641,7 @@ class TestMixedAbuseScenarios:
         self, client: AsyncClient, regular_user_in_db: dict, test_redis_client
     ):
         """E3: Submitting code with expired mfa_token → 401, no counter changes."""
-        from jose import jwt as jose_jwt
+        import jwt as jose_jwt
 
         username = regular_user_in_db["username"]
         user_id = regular_user_in_db["id"]

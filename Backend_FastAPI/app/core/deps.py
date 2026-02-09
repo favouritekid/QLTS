@@ -7,7 +7,7 @@ import structlog
 from .constants import UserRole
 from fastapi import Cookie, Depends, Header, Path, Request, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError
+from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, security  # ✅ THÊM IMPORT security

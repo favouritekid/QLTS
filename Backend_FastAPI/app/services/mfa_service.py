@@ -375,7 +375,7 @@ def create_mfa_token(username: str, user_id: int) -> str:
     Type="mfa" to distinguish from access/refresh tokens.
     """
     from datetime import datetime, timedelta, timezone
-    from jose import jwt as jose_jwt
+    import jwt
 
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.MFA_TOKEN_EXPIRE_MINUTES
@@ -387,7 +387,7 @@ def create_mfa_token(username: str, user_id: int) -> str:
         "exp": expire,
         "jti": secrets.token_urlsafe(16),
     }
-    return jose_jwt.encode(
+    return jwt.encode(
         payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
     )
 
@@ -402,10 +402,11 @@ def decode_mfa_token(token: str) -> dict:
     Raises:
         InvalidCredentials if token is invalid, expired, or wrong type.
     """
-    from jose import jwt as jose_jwt, JWTError, ExpiredSignatureError
+    import jwt
+    from jwt.exceptions import PyJWTError as JWTError, ExpiredSignatureError
 
     try:
-        payload = jose_jwt.decode(
+        payload = jwt.decode(
             token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
         )
     except ExpiredSignatureError:

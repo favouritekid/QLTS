@@ -170,6 +170,13 @@ class Settings(BaseSettings):
         default=60, validation_alias="SOCKET_MAX_CONN_PER_MINUTE"
     )  # Max WebSocket connections per minute per IP
 
+    # -- Security: HIBP Breached Password Check --
+    # Checks passwords against Have I Been Pwned database (OWASP ASVS §2.1.7)
+    # Disabled in test mode to avoid external API calls and test password rejections
+    HIBP_CHECK_ENABLED: bool = Field(
+        default=True, validation_alias="HIBP_CHECK_ENABLED"
+    )
+
     # -- Security: Device Fingerprint --
     # Server-side salt to prevent fingerprint spoofing
     # IMPORTANT: This should be a random string, set in .env
@@ -363,6 +370,14 @@ try:
     settings = Settings()
     # ✅ SECURITY: Fail-fast validation for production secrets
     settings._validate_production_secrets()
+
+    # ✅ SECURITY: Warn about insecure defaults in development
+    if settings.APP_ENV != "production" and settings.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
+        print(
+            "WARNING [config.py]: DEVICE_FINGERPRINT_SALT is using the default value. "
+            "Set a random value in .env: openssl rand -base64 32"
+        )
+
     print(
         f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}, DB_URL={settings.DATABASE_URL[:30]}..."
     )  # Log một phần DB_URL

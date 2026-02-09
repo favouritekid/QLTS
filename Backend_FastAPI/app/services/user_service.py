@@ -41,6 +41,7 @@ from ..security import (
     verify_password,
     verify_password_reset_token,
 )
+from ..security.hibp import check_password_breached
 
 # ✅ 2. Event Dispatcher Pattern (replaces direct Socket.IO dependency)
 from ..core.events import dispatcher, TransportEvents
@@ -390,6 +391,14 @@ async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> Tuple[mo
         Tuple of (user, post_commit_callback)
     """
     try:
+        # ✅ OWASP ASVS §2.1.7: Check password against known breaches
+        is_breached, breach_count = await check_password_breached(user_in.password)
+        if is_breached:
+            raise BadRequest(
+                detail=f"This password has appeared in {breach_count:,} data breaches. "
+                "Please choose a different password."
+            )
+
         hashed_password = get_password_hash(user_in.password)
         # ✅ SỬA: Dữ liệu đã sạch, chỉ cần model_dump
         db_user = models.User(
@@ -1046,8 +1055,16 @@ async def reset_password(
         if verify_password(new_password, user.password_hash):
             raise BadRequest(detail="New password must be different from your current password")
 
+        # ✅ OWASP ASVS §2.1.7: Check password against known breaches
+        is_breached, breach_count = await check_password_breached(new_password)
+        if is_breached:
+            raise BadRequest(
+                detail=f"This password has appeared in {breach_count:,} data breaches. "
+                "Please choose a different password."
+            )
+
         user.password_hash = get_password_hash(new_password)
-        
+
         # ✅ SECURITY FIX: Clear password_reset_required flag
         # This is important because forgot-password flow should also clear this flag
         # (similar to change_password in auth.py router)
@@ -1098,6 +1115,14 @@ async def change_password(
         # This is especially important when password_reset_required=true (security incident)
         if verify_password(new_password, user.password_hash):
             raise BadRequest(detail="New password must be different from your current password")
+
+        # ✅ OWASP ASVS §2.1.7: Check password against known breaches
+        is_breached, breach_count = await check_password_breached(new_password)
+        if is_breached:
+            raise BadRequest(
+                detail=f"This password has appeared in {breach_count:,} data breaches. "
+                "Please choose a different password."
+            )
 
         user.password_hash = get_password_hash(new_password)
         db.add(user)

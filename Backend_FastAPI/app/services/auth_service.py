@@ -23,7 +23,8 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Tuple
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 
 from ..config import settings
 from ..utils.exceptions import InvalidToken
