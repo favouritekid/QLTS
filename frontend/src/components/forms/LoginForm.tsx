@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import Link from "next/link";
-import { AlertCircle, Clock } from "lucide-react";
+import { AlertCircle, Clock, Info } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -62,10 +62,12 @@ function formatCountdown(totalSeconds: number): string {
 function getMfaErrorMessage(error: unknown): string | undefined {
   if (!error) return undefined;
 
-  const axiosError = error as { response?: { status?: number } };
+  const axiosError = error as { response?: { status?: number; data?: { detail?: string } } };
   const status = axiosError.response?.status;
+  const detail = axiosError.response?.data?.detail;
 
   if (status === 429) {
+    if (typeof detail === "string" && detail.length > 0) return detail;
     return "Bạn đã nhập sai quá nhiều lần. Vui lòng đợi trước khi thử lại.";
   }
   if (status === 401) {
@@ -73,6 +75,24 @@ function getMfaErrorMessage(error: unknown): string | undefined {
   }
 
   return "Đã xảy ra lỗi. Vui lòng thử lại.";
+}
+
+/** Decode JWT exp claim (client-side, no verification) */
+function getTokenRemainingSeconds(token: string): number {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    if (!payload.exp) return 0;
+    return Math.max(0, Math.floor(payload.exp - Date.now() / 1000));
+  } catch {
+    return 0;
+  }
+}
+
+function isMfaTokenExpired(error: unknown): boolean {
+  if (!error) return false;
+  const axiosError = error as { response?: { status?: number; data?: { detail?: string } } };
+  const detail = axiosError.response?.data?.detail;
+  return axiosError.response?.status === 401 && typeof detail === "string" && detail.toLowerCase().includes("expired");
 }
 
 export function LoginForm() {
@@ -87,9 +107,12 @@ export function LoginForm() {
   } = useAuth();
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [sessionExpiredMsg, setSessionExpiredMsg] = useState<string | null>(null);
+  const [mfaResetKey, setMfaResetKey] = useState(0);
 
   const loginCountdown = useCountdown(60);
   const mfaCountdown = useCountdown(60);
+  const mfaSessionCountdown = useCountdown(300);
 
   // Start countdown when login gets rate limited
   useEffect(() => {
@@ -141,11 +164,18 @@ export function LoginForm() {
 
   function onSubmit(values: LoginFormValues) {
     resetLogin();
+    setSessionExpiredMsg(null);
+    // Reset stale MFA state from expired session
+    setMfaRequired(false);
+    setMfaToken(null);
     login(values as LoginRequest, {
       onSuccess: (response) => {
         if (response?.mfa_required && response?.mfa_token) {
           setMfaRequired(true);
           setMfaToken(response.mfa_token);
+          // Start session countdown from JWT exp
+          const remaining = getTokenRemainingSeconds(response.mfa_token);
+          mfaSessionCountdown.start(String(remaining > 0 ? remaining : 300));
         }
       },
     });
@@ -154,7 +184,21 @@ export function LoginForm() {
   function handleMfaSubmit(code: string) {
     if (mfaToken) {
       resetVerifyMfa();
-      verifyMfa({ mfa_token: mfaToken, code });
+      verifyMfa(
+        { mfa_token: mfaToken, code },
+        {
+          onError: (error) => {
+            if (isMfaTokenExpired(error)) {
+              // Token expired → auto-redirect back to login with message
+              handleMfaCancel();
+              setSessionExpiredMsg("Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.");
+            } else {
+              // Wrong code → reset input for retry
+              setMfaResetKey((k) => k + 1);
+            }
+          },
+        },
+      );
     }
   }
 
@@ -163,15 +207,17 @@ export function LoginForm() {
     setMfaToken(null);
     resetVerifyMfa();
     mfaCountdown.reset();
+    mfaSessionCountdown.reset();
   }
 
-  // Show MFA verification form
-  if (mfaRequired && mfaToken) {
+  // Show MFA verification form (only while session countdown is active)
+  if (mfaRequired && mfaToken && mfaSessionCountdown.isActive) {
     const isMfaRateLimited =
       verifyMfaError?.response?.status === 429 || mfaCountdown.isActive;
 
     return (
       <MfaVerifyForm
+        key={mfaResetKey}
         onSubmit={handleMfaSubmit}
         onCancel={handleMfaCancel}
         isLoading={isLoading}
@@ -181,9 +227,16 @@ export function LoginForm() {
             : getMfaErrorMessage(verifyMfaError)
         }
         isRateLimited={isMfaRateLimited}
+        sessionSeconds={mfaSessionCountdown.seconds}
       />
     );
   }
+
+  // Derive session expired message: either from explicit state or when MFA session timed out
+  const displayExpiredMsg = sessionExpiredMsg ||
+    (mfaRequired && mfaToken && !mfaSessionCountdown.isActive
+      ? "Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại."
+      : null);
 
   const isLoginRateLimited =
     (loginError as { response?: { status?: number } })?.response?.status === 429 ||
@@ -216,6 +269,11 @@ export function LoginForm() {
                     onChange={(e) => {
                       field.onChange(e);
                       if (loginError) resetLogin();
+                      if (sessionExpiredMsg || mfaRequired) {
+                        setSessionExpiredMsg(null);
+                        setMfaRequired(false);
+                        setMfaToken(null);
+                      }
                     }}
                   />
                 </FormControl>
@@ -255,6 +313,17 @@ export function LoginForm() {
               </FormItem>
             )}
           />
+
+          {/* Session expired info */}
+          {displayExpiredMsg && !loginErrorMessage && (
+            <div
+              role="status"
+              className="flex items-center gap-2 rounded-md bg-blue-50 px-3 py-2.5 text-sm text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+            >
+              <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{displayExpiredMsg}</span>
+            </div>
+          )}
 
           {/* Inline error message */}
           {loginErrorMessage && (

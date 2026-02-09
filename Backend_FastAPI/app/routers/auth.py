@@ -34,6 +34,7 @@ from ..database import (
     safe_redis_get,
     safe_redis_pipeline,
     safe_redis_set,
+    safe_redis_ttl,
 )
 from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate limits module
 from ..services import session_service, user_service
@@ -1045,13 +1046,19 @@ async def verify_mfa(
         attempts_str = await safe_redis_get(attempt_key)
         attempts = int(attempts_str) if attempts_str else 0
         if attempts >= settings.MFA_MAX_ATTEMPTS:
+            # Get remaining TTL from Redis for Retry-After header
+            attempt_ttl = await safe_redis_ttl(attempt_key)
+            retry_after = max(attempt_ttl, 60) if attempt_ttl > 0 else settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
             log.warning(
                 "mfa_rate_limited", user_id=user_id, username=username,
-                attempts=attempts, action="mfa.rate_limited",
+                attempts=attempts, retry_after=retry_after, action="mfa.rate_limited",
             )
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many MFA attempts. Please try again later.",
+                content={
+                    "detail": "Quá nhiều lần thử xác thực. Vui lòng thử lại sau.",
+                },
+                headers={"Retry-After": str(retry_after)},
             )
     except HTTPException:
         raise

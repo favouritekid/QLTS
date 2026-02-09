@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles  # ✅ Import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -356,7 +355,20 @@ async def lifespan(app: FastAPI):
     # (Giữ nguyên logic Rate Limiter)
     if settings.APP_ENV != "test":
         fastapi_app.state.limiter = limiter
-        fastapi_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        async def _custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
+            response = JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Quá nhiều yêu cầu. Vui lòng thử lại sau.",
+                },
+            )
+            # Inject Retry-After header via slowapi limiter (accurate remaining time)
+            response = request.app.state.limiter._inject_headers(
+                response, request.state.view_rate_limit
+            )
+            return response
+
+        fastapi_app.add_exception_handler(RateLimitExceeded, _custom_rate_limit_handler)
         log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
     else:
         log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")

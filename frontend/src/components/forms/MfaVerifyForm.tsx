@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { AlertCircle, ShieldAlert } from "lucide-react";
+import { useState } from "react";
+import { AlertCircle, Clock, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -16,6 +16,8 @@ interface MfaVerifyFormProps {
   isLoading: boolean;
   errorMessage?: string;
   isRateLimited?: boolean;
+  /** Remaining seconds for MFA session (JWT expiry countdown) */
+  sessionSeconds?: number;
 }
 
 export function MfaVerifyForm({
@@ -24,18 +26,11 @@ export function MfaVerifyForm({
   isLoading,
   errorMessage,
   isRateLimited,
+  sessionSeconds,
 }: MfaVerifyFormProps) {
   const [code, setCode] = useState("");
   const [useBackupCode, setUseBackupCode] = useState(false);
   const [backupCode, setBackupCode] = useState("");
-
-  // Clear OTP input when error occurs so user can re-enter
-  useEffect(() => {
-    if (errorMessage) {
-      setCode("");
-      setBackupCode("");
-    }
-  }, [errorMessage]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -56,6 +51,18 @@ export function MfaVerifyForm({
             ? "Nhập mã backup của bạn"
             : "Nhập mã 6 chữ số từ ứng dụng xác thực"}
         </p>
+        {sessionSeconds != null && sessionSeconds > 0 && (
+          <p className={`flex items-center justify-center gap-1 text-xs ${
+            sessionSeconds <= 60
+              ? "text-orange-600 dark:text-orange-400"
+              : "text-muted-foreground"
+          }`}>
+            <Clock className="h-3 w-3" aria-hidden="true" />
+            <span>
+              Phiên hết hạn sau {Math.floor(sessionSeconds / 60)}:{String(sessionSeconds % 60).padStart(2, "0")}
+            </span>
+          </p>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
