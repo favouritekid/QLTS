@@ -1,8 +1,13 @@
 // src/app/(dashboard)/layout.tsx
 import { DashboardLayout } from "@/components/layouts/DashboardLayout";
-// ✅ SỬA LỖI: Thêm dòng import còn thiếu
-import { SocketHandler } from "@/components/layouts/SocketHandler";
+import dynamic from "next/dynamic";
 import React from "react";
+
+// ✅ PERF: Lazy-load SocketHandler - renders null, chỉ cần ở client
+const SocketHandler = dynamic(
+  () => import("@/components/layouts/SocketHandler").then(m => ({ default: m.SocketHandler })),
+  { ssr: false }
+);
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   // Layout này sẽ bọc tất cả các trang con
