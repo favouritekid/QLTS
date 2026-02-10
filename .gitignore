@@ -230,5 +230,19 @@ migration_data/
 .claude/skills/
 docs/
 
-# Lint output
+# Lint & debug output
 frontend/lint_output.txt
+frontend/lint_report.txt
+frontend/lint-errors.json
+frontend/arch-violations.txt
+frontend/architecture-report.json
+frontend/test_debug*.txt
+frontend/test_error_log.txt
+frontend/test_output.txt
+
+# Deprecated files
+*.deprecated
+
+# Report artifacts
+**/duplicate_report*.txt
+**/test_response.json
