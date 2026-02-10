@@ -45,6 +45,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+# Server-side env vars (runtime defaults, overridden by docker-compose)
+ENV BACKEND_URL=http://backend:8000
+ENV BACKEND_INTERNAL_URL=http://backend:8000
 
 # Non-root user
 RUN addgroup --system --gid 1001 nodejs \
