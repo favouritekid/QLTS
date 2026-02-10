@@ -7,13 +7,13 @@ name: Dependency Audit
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'Backend_FastAPI/requirements.txt'
       - 'frontend/package-lock.json'
       - 'frontend/package.json'
   pull_request:
-    branches: [main, develop]
+    branches: [main]
   schedule:
     # Run weekly on Monday at 08:00 UTC
     - cron: '0 8 * * 1'
