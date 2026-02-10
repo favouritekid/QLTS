@@ -25,8 +25,21 @@ import {
   isCSRFError,
   CSRF_HEADER_NAME,
 } from "./csrf";
-
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+// ============================================
+// 🚫 LOGOUT GUARD (window-level flag)
+// ============================================
+// Uses window global to survive Turbopack HMR module reloads.
+// Set by logoutMutation in useAuth.ts, reset on login success.
+function isApiLoggedOut(): boolean {
+  return typeof window !== "undefined" && !!(window as unknown as Record<string, unknown>).__qlts_logged_out;
+}
+export function setApiLoggedOut(value: boolean) {
+  if (typeof window !== "undefined") {
+    (window as unknown as Record<string, unknown>).__qlts_logged_out = value;
+  }
+}
 
 // Create axios instance
 export const api = axios.create({
@@ -75,9 +88,13 @@ const processQueue = (error: unknown, token: string | null = null) => {
 
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // ✅ SECURITY FIX: No longer need to manually set Authorization header
-    // Tokens are sent automatically via httpOnly cookies by browser
-    // withCredentials: true ensures cookies are included in requests
+    // ✅ LOGOUT GUARD: Block non-auth requests after logout.
+    // After logoutMutation sets _loggedOut=true, stale React Query
+    // observers may still fire requests before components unmount.
+    // Rejecting them here prevents spurious 401 errors.
+    if (isApiLoggedOut() && !config.url?.includes("/auth/")) {
+      return Promise.reject(new axios.Cancel("Blocked: logged out"));
+    }
 
     // ✅ CSRF Protection: Add X-CSRF-Token header for state-changing requests
     // The csrf_token cookie is set by backend on login/refresh (httpOnly=false)
@@ -129,6 +146,12 @@ api.interceptors.response.use(
       !originalRequest.url?.includes("/auth/reset-password") &&
       !originalRequest.url?.includes("/auth/verify-mfa")
     ) {
+      // Skip refresh during logout - requests may arrive after cookies
+      // are cleared but before components unmount. Just reject silently.
+      if (isApiLoggedOut()) {
+        return Promise.reject(error);
+      }
+
       const currentPath = typeof window !== "undefined" ? window.location.pathname : "";
 
       // Don't redirect if already on public pages

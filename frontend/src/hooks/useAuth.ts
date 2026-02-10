@@ -1,6 +1,6 @@
 // src/hooks/useAuth.ts
 import { useAuthStore } from "@/lib/stores/auth.store";
-import { api } from "@/lib/api/client";
+import { api, setApiLoggedOut } from "@/lib/api/client";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -68,6 +68,12 @@ export function useAuth(options?: UseAuthOptions) {
         return; // Stop here - don't setAuth or redirect
       }
 
+      // Clear stale cache from previous session before setting new auth.
+      // This prevents data leakage between different user accounts and
+      // avoids clearing during logout (which causes 401 race conditions).
+      queryClient.clear();
+      setApiLoggedOut(false); // Re-enable API requests
+
       const { user, login_notification } = loginResponse;
 
       setAuth(user);
@@ -123,6 +129,10 @@ export function useAuth(options?: UseAuthOptions) {
       return res.data;
     },
     onSuccess: async (loginResponse: LoginResponse) => {
+      // Clear stale cache from previous session (same as loginMutation).
+      queryClient.clear();
+      setApiLoggedOut(false); // Re-enable API requests
+
       const { user, login_notification } = loginResponse;
 
       setAuth(user);
@@ -148,28 +158,30 @@ export function useAuth(options?: UseAuthOptions) {
       // ========================================
       // OPTIMISTIC LOGOUT
       // ========================================
-      // Clear client state FIRST to stop React Query from firing new requests,
-      // then call backend API. Cookies remain in browser until server response
-      // clears them, so the API call still authenticates correctly.
+      // 1. Block API requests (prevents 401 cascade after cookies cleared)
+      // 2. Clear auth state
+      // 3. Redirect to login
+      // 4. Call logout API (cookies still present, server clears them)
+      //
+      // Cache is cleared on next LOGIN to avoid data leakage between users.
 
-      // 🛑 STEP 1: Cancel all ongoing requests immediately
-      await queryClient.cancelQueries();
+      // 🚫 STEP 1: Block all non-auth API requests immediately
+      setApiLoggedOut(true);
 
-      // 🗑️ STEP 2: Clear all cached data
-      queryClient.clear();
-
-      // 🧹 STEP 3: Clear client state (isAuthenticated=false stops queries)
+      // 🧹 STEP 2: Clear client state (isAuthenticated=false)
       logoutStore();
 
-      // 🚀 STEP 4: Redirect immediately (optimistic UI)
-      router.replace("/login");
-
-      // 📡 STEP 5: Call logout API (cookies still in browser, server clears them)
+      // 📡 STEP 3: Call logout API (cookies still present, server clears them)
       try {
         await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
-      } catch (error) {
-        console.warn("[Logout] API call failed:", error);
+      } catch {
+        // Ignore - user will be redirected regardless
       }
+
+      // 🚀 STEP 4: Hard redirect - more reliable than router.replace()
+      // which can fail if the component unmounts during React re-render.
+      // Also clears all JS state (module vars, React state) for a clean login page.
+      window.location.href = "/login";
     },
     onSuccess: () => {
       // User won't see this toast because they're already on login page
@@ -180,7 +192,11 @@ export function useAuth(options?: UseAuthOptions) {
       // This should rarely happen since we handle errors in mutationFn
       console.error("[Logout] Mutation error:", error);
     },
-    // onSettled removed - all cleanup is done in mutationFn
+    // NOTE: Do NOT clear queryClient here (neither onSuccess nor onSettled).
+    // Even in onSettled, dashboard components may still be mounted (~100ms
+    // after router.replace). Clearing cache causes observers to refetch
+    // after cookies are already gone → spurious 401 errors.
+    // Cache is cleared on next LOGIN instead (see loginMutation/verifyMfaMutation).
   });
 
   const {
