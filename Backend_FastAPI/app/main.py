@@ -96,6 +96,20 @@ if settings.SENTRY_DSN:
     except Exception as e:
         print(f"WARNING [main.py]: Failed to initialize Sentry: {e}")
 
+# === ✅ H3: Log Sanitization - Redact sensitive fields from log output ===
+_SENSITIVE_FIELDS = frozenset({
+    "password", "token", "secret", "payload", "authorization",
+    "csrf", "access_token", "refresh_token", "mfa_token",
+    "api_key", "credit_card", "ssn",
+})
+
+def _sanitize_sensitive_data(logger, method_name, event_dict):
+    """Structlog processor that redacts sensitive fields from log output."""
+    for key in list(event_dict.keys()):
+        if any(sensitive in key.lower() for sensitive in _SENSITIVE_FIELDS):
+            event_dict[key] = "[REDACTED]"
+    return event_dict
+
 # === Cấu hình Structured Logging ===
 structlog.configure(
     processors=[
@@ -106,6 +120,7 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
+        _sanitize_sensitive_data,  # ✅ H3: Redact sensitive fields before rendering
         (
             structlog.dev.ConsoleRenderer()
             if settings.APP_ENV == "development"

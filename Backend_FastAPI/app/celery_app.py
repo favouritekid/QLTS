@@ -128,6 +128,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=2, minute=0),  # Runs at 02:00 daily
         "options": {"queue": "default"},
     },
+
+    # --- Session Maintenance (M1: Idle Session Timeout) ---
+    "cleanup-idle-sessions-daily": {
+        "task": "cleanup_idle_sessions_task",
+        "schedule": crontab(hour=3, minute=0),  # Runs at 03:00 daily
+        "options": {"queue": "default"},
+    },
 }
 
 # =============================================================================

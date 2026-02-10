@@ -154,7 +154,18 @@ class Settings(BaseSettings):
     )
     ANOMALY_MAX_SESSIONS_PER_USER: int = Field(
         default=10, validation_alias="ANOMALY_MAX_SESSIONS_PER_USER"
-    )  # Max concurrent sessions before warning
+    )  # Max concurrent sessions (enforced, oldest evicted)
+    IDLE_SESSION_TIMEOUT_DAYS: int = Field(
+        default=7, validation_alias="IDLE_SESSION_TIMEOUT_DAYS"
+    )  # Revoke sessions idle longer than this
+
+    # -- Security: Refresh Token Abuse Prevention (M4) --
+    REFRESH_MAX_FAILURES: int = Field(
+        default=5, validation_alias="REFRESH_MAX_FAILURES"
+    )  # Max failed refresh attempts before lockout
+    REFRESH_FAILURE_WINDOW_MINUTES: int = Field(
+        default=5, validation_alias="REFRESH_FAILURE_WINDOW_MINUTES"
+    )  # Window for counting failed refresh attempts
     ANOMALY_SUSPICIOUS_COUNTRY_CHANGE_HOURS: int = Field(
         default=2, validation_alias="ANOMALY_SUSPICIOUS_COUNTRY_CHANGE_HOURS"
     )  # Hours between logins from different countries to flag
@@ -245,22 +256,22 @@ class Settings(BaseSettings):
                 "Use a remote database with proper credentials."
             )
 
-        # ✅ H6: Warn about missing TLS for DB connections
+        # ✅ M2: Enforce TLS for DB connections in production
         if "asyncpg://" in db_url_lower and "sslmode=" not in db_url_lower:
-            print(
-                "WARNING [config.py]: DATABASE_URL does not specify sslmode. "
-                "Add ?sslmode=require for encrypted connections in production."
+            raise RuntimeError(
+                "CRITICAL: DATABASE_URL does not specify sslmode in production. "
+                "Add ?sslmode=require for encrypted connections. "
+                "Example: postgresql+asyncpg://user:pass@host/db?sslmode=require"
             )
 
-        # ✅ H6: Warn about missing TLS for Redis connections
+        # ✅ M2: Enforce TLS for Redis connections in production
         redis_urls = [self.REDIS_URL, self.CELERY_BROKER_URL, self.CELERY_RESULT_BACKEND_URL]
         for url in redis_urls:
             if url.startswith("redis://") and not url.startswith("rediss://"):
-                print(
-                    f"WARNING [config.py]: Redis URL uses unencrypted redis:// protocol: {url[:30]}... "
-                    "Consider using rediss:// for TLS in production."
+                raise RuntimeError(
+                    f"CRITICAL: Redis URL uses unencrypted redis:// protocol in production: {url[:30]}... "
+                    "Use rediss:// for TLS-encrypted connections."
                 )
-                break  # One warning is enough
 
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
@@ -406,19 +417,37 @@ class Settings(BaseSettings):
         # Tính toán lại MAX_AVATAR_CONTENT_LENGTH sau khi MAX_AVATAR_SIZE_MB đã được load
         self.MAX_AVATAR_CONTENT_LENGTH = self.MAX_AVATAR_SIZE_MB * 1024 * 1024
 
+        # ✅ M5: Auto-generate secure dev secrets when using insecure defaults
+        self._generate_dev_secrets()
+
+    def _generate_dev_secrets(self):
+        """Auto-generate random secrets in non-production to avoid using insecure defaults."""
+        import secrets as _secrets
+
+        if self.APP_ENV == "production":
+            return
+
+        if self.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
+            self.DEVICE_FINGERPRINT_SALT = _secrets.token_urlsafe(32)
+            print(
+                "WARNING [config.py]: ⚠️ DEVICE_FINGERPRINT_SALT using auto-generated random value. "
+                "Set a permanent value in .env for consistent device fingerprinting across restarts."
+            )
+
+        if not self.MFA_ENCRYPTION_KEY:
+            from cryptography.fernet import Fernet
+            self.MFA_ENCRYPTION_KEY = Fernet.generate_key().decode()
+            print(
+                "WARNING [config.py]: ⚠️ MFA_ENCRYPTION_KEY auto-generated for development. "
+                "Set a permanent value in .env to persist MFA secrets across restarts."
+            )
+
 
 # --- Khởi tạo Settings ---
 try:
     settings = Settings()
     # ✅ SECURITY: Fail-fast validation for production secrets
     settings._validate_production_secrets()
-
-    # ✅ SECURITY: Warn about insecure defaults in development
-    if settings.APP_ENV != "production" and settings.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
-        print(
-            "WARNING [config.py]: DEVICE_FINGERPRINT_SALT is using the default value. "
-            "Set a random value in .env: openssl rand -base64 32"
-        )
 
     print(
         f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}, DB_URL={settings.DATABASE_URL[:30]}..."

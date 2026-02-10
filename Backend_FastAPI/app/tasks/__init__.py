@@ -28,6 +28,7 @@ from .cache_tasks import (
     recalculate_lead_caches_task,
     sync_kpi_ytd_task,
 )
+from .session_tasks import cleanup_idle_sessions_task
 
 __all__ = [
     # Email tasks
@@ -42,4 +43,6 @@ __all__ = [
     # Cache tasks
     "recalculate_lead_caches_task",
     "sync_kpi_ytd_task",
+    # Session tasks
+    "cleanup_idle_sessions_task",
 ]

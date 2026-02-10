@@ -727,6 +727,10 @@ async def refresh_access_token(
         status_code=503, detail="Auth service unavailable"
     )
 
+    # ✅ M4: Per-user rate limiting for failed refresh attempts
+    # We extract username from token even on failure to track abuse
+    _refresh_username = None
+
     try:
         # (STEP 1: Decode - Giữ nguyên)
         try:
@@ -742,10 +746,32 @@ async def refresh_access_token(
         username: str | None = payload.get("sub")
         old_refresh_jti: str | None = payload.get("jti")
         token_type: str | None = payload.get("type")
+        _refresh_username = username  # Track for rate limiting on failure
 
         if not username or not old_refresh_jti or token_type != "refresh":
-            log.warning("Invalid refresh token payload", payload=payload)
+            log.warning("Invalid refresh token payload", sub=username, type=token_type)
             raise credentials_exception
+
+        # ✅ M4: Check if user exceeded failed refresh attempts
+        try:
+            fail_key = f"refresh_fail:{username}"
+            fail_count_str = await safe_redis_get(fail_key)
+            fail_count = int(fail_count_str) if fail_count_str else 0
+            if fail_count >= settings.REFRESH_MAX_FAILURES:
+                log.warning(
+                    "Refresh token rate limited - too many failures",
+                    username=username,
+                    fail_count=fail_count,
+                    security_event="REFRESH_RATE_LIMITED",
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many failed refresh attempts. Please login again.",
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error("Redis refresh rate limit check failed", error=str(e))
 
         # (STEP 2: Check Blacklist - Giữ nguyên)
         try:
@@ -917,6 +943,12 @@ async def refresh_access_token(
                 # ✅ CSRF Protection: Refresh CSRF token on token refresh
                 set_csrf_cookie(response)
 
+                # ✅ M4: Clear failed refresh counter on success
+                try:
+                    await safe_redis_delete(f"refresh_fail:{username}")
+                except Exception:
+                    pass
+
                 return response
 
             except InvalidToken:
@@ -925,6 +957,31 @@ async def refresh_access_token(
                 raise
 
     except (JWTError, InvalidToken):
+        # ✅ M4: Increment failed refresh counter
+        if _refresh_username:
+            try:
+                fail_key = f"refresh_fail:{_refresh_username}"
+                window = settings.REFRESH_FAILURE_WINDOW_MINUTES * 60
+                current = await safe_redis_get(fail_key)
+                new_count = (int(current) if current else 0) + 1
+                await safe_redis_set(fail_key, str(new_count), ex=window)
+
+                if new_count >= settings.REFRESH_MAX_FAILURES:
+                    log.warning(
+                        "Refresh failure threshold reached - revoking all sessions",
+                        username=_refresh_username,
+                        fail_count=new_count,
+                        security_event="REFRESH_ABUSE_DETECTED",
+                    )
+                    try:
+                        user = await user_service.get_user_by_username(db, _refresh_username)
+                        if user:
+                            await user_service.invalidate_all_sessions(db, user)
+                    except Exception as revoke_err:
+                        log.error("Failed to revoke sessions after refresh abuse", error=str(revoke_err))
+            except Exception as redis_err:
+                log.error("Failed to track refresh failure", error=str(redis_err))
+
         raise credentials_exception
     except HTTPException:
         raise

@@ -767,7 +767,7 @@ async def get_application_for_user(
                 "IDOR attempt detected: Manager trying to access application outside managed units",
                 application_id=application_id,
                 lead_unit_id=lead.unit_id,
-                managed_units=managed_units,
+                managed_units_count=len(managed_units),
                 manager_id=current_user.id,
                 username=current_user.username
             )
@@ -1053,7 +1053,7 @@ async def get_distribution_rule_for_user(
                 "IDOR attempt detected: Manager trying to access distribution rule outside managed units",
                 rule_id=rule_id,
                 rule_unit_id=rule.unit_id,
-                managed_units=managed_units,
+                managed_units_count=len(managed_units),
                 user_id=current_user.id,
                 username=current_user.username
             )
@@ -1163,7 +1163,7 @@ async def get_organizational_unit_for_user(
             log.warning(
                 "IDOR attempt detected: Manager trying to access organizational unit outside managed units",
                 unit_id=unit_id,
-                managed_units=managed_units,
+                managed_units_count=len(managed_units),
                 user_id=current_user.id,
                 username=current_user.username
             )
@@ -1291,7 +1291,7 @@ async def verify_user_management_permission(
                 "IDOR attempt detected: Manager trying to manage user outside managed units",
                 target_user_id=target_user_id,
                 target_unit_id=target_user.unit_id,
-                managed_units=managed_units,
+                managed_units_count=len(managed_units),
                 current_user_id=current_user.id,
                 current_username=current_user.username
             )

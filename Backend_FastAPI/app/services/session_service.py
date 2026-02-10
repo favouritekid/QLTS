@@ -150,6 +150,76 @@ async def _revoke_previous_sessions_on_device(
         )
 
 
+async def _enforce_max_sessions(
+    db: AsyncSession,
+    user_id: int,
+):
+    """
+    ✅ H1: Enforce maximum concurrent sessions per user (FIFO eviction).
+
+    If user has >= ANOMALY_MAX_SESSIONS_PER_USER active sessions,
+    revoke the oldest sessions until under the limit, leaving room for
+    the new session about to be created.
+    """
+    from ..config import settings
+
+    max_sessions = settings.ANOMALY_MAX_SESSIONS_PER_USER
+    try:
+        repo = SessionRepository(db)
+        active_sessions = await repo.get_active_by_user(user_id)
+        active_count = len(active_sessions)
+
+        if active_count < max_sessions:
+            return
+
+        # Sessions are ordered by last_activity_at DESC, so oldest are at the end
+        # Revoke oldest sessions to make room for the new one
+        sessions_to_revoke = active_sessions[max_sessions - 1:]  # Keep max-1, new one will be added
+        now = datetime.now(timezone.utc)
+        revoked_count = 0
+
+        for session in sessions_to_revoke:
+            session.revoked_at = now
+            db.add(session)
+
+            try:
+                await safe_redis_delete(f"session:{session.refresh_jti}")
+                ttl = int((session.expires_at - now).total_seconds())
+                if ttl > 0:
+                    await safe_redis_set(
+                        f"blacklist:{session.refresh_jti}",
+                        "max_sessions_exceeded",
+                        ex=ttl,
+                    )
+            except Exception as redis_error:
+                log.warning(
+                    "Failed to clean Redis for evicted session",
+                    session_id=session.id,
+                    error=str(redis_error),
+                )
+
+            revoked_count += 1
+
+        await db.flush()
+
+        log.warning(
+            "Concurrent session limit enforced (FIFO eviction)",
+            user_id=user_id,
+            active_before=active_count,
+            revoked_count=revoked_count,
+            max_allowed=max_sessions,
+            security_event="MAX_SESSIONS_ENFORCED",
+        )
+
+    except Exception as e:
+        log.error(
+            "Failed to enforce max sessions (non-critical, continuing)",
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+
+
 async def create_session(
     db: AsyncSession,
     user_id: int,
@@ -237,6 +307,9 @@ async def create_session(
         browser=browser,
         os=os
     )
+
+    # ✅ H1: Enforce concurrent session limit (FIFO eviction)
+    await _enforce_max_sessions(db=db, user_id=user_id)
 
     # Create session record
     session = models.UserSession(
