@@ -63,10 +63,11 @@ services:
     environment:
       # Constructed from POSTGRES_* vars — do NOT also set in .env.production
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qlts_production}
-      # Redis DB allocation: 0=cache+socketio, 1=celery broker, 2=celery results
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND_URL: redis://redis:6379/2
+      # Redis DB allocation: 1=cache+socketio, 2=celery broker, 3=celery results
+      # Must match config.py defaults to avoid mismatch if env vars are unset
+      REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
     volumes:
       - backend_uploads:/app/uploads
       - backend_static_uploads:/app/app/static/uploads
@@ -99,9 +100,9 @@ services:
       - .env.production
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qlts_production}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND_URL: redis://redis:6379/2
+      REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
     volumes:
       - backend_uploads:/app/uploads
       - backend_logs:/app/logs
@@ -124,9 +125,9 @@ services:
       - .env.production
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qlts_production}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND_URL: redis://redis:6379/2
+      REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
     depends_on:
       backend:
         condition: service_healthy
