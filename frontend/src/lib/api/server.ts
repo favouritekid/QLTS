@@ -73,16 +73,14 @@ import type { AdmissionProfileResponse } from '@/lib/zod/admissions';
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 /**
- * Get backend API URL (internal docker network in production)
- * In production, use internal container name instead of external domain
+ * Get backend API URL for server-side fetches.
+ * Prefers BACKEND_INTERNAL_URL when available (Docker environment),
+ * regardless of NODE_ENV, since server components always run inside the container.
  */
 function getBackendUrl(): string {
-  // In production (Docker), use internal container network
-  if (process.env.NODE_ENV === 'production' && process.env.BACKEND_INTERNAL_URL) {
+  if (process.env.BACKEND_INTERNAL_URL) {
     return process.env.BACKEND_INTERNAL_URL;
   }
-
-  // Development: use public API URL
   return API_BASE_URL;
 }
 
