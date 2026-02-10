@@ -22,7 +22,7 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qlts}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:-qlts_production}"]
       interval: 10s
       timeout: 5s
       retries: 5

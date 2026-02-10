@@ -146,35 +146,29 @@ export function useAuth(options?: UseAuthOptions) {
   const logoutMutation = useMutation<void, AxiosError<ApiErrorResponse>>({
     mutationFn: async () => {
       // ========================================
-      // OPTIMISTIC LOGOUT (Race Condition Fix)
+      // OPTIMISTIC LOGOUT
       // ========================================
-      // Execute cleanup BEFORE calling API to prevent race conditions
-      // Order: Cancel queries → Clear cache → Redirect → API call (fire-and-forget)
+      // Clear client state FIRST to stop React Query from firing new requests,
+      // then call backend API. Cookies remain in browser until server response
+      // clears them, so the API call still authenticates correctly.
 
       // 🛑 STEP 1: Cancel all ongoing requests immediately
-      // This prevents 401 errors after logout button is clicked
       await queryClient.cancelQueries();
 
       // 🗑️ STEP 2: Clear all cached data
-      // Prevents next user from seeing previous user's data
       queryClient.clear();
 
-      // 🧹 STEP 3: Clear client state
+      // 🧹 STEP 3: Clear client state (isAuthenticated=false stops queries)
       logoutStore();
 
-      // 🚀 STEP 4: Redirect IMMEDIATELY (optimistic UI)
-      // Don't wait for API response - better UX
+      // 🚀 STEP 4: Redirect immediately (optimistic UI)
       router.replace("/login");
 
-      // 📡 STEP 5: Call logout API in background (fire-and-forget)
-      // If this fails, it's okay - client is already cleaned up
+      // 📡 STEP 5: Call logout API (cookies still in browser, server clears them)
       try {
-        if (useAuthStore.getState().isAuthenticated) {
-          await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
-        }
+        await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
       } catch (error) {
-        // Silently fail - user is already logged out on client
-        console.warn("[Logout] Background API call failed (user already logged out):", error);
+        console.warn("[Logout] API call failed:", error);
       }
     },
     onSuccess: () => {

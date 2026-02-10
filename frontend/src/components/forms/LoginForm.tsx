@@ -88,11 +88,13 @@ function getTokenRemainingSeconds(token: string): number {
   }
 }
 
-function isMfaTokenExpired(error: unknown): boolean {
+function isMfaTokenInvalid(error: unknown): boolean {
   if (!error) return false;
   const axiosError = error as { response?: { status?: number; data?: { detail?: string } } };
-  const detail = axiosError.response?.data?.detail;
-  return axiosError.response?.status === 401 && typeof detail === "string" && detail.toLowerCase().includes("expired");
+  const detail = axiosError.response?.data?.detail?.toLowerCase() ?? "";
+  return axiosError.response?.status === 401 && (
+    detail.includes("expired") || detail.includes("already used")
+  );
 }
 
 export function LoginForm() {
@@ -188,8 +190,8 @@ export function LoginForm() {
         { mfa_token: mfaToken, code },
         {
           onError: (error) => {
-            if (isMfaTokenExpired(error)) {
-              // Token expired → auto-redirect back to login with message
+            if (isMfaTokenInvalid(error)) {
+              // Token expired or already used → redirect back to login
               handleMfaCancel();
               setSessionExpiredMsg("Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.");
             } else {
