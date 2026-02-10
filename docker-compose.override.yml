@@ -45,6 +45,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: deps
     command: npm run dev
     environment:
       BACKEND_URL: http://backend:8000
@@ -54,8 +55,18 @@ services:
       - /app/.next
     ports:
       - "3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
   postgres:
+    ports:
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qlts_dev}
       POSTGRES_DB: ${POSTGRES_DB:-qlts_dev}
+
+  redis:
+    ports:
+      - "127.0.0.1:6380:6379"

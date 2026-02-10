@@ -40,7 +40,7 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY . .
 
-# Create required directories
+# Create required directories and make entrypoint executable
 RUN mkdir -p /app/uploads \
     /app/app/static/uploads/avatars \
     /app/geoip \
@@ -48,9 +48,12 @@ RUN mkdir -p /app/uploads \
     && chown -R appuser:appuser /app/uploads \
     /app/app/static/uploads \
     /app/geoip \
-    /app/logs
+    /app/logs \
+    && chmod +x /app/docker-entrypoint.sh
 
 USER appuser
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 EXPOSE 8000
 

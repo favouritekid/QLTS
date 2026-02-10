@@ -20,16 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Add notes column to fee table
-    op.add_column(
-        'fee',
-        sa.Column(
-            'notes',
-            sa.Text(),
-            nullable=True,
-            comment='Notes for waive/cancel/audit trail'
-        )
-    )
+    # notes column already exists in fee table (created in fin20260131001)
+    pass
 
 
 def downgrade() -> None:

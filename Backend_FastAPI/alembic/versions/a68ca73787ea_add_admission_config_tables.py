@@ -178,7 +178,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_profile_subject_score_id'), 'profile_subject_score', ['id'], unique=False)
     op.create_index(op.f('ix_profile_subject_score_profile_id'), 'profile_subject_score', ['profile_id'], unique=False)
     op.create_index(op.f('ix_profile_subject_score_subject_id'), 'profile_subject_score', ['subject_id'], unique=False)
-    op.drop_table('casbin_rule')
+    pass  # casbin_rule managed by adapter, not Alembic
     op.add_column('admission_profile', sa.Column('offering_admission_config_id', sa.Integer(), nullable=True, comment='Source config (audit/debug/report)'))
     op.drop_constraint(op.f('uq_admission_profile_citizen_id'), 'admission_profile', type_='unique')
     op.drop_constraint(op.f('uq_admission_profile_lead_id'), 'admission_profile', type_='unique')

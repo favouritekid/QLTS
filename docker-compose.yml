@@ -17,8 +17,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-qlts_production}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
     deploy:
       resources:
         limits:
@@ -40,8 +38,6 @@ services:
       --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
     deploy:
       resources:
         limits:
@@ -113,6 +109,8 @@ services:
       resources:
         limits:
           memory: 512M
+    healthcheck:
+      disable: true
 
   # --- Celery Beat (SINGLETON - never scale beyond 1) ---
   celery-beat:
@@ -136,6 +134,8 @@ services:
       resources:
         limits:
           memory: 256M
+    healthcheck:
+      disable: true
 
   # --- Frontend (Next.js Standalone) ---
   frontend:

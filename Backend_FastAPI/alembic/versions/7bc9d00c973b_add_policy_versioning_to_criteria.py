@@ -21,22 +21,8 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Add policy versioning fields to admission_criteria + restore casbin_rule."""
     
-    # =========================================================================
-    # RESTORE casbin_rule table (was accidentally dropped by autogenerate)
-    # =========================================================================
-    op.create_table(
-        'casbin_rule',
-        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column('ptype', sa.String(length=255), nullable=True),
-        sa.Column('v0', sa.String(length=255), nullable=True),
-        sa.Column('v1', sa.String(length=255), nullable=True),
-        sa.Column('v2', sa.String(length=255), nullable=True),
-        sa.Column('v3', sa.String(length=255), nullable=True),
-        sa.Column('v4', sa.String(length=255), nullable=True),
-        sa.Column('v5', sa.String(length=255), nullable=True),
-        sa.PrimaryKeyConstraint('id', name='casbin_rule_pkey')
-    )
-    
+    pass  # casbin_rule managed by adapter, not Alembic
+
     # =========================================================================
     # Add policy versioning columns
     # =========================================================================
@@ -81,4 +67,4 @@ def downgrade() -> None:
     op.drop_column('admission_criteria', 'effective_to')
     op.drop_column('admission_criteria', 'effective_from')
     op.drop_column('admission_criteria', 'policy_version')
-    op.drop_table('casbin_rule')
+    pass  # casbin_rule managed by adapter, not Alembic

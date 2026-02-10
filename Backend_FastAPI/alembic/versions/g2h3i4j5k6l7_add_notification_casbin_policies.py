@@ -20,6 +20,19 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add Casbin policies for notification endpoints."""
+    # Ensure casbin_rule table exists (normally created by Casbin adapter at runtime)
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS casbin_rule (
+            id SERIAL PRIMARY KEY,
+            ptype VARCHAR(255),
+            v0 VARCHAR(255),
+            v1 VARCHAR(255),
+            v2 VARCHAR(255),
+            v3 VARCHAR(255),
+            v4 VARCHAR(255),
+            v5 VARCHAR(255)
+        )
+    """)
     # Insert policies for user role
     op.execute("""
         INSERT INTO casbin_rule (ptype, v0, v1, v2)
