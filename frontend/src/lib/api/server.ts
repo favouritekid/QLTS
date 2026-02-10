@@ -64,7 +64,8 @@ import type {
   EventGroupPreferencesResponse,
   UserSessionListResponse,
 } from '@/types/api.types';
-import type { AdmissionProfileResponse } from '@/lib/zod/admissions';
+import type { AdmissionProfileResponse, AdmissionsPage } from '@/lib/zod/admissions';
+import type { EnhancedOfficerStats } from '@/hooks/useDashboardStats';
 
 // ============================================
 // CONFIGURATION
@@ -464,6 +465,23 @@ const admin = {
 };
 
 // ============================================
+// OFFICER API (SERVER-SIDE)
+// ============================================
+
+const officer = {
+  /**
+   * Get officer dashboard stats (Server-Side)
+   */
+  async getDashboardStats(params?: {
+    start_date?: string;
+    end_date?: string;
+    scope?: string;
+  }): Promise<EnhancedOfficerStats> {
+    return serverFetch<EnhancedOfficerStats>('/api/officer/dashboard', { params });
+  },
+};
+
+// ============================================
 // ADMISSIONS API (SERVER-SIDE)
 // ============================================
 
@@ -484,8 +502,8 @@ const admissions = {
     status?: string;
     page?: number;
     page_size?: number;
-  }): Promise<AdmissionProfileResponse[]> {
-    return serverFetch<AdmissionProfileResponse[]>('/api/admissions', { params });
+  }): Promise<AdmissionsPage> {
+    return serverFetch<AdmissionsPage>('/api/admissions', { params });
   },
 };
 
@@ -559,6 +577,7 @@ export const serverApi = {
   notifications,
   sessions,
   admissions,
+  officer,
 };
 
 /**

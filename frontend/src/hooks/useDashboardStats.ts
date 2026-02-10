@@ -253,6 +253,7 @@ export interface UseDashboardStatsOptions {
   scope?: DashboardScope;
   officerId?: number;
   unitId?: number;
+  initialData?: EnhancedOfficerStats;
 }
 
 export function useDashboardStats(options?: UseDashboardStatsOptions) {
@@ -278,6 +279,7 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     }),
     refetchInterval: 60000,
     staleTime: 30000,
+    initialData: options?.initialData,
   });
 
   // Fetch team stats (with date filter)

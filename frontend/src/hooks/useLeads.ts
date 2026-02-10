@@ -178,7 +178,10 @@ export function useReassignQuota(enabled: boolean = true) {
  * const { data: timeline } = useLeadTimeline(123);
  * ```
  */
-export function useLeadTimeline(leadId: number) {
+export function useLeadTimeline(
+  leadId: number,
+  options?: { initialData?: TimelineItem[] }
+) {
   return useQuery<TimelineItem[], AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.timeline(leadId),
     queryFn: async () => {
@@ -186,6 +189,7 @@ export function useLeadTimeline(leadId: number) {
     },
     enabled: !!leadId,
     staleTime: 1000 * 30, // 30 seconds
+    initialData: options?.initialData,
   });
 }
 
@@ -197,7 +201,10 @@ export function useLeadTimeline(leadId: number) {
  * const { data: insights } = useLeadInsights(123);
  * ```
  */
-export function useLeadInsights(leadId: number) {
+export function useLeadInsights(
+  leadId: number,
+  options?: { initialData?: LeadInsights }
+) {
   return useQuery<LeadInsights, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.insights(leadId),
     queryFn: async () => {
@@ -206,6 +213,7 @@ export function useLeadInsights(leadId: number) {
     enabled: !!leadId,
     staleTime: 1000 * 30, // 30 seconds - reduced for better responsiveness after lead updates
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
+    initialData: options?.initialData,
   });
 }
 

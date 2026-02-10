@@ -16,6 +16,7 @@ import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
   AdmissionListParams,
+  AdmissionsPage,
   BulkApproveRequest,
   BulkRejectRequest,
   BulkAssignRequest,
@@ -41,7 +42,10 @@ export const admissionsKeys = {
 // QUERIES
 // ============================================
 
-export function useListAdmissions(filters?: AdmissionListParams) {
+export function useListAdmissions(
+  filters?: AdmissionListParams,
+  options?: { initialData?: AdmissionsPage }
+) {
   return useQuery({
     queryKey: admissionsKeys.list(filters as Record<string, unknown> | undefined),
     queryFn: () => admissionsApi.listAdmissions({
@@ -58,6 +62,7 @@ export function useListAdmissions(filters?: AdmissionListParams) {
     staleTime: 15000, // 15 seconds
     refetchOnWindowFocus: true,
     placeholderData: (previousData) => previousData, // Keep showing old data while fetching new page
+    initialData: options?.initialData,
   })
 }
 

@@ -68,11 +68,13 @@ import { AdmissionReadinessChecklist } from "@/components/leads/AdmissionReadine
 import { LeadInfoTabs } from "./LeadInfoTabs";
 import { WorkflowBreadcrumb } from "@/components/common";
 import { cn } from "@/lib/utils";
-import type { Lead } from "@/types/lead.types";
+import type { Lead, TimelineItem, LeadInsights } from "@/types/lead.types";
 
 interface LeadDetailClientProps {
   leadId: number;
   initialData?: Lead;
+  initialTimeline?: TimelineItem[];
+  initialInsights?: LeadInsights;
 }
 
 const getInitials = (name: string) => {
@@ -98,7 +100,7 @@ const getScoreColor = (score: number) => {
   return "text-muted-foreground bg-muted";
 };
 
-export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps) {
+export function LeadDetailClient({ leadId, initialData, initialTimeline, initialInsights }: LeadDetailClientProps) {
   const router = useRouter();
 
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -118,10 +120,10 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
     }
   };
 
-  // Fetch lead data
+  // Fetch lead data with SSR prefetched initialData
   const { data: lead, isLoading, isError, error } = useLead(leadId, true, { initialData });
-  const { data: timeline } = useLeadTimeline(leadId);
-  const { data: insights } = useLeadInsights(leadId);
+  const { data: timeline } = useLeadTimeline(leadId, { initialData: initialTimeline });
+  const { data: insights } = useLeadInsights(leadId, { initialData: initialInsights });
   const { data: workflowContext } = useWorkflowContext(leadId);
 
   // Delete mutation

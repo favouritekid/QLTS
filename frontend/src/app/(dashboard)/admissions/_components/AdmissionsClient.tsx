@@ -96,7 +96,7 @@ import {
   useBulkAssignAdmissions,
   useExportAdmissions,
 } from "@/hooks/admissions"
-import type { AdmissionProfileResponse, AdmissionListParams } from "@/lib/zod/admissions"
+import type { AdmissionProfileResponse, AdmissionListParams, AdmissionsPage } from "@/lib/zod/admissions"
 import { getColumns, STATUS_CONFIG, ELIGIBILITY_CONFIG } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
 import { BulkRejectDialog } from "./dialogs/BulkRejectDialog"
@@ -122,7 +122,11 @@ const STATUS_OPTIONS = [
 // MAIN COMPONENT
 // =============================================================================
 
-export function AdmissionsClient() {
+interface AdmissionsClientProps {
+  initialData?: AdmissionsPage
+}
+
+export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   // Filter state
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
@@ -162,8 +166,8 @@ export function AdmissionsClient() {
     order: sorting[0]?.desc ? "desc" : "asc",
   }), [page, pageSize, selectedStatuses, debouncedSearch, dateFrom, dateTo, sorting])
 
-  // Query
-  const { data, isLoading, isError, isFetching } = useListAdmissions(filters)
+  // Query - use initialData for first render (SSR prefetch)
+  const { data, isLoading, isError, isFetching } = useListAdmissions(filters, { initialData })
 
   // Mutations
   const bulkApprove = useBulkApproveAdmissions()

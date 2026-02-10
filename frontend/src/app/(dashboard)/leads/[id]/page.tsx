@@ -50,14 +50,24 @@ function LeadDetailLoading() {
 }
 
 /**
- * Server Component - Fetches initial lead data
+ * Server Component - Fetches initial lead data + timeline + insights in parallel
  */
 async function LeadDetailPageContent({ leadId }: { leadId: number }) {
-  // ✅ Fetch lead detail on server
-  // Note: Timeline and Insights will be fetched client-side when tabs are accessed
-  const initialData = await serverApi.leads.getLead(leadId);
+  // ✅ Parallel fetch: lead detail, timeline, and insights on server
+  const [initialData, initialTimeline, initialInsights] = await Promise.all([
+    serverApi.leads.getLead(leadId),
+    serverApi.leads.getLeadTimeline(leadId).catch(() => undefined),
+    serverApi.leads.getLeadInsights(leadId).catch(() => undefined),
+  ]);
 
-  return <LeadDetailClient leadId={leadId} initialData={initialData} />;
+  return (
+    <LeadDetailClient
+      leadId={leadId}
+      initialData={initialData}
+      initialTimeline={initialTimeline}
+      initialInsights={initialInsights}
+    />
+  );
 }
 
 /**
