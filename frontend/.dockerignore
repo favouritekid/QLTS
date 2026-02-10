@@ -31,6 +31,24 @@ playwright.config.*
 
 # Documentation
 *.md
+docs/
 
-# Lint output
+# Temporary & Backup files
+*.bak
+*.old
+*.tmp
+*.swp
+
+# Logs
+*.log
+
+# Lint & debug output
 lint_output.txt
+lint_report.txt
+lint-errors.json
+arch-violations.txt
+architecture-report.json
+test_debug*.txt
+test_error_log.txt
+test_output.txt
+type_check*.log

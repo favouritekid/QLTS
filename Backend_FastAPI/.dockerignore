@@ -44,3 +44,30 @@ scripts/debug_*
 # SQLite databases
 *.db
 *.sqlite3
+
+# Temporary & Backup files
+*.bak
+*.old
+*.tmp
+*.swp
+*.~*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Specific Cleanup Candidates (if not deleted)
+duplicate_report.txt
+duplicate_report_utf8.txt
+arch-violations.txt
+lint-errors.json
+lint_output.txt
+lint_report.txt
+test_debug*.txt
+test_error_log.txt
+test_output.txt
+type_check*.log
+test_response.json
+ratelimit.py.deprecated
