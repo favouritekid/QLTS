@@ -16,7 +16,6 @@ const nextConfig: NextConfig = {
       "lucide-react",        // Icon library - only import used icons
       "@tanstack/react-table", // Table library
       "recharts",            // Chart library (~150KB without optimization)
-      "framer-motion",       // Animation library
       "@dnd-kit/core",       // Drag-and-drop core
       "@dnd-kit/sortable",   // Drag-and-drop sortable
       "date-fns",            // Date utility functions
