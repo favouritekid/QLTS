@@ -370,9 +370,12 @@ BASIC_USER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/notifications/mark-all-as-read", "action": "POST"},
         {"subject": "{role}", "object": "/api/notifications/{id}", "action": "DELETE"},
         # Notification preferences (SELF only)
-        {"subject": "{role}", "object": "/api/notification-preferences", "action": "GET"},
-        {"subject": "{role}", "object": "/api/notification-preferences", "action": "PUT"},
-        {"subject": "{role}", "object": "/api/notification-preferences/{channel}", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/notifications/preferences", "action": "GET"},
+        {"subject": "{role}", "object": "/api/notifications/preferences", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/notifications/preferences/{channel}", "action": "PUT"},
+        # Notification event group preferences (SELF only)
+        {"subject": "{role}", "object": "/api/notifications/event-groups", "action": "GET"},
+        {"subject": "{role}", "object": "/api/notifications/event-groups", "action": "PATCH"},
         # Sessions (SELF only - manage own sessions)
         {"subject": "{role}", "object": "/api/sessions", "action": "GET"},
         {"subject": "{role}", "object": "/api/sessions/{id}", "action": "DELETE"},
