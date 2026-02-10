@@ -783,7 +783,8 @@ class TestSecurityFixes:
     async def test_reset_password_invalidation_failure_returns_500(
         self,
         client: AsyncClient,
-        regular_user_in_db: dict
+        regular_user_in_db: dict,
+        clear_redis_keys
     ):
         """Test reset password returns 500 if session invalidation fails (FIX-2)."""
         from app.security import create_password_reset_token
@@ -807,27 +808,38 @@ class TestSecurityFixes:
         self,
         client: AsyncClient,
         regular_user_in_db: dict,
-        test_redis_client
+        test_redis_client,
+        clear_redis_keys
     ):
         """Test password change invalidates all user sessions (FIX-2)."""
         user_id = regular_user_in_db["id"]
         username = regular_user_in_db["username"]
         password = regular_user_in_db["password"]
 
-        # Create 2 sessions
-        login1_res = await client.post("/api/auth/login", data={
-            "username": username, "password": password
-        })
-        session1_cookies = dict(login1_res.cookies)
+        # Create 2 sessions from different "devices" (different User-Agent)
+        # to avoid auto-revocation of session 1 when session 2 is created
+        from app.main import fastapi_app
 
-        login2_res = await client.post("/api/auth/login", data={
-            "username": username, "password": password
-        })
-        session2_cookies = dict(login2_res.cookies)
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client_a:
+            login1_res = await client_a.post(
+                "/api/auth/login",
+                data={"username": username, "password": password},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/120"}
+            )
+            assert login1_res.status_code == 200
+            session1_cookies = dict(login1_res.cookies)
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client_b:
+            login2_res = await client_b.post(
+                "/api/auth/login",
+                data={"username": username, "password": password},
+                headers={"User-Agent": "Mozilla/5.0 (Macintosh) Safari/17.0"}
+            )
+            assert login2_res.status_code == 200
+            session2_cookies = dict(login2_res.cookies)
 
         # Change password from session 1
         new_password = "NewSecurePassword!123"
-        from app.main import fastapi_app
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as change_client:
             change_client.cookies.update(session1_cookies)
             change_res = await change_client.post("/api/auth/change-password", json={

@@ -1,4 +1,5 @@
 # app/services/user_service.py
+import hashlib
 import io
 import csv
 from typing import AsyncGenerator
@@ -1027,7 +1028,7 @@ async def reset_password(
     """
     try:
         # ✅ SECURITY: Check if token was already used (single-use enforcement)
-        token_hash = token[:32]  # Use prefix as key to avoid storing full token
+        token_hash = hashlib.sha256(token.encode()).hexdigest()[:32]  # Unique hash per token
         used_key = f"reset_token_used:{token_hash}"
         already_used = await safe_redis_get(used_key)
         if already_used:
