@@ -1,0 +1,36 @@
+node_modules
+.next
+out
+coverage
+test-results
+playwright-report
+.turbo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode
+.idea
+
+# Git
+.git
+.gitignore
+
+# Tests
+src/test
+tests
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+vitest.config.*
+playwright.config.*
+
+# Documentation
+*.md
+
+# Lint output
+lint_output.txt

@@ -66,6 +66,7 @@ virtualenv/
 *.env
 *.env.*
 !.env.example
+!.env.production.example
 *.db
 *.sqlite
 *.sqlite3
@@ -154,6 +155,7 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 !.env.example
+!.env.production.example
 
 # Vercel
 .vercel
@@ -201,9 +203,10 @@ lerna-debug.log*
 .tmp/
 tmpclaude*
 **/tmpclaude*
+nul
 
-# Docker
-docker-compose.override.yml
+# Docker (override tracked for dev config)
+# docker-compose.override.yml
 
 # Backup files
 *.bak

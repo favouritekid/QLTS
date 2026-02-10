@@ -1,0 +1,11 @@
+.git
+.github
+.vscode
+.idea
+.claude
+docs
+exports
+*.md
+!CLAUDE.md
+tmpclaude-*
+nul

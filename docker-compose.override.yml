@@ -1,0 +1,61 @@
+# =============================================================================
+# QLTS Development Overrides
+# =============================================================================
+# Automatically loaded by `docker compose up` (without --profile production)
+# Provides hot-reload for backend and frontend development
+# =============================================================================
+
+services:
+  backend:
+    build:
+      context: ./Backend_FastAPI
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    env_file:
+      - ./Backend_FastAPI/.env
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD:-qlts_dev}@postgres:5432/${POSTGRES_DB:-qlts_dev}
+    volumes:
+      - ./Backend_FastAPI:/app
+    ports:
+      - "8000:8000"
+
+  celery-worker:
+    command: celery -A app.celery_app worker --loglevel=debug --concurrency=1
+    env_file:
+      - ./Backend_FastAPI/.env
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD:-qlts_dev}@postgres:5432/${POSTGRES_DB:-qlts_dev}
+    volumes:
+      - ./Backend_FastAPI:/app
+
+  celery-beat:
+    command: celery -A app.celery_app beat --loglevel=debug
+    env_file:
+      - ./Backend_FastAPI/.env
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD:-qlts_dev}@postgres:5432/${POSTGRES_DB:-qlts_dev}
+    volumes:
+      - ./Backend_FastAPI:/app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    command: npm run dev
+    environment:
+      BACKEND_URL: http://backend:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qlts_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-qlts_dev}

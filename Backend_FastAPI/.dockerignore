@@ -1,0 +1,46 @@
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.nox
+venv
+.venv
+env
+*.egg-info
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Tests (not needed in production image)
+tests/
+
+# GeoIP databases (mounted as volume)
+geoip/
+
+# Backups
+backups/
+
+# IDE
+.vscode
+.idea
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Scripts not needed at runtime
+scripts/test_*
+scripts/debug_*
+
+# SQLite databases
+*.db
+*.sqlite3
