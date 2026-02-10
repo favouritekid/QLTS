@@ -27,6 +27,7 @@
  */
 "use client";
 
+import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -381,114 +382,103 @@ export function FunnelChart({
     );
   }
 
+  // =========== MEMOIZED COMPUTATIONS ===========
+  // All heavy data transformations memoized with `funnel` dependency
+
   // Sort by stage order
-  const sortedFunnel = [...funnel].sort((a, b) => a.stage_order - b.stage_order);
+  const sortedFunnel = useMemo(
+    () => [...funnel].sort((a, b) => a.stage_order - b.stage_order),
+    [funnel]
+  );
 
   // Separate core flow stages from outcome stages (using configurable IDs)
-  const coreStages = sortedFunnel.filter(s => 
-    !s.is_final_stage && !outcomeStageIds.includes(s.stage_id)
-  );
-  const outcomeStages = sortedFunnel.filter(s => 
-    s.is_final_stage || outcomeStageIds.includes(s.stage_id)
-  );
+  const { coreStages, outcomeStages } = useMemo(() => ({
+    coreStages: sortedFunnel.filter(s =>
+      !s.is_final_stage && !outcomeStageIds.includes(s.stage_id)
+    ),
+    outcomeStages: sortedFunnel.filter(s =>
+      s.is_final_stage || outcomeStageIds.includes(s.stage_id)
+    ),
+  }), [sortedFunnel, outcomeStageIds]);
 
   // Calculate total leads by summing all stages (core + outcome)
   // This is correct for ACTUAL count approach (not cumulative)
-  const totalLeads = sortedFunnel.reduce((sum, s) => sum + s.lead_count, 0);
-
-  // SPEC 2026-02-04: Calculate Early Exit total (FINAL leads at non-final stages)
-  const totalEarlyExit = coreStages.reduce((sum, s) =>
-    sum + (s.early_exit_count || 0), 0
+  const totalLeads = useMemo(
+    () => sortedFunnel.reduce((sum, s) => sum + s.lead_count, 0),
+    [sortedFunnel]
   );
 
-  // SPEC 2026-02-04: Calculate Lost total (early exits + negative outcomes at final stages)
-  const positiveStages = outcomeStages.filter(s => isPositiveOutcome(s, mergedConfig));
-  const negativeStages = outcomeStages.filter(s => isNegativeOutcome(s, mergedConfig));
-  const enrolledCount = positiveStages.reduce((sum, s) => sum + s.lead_count, 0);
-  const failedCount = negativeStages.reduce((sum, s) => sum + s.lead_count, 0);
+  // Memoize all derived metrics together to avoid redundant computation
+  const {
+    totalEarlyExit, enrolledCount, failedCount, totalLost,
+    netConversionRate, overallConversion, stageMetrics, bottleneckIndex,
+    aggregatedLossBreakdown, totalLostRevenue
+  } = useMemo(() => {
+    // SPEC 2026-02-04: Calculate Early Exit total (FINAL leads at non-final stages)
+    const _totalEarlyExit = coreStages.reduce((sum, s) =>
+      sum + (s.early_exit_count || 0), 0
+    );
 
-  // Total Lost = Early Exits + Failed at final stage
-  const totalLost = totalEarlyExit + failedCount;
+    // SPEC 2026-02-04: Calculate Lost total (early exits + negative outcomes at final stages)
+    const positiveStages = outcomeStages.filter(s => isPositiveOutcome(s, mergedConfig));
+    const negativeStages = outcomeStages.filter(s => isNegativeOutcome(s, mergedConfig));
+    const _enrolledCount = positiveStages.reduce((sum, s) => sum + s.lead_count, 0);
+    const _failedCount = negativeStages.reduce((sum, s) => sum + s.lead_count, 0);
 
-  // SPEC 2026-02-04: Net Conversion Rate = Enrolled / (Enrolled + Lost)
-  // This is the TRUE business metric (ignores in-progress leads)
-  const netConversionRate = (enrolledCount + totalLost) > 0
-    ? (enrolledCount / (enrolledCount + totalLost)) * 100
-    : 0;
+    // Total Lost = Early Exits + Failed at final stage
+    const _totalLost = _totalEarlyExit + _failedCount;
 
-  // Gross conversion (for display/comparison)
-  const completedCount = enrolledCount + failedCount;
-  const overallConversion = totalLeads > 0 ? (completedCount / totalLeads) * 100 : 0;
+    // SPEC 2026-02-04: Net Conversion Rate = Enrolled / (Enrolled + Lost)
+    const _netConversionRate = (_enrolledCount + _totalLost) > 0
+      ? (_enrolledCount / (_enrolledCount + _totalLost)) * 100
+      : 0;
 
-  // Calculate metrics for each stage
-  // NOTE: dropOff is ESTIMATED from count difference, NOT measured from actual transitions.
-  // Backend conversion_rate IS accurate (uses LeadStatusHistory transitions).
-  // The dropOff here is for visualization purposes only.
-  const stageMetrics = coreStages.map((stage, index) => {
-    const percentFromTotal = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
+    // Gross conversion (for display/comparison)
+    const completedCount = _enrolledCount + _failedCount;
+    const _overallConversion = totalLeads > 0 ? (completedCount / totalLeads) * 100 : 0;
 
-    // Use historical conversion rate from backend if available (this is ACCURATE)
-    const historicalConversion = stage.conversion_rate;
-    const hasHistoricalData = historicalConversion !== null && historicalConversion !== undefined;
+    // Calculate metrics for each stage
+    const _stageMetrics = coreStages.map((stage, index) => {
+      const percentFromTotal = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
+      const historicalConversion = stage.conversion_rate;
+      const hasHistoricalData = historicalConversion !== null && historicalConversion !== undefined;
 
-    if (index === 0) {
-      return {
-        conversion: hasHistoricalData ? historicalConversion : null,
-        countDiff: 0,  // Renamed from dropOff for clarity
-        countDiffPercent: 0,
-        percentFromTotal,
-        prevCount: stage.lead_count,
-        hasHistoricalData
-      };
-    }
+      if (index === 0) {
+        return {
+          conversion: hasHistoricalData ? historicalConversion : null,
+          countDiff: 0,
+          countDiffPercent: 0,
+          percentFromTotal,
+          prevCount: stage.lead_count,
+          hasHistoricalData
+        };
+      }
 
-    const prevCount = coreStages[index - 1].lead_count;
-    const conversion = hasHistoricalData ? historicalConversion : null;
-    // Count difference (NOT actual drop-off, just current distribution difference)
-    const countDiff = Math.max(0, prevCount - stage.lead_count);
-    const countDiffPercent = prevCount > 0 ? (countDiff / prevCount) * 100 : 0;
+      const prevCount = coreStages[index - 1].lead_count;
+      const conversion = hasHistoricalData ? historicalConversion : null;
+      const countDiff = Math.max(0, prevCount - stage.lead_count);
+      const countDiffPercent = prevCount > 0 ? (countDiff / prevCount) * 100 : 0;
 
-    return {
-      conversion,
-      countDiff,  // Renamed for clarity - this is count difference, not measured drop-off
-      countDiffPercent,
-      percentFromTotal,
-      prevCount,
-      hasHistoricalData
-    };
-  });
+      return { conversion, countDiff, countDiffPercent, percentFromTotal, prevCount, hasHistoricalData };
+    });
 
-  // =========== IMPROVED BOTTLENECK DETECTION ===========
-  // Find bottleneck using both conversion rate AND estimated volume impact
-  // Priority: Stages with low conversion rate and high count difference
-  const findBottleneck = (metrics: typeof stageMetrics, threshold: number) => {
+    // Bottleneck detection
     let maxImpact = -1;
-    let bottleneckIdx = -1;
-
-    metrics.forEach((metric, idx) => {
+    let _bottleneckIndex = -1;
+    _stageMetrics.forEach((metric, idx) => {
       if (idx === 0 || metric.conversion === null) return;
-      if (metric.conversion >= threshold) return; // Skip healthy stages
-
-      // Impact = estimated count diff * severity (inverse of conversion rate)
+      if (metric.conversion >= mergedConfig.bottleneckThreshold) return;
       const severity = (100 - metric.conversion) / 100;
       const impact = metric.countDiff * severity;
-
       if (impact > maxImpact) {
         maxImpact = impact;
-        bottleneckIdx = idx;
+        _bottleneckIndex = idx;
       }
     });
 
-    return bottleneckIdx;
-  };
-  const bottleneckIndex = findBottleneck(stageMetrics, mergedConfig.bottleneckThreshold);
-
-  // Phase 2: Aggregate loss breakdown across all stages
-  const aggregatedLossBreakdown = (() => {
+    // Phase 2: Aggregate loss breakdown across all stages
     const breakdown: Record<string, number> = {};
     let totalLossReasons = 0;
-
-    // Aggregate from all stages (core + outcome)
     sortedFunnel.forEach(stage => {
       if (stage.loss_breakdown) {
         stage.loss_breakdown.forEach(item => {
@@ -497,21 +487,32 @@ export function FunnelChart({
         });
       }
     });
-
-    // Convert to sorted array with percentages
-    return Object.entries(breakdown)
+    const _aggregatedLossBreakdown = Object.entries(breakdown)
       .map(([reason_code, count]) => ({
         reason_code,
         count,
         percentage: totalLossReasons > 0 ? Math.round((count / totalLossReasons) * 100 * 10) / 10 : 0,
       }))
       .sort((a, b) => b.count - a.count);
-  })();
 
-  // Phase 2: Calculate total lost revenue across all stages
-  const totalLostRevenue = sortedFunnel.reduce((sum, stage) => {
-    return sum + (stage.estimated_lost_revenue?.total_lost_revenue || 0);
-  }, 0);
+    // Phase 2: Calculate total lost revenue across all stages
+    const _totalLostRevenue = sortedFunnel.reduce((sum, stage) => {
+      return sum + (stage.estimated_lost_revenue?.total_lost_revenue || 0);
+    }, 0);
+
+    return {
+      totalEarlyExit: _totalEarlyExit,
+      enrolledCount: _enrolledCount,
+      failedCount: _failedCount,
+      totalLost: _totalLost,
+      netConversionRate: _netConversionRate,
+      overallConversion: _overallConversion,
+      stageMetrics: _stageMetrics,
+      bottleneckIndex: _bottleneckIndex,
+      aggregatedLossBreakdown: _aggregatedLossBreakdown,
+      totalLostRevenue: _totalLostRevenue,
+    };
+  }, [coreStages, outcomeStages, sortedFunnel, totalLeads, mergedConfig]);
 
   // Comparison with previous period
   const conversionTrend = previousPeriodConversion !== undefined

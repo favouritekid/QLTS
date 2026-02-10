@@ -17,13 +17,14 @@ export const LeadStats = React.memo(function LeadStats({
   totalCount,
   isLoading,
 }: LeadStatsProps) {
-  // Calculate stats from leads data
-  const newLeadsCount = leads.filter((l) => l.status === "new").length;
-  const highScoreCount = leads.filter((l) => l.lead_score > 80).length;
-  const convertedCount = leads.filter((l) => l.status === "converted").length;
-  const conversionRate = totalCount > 0
-    ? Math.round((convertedCount / totalCount) * 100)
-    : 0;
+  // Calculate stats from leads data — memoized to avoid 3x .filter() on every re-render
+  const { newLeadsCount, highScoreCount, conversionRate } = React.useMemo(() => {
+    const newCount = leads.filter((l) => l.status === "new").length;
+    const highScore = leads.filter((l) => l.lead_score > 80).length;
+    const converted = leads.filter((l) => l.status === "converted").length;
+    const rate = totalCount > 0 ? Math.round((converted / totalCount) * 100) : 0;
+    return { newLeadsCount: newCount, highScoreCount: highScore, conversionRate: rate };
+  }, [leads, totalCount]);
 
   const stats = [
     {

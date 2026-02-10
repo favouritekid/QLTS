@@ -1,7 +1,7 @@
 // src/components/leads/PipelineBoard.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -126,11 +126,17 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
     setActiveStageId(null);
   };
 
-  // Sort stages by order
-  const sortedStages = [...pipeline.stages].sort((a, b) => a.order - b.order);
+  // Sort stages by order — memoized to prevent PipelineColumn re-renders
+  const sortedStages = useMemo(
+    () => [...pipeline.stages].sort((a, b) => a.order - b.order),
+    [pipeline.stages]
+  );
 
   // Get stage IDs for sortable context
-  const stageIds = sortedStages.map((stage) => stage.id);
+  const stageIds = useMemo(
+    () => sortedStages.map((stage) => stage.id),
+    [sortedStages]
+  );
 
   return (
     <DndContext

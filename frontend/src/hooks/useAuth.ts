@@ -32,12 +32,11 @@ export function useAuth(options?: UseAuthOptions) {
   const router = useRouter();
   const queryClient = useQueryClient();
 
-  const {
-    user: userFromStore,
-    isAuthenticated,
-    setAuth,
-    logout: logoutStore,
-  } = useAuthStore();
+  // ✅ PERF FIX: Granular selectors to avoid re-rendering on unrelated store changes
+  const userFromStore = useAuthStore(s => s.user);
+  const isAuthenticated = useAuthStore(s => s.isAuthenticated);
+  const setAuth = useAuthStore(s => s.setAuth);
+  const logoutStore = useAuthStore(s => s.logout);
 
   // MFA callback ref - set by LoginForm to intercept MFA responses
   const mfaCallbackRef = React.useRef<{

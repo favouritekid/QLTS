@@ -1,7 +1,7 @@
 // src/app/(dashboard)/dashboard/officer/_components/OfficerDashboardClient.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -135,15 +135,15 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     (stats.sales_funnel ?? []).length === 0 &&
     (stats.performance_trends ?? []).length === 0;
 
-  // === DATA TRANSFORMERS ===
-  const performanceTrends = (stats.performance_trends ?? []).map((t) => ({
+  // === DATA TRANSFORMERS (memoized to prevent child chart re-renders) ===
+  const performanceTrends = useMemo(() => (stats.performance_trends ?? []).map((t) => ({
     date: t.date,
     leads_assigned: t.assigned,
     consultations: t.consultations,
     converted: t.converted,
-  }));
+  })), [stats.performance_trends]);
 
-  const salesFunnel = (stats.sales_funnel ?? []).map((s) => ({
+  const salesFunnel = useMemo(() => (stats.sales_funnel ?? []).map((s) => ({
     stage_id: s.stage_id,
     stage_name: s.stage_name,
     stage_order: s.stage_order,
@@ -158,7 +158,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     loss_breakdown: s.loss_breakdown,
     velocity: s.velocity,
     estimated_lost_revenue: s.estimated_lost_revenue,
-  }));
+  })), [stats.sales_funnel]);
 
   // Phase 2: Funnel suggestions
   const funnelSuggestions = stats.funnel_suggestions ?? [];

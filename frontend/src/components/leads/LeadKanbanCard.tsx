@@ -49,15 +49,12 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
     isDragging: isSortableDragging,
   } = useSortable({ id: lead.id });
 
-  // Hydration-safe date calculation
-  const [daysInPipeline, setDaysInPipeline] = React.useState<number | null>(null);
-  React.useEffect(() => {
-    if (lead.created_at) {
-      const days = Math.floor(
-        (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-      );
-      setDaysInPipeline(days);
-    }
+  // Hydration-safe date calculation — useMemo avoids extra render cycle from useEffect+useState
+  const daysInPipeline = React.useMemo(() => {
+    if (!lead.created_at) return null;
+    return Math.floor(
+      (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
+    );
   }, [lead.created_at]);
 
   const style = {

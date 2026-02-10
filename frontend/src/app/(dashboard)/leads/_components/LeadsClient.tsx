@@ -122,6 +122,17 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const exportMutation = useExportLeads();
   const importMutation = useImportLeads();
 
+  // ✅ PERF FIX: Extract hasFilters to avoid recomputing complex boolean inline in JSX
+  const hasFilters = useMemo(() => !!(
+    filterState.statusFilters.length ||
+    filterState.sourceFilters.length ||
+    filterState.offeringFilters.length ||
+    filterState.stageFilters.length ||
+    filterState.officerFilters.length ||
+    filterState.dateFrom ||
+    filterState.dateTo
+  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.dateFrom, filterState.dateTo]);
+
   // Filter leads by score range (client-side)
   const filteredLeads = useMemo(() => {
     if (!leadsPage?.leads) return [];
@@ -181,6 +192,13 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const handleAssign = useCallback((lead: Lead) => {
     setSelectedLead(lead);
     setAssignDialogOpen(true);
+  }, []);
+
+  // ✅ PERF FIX: Single callback for "Add Lead" — shared by LeadFilterBar and LeadsTable
+  const handleAddLead = useCallback(() => {
+    setSelectedLead(null);
+    setDialogMode("create");
+    setLeadDialogOpen(true);
   }, []);
 
   const confirmDelete = async () => {
@@ -312,11 +330,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onDateFieldChange={filterHandlers.handleDateFieldChange}
         onReset={filterHandlers.resetFilters}
         onExport={handleExport}
-        onAddLead={() => {
-          setSelectedLead(null);
-          setDialogMode("create");
-          setLeadDialogOpen(true);
-        }}
+        onAddLead={handleAddLead}
         totalCount={leadsPage?.total_count || 0}
       />
 
@@ -367,14 +381,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                   onBulkExport={handleBulkExport}
                   onBulkDelete={handleBulkDelete}
                   resetSelectionKey={resetSelectionKey}
-                  hasFilters={!!(filterState.statusFilters.length || filterState.sourceFilters.length || filterState.offeringFilters.length || filterState.stageFilters.length || filterState.officerFilters.length || filterState.dateFrom || filterState.dateTo)}
+                  hasFilters={hasFilters}
                   searchQuery={filterState.search}
                   onResetFilters={filterHandlers.resetFilters}
-                  onCreateLead={() => {
-                    setSelectedLead(null);
-                    setDialogMode("create");
-                    setLeadDialogOpen(true);
-                  }}
+                  onCreateLead={handleAddLead}
                 />
               )}
             </div>
@@ -435,14 +445,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
               onBulkExport={handleBulkExport}
               onBulkDelete={handleBulkDelete}
               resetSelectionKey={resetSelectionKey}
-              hasFilters={!!(filterState.statusFilters.length || filterState.sourceFilters.length || filterState.offeringFilters.length || filterState.stageFilters.length || filterState.officerFilters.length || filterState.dateFrom || filterState.dateTo)}
+              hasFilters={hasFilters}
               searchQuery={filterState.search}
               onResetFilters={filterHandlers.resetFilters}
-              onCreateLead={() => {
-                setSelectedLead(null);
-                setDialogMode("create");
-                setLeadDialogOpen(true);
-              }}
+              onCreateLead={handleAddLead}
             />
           )}
         </div>

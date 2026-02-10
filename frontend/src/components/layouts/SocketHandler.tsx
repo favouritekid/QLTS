@@ -34,7 +34,10 @@ const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
  * Quản lý kết nối Socket.IO và lắng nghe các sự kiện auth toàn cục.
  */
 export function SocketHandler() {
-  const { isAuthenticated, logout, user } = useAuthStore();
+  // ✅ PERF FIX: Granular selectors to avoid re-registering 30+ socket listeners on unrelated store changes
+  const isAuthenticated = useAuthStore(s => s.isAuthenticated);
+  const logout = useAuthStore(s => s.logout);
+  const user = useAuthStore(s => s.user);
   const addNotification = useAddNotification();
   const markAsRead = useMarkAsRead();  // ✅ For marking as read when user clicks toast action
   const { data: preferences } = useNotificationPreferences();
