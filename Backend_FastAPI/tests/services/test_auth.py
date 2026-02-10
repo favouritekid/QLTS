@@ -434,7 +434,7 @@ class TestSessionCreate:
         """Test create_session detects mobile device."""
         with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
-                session = await session_service.create_session(
+                session, _callback = await session_service.create_session(
                     db=db,
                     user_id=auth_test_user.id,
                     refresh_jti="mobile-test-jti",
@@ -442,7 +442,7 @@ class TestSessionCreate:
                     user_agent_string="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/605.1.15",
                     expires_at=datetime.now(timezone.utc) + timedelta(days=7),
                 )
-        
+
         assert session.device_type == "mobile"
         assert "Safari" in session.browser
         assert "iOS" in session.os
@@ -455,7 +455,7 @@ class TestSessionCreate:
         """Test create_session detects desktop device."""
         with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
-                session = await session_service.create_session(
+                session, _callback = await session_service.create_session(
                     db=db,
                     user_id=auth_test_user.id,
                     refresh_jti="desktop-test-jti",
@@ -463,7 +463,7 @@ class TestSessionCreate:
                     user_agent_string="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
                     expires_at=datetime.now(timezone.utc) + timedelta(days=7),
                 )
-        
+
         assert session.device_type == "desktop"
         assert "Chrome" in session.browser
 
@@ -483,14 +483,14 @@ class TestSessionRevoke:
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
                 with patch.object(session_service, 'dispatcher'):
-                    result = await session_service.revoke_session(
+                    result, _callback = await session_service.revoke_session(
                         db=db,
                         session_id=auth_user_session.id,
                         user_id=auth_test_user.id
                     )
-        
+
         await db.refresh(auth_user_session)
-        
+
         assert result is True
         assert auth_user_session.revoked_at is not None
 
@@ -502,12 +502,12 @@ class TestSessionRevoke:
         """Test revoking session with wrong user ID is rejected."""
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
-                result = await session_service.revoke_session(
+                result, _callback = await session_service.revoke_session(
                     db=db,
                     session_id=auth_user_session.id,
                     user_id=999999  # Wrong user
                 )
-        
+
         assert result is False
         
         await db.refresh(auth_user_session)
@@ -550,12 +550,12 @@ class TestSessionRevokeAll:
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
                 with patch.object(session_service, 'dispatcher'):
-                    count = await session_service.revoke_all_other_sessions(
+                    count, _callback = await session_service.revoke_all_other_sessions(
                         db=db,
                         user_id=auth_test_user.id,
                         except_session_id=preserve_id
                     )
-        
+
         assert count == 2
         
         for s in sessions:
