@@ -128,10 +128,13 @@ export function PageHeader({
             {title}
           </h1>
           {description && (
-            <p className={cn(
-              "text-muted-foreground",
-              compact || isSticky ? "text-xs" : "text-sm mt-1"
-            )}>
+            <p
+              suppressHydrationWarning
+              className={cn(
+                "text-muted-foreground",
+                compact || isSticky ? "text-xs" : "text-sm mt-1"
+              )}
+            >
               {description}
             </p>
           )}

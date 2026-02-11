@@ -287,7 +287,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         variant="sticky"
         title="Trung Tâm Quản Lý Lead"
         icon={<Command className="text-primary h-5 w-5" />}
-        description={`${leadsPage?.total_count?.toLocaleString() || 0} lead`}
+        description={`${(leadsPage?.total_count ?? initialData?.total_count ?? 0).toLocaleString("vi-VN")} lead`}
         actions={
           <>
             {/* Hidden file input for import */}
