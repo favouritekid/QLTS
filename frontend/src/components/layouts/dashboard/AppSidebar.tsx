@@ -62,7 +62,9 @@ export function AppSidebar() {
   });
 
   // Fetch finance dashboard stats for pending payments badge
-  const { data: financeStats } = useFinanceDashboard();
+  // Only fetch if finance navigation group is visible (role-based)
+  const hasFinanceAccess = navigation.some((group) => group.title === "Finance");
+  const { data: financeStats } = useFinanceDashboard({ enabled: hasFinanceAccess });
 
   const unreadCount = notificationsData?.unread_count || 0;
   const pendingPaymentsCount = financeStats?.pending_payments_count || 0;

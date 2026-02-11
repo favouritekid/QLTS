@@ -136,7 +136,7 @@ export async function assignLead(
  * Get reassign quota for current user
  */
 export async function getReassignQuota(): Promise<ReassignQuota> {
-  const response = await api.get<ReassignQuota>('/api/leads/reassign-quota')
+  const response = await api.get<ReassignQuota>('/api/leads/my/reassign-quota')
   return response.data
 }
 

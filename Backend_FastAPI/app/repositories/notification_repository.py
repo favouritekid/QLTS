@@ -1,6 +1,7 @@
 # app/repositories/notification_repository.py
 from typing import List, Optional, Tuple
-from sqlalchemy import and_, cast, desc, func, insert, select, String
+from sqlalchemy import and_, cast, desc, func, insert, select, String, type_coerce
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -76,7 +77,9 @@ class NotificationRepository(BaseRepository[models.Notification]):
             and_(
                 self.model.user_id.in_(user_ids),
                 # PostgreSQL JSONB operator: data->>'dedupe_key' = value
-                self.model.data["dedupe_key"].astext == dedupe_key
+                # type_coerce needed because column is JSON (not JSONB), but
+                # PostgreSQL stores both identically; JSONB enables .astext
+                type_coerce(self.model.data, JSONB)["dedupe_key"].astext == dedupe_key
             )
         )
         result = await self.db.execute(query)
