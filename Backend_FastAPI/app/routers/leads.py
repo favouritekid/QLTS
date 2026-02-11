@@ -264,6 +264,209 @@ async def get_all_leads(
     return {"total_count": total, "leads": leads}
 
 
+# ==============================================================================
+# EXPORT (must be defined BEFORE /{lead_id} to avoid route conflict)
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour - Export operation
+@router.get("/export")
+async def export_leads(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    format: str = Query("csv", description="Export format (csv or xlsx)"),
+    # ✅ RBAC enforcement via LeadListFilter dependency
+    lead_filter: LeadListFilter = Depends(get_lead_list_filter),
+    # Apply same filters as get_all_leads (aligned param types)
+    status: Optional[str] = Query(
+        None, description="Filter by status (comma-separated)"
+    ),
+    assigned_officer_id: Optional[str] = Query(
+        None, description="Filter by assigned officer ID(s) (comma-separated)"
+    ),
+    offering_id: Optional[str] = Query(
+        None, description="Filter by program offering ID(s) (comma-separated)"
+    ),
+    source: Optional[str] = Query(
+        None, description="Filter by source (comma-separated)"
+    ),
+    search: Optional[str] = Query(
+        None, description="Search term for name, email, phone"
+    ),
+    sort_by: str = Query("created_at", description="Field to sort by"),
+    order: str = Query("desc", description="Sort order (asc or desc)"),
+    pipeline_stage_id: Optional[str] = Query(
+        None, description="Filter by pipeline stage ID(s) (comma-separated)"
+    ),
+    date_from: Optional[datetime] = Query(
+        None, description="Filter leads from this date (ISO format)"
+    ),
+    date_to: Optional[datetime] = Query(
+        None, description="Filter leads until this date (ISO format)"
+    ),
+    date_field: str = Query(
+        "created_at", description="Date field to filter on (created_at or updated_at)"
+    ),
+):
+    """
+    Export leads to CSV or Excel file.
+
+    Apply same filters as the list endpoint to allow exporting filtered results.
+    Maximum 10,000 leads per export to prevent performance issues.
+
+    **RBAC:** Officers only export their own leads, Managers only their unit.
+    """
+    # ✅ Use role-enforced filter from dependency (same as list endpoint)
+    effective_officer_id = lead_filter.assigned_officer_id
+    effective_unit_id = lead_filter.unit_id
+
+    # Get filtered leads (no pagination, but limit to 10,000)
+    total, leads = await lead_service.get_leads(
+        db,
+        skip=0,
+        limit=10000,  # Export limit
+        status=status,
+        assigned_officer_id=effective_officer_id,
+        unit_id=effective_unit_id,
+        offering_id=offering_id,
+        source=source,
+        search=search,
+        sort_by=sort_by,
+        order=order,
+        pipeline_stage_id=pipeline_stage_id,
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
+    )
+
+    # Helper: extract display names from relationships (already eager-loaded)
+    def _lead_row(lead):
+        # Split offering into 3 columns: Trình độ ĐT, Ngành, Hình thức
+        degree_level = ""
+        program_name = ""
+        offering_type = ""
+        if lead.offering and lead.offering.program:
+            degree_level = lead.offering.program.degree_level or ""
+            full_name = lead.offering.program.name or ""
+            # Strip degree_level prefix from name to get pure program name
+            # e.g. "Cao đẳng Công nghệ thông tin" → "Công nghệ thông tin"
+            if degree_level and full_name.startswith(degree_level):
+                program_name = full_name[len(degree_level):].strip()
+            else:
+                program_name = full_name
+        if lead.offering:
+            offering_type = lead.offering.offering_type or ""
+
+        return {
+            "ID": lead.id,
+            "Họ tên": lead.full_name,
+            "Email": lead.email or "",
+            "SĐT": lead.phone,
+            "SĐT 2": lead.phone2 or "",
+            "Trạng thái": lead.status,
+            "Điểm lead": lead.lead_score,
+            "Nguồn": lead.source,
+            "Trình độ học vấn": lead.education_level or "",
+            "GPA": lead.gpa or "",
+            "Địa chỉ": lead.location or "",
+            "Trình độ ĐT": degree_level,
+            "Ngành": program_name,
+            "Hình thức": offering_type,
+            "Cán bộ phụ trách": lead.assigned_officer.full_name if lead.assigned_officer else "",
+            "Giai đoạn pipeline": lead.pipeline_stage.name if lead.pipeline_stage else "",
+            "Trạng thái tư vấn": lead.consultation_status.name if lead.consultation_status else "",
+            "Đơn vị": lead.unit.name if lead.unit else "",
+            "Ngày tạo": lead.created_at.isoformat() if lead.created_at else "",
+            "Ngày cập nhật": lead.updated_at.isoformat() if lead.updated_at else "",
+        }
+
+    fieldnames = [
+        "ID", "Họ tên", "Email", "SĐT", "SĐT 2",
+        "Trạng thái", "Điểm lead", "Nguồn", "Trình độ học vấn", "GPA", "Địa chỉ",
+        "Trình độ ĐT", "Ngành", "Hình thức",
+        "Cán bộ phụ trách", "Giai đoạn pipeline",
+        "Trạng thái tư vấn", "Đơn vị", "Ngày tạo", "Ngày cập nhật",
+    ]
+
+    if format.lower() == "csv":
+        # Generate CSV with UTF-8 BOM for Vietnamese encoding in Excel
+        output = io.StringIO()
+        output.write("\ufeff")  # UTF-8 BOM
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for lead in leads:
+            writer.writerow(_lead_row(lead))
+
+        output.seek(0)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"leads_export_{timestamp}.csv"
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    elif format.lower() in ["xlsx", "excel"]:
+        # Generate Excel using openpyxl
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Leads Export"
+
+        # Header row with styling
+        ws.append(fieldnames)
+
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+
+        # Data rows
+        for lead in leads:
+            row = _lead_row(lead)
+            ws.append([row[col] for col in fieldnames])
+
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except (TypeError, ValueError):
+                    pass
+            adjusted_width = min(max_length + 2, 50)  # Cap at 50
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        # Save to BytesIO
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"leads_export_{timestamp}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    else:
+        return {
+            "error": f"Unsupported format '{format}'. Supported formats: csv, xlsx"
+        }
+
+
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{lead_id}", response_model=schemas.Lead)
 async def get_lead_details(
@@ -811,187 +1014,6 @@ async def restore_a_consultation(
     )
 
     return consultation
-
-
-@limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour - Export operation
-@router.get("/export")
-async def export_leads(
-    request: Request,
-    db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
-    format: str = Query("csv", description="Export format (csv or xlsx)"),
-    # Apply same filters as get_all_leads
-    status: Optional[str] = Query(
-        None, description="Filter by status (comma-separated)"
-    ),
-    assigned_officer_id: Optional[int] = Query(
-        None, description="Filter by assigned officer ID"
-    ),
-    unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
-    offering_id: Optional[int] = Query(None, description="Filter by program offering ID"),
-    source: Optional[str] = Query(
-        None, description="Filter by source (comma-separated)"
-    ),
-    search: Optional[str] = Query(
-        None, description="Search term for name, email, phone"
-    ),
-    sort_by: str = Query("created_at", description="Field to sort by"),
-    order: str = Query("desc", description="Sort order (asc or desc)"),
-):
-    """
-    Export leads to CSV or Excel file.
-
-    Apply same filters as the list endpoint to allow exporting filtered results.
-    Maximum 10,000 leads per export to prevent performance issues.
-    """
-    # Get filtered leads (no pagination, but limit to 10,000)
-    total, leads = await lead_service.get_leads(
-        db,
-        skip=0,
-        limit=10000,  # Export limit
-        status=status,
-        assigned_officer_id=assigned_officer_id,
-        unit_id=unit_id,
-        offering_id=offering_id,
-        source=source,
-        search=search,
-        sort_by=sort_by,
-        order=order,
-    )
-
-    if format.lower() == "csv":
-        # Generate CSV
-        output = io.StringIO()
-        fieldnames = [
-            "id",
-            "full_name",
-            "email",
-            "phone",
-            "status",
-            "lead_score",
-            "source",
-            "education_level",
-            "gpa",
-            "location",
-            "assigned_officer_id",
-            "pipeline_stage_id",
-            "consultation_status_id",
-            "created_at",
-            "updated_at",
-        ]
-        writer = csv.DictWriter(output, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for lead in leads:
-            writer.writerow({
-                "id": lead.id,
-                "full_name": lead.full_name,
-                "email": lead.email,
-                "phone": lead.phone,
-                "status": lead.status,
-                "lead_score": lead.lead_score,
-                "source": lead.source,
-                "education_level": lead.education_level or "",
-                "gpa": lead.gpa or "",
-                "location": lead.location or "",
-                "assigned_officer_id": lead.assigned_officer_id or "",
-                "pipeline_stage_id": lead.pipeline_stage_id or "",
-                "consultation_status_id": lead.consultation_status_id or "",
-                "created_at": lead.created_at.isoformat() if lead.created_at else "",
-                "updated_at": lead.updated_at.isoformat() if lead.updated_at else "",
-            })
-
-        output.seek(0)
-
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"leads_export_{timestamp}.csv"
-
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
-            }
-        )
-    elif format.lower() in ["xlsx", "excel"]:
-        # Generate Excel using openpyxl
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Leads Export"
-
-        # Header row with styling
-        headers = [
-            "ID", "Full Name", "Email", "Phone", "Status", "Lead Score",
-            "Source", "Education Level", "GPA", "Location",
-            "Assigned Officer ID", "Pipeline Stage ID", "Consultation Status ID",
-            "Created At", "Updated At"
-        ]
-        ws.append(headers)
-
-        # Style header row
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        header_font = Font(color="FFFFFF", bold=True)
-        for cell in ws[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-
-        # Data rows
-        for lead in leads:
-            ws.append([
-                lead.id,
-                lead.full_name,
-                lead.email,
-                lead.phone,
-                lead.status,
-                lead.lead_score,
-                lead.source,
-                lead.education_level or "",
-                lead.gpa or "",
-                lead.location or "",
-                lead.assigned_officer_id or "",
-                lead.pipeline_stage_id or "",
-                lead.consultation_status_id or "",
-                lead.created_at.isoformat() if lead.created_at else "",
-                lead.updated_at.isoformat() if lead.updated_at else "",
-            ])
-
-        # Auto-adjust column widths
-        for column in ws.columns:
-            max_length = 0
-            column_letter = column[0].column_letter
-            for cell in column:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except (TypeError, ValueError):
-                    pass
-            adjusted_width = min(max_length + 2, 50)  # Cap at 50
-            ws.column_dimensions[column_letter].width = adjusted_width
-
-        # Save to BytesIO
-        output = io.BytesIO()
-        wb.save(output)
-        output.seek(0)
-
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"leads_export_{timestamp}.xlsx"
-
-        return StreamingResponse(
-            output,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
-            }
-        )
-    else:
-        return {
-            "error": f"Unsupported format '{format}'. Supported formats: csv, xlsx"
-        }
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour

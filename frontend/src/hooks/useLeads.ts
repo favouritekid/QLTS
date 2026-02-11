@@ -1050,8 +1050,8 @@ export function useExportLeads() {
     AxiosError<ApiErrorResponse>,
     { format?: "csv" | "xlsx"; filters?: LeadListParams }
   >({
-    mutationFn: async ({ filters }) => {
-      return await leadsApi.exportLeads(filters);
+    mutationFn: async ({ format = "csv", filters }) => {
+      return await leadsApi.exportLeads(filters, format);
     },
 
     onSuccess: (blob, variables) => {

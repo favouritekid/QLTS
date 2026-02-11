@@ -417,7 +417,7 @@ export async function importLeads(file: File): Promise<LeadImportResult> {
   formData.append('file', file)
 
   const response = await api.post<LeadImportResult>(
-    '/api/admin/leads/import',
+    '/api/leads/import',
     formData,
     {
       headers: {
@@ -473,9 +473,12 @@ export async function downloadImportTemplate(format: 'csv' | 'xlsx' = 'csv'): Pr
  * a.click()
  * ```
  */
-export async function exportLeads(params?: LeadListParams): Promise<Blob> {
-  const response = await api.get('/api/admin/leads/export', {
-    params,
+export async function exportLeads(
+  params?: LeadListParams,
+  format: 'csv' | 'xlsx' = 'csv'
+): Promise<Blob> {
+  const response = await api.get('/api/leads/export', {
+    params: { ...params, format },
     responseType: 'blob',
   })
   return response.data
