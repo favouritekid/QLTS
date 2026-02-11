@@ -141,6 +141,8 @@ interface LeadDialogProps {
   onOpenChange: (open: boolean) => void;
   lead?: Lead | null;
   mode: "create" | "edit";
+  /** Called after a lead is successfully created (not edit) */
+  onCreated?: () => void;
 }
 
 // Validation status indicator component
@@ -177,7 +179,7 @@ function ValidationIndicator({
   );
 }
 
-export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) {
+export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDialogProps) {
   const createMutation = useCreateLead();
   const updateMutation = useUpdateLead();
   const { user } = useAuth();
@@ -335,6 +337,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
     if (isCreate) {
       createMutation.mutate(apiData, {
         onSuccess: () => {
+          onCreated?.();
           if (shouldCreateAnother) {
             // Reset form but keep unit_id and source
             form.reset({

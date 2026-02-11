@@ -459,6 +459,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     const params: Record<string, unknown> = {
       page,
       page_size: pageSize,
+      sort_by: "created_at",
+      order: "desc",
     };
 
     if (search) params.search = search;

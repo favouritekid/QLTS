@@ -531,6 +531,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onOpenChange={setLeadDialogOpen}
         lead={selectedLead}
         mode={dialogMode}
+        onCreated={() => filterHandlers.setPage(1)}
       />
 
       <AssignLeadDialog

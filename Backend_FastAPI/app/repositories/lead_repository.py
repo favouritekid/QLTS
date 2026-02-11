@@ -298,35 +298,42 @@ class LeadRepository(BaseRepository[models.Lead]):
         if total_count == 0:
             return 0, []
 
-        # Apply sorting with bubble-up logic
-        now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-        # Priority weight:
-        # 0 = Overdue (most urgent)
-        # 1 = Today
-        # 2 = Future or NULL
-        activity_priority = case(
-            (models.Lead.next_activity_at <= now, 0),
-            (models.Lead.next_activity_at.between(today_start, today_end), 1),
-            else_=2
-        )
-
+        # Apply sorting
         sort_column = getattr(models.Lead, sort_by, models.Lead.created_at)
 
-        if order.lower() == "desc":
-            leads_query = base_query.order_by(
-                activity_priority.asc(),
-                models.Lead.next_activity_at.asc().nullslast(),
-                sort_column.desc()
+        # Only apply activity bubble-up when sorting by urgency-related columns.
+        # For other columns (e.g. created_at), use simple sort so that new leads
+        # appear at the top when sorted by newest first.
+        use_bubble_up = sort_by in ("cached_urgency_score", "next_activity_at")
+
+        if use_bubble_up:
+            now = datetime.now(timezone.utc)
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+            activity_priority = case(
+                (models.Lead.next_activity_at <= now, 0),  # Overdue
+                (models.Lead.next_activity_at.between(today_start, today_end), 1),  # Today
+                else_=2  # Future or NULL
             )
+
+            if order.lower() == "desc":
+                leads_query = base_query.order_by(
+                    activity_priority.asc(),
+                    models.Lead.next_activity_at.asc().nullslast(),
+                    sort_column.desc()
+                )
+            else:
+                leads_query = base_query.order_by(
+                    activity_priority.asc(),
+                    models.Lead.next_activity_at.asc().nullslast(),
+                    sort_column.asc()
+                )
         else:
-            leads_query = base_query.order_by(
-                activity_priority.asc(),
-                models.Lead.next_activity_at.asc().nullslast(),
-                sort_column.asc()
-            )
+            if order.lower() == "desc":
+                leads_query = base_query.order_by(sort_column.desc())
+            else:
+                leads_query = base_query.order_by(sort_column.asc())
 
         # ✅ Apply eager loading with ALL relationships required by schema
         leads_query = (
