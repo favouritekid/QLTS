@@ -123,7 +123,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       filterState.stageFilters.length === 0 &&
       filterState.officerFilters.length === 0 &&
       !filterState.dateFrom &&
-      !filterState.dateTo
+      !filterState.dateTo &&
+      filterState.sortBy === "created_at" &&
+      filterState.sortOrder === "desc"
         ? initialData
         : undefined,
   });

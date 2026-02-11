@@ -182,6 +182,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const pathname = usePathname();
   const isInitialMount = useRef(true);
   const urlUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Track previous searchParams content to avoid false triggers from reference changes
+  const prevSearchParamsStr = useRef(searchParams.toString());
 
   // Determine initial values: URL params > localStorage > defaults
   const initialValues = useMemo(() => {
@@ -229,17 +231,24 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   // Sync URL params INTO state when URL changes from external navigation  
   // (e.g., clicking funnel stage from dashboard)
   useEffect(() => {
+    // Skip if searchParams content didn't actually change (just a new object reference)
+    const currentStr = searchParams.toString();
+    if (currentStr === prevSearchParamsStr.current) {
+      return;
+    }
+    prevSearchParamsStr.current = currentStr;
+
     // Skip if this URL change was caused by our own state update
     if (isInternalUrlChange.current) {
       isInternalUrlChange.current = false;
       return;
     }
-    
+
     // Only sync if URL has filter params (external navigation)
     if (!hasUrlFilterParams(searchParams)) {
       return;
     }
-    
+
     const urlFilters = parseSearchParams(searchParams);
     
     // Only update state if it differs from current URL params

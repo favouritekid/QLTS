@@ -119,7 +119,9 @@ export function useLeads(
   return useQuery<LeadsPage, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.list(params),
     queryFn: async () => {
-      return await leadsApi.getLeads(params);
+      const data = await leadsApi.getLeads(params);
+      if (!data) throw new Error("Failed to fetch leads");
+      return data;
     },
     staleTime: 1000 * 5, // 5 seconds - shorter for real-time updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
@@ -143,7 +145,9 @@ export function useLead(
   return useQuery<Lead, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.detail(id),
     queryFn: async () => {
-      return await leadsApi.getLead(id);
+      const data = await leadsApi.getLead(id);
+      if (!data) throw new Error("Failed to fetch lead");
+      return data;
     },
     enabled: enabled && !!id,
     initialData: options?.initialData,
@@ -163,7 +167,9 @@ export function useReassignQuota(enabled: boolean = true) {
   return useQuery<ReassignQuota>({
     queryKey: ["leads", "reassign-quota"],
     queryFn: async () => {
-      return leadsApi.getReassignQuota();
+      const data = await leadsApi.getReassignQuota();
+      if (!data) throw new Error("Failed to fetch reassign quota");
+      return data;
     },
     staleTime: 1000 * 60, // 1 minute
     enabled,
@@ -185,7 +191,9 @@ export function useLeadTimeline(
   return useQuery<TimelineItem[], AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.timeline(leadId),
     queryFn: async () => {
-      return await leadsApi.getLeadTimeline(leadId);
+      const data = await leadsApi.getLeadTimeline(leadId);
+      if (!data) throw new Error("Failed to fetch lead timeline");
+      return data;
     },
     enabled: !!leadId,
     staleTime: 1000 * 30, // 30 seconds
@@ -208,7 +216,9 @@ export function useLeadInsights(
   return useQuery<LeadInsights, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.insights(leadId),
     queryFn: async () => {
-      return await leadsApi.getLeadInsights(leadId);
+      const data = await leadsApi.getLeadInsights(leadId);
+      if (!data) throw new Error("Failed to fetch lead insights");
+      return data;
     },
     enabled: !!leadId,
     staleTime: 1000 * 30, // 30 seconds - reduced for better responsiveness after lead updates

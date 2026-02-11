@@ -59,6 +59,8 @@ async function LeadsPageContent() {
   const initialData = await serverApi.leads.getLeads({
     page: 1,
     page_size: 50,
+    sort_by: "created_at",
+    order: "desc",
   });
 
   // ✅ Pass data to Client Component
