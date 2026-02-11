@@ -142,11 +142,11 @@ export function SmartHeader({
     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
       {/* Left: Greeting + Date */}
       <div>
-        <h1 className="text-2xl font-semibold font-display flex items-center gap-2">
+        <h1 suppressHydrationWarning className="text-2xl font-semibold font-display flex items-center gap-2">
           {getGreeting()}, {user?.full_name || user?.username || "Officer"}!
           {isGoalMet && <Sparkles className="h-5 w-5 text-amber-500" />}
         </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p suppressHydrationWarning className="text-sm text-muted-foreground mt-0.5">
           {new Date().toLocaleDateString("vi-VN", {
             weekday: "long",
             day: "numeric",
