@@ -25,6 +25,7 @@ from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
+from ..utils.csv_helpers import sanitize_csv_cell
 
 log = structlog.get_logger(__name__)
 
@@ -3159,6 +3160,14 @@ async def import_leads_from_file_content(
         if officer.status != "active":
             raise BadRequest(f"Officer {auto_assign_officer_id} is not active")
 
+    # --- 0. Validate file size ---
+    MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+    if len(file_content) > MAX_IMPORT_FILE_SIZE:
+        raise ValueError(
+            f"File quá lớn ({len(file_content) / (1024*1024):.1f} MB). "
+            f"Giới hạn tối đa {MAX_IMPORT_FILE_SIZE // (1024*1024)} MB."
+        )
+
     # --- 1. Validate file extension ---
     file_extension = ""
     if filename:
@@ -3185,6 +3194,13 @@ async def import_leads_from_file_content(
             df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
 
         log.info(f"Successfully read {len(df)} rows from {file_extension} file.")
+
+        # --- 2b. Validate row count ---
+        MAX_IMPORT_ROWS = 10000
+        if len(df) > MAX_IMPORT_ROWS:
+            raise ValueError(
+                f"File chứa {len(df)} dòng, vượt quá giới hạn {MAX_IMPORT_ROWS} dòng/lần import."
+            )
 
     except ValueError as e:
         raise e  # Re-raise validation errors
@@ -3268,7 +3284,7 @@ async def import_leads_from_file_content(
 
         # Type conversion for required fields
         try:
-            cleaned_data["full_name"] = str(row_data.get("full_name", "")).strip()
+            cleaned_data["full_name"] = sanitize_csv_cell(str(row_data.get("full_name", "")).strip())
             cleaned_data["email"] = str(row_data.get("email", "")).strip()
 
             # Special handling for 'phone': convert to string, remove ".0" if float
@@ -3277,10 +3293,10 @@ async def import_leads_from_file_content(
                 str(phone_val).split(".")[0] if pd.notna(phone_val) else ""
             )
 
-            cleaned_data["source"] = str(row_data.get("source", "")).strip()
-            
+            cleaned_data["source"] = sanitize_csv_cell(str(row_data.get("source", "")).strip())
+
             # ✅ Extract optional fields for Scoring
-            cleaned_data["education_level"] = str(row_data.get("education_level", "")).strip() or None
+            cleaned_data["education_level"] = sanitize_csv_cell(str(row_data.get("education_level", "")).strip()) or None
             
             gpa_val = row_data.get("gpa")
             if pd.notna(gpa_val):
@@ -3292,7 +3308,7 @@ async def import_leads_from_file_content(
             else:
                 cleaned_data["gpa"] = None
                 
-            cleaned_data["location"] = str(row_data.get("location", "")).strip() or None
+            cleaned_data["location"] = sanitize_csv_cell(str(row_data.get("location", "")).strip()) or None
 
 
             # Convert 'unit_id' to int (or use default if provided)

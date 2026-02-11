@@ -1,7 +1,7 @@
 import csv
 import io
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -11,6 +11,7 @@ import structlog
 from .. import database, models, schemas
 from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_list_filter  # ✅ Phase 2.2
 from ..services import distribution_service, insights_service, lead_service
+from ..utils.csv_helpers import sanitize_csv_cell
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..core.constants import UserRole
@@ -274,7 +275,7 @@ async def export_leads(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
-    format: str = Query("csv", description="Export format (csv or xlsx)"),
+    format: Literal["csv", "xlsx"] = Query("csv", description="Export format (csv or xlsx)"),
     # ✅ RBAC enforcement via LeadListFilter dependency
     lead_filter: LeadListFilter = Depends(get_lead_list_filter),
     # Apply same filters as get_all_leads (aligned param types)
@@ -357,22 +358,23 @@ async def export_leads(
         if lead.offering:
             offering_type = lead.offering.offering_type or ""
 
+        # ✅ SECURITY: Sanitize all user-data strings to prevent CSV/Excel formula injection
         return {
             "ID": lead.id,
-            "Họ tên": lead.full_name,
-            "Email": lead.email or "",
-            "SĐT": lead.phone,
-            "SĐT 2": lead.phone2 or "",
+            "Họ tên": sanitize_csv_cell(lead.full_name),
+            "Email": sanitize_csv_cell(lead.email),
+            "SĐT": sanitize_csv_cell(lead.phone),
+            "SĐT 2": sanitize_csv_cell(lead.phone2),
             "Trạng thái": lead.status,
             "Điểm lead": lead.lead_score,
-            "Nguồn": lead.source,
-            "Trình độ học vấn": lead.education_level or "",
+            "Nguồn": sanitize_csv_cell(lead.source),
+            "Trình độ học vấn": sanitize_csv_cell(lead.education_level),
             "GPA": lead.gpa or "",
-            "Địa chỉ": lead.location or "",
+            "Địa chỉ": sanitize_csv_cell(lead.location),
             "Trình độ ĐT": degree_level,
             "Ngành": program_name,
             "Hình thức": offering_type,
-            "Cán bộ phụ trách": lead.assigned_officer.full_name if lead.assigned_officer else "",
+            "Cán bộ phụ trách": sanitize_csv_cell(lead.assigned_officer.full_name if lead.assigned_officer else ""),
             "Giai đoạn pipeline": lead.pipeline_stage.name if lead.pipeline_stage else "",
             "Trạng thái tư vấn": lead.consultation_status.name if lead.consultation_status else "",
             "Đơn vị": lead.unit.name if lead.unit else "",
@@ -388,7 +390,9 @@ async def export_leads(
         "Trạng thái tư vấn", "Đơn vị", "Ngày tạo", "Ngày cập nhật",
     ]
 
-    if format.lower() == "csv":
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if format == "csv":
         # Generate CSV with UTF-8 BOM for Vietnamese encoding in Excel
         output = io.StringIO()
         output.write("\ufeff")  # UTF-8 BOM
@@ -399,8 +403,6 @@ async def export_leads(
             writer.writerow(_lead_row(lead))
 
         output.seek(0)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"leads_export_{timestamp}.csv"
 
         return StreamingResponse(
@@ -410,8 +412,7 @@ async def export_leads(
                 "Content-Disposition": f'attachment; filename="{filename}"'
             }
         )
-    elif format.lower() in ["xlsx", "excel"]:
-        # Generate Excel using openpyxl
+    else:  # xlsx — validated by Literal type
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill
 
@@ -450,8 +451,6 @@ async def export_leads(
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"leads_export_{timestamp}.xlsx"
 
         return StreamingResponse(
@@ -461,10 +460,6 @@ async def export_leads(
                 "Content-Disposition": f'attachment; filename="{filename}"'
             }
         )
-    else:
-        return {
-            "error": f"Unsupported format '{format}'. Supported formats: csv, xlsx"
-        }
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
