@@ -17,7 +17,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { useQueryClient } from "@tanstack/react-query";
-import { Upload, Command } from "lucide-react";
+import { Upload, Download, ChevronDown, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layouts/PageHeader";
@@ -33,10 +33,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 
-import { useLeads, useDeleteLead, useExportLeads, useImportLeads, leadsKeys } from "@/hooks/useLeads";
+import { useLeads, useDeleteLead, useExportLeads, useImportLeads, useDownloadImportTemplate, leadsKeys } from "@/hooks/useLeads";
 import { leadsApi } from "@/lib/api/leads";
 import { useLeadsFilter } from "@/hooks/useLeadsFilter";
 import { LeadDialog } from "@/components/leads/LeadDialog";
@@ -121,6 +127,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const deleteMutation = useDeleteLead();
   const exportMutation = useExportLeads();
   const importMutation = useImportLeads();
+  const templateMutation = useDownloadImportTemplate();
 
   // ✅ PERF FIX: Extract hasFilters to avoid recomputing complex boolean inline in JSX
   const hasFilters = useMemo(() => !!(
@@ -275,6 +282,30 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         description={`${leadsPage?.total_count?.toLocaleString() || 0} lead`}
         actions={
           <>
+            {/* Template download dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={templateMutation.isPending}
+                  className="h-8"
+                >
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  Tải mẫu
+                  <ChevronDown className="ml-1 h-3 w-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => templateMutation.mutate({ format: 'csv' })}>
+                  CSV (.csv)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => templateMutation.mutate({ format: 'xlsx' })}>
+                  Excel (.xlsx)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             {/* Hidden file input for import */}
             <input
               type="file"

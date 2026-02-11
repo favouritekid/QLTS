@@ -429,6 +429,26 @@ export async function importLeads(file: File): Promise<LeadImportResult> {
 }
 
 /**
+ * Download import template (CSV/Excel)
+ * Provides a pre-formatted template with correct headers for bulk import
+ *
+ * @param format - File format: 'csv' or 'xlsx'
+ * @returns Blob of the template file
+ *
+ * @example
+ * ```ts
+ * const blob = await leadsApi.downloadImportTemplate('csv')
+ * ```
+ */
+export async function downloadImportTemplate(format: 'csv' | 'xlsx' = 'csv'): Promise<Blob> {
+  const response = await api.get('/api/leads/import/template', {
+    params: { format },
+    responseType: 'blob',
+  })
+  return response.data
+}
+
+/**
  * Export leads to CSV/Excel
  * Admin only endpoint
  *
@@ -572,6 +592,7 @@ export const leadsApi = {
   getWorkflowContext,
 
   importLeads,
+  downloadImportTemplate,
   exportLeads,
 
   // Distribution

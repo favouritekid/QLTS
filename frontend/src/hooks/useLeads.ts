@@ -987,6 +987,51 @@ export function useImportLeads() {
 }
 
 /**
+ * Download import template (CSV/Excel)
+ *
+ * @example
+ * ```tsx
+ * const downloadTemplate = useDownloadImportTemplate();
+ * downloadTemplate.mutate({ format: 'csv' });
+ * ```
+ */
+export function useDownloadImportTemplate() {
+  return useMutation<
+    Blob,
+    AxiosError<ApiErrorResponse>,
+    { format: 'csv' | 'xlsx' }
+  >({
+    mutationFn: async ({ format }) => {
+      return await leadsApi.downloadImportTemplate(format);
+    },
+
+    onSuccess: (blob, { format }) => {
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `lead_import_template.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      toast.success("Tải mẫu thành công!", {
+        description: `File lead_import_template.${format} đã được tải về`,
+      });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : "Không thể tải mẫu import";
+      toast.error("Lỗi tải mẫu", { description: message });
+    },
+  });
+}
+
+/**
  * Export leads to CSV/Excel
  *
  * @example
