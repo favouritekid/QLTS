@@ -104,6 +104,8 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/my/reassign-quota", "action": "GET"},  # Reassign quota
         {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
+        # Admin users (read-only) — needed for officer filter bar and lead assignment dialog
+        {"subject": "{role}", "object": "/api/admin/users", "action": "GET"},
         # Pipeline access (for consultation statuses in QuickDisposition)
         {"subject": "{role}", "object": "/api/pipeline/stages", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/all", "action": "GET"},
