@@ -339,20 +339,16 @@ export function useUpdateLead() {
         description: updatedLead.full_name,
       });
 
-      // CRITICAL: Update cache immediately with full response from API
-      // This ensures ALL computed fields (lead_score, etc) are updated
+      // Update cache immediately with full response from API
       queryClient.setQueryData(leadsKeys.detail(updatedLead.id), updatedLead);
-      
-      // Also refetch to ensure any relationship data is fresh
-      await queryClient.refetchQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
-      
-      // Force immediate refetch of lists (not just invalidate)
-      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
-      
-      // Invalidate other related queries
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
-      await queryClient.refetchQueries({ queryKey: leadsKeys.insights(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // Invalidate related queries (only refetch currently active ones)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: leadsKeys.insights(updatedLead.id), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' }),
+      ]);
     },
   });
 }

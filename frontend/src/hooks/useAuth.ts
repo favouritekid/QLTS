@@ -28,6 +28,14 @@ export interface UseAuthOptions {
   initialData?: User;
 }
 
+function isValidRedirect(url: string | null): url is string {
+  if (!url) return false;
+  if (!url.startsWith('/')) return false;
+  if (url.startsWith('//')) return false;
+  if (url.includes(':')) return false;
+  return true;
+}
+
 export function useAuth(options?: UseAuthOptions) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -110,7 +118,7 @@ export function useAuth(options?: UseAuthOptions) {
 
       const redirect = new URLSearchParams(window.location.search).get("redirect");
       const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
-      router.push(redirect || defaultPath);
+      router.push(isValidRedirect(redirect) ? redirect : defaultPath);
     },
     // No toast here - LoginForm shows inline error via loginError
   });
@@ -147,7 +155,7 @@ export function useAuth(options?: UseAuthOptions) {
 
       const redirect = new URLSearchParams(window.location.search).get("redirect");
       const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
-      router.push(redirect || defaultPath);
+      router.push(isValidRedirect(redirect) ? redirect : defaultPath);
     },
     // No toast here - LoginForm shows inline error via verifyMfaError
   });

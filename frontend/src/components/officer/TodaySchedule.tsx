@@ -165,6 +165,7 @@ function MiniCalendar({
             key={index}
             disabled={day === null}
             onClick={() => day !== null && onDateSelect(new Date(year, month, day))}
+            aria-label={day !== null ? `Ngày ${day} tháng ${month + 1}${hasActivity(day) ? ' - Có lịch hẹn' : ''}` : undefined}
             className={cn(
               "relative h-7 w-7 text-xs rounded-full transition-colors disabled:invisible",
               "hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
@@ -177,7 +178,7 @@ function MiniCalendar({
             {day}
             {/* Red dot indicator for days with activities */}
             {day !== null && hasActivity(day) && (
-              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-error-500 rounded-full" />
+              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-error-500 rounded-full" aria-hidden="true" />
             )}
           </button>
         ))}
@@ -275,6 +276,7 @@ export function TodaySchedule({ className }: TodayScheduleProps) {
               <button
                 key={activity.id}
                 onClick={() => handleActivityClick(activity)}
+                aria-label={`Lịch hẹn lúc ${activity.time} với ${activity.lead_name}`}
                 className={cn(
                   "w-full flex items-center gap-3 p-2 rounded-lg text-left",
                   "hover:bg-muted/50 transition-colors cursor-pointer"

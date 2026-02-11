@@ -90,7 +90,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                       </p>
                     </div>
                     <Link href={`/leads/${lead.id}`}>
-                      <Button size="sm" variant="ghost">
+                      <Button size="sm" variant="ghost" aria-label="Xem chi tiết lead">
                         <ArrowRight className="h-4 w-4" />
                       </Button>
                     </Link>
@@ -138,7 +138,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                       </Badge>
                     </div>
                     <Link href={`/leads/${lead.id}`}>
-                      <Button size="sm" variant="ghost">
+                      <Button size="sm" variant="ghost" aria-label="Xem chi tiết lead">
                         <ArrowRight className="h-4 w-4" />
                       </Button>
                     </Link>
@@ -194,7 +194,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                       )}
                     </div>
                     <Link href={`/leads/${consult.lead_id}`}>
-                      <Button size="sm" variant="ghost">
+                      <Button size="sm" variant="ghost" aria-label="Xem chi tiết lead">
                         <ArrowRight className="h-4 w-4" />
                       </Button>
                     </Link>

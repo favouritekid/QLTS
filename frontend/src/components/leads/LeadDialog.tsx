@@ -154,22 +154,22 @@ function ValidationIndicator({
   if (state === "idle") return null;
 
   return (
-    <div className="flex items-center gap-1.5 mt-1">
+    <div className="flex items-center gap-1.5 mt-1" role="status" aria-live="polite">
       {state === "checking" && (
         <>
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden="true" />
           <span className="text-xs text-muted-foreground">Đang kiểm tra...</span>
         </>
       )}
       {state === "valid" && (
         <>
-          <Check className="h-3.5 w-3.5 text-success-600" />
+          <Check className="h-3.5 w-3.5 text-success-600" aria-hidden="true" />
           <span className="text-xs text-success-600">Hợp lệ</span>
         </>
       )}
       {state === "invalid" && (
         <>
-          <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+          <AlertCircle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />
           <span className="text-xs text-destructive">{message}</span>
         </>
       )}

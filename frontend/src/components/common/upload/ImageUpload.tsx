@@ -172,9 +172,23 @@ export function ImageUpload({
   // Validate file
   const validateFile = React.useCallback(
     (file: File): string | null => {
+      // Extension validation (primary defense - harder to spoof than MIME)
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const allowedExtensions = ['png', 'jpg', 'jpeg', 'webp'];
+      if (!ext || !allowedExtensions.includes(ext)) {
+        return "Chi chap nhan file PNG, JPG hoac WebP";
+      }
+
+      // Block SVG (XSS vector via embedded scripts)
+      if (ext === 'svg' || file.type === 'image/svg+xml') {
+        return "File SVG khong duoc phep vi ly do bao mat";
+      }
+
       if (file.size > maxSize) {
         return `Anh qua lon. Kich thuoc toi da: ${Math.round(maxSize / 1024 / 1024)}MB`;
       }
+
+      // MIME check (secondary defense)
       const acceptedTypes = accept.split(",").map((t) => t.trim());
       if (!acceptedTypes.includes(file.type)) {
         return "Chi chap nhan file PNG, JPG hoac WebP";
