@@ -32,6 +32,7 @@ import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import type { ConsultationStatus, ConsultationCreate, ConsultationMethod } from "@/types/lead.types";
+import { LossReasonQuickSelect, requiresLossReason } from "@/components/leads/LossReasonQuickSelect";
 
 interface QuickConsultationSectionProps {
   leadId: number;
@@ -151,6 +152,10 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [method, setMethod] = useState<ConsultationMethod>("phone");
 
+  // Loss reason state (for negative final statuses)
+  const [lossReasonCode, setLossReasonCode] = useState<string | null>(null);
+  const [lossReasonNote, setLossReasonNote] = useState("");
+
   // ✅ DELAYED COMMIT STATE
   const COUNTDOWN_SECONDS = 3;
   const [pendingStatus, setPendingStatus] = useState<ConsultationStatus | null>(null);
@@ -234,6 +239,8 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     }
     setPendingStatus(null);
     setCountdown(COUNTDOWN_SECONDS);
+    setLossReasonCode(null);
+    setLossReasonNote("");
   };
 
   // Commit the save immediately
@@ -242,6 +249,12 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     if (isSavingRef.current) {
       return;
     }
+
+    // Validate loss reason for negative final statuses
+    if (requiresLossReason(status) && !lossReasonCode) {
+      return;
+    }
+
     isSavingRef.current = true;
 
     if (countdownRef.current) {
@@ -261,6 +274,10 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       method: method,
       notes: notes.trim() || `Ghi nhận: ${status.name}`,
       scheduled_at: scheduledAt,
+      ...(lossReasonCode && {
+        loss_reason_code: lossReasonCode,
+        loss_reason_note: lossReasonNote || undefined,
+      }),
     };
 
     try {
@@ -274,6 +291,8 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       setNotes("");
       setScheduleOption("none");
       setCustomDateTime(undefined);
+      setLossReasonCode(null);
+      setLossReasonNote("");
 
       onSuccess?.();
     } catch {
@@ -281,6 +300,16 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     } finally {
       setSavingStatusId(null);
       isSavingRef.current = false;
+    }
+  };
+
+  // Handle loss reason selection — start countdown once reason is chosen
+  const handleLossReasonSelect = (code: string | null, note?: string) => {
+    setLossReasonCode(code);
+    if (note !== undefined) setLossReasonNote(note);
+    // Reason selected → start countdown
+    if (code && pendingStatus) {
+      startCountdown(pendingStatus);
     }
   };
 
@@ -292,8 +321,19 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     // If clicking the same pending status, do nothing
     if (pendingStatus?.id === status.id) return;
 
-    // If there's a different pending status, switch to new one
-    startCountdown(status);
+    // Reset loss reason state when selecting a new status
+    setLossReasonCode(null);
+    setLossReasonNote("");
+
+    if (requiresLossReason(status)) {
+      // Negative final: pause for loss reason selection (no countdown yet)
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      setPendingStatus(status);
+      setCountdown(COUNTDOWN_SECONDS);
+    } else {
+      // Normal flow: start countdown immediately
+      startCountdown(status);
+    }
   };
 
   // ✅ Drag-to-scroll using callback refs with proper cleanup
@@ -887,8 +927,21 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                  );
               })()}
 
+              {/* Loss Reason Selection (shown for negative final statuses) */}
+              {pendingStatus && requiresLossReason(pendingStatus) && (
+                <div className="mt-3">
+                  <LossReasonQuickSelect
+                    value={lossReasonCode}
+                    onChange={handleLossReasonSelect}
+                    note={lossReasonNote}
+                    onNoteChange={setLossReasonNote}
+                    required
+                  />
+                </div>
+              )}
+
               {/* ✅ INLINE DELAYED COMMIT CONFIRMATION BAR */}
-              {pendingStatus && (
+              {pendingStatus && (lossReasonCode || !requiresLossReason(pendingStatus)) && (
                 <div className="mt-3 overflow-hidden rounded-lg border border-info-200 bg-info-50">
                   {/* Progress bar (shrinks from right to left) */}
                   <div

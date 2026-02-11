@@ -240,6 +240,8 @@ export interface ConsultationCreate {
   notes?: string;
   duration_minutes?: number;
   status_id: string; // Required - consultation status ID
+  loss_reason_code?: string | null;
+  loss_reason_note?: string;
 }
 
 /**
