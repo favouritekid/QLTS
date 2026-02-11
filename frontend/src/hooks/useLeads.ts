@@ -497,9 +497,9 @@ export function useBulkAssignLeads() {
         description: `${result.assigned_count} leads assigned`,
       });
 
-      // Invalidate all lead-related queries
-      queryClient.invalidateQueries({ queryKey: leadsKeys.all });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // Invalidate lead lists and pipeline — don't wipe individual lead details
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
     },
 
     onError: (error) => {

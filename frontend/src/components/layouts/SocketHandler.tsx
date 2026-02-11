@@ -11,6 +11,7 @@ import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
+import { isSafeUrl } from "@/lib/utils";
 
 // =============================================================================
 // DEBOUNCED INVALIDATION HELPER
@@ -817,7 +818,7 @@ export function SocketHandler() {
       toastFn(`🚨 System Alert`, {
         description: data.message,
         duration: 10000,
-        action: data.action_url
+        action: data.action_url && isSafeUrl(data.action_url)
           ? {
               label: "View",
               onClick: () => (window.location.href = data.action_url!),

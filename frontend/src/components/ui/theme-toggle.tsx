@@ -82,7 +82,7 @@ export function ThemeToggle() {
           <div className="relative flex items-center justify-center transition-transform duration-300">
             {getCurrentIcon()}
           </div>
-          <span className="sr-only">Toggle theme</span>
+          <span className="sr-only">Chuyển đổi giao diện</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

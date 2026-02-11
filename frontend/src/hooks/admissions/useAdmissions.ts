@@ -60,7 +60,6 @@ export function useListAdmissions(
       order: filters?.order,
     }),
     staleTime: 15000, // 15 seconds
-    refetchOnWindowFocus: true,
     placeholderData: (previousData) => previousData, // Keep showing old data while fetching new page
     initialData: options?.initialData,
   })
@@ -80,7 +79,6 @@ export function useGetAdmission(
     enabled: (options?.enabled ?? true) && !!id,
     initialData: options?.initialData,
     staleTime: options?.staleTime ?? 15000, // 15 seconds
-    refetchOnWindowFocus: true,
   })
 }
 

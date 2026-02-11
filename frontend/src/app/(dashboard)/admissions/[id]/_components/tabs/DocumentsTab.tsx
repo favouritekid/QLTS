@@ -37,6 +37,7 @@ import { useUploadAdmissionDocument, useMarkPaperSubmitted, useRejectDocument, u
 import { usePermissions } from "@/hooks/usePermissions"
 import { useRef, useState } from "react"
 import { toast } from "sonner"
+import { isSafeFilePath } from "@/lib/utils"
 
 interface DocumentsTabProps {
   profile: AdmissionProfileResponse
@@ -264,7 +265,9 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
   }
 
   const handleViewDocument = (filePath: string) => {
-    const url = `${process.env.NEXT_PUBLIC_API_URL || ""}/${filePath}`
+    if (!isSafeFilePath(filePath)) return
+    const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath
+    const url = `${process.env.NEXT_PUBLIC_API_URL || ""}/${cleanPath}`
     window.open(url, "_blank", "noopener,noreferrer")
   }
   

@@ -51,13 +51,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
       socketService.onReconnect(() => {
         console.log("[Providers] 🔄 Socket reconnected - Invalidating critical queries...");
 
-        // Invalidate all critical data that may have changed during disconnect
-        // These queries have staleTime: Infinity via SocketHandler, so they need manual invalidation
-        queryClient.invalidateQueries({ queryKey: ["admin"] }); // Current user + permissions
-        queryClient.invalidateQueries({ queryKey: ["users"] }); // User management
-        queryClient.invalidateQueries({ queryKey: ["leads"] }); // Leads data
-        queryClient.invalidateQueries({ queryKey: ["organization"] }); // Organization tree
-        queryClient.invalidateQueries({ queryKey: ["notifications"] }); // Notifications
+        // Invalidate critical data — only refetch queries that are currently mounted
+        queryClient.invalidateQueries({ queryKey: ["admin"], refetchType: 'active' });
+        queryClient.invalidateQueries({ queryKey: ["users"], refetchType: 'active' });
+        queryClient.invalidateQueries({ queryKey: ["leads"], refetchType: 'active' });
+        queryClient.invalidateQueries({ queryKey: ["organization"], refetchType: 'active' });
+        queryClient.invalidateQueries({ queryKey: ["notifications"], refetchType: 'active' });
 
         console.log("[Providers] ✅ Cache invalidation triggered - React Query will refetch data");
       });

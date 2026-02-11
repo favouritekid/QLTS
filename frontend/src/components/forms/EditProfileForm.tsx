@@ -145,6 +145,7 @@ export function EditProfileForm() {
                   onClick={handleAvatarClick}
                   className="bg-primary text-primary-foreground hover:bg-primary/90 absolute bottom-0 right-0 rounded-full p-2 shadow-md transition-colors"
                   disabled={isUpdatingProfile}
+                  aria-label="Tải ảnh đại diện mới"
                 >
                   <Camera className="h-4 w-4" />
                 </button>

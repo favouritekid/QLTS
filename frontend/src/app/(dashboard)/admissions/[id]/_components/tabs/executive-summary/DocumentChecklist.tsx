@@ -46,6 +46,7 @@ import {
 import { useVerifyDocument, useRejectDocument } from "@/hooks/admissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { API_BASE_URL } from "@/lib/api/client"
+import { isSafeFilePath } from "@/lib/utils"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -422,8 +423,8 @@ function DocumentRow({
 // Helper function to get document URL
 function getDocumentUrl(filePath?: string | null) {
   if (!filePath) return null
-  if (filePath.startsWith("http")) return filePath
-  // Handle relative paths (remove leading slash if present to avoid double slash)
+  // Only allow safe relative file paths — block external URLs and traversal
+  if (!isSafeFilePath(filePath)) return null
   const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath
   return `${API_BASE_URL}/${cleanPath}`
 }

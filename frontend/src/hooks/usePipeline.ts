@@ -254,10 +254,8 @@ export function useCreatePipelineStage() {
         description: newStage.name,
       });
 
-      // Invalidate and refetch pipeline queries immediately
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.stages() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.stages(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -303,10 +301,8 @@ export function useUpdatePipelineStage() {
         description: updatedStage.name,
       });
 
-      // Invalidate and refetch pipeline queries immediately
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.stages() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.stages(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -342,10 +338,8 @@ export function useDeletePipelineStage() {
     onSuccess: () => {
       toast.success("Pipeline stage deleted!");
 
-      // Invalidate and refetch pipeline queries immediately
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.stages() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.stages(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -392,10 +386,8 @@ export function useCreateConsultationStatus() {
         description: newStatus.name,
       });
 
-      // Invalidate and refetch consultation status queries immediately
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.consultationStatuses() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -441,10 +433,8 @@ export function useUpdateConsultationStatus() {
         description: updatedStatus.name,
       });
 
-      // Invalidate and refetch consultation status queries immediately
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.consultationStatuses() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -480,10 +470,8 @@ export function useDeleteConsultationStatus() {
     onSuccess: () => {
       toast.success("Consultation status deleted!");
 
-      // Invalidate and refetch consultation status queries immediately
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.consultationStatuses() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -736,9 +724,7 @@ export function useCreateAllowedTransition() {
         description: `${newTransition.from_status_id} → ${newTransition.to_status_id}`,
       });
 
-      // Invalidate and refetch allowed transitions queries
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.allowedTransitions() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.allowedTransitions() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.allowedTransitions(), refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -774,9 +760,7 @@ export function useDeleteAllowedTransition() {
     onSuccess: () => {
       toast.success("Allowed transition deleted!");
 
-      // Invalidate and refetch allowed transitions queries
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.allowedTransitions() });
-      queryClient.refetchQueries({ queryKey: pipelineKeys.allowedTransitions() });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.allowedTransitions(), refetchType: 'active' });
     },
 
     onError: (error) => {

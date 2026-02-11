@@ -59,7 +59,7 @@ export function Header() {
         size="icon"
         className="h-9 w-9 shrink-0"
         onClick={toggleSidebar}
-        aria-label="Toggle sidebar"
+        aria-label="Bật/tắt thanh bên"
       >
         <Menu className="h-5 w-5" />
       </Button>
@@ -73,6 +73,7 @@ export function Header() {
         <Button
           variant="outline"
           onClick={open}
+          aria-label="Tìm kiếm trang và thao tác"
           className={cn(
             "relative h-9 w-9 p-0 md:w-auto md:px-3 md:justify-start md:gap-2 text-sm text-muted-foreground",
             "transition-colors duration-200 ease-in-out",

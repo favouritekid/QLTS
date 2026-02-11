@@ -66,6 +66,41 @@ export function sanitizeColorCode(
 }
 
 /**
+ * Validate that a URL is safe for navigation (same-origin only).
+ * Blocks javascript:, data:, external URLs, and protocol-relative URLs.
+ */
+export function isSafeUrl(url: string): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  // Block dangerous protocols
+  if (/^(javascript|data|vbscript):/i.test(trimmed)) return false;
+  // Block protocol-relative URLs
+  if (trimmed.startsWith('//')) return false;
+  // Allow relative paths
+  if (trimmed.startsWith('/')) return true;
+  // Allow same-origin absolute URLs
+  if (API_BASE_URL && trimmed.startsWith(API_BASE_URL)) return true;
+  // Allow current origin
+  if (typeof window !== 'undefined' && trimmed.startsWith(window.location.origin)) return true;
+  return false;
+}
+
+/**
+ * Validate a file path from API for document viewing.
+ * Only allows relative paths (no protocol, no traversal).
+ */
+export function isSafeFilePath(filePath: string): boolean {
+  if (!filePath) return false;
+  // Block any protocol handler
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(filePath)) return false;
+  // Block protocol-relative URLs
+  if (filePath.startsWith('//')) return false;
+  // Block path traversal
+  if (filePath.includes('..')) return false;
+  return true;
+}
+
+/**
  * Convert relative avatar URL to absolute URL with backend base URL
  * This is necessary because Next.js dev server runs on different port than FastAPI
  * @param avatarUrl - The avatar URL from backend (can be relative or absolute)
