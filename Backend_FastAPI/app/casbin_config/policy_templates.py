@@ -89,7 +89,11 @@ OFFICER_TEMPLATE: PolicyTemplate = {
     "policies": [
         # Lead access
         {"subject": "{role}", "object": "/api/leads", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads", "action": "POST"},  # Create lead
         {"subject": "{role}", "object": "/api/leads/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/{id}", "action": "PUT"},  # Update lead
+        {"subject": "{role}", "object": "/api/leads/check-duplicate", "action": "GET"},  # Duplicate check for create/edit form
+        {"subject": "{role}", "object": "/api/leads/{id}/workflow-context", "action": "GET"},  # Workflow context
         {"subject": "{role}", "object": "/api/leads/{id}/consultations", "action": "GET"},  # List consultations
         {"subject": "{role}", "object": "/api/leads/{id}/consultations", "action": "POST"},  # Create consultation
         {"subject": "{role}", "object": "/api/leads/{id}/consultations/{consultation_id}", "action": "PUT"},  # Update

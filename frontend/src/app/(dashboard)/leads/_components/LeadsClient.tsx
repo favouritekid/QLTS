@@ -17,7 +17,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { useQueryClient } from "@tanstack/react-query";
-import { Upload, Download, ChevronDown, Command } from "lucide-react";
+import { Download, FileUp, FileSpreadsheet, ArrowDownUp, ChevronDown, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layouts/PageHeader";
@@ -37,6 +37,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -96,6 +97,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [selectedLeadsForBulk, setSelectedLeadsForBulk] = useState<Lead[]>([]);
   const [resetSelectionKey, setResetSelectionKey] = useState(0);
+
+  // Ref for file import input
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Ref to auto-scroll detail panel when selecting a new lead
   const detailPanelRef = useRef<HTMLDivElement>(null);
@@ -219,8 +223,12 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     }
   };
 
-  const handleExport = () => {
+  const handleExportCsv = () => {
     exportMutation.mutate({ format: "csv", filters: apiFilters });
+  };
+
+  const handleExportXlsx = () => {
+    exportMutation.mutate({ format: "xlsx", filters: apiFilters });
   };
 
   const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -282,48 +290,55 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         description={`${leadsPage?.total_count?.toLocaleString() || 0} lead`}
         actions={
           <>
-            {/* Template download dropdown */}
+            {/* Hidden file input for import */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xlsx"
+              onChange={handleImport}
+              className="sr-only"
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+
+            {/* Combined Import/Export dropdown */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  disabled={templateMutation.isPending}
+                  disabled={exportMutation.isPending || importMutation.isPending || templateMutation.isPending}
                   className="h-8"
                 >
-                  <Download className="mr-1.5 h-3.5 w-3.5" />
-                  Tải mẫu
+                  <ArrowDownUp className="mr-1.5 h-3.5 w-3.5" />
+                  Nhập / Xuất
                   <ChevronDown className="ml-1 h-3 w-3" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => templateMutation.mutate({ format: 'csv' })}>
-                  CSV (.csv)
+                <DropdownMenuItem onSelect={handleExportCsv}>
+                  <FileUp className="mr-2 h-4 w-4" aria-hidden="true" />
+                  Xuất CSV
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => templateMutation.mutate({ format: 'xlsx' })}>
-                  Excel (.xlsx)
+                <DropdownMenuItem onSelect={handleExportXlsx}>
+                  <FileUp className="mr-2 h-4 w-4" aria-hidden="true" />
+                  Xuất Excel
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
+                  <Download className="mr-2 h-4 w-4" aria-hidden="true" />
+                  Nhập từ file…
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => templateMutation.mutate({ format: 'csv' })}>
+                  <FileSpreadsheet className="mr-2 h-4 w-4" aria-hidden="true" />
+                  Tải mẫu nhập CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => templateMutation.mutate({ format: 'xlsx' })}>
+                  <FileSpreadsheet className="mr-2 h-4 w-4" aria-hidden="true" />
+                  Tải mẫu nhập Excel
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-
-            {/* Hidden file input for import */}
-            <input
-              type="file"
-              accept=".csv,.xlsx"
-              onChange={handleImport}
-              className="hidden"
-              id="import-file"
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => document.getElementById("import-file")?.click()}
-              disabled={importMutation.isPending}
-              className="h-8"
-            >
-              <Upload className="mr-1.5 h-3.5 w-3.5" />
-              Nhập
-            </Button>
           </>
         }
       />
@@ -360,7 +375,6 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onDateToChange={filterHandlers.handleDateToChange}
         onDateFieldChange={filterHandlers.handleDateFieldChange}
         onReset={filterHandlers.resetFilters}
-        onExport={handleExport}
         onAddLead={handleAddLead}
         totalCount={leadsPage?.total_count || 0}
       />

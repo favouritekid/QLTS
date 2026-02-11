@@ -16,7 +16,6 @@ import {
   Search,
   X,
   RotateCcw,
-  Download,
   Plus,
   ChevronDown,
   Calendar,
@@ -83,7 +82,6 @@ interface LeadFilterBarProps {
   onDateFieldChange: (field: "created_at" | "last_consultation_at") => void;
   // Actions
   onReset: () => void;
-  onExport: () => void;
   onAddLead: () => void;
   // Total count
   totalCount: number;
@@ -185,7 +183,6 @@ export function LeadFilterBar({
   onDateToChange,
   onDateFieldChange,
   onReset,
-  onExport,
   onAddLead,
   totalCount,
 }: LeadFilterBarProps) {
@@ -591,10 +588,6 @@ export function LeadFilterBar({
               Đặt lại
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={onExport} className="h-8">
-            <Download className="mr-1.5 h-3.5 w-3.5" />
-            Xuất
-          </Button>
           <Button size="sm" onClick={onAddLead} className="h-8">
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             Thêm Lead
@@ -718,10 +711,6 @@ export function LeadFilterBar({
                 Đặt lại
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={onExport} className="h-9">
-              <Download className="mr-1.5 h-3.5 w-3.5" />
-              Xuất
-            </Button>
           </div>
         </div>
       )}

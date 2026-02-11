@@ -90,6 +90,7 @@ const DEFAULT_FILTERS: StoredFilters = {
 // =============================================================================
 
 function saveFiltersToStorage(filters: StoredFilters) {
+  if (typeof window === 'undefined') return;
   try {
     // ✅ VERSIONING: Store with version for schema compatibility
     const versioned: VersionedStorage = {
@@ -103,6 +104,7 @@ function saveFiltersToStorage(filters: StoredFilters) {
 }
 
 function loadFiltersFromStorage(): StoredFilters | null {
+  if (typeof window === 'undefined') return null;
   try {
     const stored = localStorage.getItem(LEADS_FILTERS_STORAGE_KEY);
     if (stored) {
@@ -125,6 +127,7 @@ function loadFiltersFromStorage(): StoredFilters | null {
 }
 
 function clearFiltersFromStorage() {
+  if (typeof window === 'undefined') return;
   try {
     localStorage.removeItem(LEADS_FILTERS_STORAGE_KEY);
   } catch {

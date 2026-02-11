@@ -167,7 +167,7 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
                       <p className="text-sm leading-none font-medium">
                         {activity.description || activity.action}
                       </p>
-                      <p className="text-muted-foreground text-xs">
+                      <p className="text-muted-foreground text-xs" suppressHydrationWarning>
                         bởi {activity.actor_username || "System"} •{" "}
                         {format(new Date(activity.created_at), "dd/MM, HH:mm")}
                       </p>

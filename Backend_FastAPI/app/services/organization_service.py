@@ -1864,14 +1864,19 @@ async def get_all_program_offerings(
     Get all program offerings as flat list for dropdowns.
 
     Uses OrganizationRepository with eager loading for program name display.
-    ✅ M12 FIX: Filters by Manager's managed units.
+
+    NOTE: No unit-based RBAC filtering here. This endpoint serves dropdown
+    selections (e.g., LeadDialog, LeadFilterBar) where all authenticated users
+    need to see all active programs. Officers in administrative units (e.g.,
+    Phòng Tuyển sinh) must be able to select any program when managing leads.
+    Casbin enforces endpoint-level access at the router layer.
 
     Args:
         db: Database session
         is_active: Filter by active status (None = all)
         skip: Offset for pagination
         limit: Maximum results
-        current_user: If provided, filters by user's role/managed units
+        current_user: If provided, used for Casbin auth (handled by router)
 
     Returns:
         List of ProgramOffering with program loaded
@@ -1882,14 +1887,6 @@ async def get_all_program_offerings(
         skip=skip,
         limit=limit
     )
-
-    # ✅ M12 FIX: Filter by allowed unit IDs
-    allowed_unit_ids = await _get_allowed_unit_ids_for_user(db, current_user)
-    if allowed_unit_ids is not None:
-        offerings = [
-            o for o in offerings
-            if o.program and o.program.unit_id in allowed_unit_ids
-        ]
 
     return offerings
 

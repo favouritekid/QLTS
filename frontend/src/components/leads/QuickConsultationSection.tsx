@@ -325,6 +325,15 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     setLossReasonCode(null);
     setLossReasonNote("");
 
+    // DEBUG: Remove after fix confirmed
+    console.log("[QuickConsultation] handleStatusClick:", {
+      statusId: status.id,
+      statusName: status.name,
+      is_final: status.is_final,
+      outcome_type: status.outcome_type,
+      requiresLossReason: requiresLossReason(status),
+    });
+
     if (requiresLossReason(status)) {
       // Negative final: pause for loss reason selection (no countdown yet)
       if (countdownRef.current) clearInterval(countdownRef.current);
