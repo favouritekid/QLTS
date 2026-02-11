@@ -321,19 +321,21 @@ class LeadRepository(BaseRepository[models.Lead]):
                 leads_query = base_query.order_by(
                     activity_priority.asc(),
                     models.Lead.next_activity_at.asc().nullslast(),
-                    sort_column.desc()
+                    sort_column.desc(),
+                    models.Lead.id.desc()
                 )
             else:
                 leads_query = base_query.order_by(
                     activity_priority.asc(),
                     models.Lead.next_activity_at.asc().nullslast(),
-                    sort_column.asc()
+                    sort_column.asc(),
+                    models.Lead.id.desc()
                 )
         else:
             if order.lower() == "desc":
-                leads_query = base_query.order_by(sort_column.desc())
+                leads_query = base_query.order_by(sort_column.desc(), models.Lead.id.desc())
             else:
-                leads_query = base_query.order_by(sort_column.asc())
+                leads_query = base_query.order_by(sort_column.asc(), models.Lead.id.desc())
 
         # ✅ Apply eager loading with ALL relationships required by schema
         leads_query = (
