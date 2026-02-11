@@ -35,6 +35,8 @@ export interface StoredFilters {
 export interface LeadsFilterState extends StoredFilters {
   pageSize: number;
   scoreRange: [number, number];
+  sortBy: string;
+  sortOrder: "asc" | "desc";
 }
 
 export interface LeadsFilterHandlers {
@@ -49,6 +51,7 @@ export interface LeadsFilterHandlers {
   handleDateFromChange: (date: string) => void;
   handleDateToChange: (date: string) => void;
   handleDateFieldChange: (field: "created_at" | "last_consultation_at") => void;
+  handleSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void;
   resetFilters: () => void;
 }
 
@@ -213,6 +216,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const [dateField, setDateField] = useState<"created_at" | "last_consultation_at">(
     initialValues.dateField === "created_at" ? "created_at" : "last_consultation_at"
   );
+  const [sortBy, setSortBy] = useState("created_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   // ==========================================================================
   // EXTERNAL URL CHANGE DETECTION (e.g., navigation from dashboard)
@@ -417,6 +422,12 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     setPage(1);
   }, []);
 
+  const handleSortChange = useCallback((newSortBy: string, newSortOrder: "asc" | "desc") => {
+    setSortBy(newSortBy);
+    setSortOrder(newSortOrder);
+    setPage(1);
+  }, []);
+
   const resetFilters = useCallback(() => {
     setSearch("");
     setStatusFilters([]);
@@ -428,6 +439,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     setDateFrom("");
     setDateTo("");
     setDateField("created_at");
+    setSortBy("created_at");
+    setSortOrder("desc");
     setPage(1);
     clearFiltersFromStorage();
   }, []);
@@ -459,8 +472,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     const params: Record<string, unknown> = {
       page,
       page_size: pageSize,
-      sort_by: "created_at",
-      order: "desc",
+      sort_by: sortBy,
+      order: sortOrder,
     };
 
     if (search) params.search = search;
@@ -482,6 +495,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   }, [
     page, pageSize, search, statusFilters, sourceFilters,
     offeringFilters, stageFilters, officerFilters, dateFrom, dateTo, dateField,
+    sortBy, sortOrder,
   ]);
 
   // ==========================================================================
@@ -502,6 +516,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       dateFrom,
       dateTo,
       dateField,
+      sortBy,
+      sortOrder,
     },
     handlers: {
       setPage,
@@ -515,6 +531,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       handleDateFromChange,
       handleDateToChange,
       handleDateFieldChange,
+      handleSortChange,
       resetFilters,
     },
     hasActiveFilters,

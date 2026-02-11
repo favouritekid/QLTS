@@ -430,6 +430,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                   searchQuery={filterState.search}
                   onResetFilters={filterHandlers.resetFilters}
                   onCreateLead={handleAddLead}
+                  sortBy={filterState.sortBy}
+                  sortOrder={filterState.sortOrder}
+                  onSortChange={filterHandlers.handleSortChange}
                 />
               )}
             </div>

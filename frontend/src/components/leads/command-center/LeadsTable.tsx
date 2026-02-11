@@ -24,7 +24,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useReactTable,
   getCoreRowModel,
-  getSortedRowModel,
   flexRender,
   createColumnHelper,
   type SortingState,
@@ -116,6 +115,10 @@ interface LeadsTableProps {
   searchQuery?: string;
   onResetFilters?: () => void;
   onCreateLead?: () => void;
+  // Server-side sorting
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+  onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
 }
 
 // =============================================================================
@@ -124,10 +127,22 @@ interface LeadsTableProps {
 
 const COLUMN_VISIBILITY_STORAGE_KEY = "leads_table_columns";
 const DENSITY_MODE_STORAGE_KEY = "leads_table_density";
-const SORTING_STORAGE_KEY = "leads_table_sorting";
 
-// Default sort: urgency_score DESC (most urgent leads first)
-const DEFAULT_SORTING: SortingState = [{ id: "cached_urgency_score", desc: true }];
+// Mapping between TanStack column IDs and backend sort_by field names
+const COLUMN_TO_BACKEND_SORT: Record<string, string> = {
+  full_name: "full_name",
+  lead_score: "lead_score",
+  activity: "last_consultation_at",
+  cached_urgency_score: "cached_urgency_score",
+};
+
+const BACKEND_TO_COLUMN_SORT: Record<string, string> = {
+  full_name: "full_name",
+  lead_score: "lead_score",
+  last_consultation_at: "activity",
+  cached_urgency_score: "cached_urgency_score",
+  created_at: "created_at", // no visible column, but valid backend field
+};
 
 // Density configuration
 const DENSITY_CONFIG: Record<DensityMode, { rowHeight: number; cellPadding: string; headerHeight: string }> = {
@@ -254,13 +269,22 @@ export function LeadsTable({
   searchQuery = "",
   onResetFilters,
   onCreateLead,
+  sortBy = "created_at",
+  sortOrder = "desc",
+  onSortChange,
 }: LeadsTableProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const tableContainerRef = useRef<HTMLDivElement>(null);
   
-  // ✅ Sorting state with localStorage persistence and default urgency sort
-  const [sorting, setSorting] = React.useState<SortingState>(DEFAULT_SORTING);
+  // Derive TanStack sorting state from server-side sort props
+  const sorting = React.useMemo<SortingState>(() => {
+    const columnId = BACKEND_TO_COLUMN_SORT[sortBy];
+    if (columnId) {
+      return [{ id: columnId, desc: sortOrder === "desc" }];
+    }
+    return [];
+  }, [sortBy, sortOrder]);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
@@ -289,15 +313,6 @@ export function LeadsTable({
       // Ignore parse errors
     }
 
-    try {
-      const savedSorting = localStorage.getItem(SORTING_STORAGE_KEY);
-      if (savedSorting) {
-        setSorting(JSON.parse(savedSorting));
-      }
-    } catch {
-      // Ignore parse errors
-    }
-    
     setIsHydrated(true);
   }, []);
 
@@ -317,11 +332,6 @@ export function LeadsTable({
       localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
     }
   }, [columnVisibility, isHydrated]);
-
-  // ✅ Persist sorting preference
-  useEffect(() => {
-    localStorage.setItem(SORTING_STORAGE_KEY, JSON.stringify(sorting));
-  }, [sorting]);
 
   // Reset row selection when resetSelectionKey changes (after bulk actions)
   useEffect(() => {
@@ -602,14 +612,22 @@ export function LeadsTable({
     enableRowSelection: true,
     enableColumnResizing: true,
     columnResizeMode,
+    manualSorting: true,
     onSortingChange: (updater) => {
-      setSorting(updater);
-      setFocusedRowIndex(-1); // Reset focus when sorting changes
+      const newSorting = typeof updater === "function" ? updater(sorting) : updater;
+      if (newSorting.length > 0 && onSortChange) {
+        const { id, desc } = newSorting[0];
+        const backendField = COLUMN_TO_BACKEND_SORT[id] || id;
+        onSortChange(backendField, desc ? "desc" : "asc");
+      } else if (newSorting.length === 0 && onSortChange) {
+        // Reset to default sort when user clears sorting
+        onSortChange("created_at", "desc");
+      }
+      setFocusedRowIndex(-1);
     },
     onRowSelectionChange: setRowSelection,
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   // Get all rows for virtualization
