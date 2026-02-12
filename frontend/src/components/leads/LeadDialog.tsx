@@ -8,13 +8,6 @@ import * as z from "zod";
 import {
   Loader2,
   Info,
-  User,
-  Mail,
-  Phone,
-  Building2,
-  GraduationCap,
-  MapPin,
-  Megaphone,
   ChevronDown,
   ChevronUp,
   Check,
@@ -405,10 +398,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                         Họ và tên <span className="text-destructive">*</span>
                       </FormLabel>
                       <FormControl>
-                        <div className="relative">
-                          <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input className="pl-10" placeholder="Nguyễn Văn A" autoComplete="name" {...field} />
-                        </div>
+                        <Input placeholder="Nguyễn Văn A" autoComplete="name" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -425,10 +415,9 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                       </FormLabel>
                       <FormControl>
                         <div className="relative">
-                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                           <Input
                             className={cn(
-                              "pl-10 pr-8",
+                              "pr-8",
                               duplicateValidation.phone.state === "valid" && "border-success-500",
                               duplicateValidation.phone.state === "invalid" && "border-destructive"
                             )}
@@ -464,8 +453,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                   name="source"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="flex items-center gap-1.5">
-                        <Megaphone className="h-3.5 w-3.5" />
+                      <FormLabel>
                         Nguồn lead <span className="text-destructive">*</span>
                       </FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
@@ -496,8 +484,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
 
                     return (
                       <FormItem>
-                        <FormLabel className="flex items-center gap-1.5">
-                          <Building2 className="h-3.5 w-3.5" />
+                        <FormLabel>
                           Đơn vị {!unitOptional && !hideUnitSelector && <span className="text-destructive">*</span>}
                         </FormLabel>
                         <FormControl>
@@ -616,8 +603,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
               <CollapsibleContent className="space-y-4 pt-4">
                 {/* Contact Info */}
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2 pb-2 border-b">
-                    <Mail className="h-4 w-4 text-muted-foreground" />
+                  <div className="pb-2 border-b">
                     <h3 className="text-sm font-semibold">Liên hệ bổ sung</h3>
                   </div>
 
@@ -629,17 +615,13 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                         <FormItem>
                           <FormLabel>Email</FormLabel>
                           <FormControl>
-                            <div className="relative">
-                              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                              <Input
-                                className="pl-10"
-                                type="email"
-                                placeholder="email@example.com"
-                                autoComplete="email"
-                                {...field}
-                                value={field.value ?? ""}
-                              />
-                            </div>
+                            <Input
+                              type="email"
+                              placeholder="email@example.com"
+                              autoComplete="email"
+                              {...field}
+                              value={field.value ?? ""}
+                            />
                           </FormControl>
                           <FormMessage />
                           <ValidationIndicator
@@ -668,8 +650,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
 
                 {/* Personal Info */}
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2 pb-2 border-b">
-                    <User className="h-4 w-4 text-muted-foreground" />
+                  <div className="pb-2 border-b">
                     <h3 className="text-sm font-semibold">Thông tin cá nhân</h3>
                   </div>
 
@@ -701,10 +682,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                       name="location"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel className="flex items-center gap-1.5">
-                            <MapPin className="h-3.5 w-3.5" />
-                            Địa chỉ
-                          </FormLabel>
+                          <FormLabel>Địa chỉ</FormLabel>
                           <FormControl>
                             <Input placeholder="TP.HCM" autoComplete="address-level1" {...field} value={field.value ?? ""} />
                           </FormControl>
@@ -740,8 +718,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
 
                 {/* Academic Info */}
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2 pb-2 border-b">
-                    <GraduationCap className="h-4 w-4 text-muted-foreground" />
+                  <div className="pb-2 border-b">
                     <h3 className="text-sm font-semibold">Thông tin học vấn</h3>
                   </div>
 
