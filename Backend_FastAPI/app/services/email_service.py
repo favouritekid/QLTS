@@ -154,12 +154,19 @@ class EmailService:
         self.from_name = getattr(settings, "FROM_NAME", "QLTS Notification")
 
     def _create_connection(self):
-        """Create SMTP connection."""
+        """Create SMTP connection. Supports both SSL/TLS (port 465) and STARTTLS (port 587)."""
         try:
-            server = smtplib.SMTP(self.smtp_host, self.smtp_port)
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
+            use_ssl = getattr(settings, "MAIL_SSL_TLS", False)
+            use_starttls = getattr(settings, "MAIL_STARTTLS", True)
+
+            if use_ssl:
+                server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port)
+            else:
+                server = smtplib.SMTP(self.smtp_host, self.smtp_port)
+                server.ehlo()
+                if use_starttls:
+                    server.starttls()
+                    server.ehlo()
 
             if self.smtp_user and self.smtp_password:
                 server.login(self.smtp_user, self.smtp_password)

@@ -187,8 +187,15 @@ def _send_email(to: str, subject: str, html_body: str, text_body: str):
     msg.attach(text_part)
     msg.attach(html_part)
 
-    with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as server:
-        if settings.MAIL_STARTTLS:
-            server.starttls()
-        server.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
-        server.send_message(msg)
+    if settings.MAIL_SSL_TLS:
+        # Port 465: implicit SSL/TLS connection
+        with smtplib.SMTP_SSL(settings.MAIL_SERVER, settings.MAIL_PORT) as server:
+            server.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
+            server.send_message(msg)
+    else:
+        # Port 587: plaintext then upgrade via STARTTLS
+        with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as server:
+            if settings.MAIL_STARTTLS:
+                server.starttls()
+            server.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
+            server.send_message(msg)
