@@ -19,6 +19,9 @@ from .config import (
     SkillRequirementRule,
 )
 
+# Collaborator (CTV) models
+from .collaborator import Collaborator, LeadClaim
+
 # Lead management models
 from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
@@ -123,6 +126,9 @@ __all__ = [
     "LeadScoringConfig",
     "OfficerAssignmentConfig",
     "SkillRequirementRule",
+    # Collaborator (CTV)
+    "Collaborator",
+    "LeadClaim",
     # Lead
     "Application",
     "AssignmentLog",

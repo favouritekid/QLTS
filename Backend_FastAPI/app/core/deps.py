@@ -14,6 +14,7 @@ from .. import database, models, security  # ✅ THÊM IMPORT security
 from ..database import safe_redis_exists, safe_redis_get
 from ..services import user_service
 from ..utils.exceptions import (
+    BusinessRuleViolation,
     InvalidToken,
     PermissionDeniedError,
     ResourceNotFoundError,
@@ -60,6 +61,12 @@ __all__ = [
     
     # Admission Configuration Console IDOR
     "get_admission_path_for_user",  # Phase 1: Config Console
+
+    # Collaborator System (Phase 1)
+    "require_collaborator_role",
+    "get_own_collaborator",
+    "get_collaborator_for_user",
+    "get_lead_claim_for_review",
 
     # Data Classes
     "OfficerDashboardScope",
@@ -1915,5 +1922,80 @@ async def validate_status_transition(
         to_status=to_status_id,
         lead_phase=lead_phase
     )
-    
+
     return to_status
+
+
+# =============================================================================
+# COLLABORATOR SYSTEM DEPENDENCIES (Phase 1)
+# =============================================================================
+
+
+async def require_collaborator_role(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """Requires user to have collaborator role."""
+    if current_user.role != UserRole.COLLABORATOR:
+        raise PermissionDeniedError("Collaborator access required")
+    return current_user
+
+
+async def get_own_collaborator(
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_collaborator_role),
+) -> models.Collaborator:
+    """Load Collaborator record linked to current user. Checks active status."""
+    from ..repositories.collaborator_repository import CollaboratorRepository
+
+    repo = CollaboratorRepository(db)
+    collab = await repo.get_by_user_id(current_user.id)
+    if not collab:
+        raise ResourceNotFoundError("Collaborator profile not found")
+    if collab.status != "active":
+        raise BusinessRuleViolation("Collaborator account is not active")
+    return collab
+
+
+async def get_collaborator_for_user(
+    collaborator_id: int = Path(...),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.Collaborator:
+    """
+    IDOR protection for collaborator access:
+    - Admin: all collaborators
+    - Manager: collaborators in their unit
+    - Returns 404 for unauthorized (not 403)
+    """
+    from ..repositories.collaborator_repository import CollaboratorRepository
+
+    repo = CollaboratorRepository(db)
+    collab = await repo.get_by_id(collaborator_id)
+    if not collab:
+        raise ResourceNotFoundError("Collaborator not found")
+    if current_user.role == UserRole.ADMIN:
+        return collab
+    if current_user.role == UserRole.MANAGER:
+        if collab.unit_id == current_user.unit_id:
+            return collab
+    raise ResourceNotFoundError("Collaborator not found")
+
+
+async def get_lead_claim_for_review(
+    claim_id: int = Path(...),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.LeadClaim:
+    """Admin/Manager can review claims. IDOR via unit scope."""
+    from ..repositories.lead_claim_repository import LeadClaimRepository
+
+    repo = LeadClaimRepository(db)
+    claim = await repo.get_by_id(claim_id)
+    if not claim:
+        raise ResourceNotFoundError("Claim not found")
+    if current_user.role == UserRole.ADMIN:
+        return claim
+    if current_user.role == UserRole.MANAGER:
+        if claim.collaborator and claim.collaborator.unit_id == current_user.unit_id:
+            return claim
+    raise ResourceNotFoundError("Claim not found")

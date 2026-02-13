@@ -5,7 +5,7 @@ import io
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 try:
     import pandas as pd
@@ -15,10 +15,9 @@ except ImportError:
 
 import pytest
 import pytest_asyncio
-import redis.asyncio as redis
 import fakeredis.aioredis
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import insert, select, text
+from sqlalchemy import insert, text
 
 # --- PATH SETUP ---
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -32,12 +31,24 @@ print(f"INFO [conftest.py]: Verified os.getenv('APP_ENV') = {app_env_check}")
 if app_env_check != "test":
     pytest.fail("Failed to set APP_ENV=test in os.environ early in conftest.py")
 
+# --- LOAD .env.test WITH OVERRIDE ---
+# In Docker, environment variables from docker-compose.override.yml (e.g. DATABASE_URL=qlts_dev)
+# take precedence over Pydantic-settings env_file values. We need to force-load .env.test
+# with override=True so that test DATABASE_URL (qlts_test) wins over Docker's DATABASE_URL.
+from dotenv import load_dotenv
+_env_test_path = os.path.join(project_root, ".env.test")
+if os.path.exists(_env_test_path):
+    load_dotenv(_env_test_path, override=True)
+    print(f"INFO [conftest.py]: Loaded .env.test with override=True from {_env_test_path}")
+    print(f"INFO [conftest.py]: DATABASE_URL after override = {os.getenv('DATABASE_URL', 'NOT SET')[:60]}...")
+else:
+    print(f"WARNING [conftest.py]: .env.test not found at {_env_test_path}")
+
 # --- PATCH REDIS BEFORE APP IMPORT ---
 print("INFO [conftest.py]: Patching Redis with FakeRedis before app import...")
 import redis
 import redis.asyncio
 import fakeredis
-import fakeredis.aioredis
 
 # Create a shared FakeServer to enable LUA script support
 _fake_server = fakeredis.FakeServer()
@@ -235,7 +246,8 @@ def app_instance():
 async def manage_engine():
     yield
     log.info("\n--- [FUNCTION TEARDOWN] Disposing test engine ---")
-    await engine.dispose()
+    import app.database as _db_mod
+    await _db_mod.engine.dispose()
     log.info("--- [FUNCTION TEARDOWN] Test engine disposed ---")
 
 
@@ -321,133 +333,115 @@ async def setup_test_database(manage_engine):
     _verify_test_database_safety()
 
     log.info(
-        "--- [FUNCTION SETUP] Setting up test database (dropping and creating all tables) ---"
+        "--- [FUNCTION SETUP] Setting up test database (drop + create all tables) ---"
     )
 
-    # ✅ FIX v2: Robust schema reset with explicit transaction handling
-    # Step 1: Drop schema in its OWN transaction (must commit before create)
-    try:
-        async with engine.begin() as conn:
-            # Drop all tables, indexes, and constraints with CASCADE
-            await conn.execute(text("DROP SCHEMA public CASCADE"))
-            await conn.execute(text("CREATE SCHEMA public"))
-            await conn.execute(text("GRANT ALL ON SCHEMA public TO CURRENT_USER"))
-            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
-        # Transaction commits automatically when exiting 'async with'
-        log.info("Schema reset complete (all tables dropped)")
-    except Exception as e:
-        log.warning(f"Schema reset failed: {e}")
-        # Fallback: Try to drop all known orphan indexes explicitly
-        try:
-            async with engine.begin() as conn:
-                # Drop known problematic indexes
-                await conn.execute(text("DROP INDEX IF EXISTS ix_notification_action_rule_id"))
-                await conn.execute(text("DROP INDEX IF EXISTS ix_notification_action_step"))
-                # Then try metadata drop
-                if CasbinBase:
-                    await conn.run_sync(CasbinBase.metadata.drop_all)
-                await conn.run_sync(AppBase.metadata.drop_all)
-            log.info("Fallback cleanup completed")
-        except Exception as e2:
-            log.warning(f"Fallback cleanup also failed: {e2}")
+    # ✅ FIX: Use metadata.drop_all() — NOT DROP SCHEMA CASCADE.
+    #
+    # DROP SCHEMA CASCADE changes the schema OID, which permanently breaks
+    # asyncpg connections — even new connections from the same engine bind
+    # to the old OID and can't access the re-created schema.
+    #
+    # metadata.drop_all() drops tables individually, preserving the schema
+    # OID so connections continue to work correctly.
+    #
+    # PREREQUISITE: The test database must NOT have orphaned enum types
+    # (from previous DROP SCHEMA CASCADE operations). If tests fail with
+    # UniqueViolationError on pg_type_typname_nsp_index, recreate the
+    # test database: DROP DATABASE qlts_test; CREATE DATABASE qlts_test;
 
-    # ✅ FIX v3: Explicitly drop known problematic indexes BEFORE create_all
-    # This handles connection pool caching stale schema state
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("DROP INDEX IF EXISTS public.ix_notification_action_rule_id"))
-            await conn.execute(text("DROP INDEX IF EXISTS public.ix_notification_action_step"))
-            await conn.execute(text("DROP INDEX IF EXISTS public.ix_payment_method_id"))
-            await conn.execute(text("DROP TABLE IF EXISTS notification_action CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS notification_rule CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS notification_template CASCADE"))
-            # Drop all finance tables explicitly
-            await conn.execute(text("DROP TABLE IF EXISTS payment_transaction CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS payment CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS payment_intent CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS invoice CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS fee_applied_discount CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS fee CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS overpayment_record CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS refund_request CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS processed_event CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS accounting_period CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS payment_method CASCADE"))
-            await conn.execute(text("DROP TABLE IF EXISTS installment_plan CASCADE"))
-    except Exception as e:
-        log.debug(f"Pre-create cleanup (expected to fail on fresh db): {e}")
-
-    # ✅ FIX v4: Dispose and recreate engine to clear connection pool cache
     await engine.dispose()
-    log.info("Engine disposed to clear connection pool cache")
 
-    # Step 2: Verify schema is empty and create all tables
+    # --- Transaction 1: Drop all tables and enum types ---
     async with engine.begin() as conn:
-        # ✅ FIX v5: Double-check schema is empty
-        result = await conn.execute(text(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
-        ))
-        table_count = result.scalar()
-        log.info(f"Tables in schema after DROP: {table_count}")
-        if table_count > 0:
-            log.warning(f"Schema has {table_count} tables after DROP - forcing drop_all")
-            await conn.run_sync(AppBase.metadata.drop_all)
-            if CasbinBase:
-                await conn.run_sync(CasbinBase.metadata.drop_all)
+        # CasbinBase.drop_all may fail if casbin_rule doesn't exist yet
+        # (first run). Use SAVEPOINT to protect the outer transaction.
+        if CasbinBase:
+            try:
+                async with conn.begin_nested():
+                    await conn.run_sync(CasbinBase.metadata.drop_all)
+            except Exception:
+                log.debug("CasbinBase.drop_all failed (table may not exist), continuing")
 
-        # ✅ FIX v7: Drop all indexes explicitly before create_all
-        # This handles SQLAlchemy's checkfirst not working correctly for indexes with asyncpg
+        await conn.run_sync(AppBase.metadata.drop_all)
+
+        # Drop all enum types in public schema
         await conn.execute(text("""
-            DO $$
-            DECLARE
-                idx RECORD;
-            BEGIN
-                FOR idx IN
-                    SELECT indexname FROM pg_indexes WHERE schemaname = 'public'
+            DO $$ DECLARE r RECORD; BEGIN
+                FOR r IN SELECT typname FROM pg_type tp
+                    JOIN pg_namespace ns ON tp.typnamespace = ns.oid
+                    WHERE tp.typtype = 'e' AND ns.nspname = 'public'
                 LOOP
-                    EXECUTE 'DROP INDEX IF EXISTS public.' || quote_ident(idx.indexname);
+                    EXECUTE 'DROP TYPE IF EXISTS public.' || quote_ident(r.typname) || ' CASCADE';
                 END LOOP;
             END $$;
         """))
-        log.info("Dropped all existing indexes in public schema")
+    log.info("Step 1: drop_all + drop enums complete")
 
-        # ✅ FIX v6: Use checkfirst=True explicitly for indexes (default but explicit)
-        await conn.run_sync(lambda sync_conn: AppBase.metadata.create_all(sync_conn, checkfirst=True))
+    # CRITICAL: Dispose engine between drop and create.
+    # asyncpg caches prepared statement results per connection. If we reuse
+    # the same connection, checkfirst returns stale "table exists" results.
+    await engine.dispose()
+
+    # --- Transaction 2: Create everything (fresh connection) ---
+    async with engine.begin() as conn:
+        await conn.run_sync(AppBase.metadata.create_all)
+
         if CasbinBase:
-            await conn.run_sync(lambda sync_conn: CasbinBase.metadata.create_all(sync_conn, checkfirst=True))
-
-            # Add tracking columns to casbin_rule (Phase 6 migration columns)
-            # This allows testing tracking functionality without running full migrations
-            try:
-                await conn.execute(text("""
+            await conn.run_sync(CasbinBase.metadata.create_all)
+            await conn.execute(text("""
+                DO $$ BEGIN
                     ALTER TABLE casbin_rule
                     ADD COLUMN IF NOT EXISTS template_id VARCHAR(50),
                     ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP,
-                    ADD COLUMN IF NOT EXISTS applied_by INTEGER
-                """))
-                await conn.execute(text("""
+                    ADD COLUMN IF NOT EXISTS applied_by INTEGER;
                     CREATE INDEX IF NOT EXISTS ix_casbin_rule_template_id
-                    ON casbin_rule(template_id)
-                """))
-                log.info("✅ Added tracking columns to casbin_rule for testing")
-            except Exception as e:
-                log.warning(f"Could not add tracking columns (may already exist): {e}")
+                    ON casbin_rule(template_id);
+                EXCEPTION WHEN undefined_table THEN
+                    NULL;
+                END $$;
+            """))
+
+        tc = await conn.execute(text(
+            "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"
+        ))
+        table_count = tc.scalar()
+        log.info(f"Step 2: Tables after create_all: {table_count}")
+        if table_count == 0:
+            raise RuntimeError(
+                "setup_test_database: create_all produced 0 tables! "
+                "This likely means orphaned enum types exist. "
+                "Fix: DROP DATABASE qlts_test; CREATE DATABASE qlts_test;"
+            )
 
     log.info("--- [FUNCTION SETUP] Test database setup complete ---")
     yield
 
     log.info(
-        "\n--- [FUNCTION TEARDOWN] Tearing down test database (dropping all tables) ---"
+        "\n--- [FUNCTION TEARDOWN] Tearing down test database ---"
     )
     try:
-        async with engine.begin() as conn:
-            # Drop all tables with CASCADE
-            await conn.execute(text("DROP SCHEMA public CASCADE"))
-            await conn.execute(text("CREATE SCHEMA public"))
-            await conn.execute(text("GRANT ALL ON SCHEMA public TO CURRENT_USER"))
-            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+        import app.database as _db_mod
+        async with _db_mod.engine.begin() as conn:
+            if CasbinBase:
+                try:
+                    async with conn.begin_nested():
+                        await conn.run_sync(CasbinBase.metadata.drop_all)
+                except Exception:
+                    pass
+            await conn.run_sync(AppBase.metadata.drop_all)
+            await conn.execute(text("""
+                DO $$ DECLARE r RECORD; BEGIN
+                    FOR r IN SELECT typname FROM pg_type tp
+                        JOIN pg_namespace ns ON tp.typnamespace = ns.oid
+                        WHERE tp.typtype = 'e' AND ns.nspname = 'public'
+                    LOOP
+                        EXECUTE 'DROP TYPE IF EXISTS public.' || quote_ident(r.typname) || ' CASCADE';
+                    END LOOP;
+                END $$;
+            """))
     except Exception as e:
-        log.warning(f"Teardown schema drop failed: {e}")
+        log.warning(f"Teardown failed: {e}")
     log.info("--- [FUNCTION TEARDOWN] Test database teardown complete ---")
 
 

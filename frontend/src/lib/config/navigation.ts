@@ -19,6 +19,7 @@ import {
   DollarSign,
   FileText,
   FolderTree,
+  Handshake,
   History,
   LayoutDashboard,
   Percent,
@@ -241,6 +242,27 @@ export const navigationConfig: NavigationConfig = {
           href: "/admin/policies",
           icon: ShieldCheck,
           roles: ["admin", "manager"],
+        },
+        {
+          label: "Cộng tác viên",
+          href: "/admin/collaborators",
+          icon: Handshake,
+          roles: ["admin", "manager"],
+        },
+      ],
+    },
+
+    // =========================================================================
+    // 6b. CTV SELF-SERVICE - Collaborator dashboard (collaborator role only)
+    // =========================================================================
+    {
+      title: "CTV",
+      items: [
+        {
+          label: "Dashboard CTV",
+          href: "/ctv",
+          icon: LayoutDashboard,
+          roles: ["collaborator"],
         },
       ],
     },

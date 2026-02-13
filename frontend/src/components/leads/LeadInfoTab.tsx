@@ -3,8 +3,9 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Building, GraduationCap, MapPin, Calendar, User } from "lucide-react";
+import { Building, GraduationCap, Handshake, MapPin, Calendar, User } from "lucide-react";
 import type { Lead } from "@/types/lead.types";
+import { getLeadValidityLabel, getLeadValidityOption } from "@/constants/lead.constants";
 
 interface LeadInfoTabProps {
   lead: Lead;
@@ -123,6 +124,28 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
               </Badge>
             </div>
           </div>
+          {lead.validity_status && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Trạng thái hợp lệ</label>
+              <div className="mt-1">
+                <Badge variant="outline" className="gap-1.5">
+                  <span className={`inline-block h-2 w-2 rounded-full ${getLeadValidityOption(lead.validity_status)?.color ?? "bg-gray-400"}`} />
+                  {getLeadValidityLabel(lead.validity_status)}
+                </Badge>
+              </div>
+            </div>
+          )}
+          {lead.referrer && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">CTV giới thiệu</label>
+              <div className="flex items-center gap-2">
+                <Handshake aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
+                <p className="text-base">
+                  {lead.referrer.code} - {lead.referrer.full_name}
+                </p>
+              </div>
+            </div>
+          )}
           <div>
             <label className="text-sm font-medium text-muted-foreground">Điểm Lead</label>
             <p className="text-base font-semibold">{lead.lead_score}/100</p>

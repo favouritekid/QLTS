@@ -4,6 +4,7 @@
  */
 
 import type { ConsultationStatus, PipelineStage } from "./pipeline.types";
+import type { CollaboratorShallow } from "./collaborator.types";
 
 // ============================================
 // CORE LEAD TYPES
@@ -115,6 +116,12 @@ export interface Lead {
   application?: Application | null;
   // NEW: AdmissionProfile (replacement for Application in admission module)
   admission_profile?: AdmissionProfileShallow | null;
+
+  // Collaborator (CTV) fields
+  referrer_id: number | null;
+  validity_status: string | null;
+  created_via: string | null;
+  referrer: CollaboratorShallow | null;
 }
 
 /**

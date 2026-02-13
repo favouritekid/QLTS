@@ -293,6 +293,41 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/payments/{id}/reject", "action": "PUT"},  # Reject payment
         {"subject": "{role}", "object": "/api/accounting/periods/{id}", "action": "GET"},  # View period details
         {"subject": "{role}", "object": "/api/accounting/periods/{id}/summary", "action": "GET"},  # View period summary
+        # CTV Management (Phase 1: Collaborator System)
+        {"subject": "{role}", "object": "/api/collaborators", "action": "GET"},
+        {"subject": "{role}", "object": "/api/collaborators", "action": "POST"},
+        {"subject": "{role}", "object": "/api/collaborators/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/collaborators/{id}", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/collaborators/{id}/approve", "action": "POST"},
+        {"subject": "{role}", "object": "/api/collaborators/{id}/suspend", "action": "POST"},
+        {"subject": "{role}", "object": "/api/collaborators/claims", "action": "GET"},
+        {"subject": "{role}", "object": "/api/collaborators/claims/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/collaborators/claims/{id}/review", "action": "POST"},
+        # Lead validity management (Phase 1: CTV System)
+        {"subject": "{role}", "object": "/api/leads/{id}/validity", "action": "POST"},
+    ]
+}
+
+# =============================================================================
+# COLLABORATOR TEMPLATE (Phase 1: CTV System)
+# NO inheritance from user — standalone permissions
+# =============================================================================
+
+COLLABORATOR_TEMPLATE: PolicyTemplate = {
+    "display_name": "Collaborator (CTV)",
+    "description": "External collaborator: submit leads, view own stats only. No inheritance.",
+    "category": "core",
+    "policies": [
+        # CTV self-service ONLY
+        {"subject": "{role}", "object": "/api/ctv/profile", "action": "GET"},
+        {"subject": "{role}", "object": "/api/ctv/leads", "action": "GET"},
+        {"subject": "{role}", "object": "/api/ctv/leads/submit", "action": "POST"},
+        {"subject": "{role}", "object": "/api/ctv/leads/check-phone", "action": "GET"},
+        {"subject": "{role}", "object": "/api/ctv/claims", "action": "GET"},
+        {"subject": "{role}", "object": "/api/ctv/stats", "action": "GET"},
+        # Minimal auth-related (NO session management, NO security endpoints)
+        {"subject": "{role}", "object": "/api/profile", "action": "GET"},
+        {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
     ]
 }
 
@@ -408,6 +443,7 @@ POLICY_TEMPLATES: Dict[str, PolicyTemplate] = {
     "manager": MANAGER_TEMPLATE,
     "accountant": ACCOUNTANT_TEMPLATE,  # Finance staff
     "officer": OFFICER_TEMPLATE,
+    "collaborator": COLLABORATOR_TEMPLATE,  # External CTV
     "user": BASIC_USER_TEMPLATE,
 
     # Custom templates (business-specific)
@@ -448,6 +484,13 @@ SYSTEM_ROLES = [
         "description": "Admission consultant with lead management capabilities",
         "is_system_role": True,
         "template_id": "officer",
+    },
+    {
+        "name": "role:collaborator",
+        "display_name": "Collaborator",
+        "description": "External collaborator: submit leads, view own stats",
+        "is_system_role": True,
+        "template_id": "collaborator",
     },
     {
         "name": "role:user",

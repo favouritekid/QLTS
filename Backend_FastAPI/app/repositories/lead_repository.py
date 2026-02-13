@@ -89,6 +89,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 ),
                 # NEW: AdmissionProfile for admission module
                 selectinload(models.Lead.admission_profile),
+                # Collaborator referrer
+                selectinload(models.Lead.referrer),
                 # Collection relationships for timeline/insights
                 # ✅ FIX: Filter out soft-deleted consultations
                 selectinload(
@@ -152,13 +154,15 @@ class LeadRepository(BaseRepository[models.Lead]):
                 ),
                 # NEW: AdmissionProfile for admission module
                 selectinload(models.Lead.admission_profile),
+                # Collaborator referrer
+                selectinload(models.Lead.referrer),
             )
             .where(self.model.id == lead_id)
         )
-        
+
         if not include_deleted:
             query = query.where(self.model.deleted_at.is_(None))
-        
+
         result = await self.db.execute(query)
         return result.scalars().first()
 
@@ -180,6 +184,9 @@ class LeadRepository(BaseRepository[models.Lead]):
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         date_field: str = "created_at",
+        # === COLLABORATOR FILTERS ===
+        referrer_id: Optional[int] = None,
+        validity_status: Optional[str] = None,
     ) -> Tuple[int, List[models.Lead]]:
         """
         Get filtered list of leads with pagination and eager loading.
@@ -286,6 +293,15 @@ class LeadRepository(BaseRepository[models.Lead]):
             if date_to:
                 filters.append(date_column <= date_to)
 
+        # === COLLABORATOR FILTERS ===
+        if referrer_id is not None:
+            filters.append(models.Lead.referrer_id == referrer_id)
+
+        if validity_status:
+            v_statuses = [s.strip() for s in validity_status.split(",") if s.strip()]
+            if v_statuses:
+                filters.append(models.Lead.validity_status.in_(v_statuses))
+
         # Apply filters to both queries
         if filters:
             base_query = base_query.where(*filters)
@@ -352,6 +368,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.application),
                 # NEW: AdmissionProfile for admission module
                 selectinload(models.Lead.admission_profile),
+                # Collaborator referrer
+                selectinload(models.Lead.referrer),
             )
             .offset(skip)
             .limit(limit)
@@ -1100,20 +1118,20 @@ class LeadRepository(BaseRepository[models.Lead]):
     ) -> int:
         """
         Count leads with no activity in X days (non-final status only).
-        
+
         ✅ ARCHITECTURE COMPLIANT: Replaces direct query in recommendation_engine.
-        
+
         Args:
             officer_id: Officer ID
             days_threshold: Days of inactivity
-            
+
         Returns:
             Count of stale leads
         """
         from datetime import timedelta
-        
+
         threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
-        
+
         query = (
             select(func.count(models.Lead.id))
             .join(
@@ -1131,5 +1149,178 @@ class LeadRepository(BaseRepository[models.Lead]):
         )
         result = await self.db.execute(query)
         return result.scalar() or 0
+
+    # =========================================================================
+    # COLLABORATOR SYSTEM (Phase 1)
+    # =========================================================================
+
+    async def check_first_touch_for_update(self, phone: str) -> Optional[models.Lead]:
+        """
+        Check first-touch lock: Find existing lead by phone with FOR UPDATE lock.
+
+        Used in CTV claim workflow to prevent race conditions.
+        Loads referrer relationship to check if lead already has a referrer.
+
+        Args:
+            phone: Phone number to check
+
+        Returns:
+            Lead with FOR UPDATE lock, or None
+        """
+        result = await self.db.execute(
+            select(models.Lead)
+            .options(selectinload(models.Lead.referrer))
+            .where(
+                or_(
+                    models.Lead.phone == phone,
+                    models.Lead.phone2 == phone,
+                ),
+                models.Lead.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        return result.scalars().first()
+
+    async def reassign_unprocessed_leads(
+        self,
+        referrer_id: int,
+        from_officer_id: int,
+        to_officer_id: int,
+        to_unit_id: int,
+        only_statuses: set[str],
+    ) -> int:
+        """
+        Reassign unprocessed leads from one officer to another (EC-1: CTV re-assignment).
+
+        Only reassigns leads that:
+        - Have the given referrer_id
+        - Are assigned to from_officer_id
+        - Have status in only_statuses (e.g. {"new"})
+        - Are not soft-deleted
+
+        Args:
+            referrer_id: CTV who referred these leads
+            from_officer_id: Current officer
+            to_officer_id: New officer
+            to_unit_id: New officer's unit
+            only_statuses: Only reassign leads with these statuses
+
+        Returns:
+            Number of leads reassigned
+        """
+        from sqlalchemy import update
+
+        stmt = (
+            update(models.Lead)
+            .where(
+                models.Lead.referrer_id == referrer_id,
+                models.Lead.assigned_officer_id == from_officer_id,
+                models.Lead.status.in_(only_statuses),
+                models.Lead.deleted_at.is_(None),
+            )
+            .values(
+                assigned_officer_id=to_officer_id,
+                unit_id=to_unit_id,
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount
+
+    async def get_leads_by_referrer(
+        self,
+        referrer_id: int,
+        skip: int = 0,
+        limit: int = 10,
+    ) -> Tuple[int, List[models.Lead]]:
+        """
+        Get leads referred by a collaborator (for CTV self-service).
+        No unit filter — EC-5: cross-unit visibility.
+
+        Args:
+            referrer_id: Collaborator ID
+            skip: Offset
+            limit: Max results
+
+        Returns:
+            Tuple of (total_count, leads)
+        """
+        filters = [
+            models.Lead.referrer_id == referrer_id,
+            models.Lead.deleted_at.is_(None),
+        ]
+
+        count_query = select(func.count(models.Lead.id)).where(*filters)
+        total_result = await self.db.execute(count_query)
+        total_count = total_result.scalar_one_or_none() or 0
+
+        if total_count == 0:
+            return 0, []
+
+        leads_query = (
+            select(models.Lead)
+            .options(
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.pipeline_stage),
+                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.unit),
+            )
+            .where(*filters)
+            .order_by(models.Lead.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(leads_query)
+        leads = list(result.scalars().all())
+
+        return total_count, leads
+
+    async def count_leads_by_referrer_and_validity(
+        self,
+        referrer_id: int,
+    ) -> dict:
+        """
+        Count leads by validity_status for a collaborator (for CTV stats).
+
+        Returns:
+            Dict with total, valid, qualified, converted counts
+        """
+        base_filters = [
+            models.Lead.referrer_id == referrer_id,
+            models.Lead.deleted_at.is_(None),
+        ]
+
+        # Total
+        total_q = select(func.count(models.Lead.id)).where(*base_filters)
+        total_result = await self.db.execute(total_q)
+        total = total_result.scalar_one_or_none() or 0
+
+        # Valid
+        valid_q = select(func.count(models.Lead.id)).where(
+            *base_filters, models.Lead.validity_status == "valid"
+        )
+        valid_result = await self.db.execute(valid_q)
+        valid = valid_result.scalar_one_or_none() or 0
+
+        # Qualified
+        qualified_q = select(func.count(models.Lead.id)).where(
+            *base_filters, models.Lead.validity_status == "qualified"
+        )
+        qualified_result = await self.db.execute(qualified_q)
+        qualified = qualified_result.scalar_one_or_none() or 0
+
+        # Converted
+        converted_q = select(func.count(models.Lead.id)).where(
+            *base_filters, models.Lead.status == "converted"
+        )
+        converted_result = await self.db.execute(converted_q)
+        converted = converted_result.scalar_one_or_none() or 0
+
+        return {
+            "total_leads": total,
+            "valid_leads": valid,
+            "qualified_leads": qualified,
+            "converted_leads": converted,
+        }
 
 

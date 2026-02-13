@@ -36,4 +36,5 @@ class UserRole(StrEnum):
     MANAGER = "manager"
     ACCOUNTANT = "accountant"  # Finance staff - record/verify payments, issue invoices
     OFFICER = "officer"  # Admission consultant - manage leads, create payment intents
+    COLLABORATOR = "collaborator"  # External collaborator (CTV) - submit leads, view own stats
     USER = "user"  # Basic user role with minimal permissions

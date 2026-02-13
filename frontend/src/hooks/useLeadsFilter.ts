@@ -24,6 +24,7 @@ export interface StoredFilters {
   search: string;
   statusFilters: LeadStatus[];
   sourceFilters: string[];
+  validityFilters: string[];
   offeringFilters: string[];
   stageFilters: string[];
   officerFilters: string[];
@@ -44,6 +45,7 @@ export interface LeadsFilterHandlers {
   handleSearchChange: (value: string) => void;
   handleStatusChange: (statuses: LeadStatus[]) => void;
   handleSourceChange: (sources: string[]) => void;
+  handleValidityChange: (validity: string[]) => void;
   handleOfferingChange: (offerings: string[]) => void;
   handleStageChange: (stages: string[]) => void;
   handleOfficerChange: (officers: string[]) => void;
@@ -68,7 +70,7 @@ export interface UseLeadsFilterReturn {
 
 const LEADS_FILTERS_STORAGE_KEY = "leads_filters";
 // ✅ VERSIONING: Increment when StoredFilters schema changes
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 
 interface VersionedStorage {
   version: number;
@@ -80,6 +82,7 @@ const DEFAULT_FILTERS: StoredFilters = {
   search: "",
   statusFilters: [],
   sourceFilters: [],
+  validityFilters: [],
   offeringFilters: [],
   stageFilters: [],
   officerFilters: [],
@@ -148,6 +151,7 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
     searchParams.get("q") ||
     searchParams.get("status") ||
     searchParams.get("source") ||
+    searchParams.get("validity") ||
     searchParams.get("offering") ||
     searchParams.get("stage") ||
     searchParams.get("officer") ||
@@ -162,6 +166,7 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
     search: searchParams.get("q") || "",
     statusFilters: searchParams.get("status")?.split(",").filter(Boolean) as LeadStatus[] || [],
     sourceFilters: searchParams.get("source")?.split(",").filter(Boolean) || [],
+    validityFilters: searchParams.get("validity")?.split(",").filter(Boolean) || [],
     offeringFilters: searchParams.get("offering")?.split(",").filter(Boolean) || [],
     stageFilters: searchParams.get("stage")?.split(",").filter(Boolean) || [],
     officerFilters: searchParams.get("officer")?.split(",").filter(Boolean) || [],
@@ -209,6 +214,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const [search, setSearch] = useState(initialValues.search);
   const [statusFilters, setStatusFilters] = useState<LeadStatus[]>(initialValues.statusFilters);
   const [sourceFilters, setSourceFilters] = useState<string[]>(initialValues.sourceFilters);
+  const [validityFilters, setValidityFilters] = useState<string[]>(initialValues.validityFilters);
   const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
   const [offeringFilters, setOfferingFilters] = useState<string[]>(initialValues.offeringFilters);
   const [stageFilters, setStageFilters] = useState<string[]>(initialValues.stageFilters);
@@ -262,6 +268,9 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (JSON.stringify(urlFilters.sourceFilters) !== JSON.stringify(sourceFilters)) {
       setSourceFilters(urlFilters.sourceFilters);
     }
+    if (JSON.stringify(urlFilters.validityFilters) !== JSON.stringify(validityFilters)) {
+      setValidityFilters(urlFilters.validityFilters);
+    }
     if (JSON.stringify(urlFilters.offeringFilters) !== JSON.stringify(offeringFilters)) {
       setOfferingFilters(urlFilters.offeringFilters);
     }
@@ -309,6 +318,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       if (search) params.set("q", search);
       if (statusFilters.length > 0) params.set("status", statusFilters.join(","));
       if (sourceFilters.length > 0) params.set("source", sourceFilters.join(","));
+      if (validityFilters.length > 0) params.set("validity", validityFilters.join(","));
       if (offeringFilters.length > 0) params.set("offering", offeringFilters.join(","));
       if (stageFilters.length > 0) params.set("stage", stageFilters.join(","));
       if (officerFilters.length > 0) params.set("officer", officerFilters.join(","));
@@ -333,7 +343,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       }
     };
   }, [
-    page, search, statusFilters, sourceFilters, offeringFilters,
+    page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, dateFrom, dateTo, dateField,
     pathname,
   ]);
@@ -348,6 +358,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       search,
       statusFilters,
       sourceFilters,
+      validityFilters,
       offeringFilters,
       stageFilters,
       officerFilters,
@@ -362,6 +373,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       search ||
       statusFilters.length > 0 ||
       sourceFilters.length > 0 ||
+      validityFilters.length > 0 ||
       offeringFilters.length > 0 ||
       stageFilters.length > 0 ||
       officerFilters.length > 0 ||
@@ -374,7 +386,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       clearFiltersFromStorage();
     }
   }, [
-    page, search, statusFilters, sourceFilters, offeringFilters,
+    page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, dateFrom, dateTo, dateField,
   ]);
 
@@ -394,6 +406,11 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
 
   const handleSourceChange = useCallback((sources: string[]) => {
     setSourceFilters(sources);
+    setPage(1);
+  }, []);
+
+  const handleValidityChange = useCallback((validity: string[]) => {
+    setValidityFilters(validity);
     setPage(1);
   }, []);
 
@@ -441,6 +458,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     setSearch("");
     setStatusFilters([]);
     setSourceFilters([]);
+    setValidityFilters([]);
     setScoreRange([0, 100]);
     setOfferingFilters([]);
     setStageFilters([]);
@@ -465,6 +483,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       search ||
       statusFilters.length > 0 ||
       sourceFilters.length > 0 ||
+      validityFilters.length > 0 ||
       offeringFilters.length > 0 ||
       stageFilters.length > 0 ||
       officerFilters.length > 0 ||
@@ -473,7 +492,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       dateTo
     );
   }, [
-    search, statusFilters, sourceFilters, offeringFilters,
+    search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, hasScoreFilter, dateFrom, dateTo,
   ]);
 
@@ -488,6 +507,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (search) params.search = search;
     if (statusFilters.length > 0) params.status = statusFilters.join(",");
     if (sourceFilters.length > 0) params.source = sourceFilters.join(",");
+    if (validityFilters.length > 0) params.validity_status = validityFilters.join(",");
     if (offeringFilters.length > 0) params.offering_id = offeringFilters.join(",");
     if (stageFilters.length > 0) params.pipeline_stage_id = stageFilters.join(",");
     if (officerFilters.length > 0) params.assigned_officer_id = officerFilters.join(",");
@@ -502,7 +522,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
 
     return params;
   }, [
-    page, pageSize, search, statusFilters, sourceFilters,
+    page, pageSize, search, statusFilters, sourceFilters, validityFilters,
     offeringFilters, stageFilters, officerFilters, dateFrom, dateTo, dateField,
     sortBy, sortOrder,
   ]);
@@ -518,6 +538,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       search,
       statusFilters,
       sourceFilters,
+      validityFilters,
       scoreRange,
       offeringFilters,
       stageFilters,
@@ -533,6 +554,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       handleSearchChange,
       handleStatusChange,
       handleSourceChange,
+      handleValidityChange,
       handleOfferingChange,
       handleStageChange,
       handleOfficerChange,

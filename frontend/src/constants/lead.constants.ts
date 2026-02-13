@@ -160,3 +160,33 @@ export const isComplexStatus = (status: LeadStatus): boolean =>
  */
 export const isSchedulableStatus = (status: LeadStatus): boolean =>
   SCHEDULABLE_STATUS_SET.has(status);
+
+// =============================================================================
+// LEAD VALIDITY OPTIONS (CTV System)
+// =============================================================================
+
+export interface LeadValidityOption {
+  value: string
+  label: string
+  color: string
+}
+
+export const LEAD_VALIDITY_OPTIONS: LeadValidityOption[] = [
+  { value: "raw", label: "Chưa kiểm tra", color: "bg-gray-400" },
+  { value: "duplicate", label: "Trùng lặp", color: "bg-orange-500" },
+  { value: "invalid", label: "Không hợp lệ", color: "bg-red-500" },
+  { value: "valid", label: "Hợp lệ", color: "bg-green-500" },
+  { value: "qualified", label: "Đủ điều kiện", color: "bg-blue-500" },
+]
+
+export const LEAD_VALIDITY_MAP = new Map(
+  LEAD_VALIDITY_OPTIONS.map((o) => [o.value, o])
+)
+
+export function getLeadValidityOption(value: string): LeadValidityOption | undefined {
+  return LEAD_VALIDITY_MAP.get(value)
+}
+
+export function getLeadValidityLabel(value: string): string {
+  return LEAD_VALIDITY_MAP.get(value)?.label ?? value
+}

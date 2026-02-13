@@ -120,6 +120,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       filterState.statusFilters.length === 0 &&
       filterState.offeringFilters.length === 0 &&
       filterState.sourceFilters.length === 0 &&
+      filterState.validityFilters.length === 0 &&
       filterState.stageFilters.length === 0 &&
       filterState.officerFilters.length === 0 &&
       !filterState.dateFrom &&
@@ -139,12 +140,13 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const hasFilters = useMemo(() => !!(
     filterState.statusFilters.length ||
     filterState.sourceFilters.length ||
+    filterState.validityFilters.length ||
     filterState.offeringFilters.length ||
     filterState.stageFilters.length ||
     filterState.officerFilters.length ||
     filterState.dateFrom ||
     filterState.dateTo
-  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.dateFrom, filterState.dateTo]);
+  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.validityFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.dateFrom, filterState.dateTo]);
 
   // Filter leads by score range (client-side)
   const filteredLeads = useMemo(() => {
@@ -362,6 +364,8 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onStatusChange={filterHandlers.handleStatusChange}
         sourceFilters={filterState.sourceFilters}
         onSourceChange={filterHandlers.handleSourceChange}
+        validityFilters={filterState.validityFilters}
+        onValidityChange={filterHandlers.handleValidityChange}
         offeringFilters={filterState.offeringFilters}
         onOfferingChange={filterHandlers.handleOfferingChange}
         stageFilters={filterState.stageFilters}

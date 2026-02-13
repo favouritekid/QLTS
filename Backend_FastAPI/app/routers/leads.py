@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_list_filter  # ✅ Phase 2.2
+from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_list_filter, require_admin_or_manager  # ✅ Phase 2.2
+from ..schemas.collaborator import LeadValidityUpdate
 from ..services import distribution_service, insights_service, lead_service
 from ..utils.csv_helpers import sanitize_csv_cell
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
@@ -1440,5 +1441,33 @@ async def update_lead_consultation_status(
     
     # TODO: Dispatch status change notification if needed
     # await dispatch(db, SystemEvents.LEAD_STATUS_CHANGED, {...})
-    
+
     return lead
+
+
+# =============================================================================
+# LEAD VALIDITY STATUS (Collaborator System Phase 1)
+# =============================================================================
+
+
+@router.post("/{lead_id}/validity", response_model=schemas.Lead)
+async def set_lead_validity(
+    validity_data: LeadValidityUpdate,
+    lead: models.Lead = Depends(get_lead_for_user),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+):
+    """
+    Update lead validity status (admin/manager only).
+
+    Validity status is a quality control field separate from lead lifecycle status.
+    Used by CTV system to track lead quality: raw, duplicate, invalid, valid, qualified.
+    """
+    from app.services.collaborator_service import update_lead_validity
+    from app.repositories.lead_repository import LeadRepository
+
+    updated_lead, _ = await update_lead_validity(db, lead, validity_data)
+    await db.commit()
+
+    repo = LeadRepository(db)
+    return await repo.get_by_id_shallow(updated_lead.id)

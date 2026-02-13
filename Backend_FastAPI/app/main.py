@@ -42,6 +42,7 @@ from .routers import (
     admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
     applications,
     auth,
+    collaborators,  # ✅ CTV SYSTEM: Collaborator management + CTV self-service
     config_data, # ✅ NEW: Dynamic Config Data (Categories, Import)
     document_groups,  # ✅ PHASE A.3: DocumentGroup CRUD
     fees,  # ✅ FINANCE MODULE: Fee Calculation & Management
@@ -702,6 +703,8 @@ fastapi_app.include_router(notification_preferences.router, prefix="/api/notific
 fastapi_app.include_router(notification_rules.router, prefix="/api")  # ✅ PHASE 2.2: Admin-only notification rule management
 fastapi_app.include_router(notification_templates.router, prefix="/api")  # ✅ PHASE 3.1: Admin-only template management
 fastapi_app.include_router(leads.router, prefix="/api/leads")
+fastapi_app.include_router(collaborators.admin_router, prefix="/api")  # ✅ CTV: Admin/Manager CTV management
+fastapi_app.include_router(collaborators.ctv_router, prefix="/api")  # ✅ CTV: Self-service endpoints
 fastapi_app.include_router(applications.router, prefix="/api")
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ NEW: Admission Profile workflow
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from .collaborator import CollaboratorShallow
 from .organization import ProgramOffering, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
 
@@ -348,6 +349,11 @@ class Lead(LeadBase):
     officer_summary: Optional[str] = None
     # =========================================================================
 
+    # Collaborator system
+    referrer_id: Optional[int] = None
+    validity_status: Optional[str] = None
+    created_via: Optional[str] = None
+
     offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow
     unit: Optional[OrganizationUnitShallow] = None
@@ -358,6 +364,8 @@ class Lead(LeadBase):
     application: Optional["ApplicationShallow"] = None
     # NEW: AdmissionProfile (replacement for Application in admission module)
     admission_profile: Optional[AdmissionProfileShallow] = None
+    # Collaborator referrer (nested)
+    referrer: Optional[CollaboratorShallow] = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -34,6 +34,7 @@ import { cn, sanitizeColorCode } from "@/lib/utils";
 import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import type { LeadStatus } from "@/types/lead.types";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
+import { LEAD_VALIDITY_OPTIONS } from "@/constants/lead.constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
 import { useAllProgramOfferings } from "@/hooks/useOrganization";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
@@ -64,6 +65,8 @@ interface LeadFilterBarProps {
   // Multi-select filters
   sourceFilters: string[];
   onSourceChange: (sources: string[]) => void;
+  validityFilters: string[];
+  onValidityChange: (validity: string[]) => void;
   offeringFilters: string[];
   onOfferingChange: (offerings: string[]) => void;
   stageFilters: string[];
@@ -168,6 +171,8 @@ export function LeadFilterBar({
   onStatusChange,
   sourceFilters,
   onSourceChange,
+  validityFilters,
+  onValidityChange,
   offeringFilters,
   onOfferingChange,
   stageFilters,
@@ -259,6 +264,16 @@ export function LeadFilterBar({
     });
   }, [sourceFilters, onSourceChange]);
 
+  const handleValidityToggle = useCallback((validity: string) => {
+    startTransition(() => {
+      if (validityFilters.includes(validity)) {
+        onValidityChange(validityFilters.filter((v) => v !== validity));
+      } else {
+        onValidityChange([...validityFilters, validity]);
+      }
+    });
+  }, [validityFilters, onValidityChange]);
+
   const handleStageToggle = useCallback((stageId: string) => {
     startTransition(() => {
       if (stageFilters.includes(stageId)) {
@@ -295,6 +310,7 @@ export function LeadFilterBar({
     search ||
     statusFilters.length > 0 ||
     sourceFilters.length > 0 ||
+    validityFilters.length > 0 ||
     offeringFilters.length > 0 ||
     stageFilters.length > 0 ||
     officerFilters.length > 0 ||
@@ -307,6 +323,8 @@ export function LeadFilterBar({
     LEAD_STATUS_OPTIONS.find((o) => o.value === value)?.label || value;
   const getSourceLabel = (value: string) =>
     LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
+  const getValidityLabel = (value: string) =>
+    LEAD_VALIDITY_OPTIONS.find((o) => o.value === value)?.label || value;
   const getStageLabel = (id: string) =>
     pipelineStages.find((s) => s.id === id)?.name || id;
   const getOfficerLabel = (id: string) =>
@@ -326,6 +344,7 @@ export function LeadFilterBar({
   const activeFilterCount =
     statusFilters.length +
     sourceFilters.length +
+    validityFilters.length +
     stageFilters.length +
     offeringFilters.length +
     officerFilters.length +
@@ -425,6 +444,28 @@ export function LeadFilterBar({
                     htmlFor={`bar-source-${option.value}`}
                     className="cursor-pointer text-sm font-normal"
                   >
+                    {option.label}
+                  </Label>
+                </div>
+              ))}
+            </div>
+          </FilterDropdown>
+
+          {/* Validity Filter */}
+          <FilterDropdown label="Hợp lệ" count={validityFilters.length}>
+            <div className="space-y-2">
+              {LEAD_VALIDITY_OPTIONS.map((option) => (
+                <div key={option.value} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`bar-validity-${option.value}`}
+                    checked={validityFilters.includes(option.value)}
+                    onCheckedChange={() => handleValidityToggle(option.value)}
+                  />
+                  <Label
+                    htmlFor={`bar-validity-${option.value}`}
+                    className="cursor-pointer text-sm font-normal flex items-center gap-1.5"
+                  >
+                    <span className={`inline-block h-2 w-2 rounded-full ${option.color}`} />
                     {option.label}
                   </Label>
                 </div>
@@ -644,6 +685,28 @@ export function LeadFilterBar({
               </div>
             </FilterDropdown>
 
+            {/* Validity Filter */}
+            <FilterDropdown label="Hợp lệ" count={validityFilters.length}>
+              <div className="space-y-2">
+                {LEAD_VALIDITY_OPTIONS.map((option) => (
+                  <div key={option.value} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`mobile-validity-${option.value}`}
+                      checked={validityFilters.includes(option.value)}
+                      onCheckedChange={() => handleValidityToggle(option.value)}
+                    />
+                    <Label
+                      htmlFor={`mobile-validity-${option.value}`}
+                      className="cursor-pointer text-sm font-normal flex items-center gap-1.5"
+                    >
+                      <span className={`inline-block h-2 w-2 rounded-full ${option.color}`} />
+                      {option.label}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </FilterDropdown>
+
             {/* Stage Filter */}
             <FilterDropdown label="Giai đoạn" count={stageFilters.length}>
               <div className="space-y-2">
@@ -728,6 +791,9 @@ export function LeadFilterBar({
         });
         sourceFilters.forEach((source) => {
           allPills.push({ key: `source-${source}`, label: getSourceLabel(source), onRemove: () => handleSourceToggle(source) });
+        });
+        validityFilters.forEach((validity) => {
+          allPills.push({ key: `validity-${validity}`, label: getValidityLabel(validity), onRemove: () => handleValidityToggle(validity) });
         });
         stageFilters.forEach((stage) => {
           allPills.push({ key: `stage-${stage}`, label: getStageLabel(stage), onRemove: () => handleStageToggle(stage) });

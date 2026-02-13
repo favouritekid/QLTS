@@ -13,6 +13,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.constants import UserRole
 from app.database import AsyncSessionLocal
 from app.security import get_password_hash
 from app.config import settings
@@ -39,7 +40,7 @@ log = logging.getLogger(__name__)
 async def db(setup_test_database) -> AsyncSession:
     """
     Provide a database session for service integration tests.
-    
+
     This fixture:
     1. Depends on setup_test_database to ensure schema is ready
     2. Creates a new AsyncSession for the test
@@ -291,5 +292,228 @@ async def multiple_leads(
     await db.flush()
     for lead in leads:
         await db.refresh(lead)
-    
+
     return leads
+
+
+# =============================================================================
+# COLLABORATOR FIXTURES
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def collaborator_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """User with collaborator role, linked to a Collaborator record."""
+    user = models.User(
+        username="ctv_user_1",
+        email="ctv1@test.com",
+        password_hash=get_password_hash("CTVPass123!"),
+        role=UserRole.COLLABORATOR,
+        status="active",
+        full_name="CTV User 1",
+        unit_id=seeded_dependencies["unit_id"],
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def collaborator_user_2(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """Second collaborator user for concurrent/cross-CTV tests."""
+    user = models.User(
+        username="ctv_user_2",
+        email="ctv2@test.com",
+        password_hash=get_password_hash("CTVPass456!"),
+        role=UserRole.COLLABORATOR,
+        status="active",
+        full_name="CTV User 2",
+        unit_id=seeded_dependencies["unit_id"],
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def officer_user_2(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """Second officer for EC-1 reassignment tests."""
+    user = models.User(
+        username="officer_2",
+        email="officer2@test.com",
+        password_hash=get_password_hash("Officer2Pass123!"),
+        role=UserRole.OFFICER,
+        status="active",
+        full_name="Officer User 2",
+        unit_id=seeded_dependencies["unit_id"],
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def active_collaborator(
+    db: AsyncSession,
+    seeded_dependencies: dict,
+    collaborator_user: models.User,
+    officer_user: models.User,
+) -> models.Collaborator:
+    """Active collaborator managed by officer."""
+    collab = models.Collaborator(
+        code="CTV-2026-0001",
+        full_name="Active CTV",
+        phone="0911000001",
+        email="active_ctv@test.com",
+        status="active",
+        unit_id=seeded_dependencies["unit_id"],
+        user_id=collaborator_user.id,
+        managed_by_officer_id=officer_user.id,
+        approved_at=datetime.now(timezone.utc),
+    )
+    db.add(collab)
+    await db.flush()
+    await db.refresh(collab)
+    return collab
+
+
+@pytest_asyncio.fixture
+async def independent_collaborator(
+    db: AsyncSession,
+    seeded_dependencies: dict,
+    collaborator_user_2: models.User,
+) -> models.Collaborator:
+    """Independent collaborator (no officer)."""
+    collab = models.Collaborator(
+        code="CTV-2026-0002",
+        full_name="Independent CTV",
+        phone="0911000002",
+        email="independent_ctv@test.com",
+        status="active",
+        unit_id=seeded_dependencies["unit_id"],
+        user_id=collaborator_user_2.id,
+        managed_by_officer_id=None,
+        approved_at=datetime.now(timezone.utc),
+    )
+    db.add(collab)
+    await db.flush()
+    await db.refresh(collab)
+    return collab
+
+
+@pytest_asyncio.fixture
+async def pending_collaborator(
+    db: AsyncSession,
+    seeded_dependencies: dict,
+) -> models.Collaborator:
+    """Pending collaborator (not yet approved)."""
+    collab = models.Collaborator(
+        code="CTV-2026-0003",
+        full_name="Pending CTV",
+        phone="0911000003",
+        email="pending_ctv@test.com",
+        status="pending",
+        unit_id=seeded_dependencies["unit_id"],
+    )
+    db.add(collab)
+    await db.flush()
+    await db.refresh(collab)
+    return collab
+
+
+@pytest_asyncio.fixture
+async def second_unit(db: AsyncSession) -> models.OrganizationUnit:
+    """Second organization unit for cross-unit IDOR tests."""
+    unit = models.OrganizationUnit(
+        id=2001,
+        name="Second Test Unit",
+        type="department",
+    )
+    db.add(unit)
+    await db.flush()
+    await db.refresh(unit)
+    return unit
+
+
+@pytest_asyncio.fixture
+async def collaborator_in_second_unit(
+    db: AsyncSession,
+    second_unit: models.OrganizationUnit,
+) -> models.Collaborator:
+    """Collaborator in a different unit for IDOR tests."""
+    collab = models.Collaborator(
+        code="CTV-2026-0010",
+        full_name="Other Unit CTV",
+        phone="0911000010",
+        email="other_unit_ctv@test.com",
+        status="active",
+        unit_id=second_unit.id,
+        approved_at=datetime.now(timezone.utc),
+    )
+    db.add(collab)
+    await db.flush()
+    await db.refresh(collab)
+    return collab
+
+
+@pytest_asyncio.fixture
+async def referred_leads(
+    db: AsyncSession,
+    seeded_dependencies: dict,
+    active_collaborator: models.Collaborator,
+    officer_user: models.User,
+) -> list[models.Lead]:
+    """
+    Leads referred by active_collaborator. Mix of statuses:
+    - 2x status="new", validity_status="raw"
+    - 1x status="contacted", validity_status="raw"
+    - 1x status="new", validity_status="valid"
+    """
+    leads_data = [
+        {"full_name": "Referred Lead 1", "phone": "0922000001", "status": "new", "validity_status": "raw"},
+        {"full_name": "Referred Lead 2", "phone": "0922000002", "status": "new", "validity_status": "raw"},
+        {"full_name": "Referred Lead 3", "phone": "0922000003", "status": "contacted", "validity_status": "raw"},
+        {"full_name": "Referred Lead 4", "phone": "0922000004", "status": "new", "validity_status": "valid"},
+    ]
+    leads = []
+    for ld in leads_data:
+        lead = models.Lead(
+            full_name=ld["full_name"],
+            phone=ld["phone"],
+            source="referral",
+            status=ld["status"],
+            validity_status=ld["validity_status"],
+            unit_id=seeded_dependencies["unit_id"],
+            referrer_id=active_collaborator.id,
+            assigned_officer_id=officer_user.id,
+            assignment_status="assigned",
+            created_via="claim",
+        )
+        db.add(lead)
+        leads.append(lead)
+    await db.flush()
+    for lead in leads:
+        await db.refresh(lead)
+    return leads
+
+
+@pytest_asyncio.fixture
+async def deleted_lead_with_phone(
+    db: AsyncSession,
+    seeded_dependencies: dict,
+) -> models.Lead:
+    """Soft-deleted lead for testing soft-delete filtering."""
+    lead = models.Lead(
+        full_name="Deleted Lead",
+        phone="0933000001",
+        source="website",
+        status="new",
+        unit_id=seeded_dependencies["unit_id"],
+        deleted_at=datetime.now(timezone.utc),
+    )
+    db.add(lead)
+    await db.flush()
+    await db.refresh(lead)
+    return lead

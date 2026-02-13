@@ -66,6 +66,7 @@ import type {
 } from '@/types/api.types';
 import type { AdmissionProfileResponse, AdmissionsPage } from '@/lib/zod/admissions';
 import type { EnhancedOfficerStats } from '@/hooks/useDashboardStats';
+import type { CollaboratorsPage } from '@/types/collaborator.types';
 
 // ============================================
 // CONFIGURATION
@@ -449,6 +450,23 @@ const admin = {
      * Get all distribution rules
      */    async getRules(): Promise<DistributionRule[]> {
       return serverFetch<DistributionRule[]>('/api/admin/distribution-rules');
+    },
+  },
+
+  /**
+   * Collaborators Management
+   */
+  collaborators: {
+    async getCollaborators(params?: {
+      skip?: number;
+      limit?: number;
+      status?: string;
+      unit_id?: number;
+      search?: string;
+      sort_by?: string;
+      order?: string;
+    }): Promise<CollaboratorsPage> {
+      return serverFetch<CollaboratorsPage>('/api/collaborators', { params });
     },
   },
 

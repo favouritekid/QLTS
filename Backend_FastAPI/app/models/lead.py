@@ -8,6 +8,22 @@ from sqlalchemy.orm import relationship
 from .base import Base
 
 
+class LeadValidityEnum(str, enum.Enum):
+    """Lead validity/quality status — separate from lifecycle status."""
+    raw = "raw"
+    duplicate = "duplicate"
+    invalid = "invalid"
+    valid = "valid"
+    qualified = "qualified"
+
+
+class LeadCreatedViaEnum(str, enum.Enum):
+    """How the lead was created."""
+    manual = "manual"
+    claim = "claim"
+    import_ = "import"
+
+
 class ConsultationMethodEnum(str, enum.Enum):
     """Method of consultation contact."""
     phone = "phone"
@@ -179,6 +195,30 @@ class Lead(Base):
         comment="List of officer IDs who reassigned this lead - prevents reassignment back to them"
     )
 
+    # =========================================================================
+    # COLLABORATOR SYSTEM (Phase 1)
+    # =========================================================================
+    referrer_id = Column(
+        Integer,
+        ForeignKey("collaborator.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="CTV who referred this lead",
+    )
+    validity_status = Column(
+        String(20),
+        nullable=False,
+        default="raw",
+        index=True,
+        comment="Lead quality status: raw, duplicate, invalid, valid, qualified",
+    )
+    created_via = Column(
+        String(20),
+        nullable=False,
+        default="manual",
+        comment="How lead was created: manual, claim, import",
+    )
+
     pipeline_stage = relationship("PipelineStage", back_populates="leads")
 
     assigned_officer = relationship(
@@ -210,6 +250,9 @@ class Lead(Base):
     offering = relationship("ProgramOffering", back_populates="leads")
     unit = relationship("OrganizationUnit", back_populates="leads")
     consultation_status = relationship("ConsultationStatus", back_populates="leads")
+    # Collaborator system
+    referrer = relationship("Collaborator", back_populates="leads_referred")
+    claims = relationship("LeadClaim", back_populates="lead", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Lead {self.id}: {self.full_name}>"
