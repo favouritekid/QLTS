@@ -138,8 +138,9 @@ async def check_duplicate(
 
     # Check phone (global scope)
     if phone:
-        # Normalize phone (remove spaces, dashes)
-        normalized_phone = phone.replace(" ", "").replace("-", "").replace(".", "")
+        # Normalize phone using the same function as Pydantic schema validators
+        from ..utils.phone_helpers import normalize_vietnam_phone
+        normalized_phone = normalize_vietnam_phone(phone) or phone.replace(" ", "").replace("-", "").replace(".", "")
         existing = await repo.check_phone_conflict(
             phone=normalized_phone,
             phone2=None,
