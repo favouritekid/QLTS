@@ -52,6 +52,7 @@ async def list_collaborators(
     limit: int = Query(10, ge=1, le=100),
     status: Optional[str] = None,
     unit_id: Optional[int] = None,
+    managed_by_officer_id: Optional[int] = None,
     search: Optional[str] = None,
     sort_by: str = "created_at",
     order: str = "desc",
@@ -65,11 +66,17 @@ async def list_collaborators(
     if current_user.role == "manager":
         unit_id = current_user.unit_id
 
+    # Officer: force own managed CTV only + active status
+    if current_user.role == "officer":
+        managed_by_officer_id = current_user.id
+        status = "active"
+
     total, collaborators = await repo.get_filtered(
         skip=skip,
         limit=limit,
         status=status,
         unit_id=unit_id,
+        managed_by_officer_id=managed_by_officer_id,
         search=search,
         sort_by=sort_by,
         order=order,

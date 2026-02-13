@@ -24,6 +24,7 @@ from ..core.status_mapping import sync_lead_status_from_consultation
 from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
+from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
 from ..utils.csv_helpers import sanitize_csv_cell
 
@@ -65,6 +66,7 @@ SPECIAL_HANDLED_FIELDS: frozenset = frozenset({
     "offering_id",             # Handled separately for auto-reassign
     "unit_id",                 # Handled separately for reassignment
     "version",                 # Optimistic locking - not stored directly
+    "referrer_id",             # Handled separately with CTV validation
 })
 
 
@@ -776,6 +778,26 @@ async def create_lead(
         # Remove assigned_officer_id from create_data (it's not a Lead model field for creation)
         create_data.pop("assigned_officer_id", None)
 
+        # === REFERRER (CTV) VALIDATION ===
+        referrer_id = create_data.pop("referrer_id", None)
+        if referrer_id is not None:
+            collab_repo = CollaboratorRepository(db)
+            collaborator = await collab_repo.get_by_id(referrer_id)
+            if not collaborator or collaborator.status != "active":
+                raise ResourceNotFoundError("CTV giới thiệu không tồn tại hoặc chưa kích hoạt")
+
+            # IDOR: Officer can only use their own managed CTVs
+            if user_role == UserRole.OFFICER:
+                if collaborator.managed_by_officer_id != created_by.id:
+                    raise ResourceNotFoundError("CTV giới thiệu không tồn tại hoặc chưa kích hoạt")
+            elif user_role == UserRole.MANAGER:
+                if collaborator.unit_id != created_by.unit_id:
+                    raise ResourceNotFoundError("CTV giới thiệu không tồn tại hoặc chưa kích hoạt")
+            # Admin: no restriction
+
+            create_data["referrer_id"] = referrer_id
+            create_data["source"] = "referral"
+
         # === DUPLICATE CHECK ===
         # Phone: Check globally across ALL units (phone must be unique system-wide)
         # Email: Check within same unit only (email can exist in different units)
@@ -1273,6 +1295,27 @@ async def update_lead(
                     detail="Không được phép cập nhật trạng thái trực tiếp. "
                            "Vui lòng sử dụng tính năng 'Thêm Tương Tác' (Consultation) để ghi nhận kết quả và thay đổi trạng thái."
                 )
+
+            # === REFERRER (CTV) VALIDATION on update ===
+            if "referrer_id" in update_data:
+                new_referrer_id = update_data["referrer_id"]
+                if new_referrer_id is not None:
+                    collab_repo = CollaboratorRepository(db)
+                    collaborator = await collab_repo.get_by_id(new_referrer_id)
+                    if not collaborator or collaborator.status != "active":
+                        raise ResourceNotFoundError("CTV giới thiệu không tồn tại hoặc chưa kích hoạt")
+
+                    user_role = updated_by.role
+                    if user_role == UserRole.OFFICER:
+                        if collaborator.managed_by_officer_id != updated_by.id:
+                            raise ResourceNotFoundError("CTV giới thiệu không tồn tại hoặc chưa kích hoạt")
+                    elif user_role == UserRole.MANAGER:
+                        if collaborator.unit_id != updated_by.unit_id:
+                            raise ResourceNotFoundError("CTV giới thiệu không tồn tại hoặc chưa kích hoạt")
+
+                db_lead.referrer_id = new_referrer_id
+                if new_referrer_id is not None:
+                    db_lead.source = "referral"
 
             # === NEW FEATURE: Auto-Reassign when Offering Changes ===
             # If offering_id changed, re-route Lead to new Unit and reset assignment

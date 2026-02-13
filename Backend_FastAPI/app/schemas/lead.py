@@ -226,6 +226,7 @@ class LeadCreate(LeadBase):
     gpa: Optional[float] = None
     location: Optional[str] = None
     assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
+    referrer_id: Optional[int] = None  # CTV referrer for source="referral"
     # Fit Score fields (Officer input)
     birth_year: Optional[int] = Field(None, ge=1900, le=2100)
     location_proximity: int = Field(0, ge=0, le=2, description="0=Xa, 1=Lân cận, 2=Gần")
@@ -252,6 +253,7 @@ class LeadUpdate(BaseModel):
     location_proximity: Optional[int] = Field(None, ge=0, le=2)
     occupation_relevance: Optional[int] = Field(None, ge=0, le=2)
     academic_performance: Optional[int] = Field(None, ge=0, le=3)
+    referrer_id: Optional[int] = None  # CTV referrer for source="referral"
     # Optimistic locking - optional, when provided will check for concurrent updates
     version: Optional[int] = Field(None, description="Optimistic locking version")
 

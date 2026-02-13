@@ -146,6 +146,8 @@ export interface LeadCreate {
   unit_id?: number | null;
   // Direct assignment: null = auto-assign (Celery), number = assign to specific officer
   assigned_officer_id?: number | null;
+  // CTV referrer for source="referral"
+  referrer_id?: number | null;
   // Fit Score fields
   birth_year?: number | null;
   location_proximity?: number;
@@ -171,6 +173,8 @@ export interface LeadUpdate {
   unit_id?: number | null; // Allow null for unit reassignment
   consultation_status_id?: string | null;
   pipeline_stage_id?: string | null;
+  // CTV referrer for source="referral"
+  referrer_id?: number | null;
   // Fit Score fields
   birth_year?: number | null;
   location_proximity?: number;

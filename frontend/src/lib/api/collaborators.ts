@@ -22,6 +22,7 @@ export async function getCollaborators(params?: {
   limit?: number
   status?: string
   unit_id?: number
+  managed_by_officer_id?: number
   search?: string
   sort_by?: string
   order?: string

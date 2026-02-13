@@ -31,6 +31,7 @@ from app.utils.exceptions import (
     DuplicateResourceError,
     ResourceNotFoundError,
 )
+from .status_helper import StatusHelper
 
 log = structlog.get_logger(__name__)
 
@@ -316,6 +317,7 @@ async def submit_lead_claim(
             officer = None
 
     # First-touch lock with FOR UPDATE
+    # A1: LeadClaim created INSIDE savepoint for atomicity
     async with db.begin_nested():
         existing = await lead_repo.check_first_touch_for_update(claim_data.phone)
 
@@ -352,23 +354,31 @@ async def submit_lead_claim(
                 assignment_status="assigned" if officer else "pending",
             )
             db.add(lead)
+
+            # A2: Set initial consultation status (same pattern as create_lead)
+            initial_status = await StatusHelper.get_initial_status(db)
+            if initial_status:
+                await StatusHelper.sync_lead_status(lead, initial_status)
+            else:
+                lead.status = "new"
+
             await db.flush()
 
-    # Create LeadClaim record
-    claim_data_dict = claim_data.model_dump()
-    try:
-        claim = models.LeadClaim(
-            collaborator_id=collaborator.id,
-            lead_id=lead.id,
-            status="pending",
-            claim_data=claim_data_dict,
-        )
-        db.add(claim)
-        await db.flush()
-    except IntegrityError:
-        raise DuplicateResourceError(
-            "CTV đã claim lead này trước đó. Mỗi CTV chỉ được claim 1 lead 1 lần."
-        )
+        # Create LeadClaim record (inside savepoint for atomicity)
+        claim_data_dict = claim_data.model_dump()
+        try:
+            claim = models.LeadClaim(
+                collaborator_id=collaborator.id,
+                lead_id=lead.id,
+                status="pending",
+                claim_data=claim_data_dict,
+            )
+            db.add(claim)
+            await db.flush()
+        except IntegrityError:
+            raise DuplicateResourceError(
+                "CTV đã claim lead này trước đó. Mỗi CTV chỉ được claim 1 lead 1 lần."
+            )
 
     log.info(
         "Lead claim submitted",

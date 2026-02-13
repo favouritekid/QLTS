@@ -106,6 +106,8 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
         # Admin users (read-only) — needed for officer filter bar and lead assignment dialog
         {"subject": "{role}", "object": "/api/admin/users", "action": "GET"},
+        # Collaborators (read-only) — needed for CTV referrer dropdown in lead form
+        {"subject": "{role}", "object": "/api/collaborators", "action": "GET"},
         # Pipeline access (for consultation statuses in QuickDisposition)
         {"subject": "{role}", "object": "/api/pipeline/stages", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/all", "action": "GET"},

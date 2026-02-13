@@ -13,9 +13,12 @@ import {
   Check,
   AlertCircle,
   Plus,
+  ChevronsUpDown,
+  Users,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { leadsApi } from "@/lib/api/leads"; // architecture-allow legacy
+import { getCollaborators } from "@/lib/api/collaborators";
 
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
@@ -47,6 +50,19 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 import { useCreateLead, useUpdateLead } from "@/hooks/useLeads";
 import { useAuth } from "@/hooks/useAuth";
@@ -107,6 +123,7 @@ const leadSchema = z
     offering_id: z.number().optional().nullable(),
     unit_id: z.string().optional().nullable(),
     assigned_officer_id: z.string().optional().nullable(),
+    referrer_id: z.number().optional().nullable(),
     birth_year: z.number().min(1900).max(2100).optional().nullable(),
     location_proximity: z.number().min(0).max(2).optional(),
     occupation_relevance: z.number().min(0).max(2).optional(),
@@ -203,6 +220,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
       offering_id: null,
       unit_id: user?.unit_id?.toString() || "",
       assigned_officer_id: "auto",
+      referrer_id: null,
       birth_year: null,
       location_proximity: 0,
       occupation_relevance: 0,
@@ -210,10 +228,14 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
     },
   });
 
+  // State for CTV referrer popover
+  const [ctvPopoverOpen, setCtvPopoverOpen] = useState(false);
+
   // Watch values for conditional rendering
   const selectedUnitId = form.watch("unit_id");
   const selectedOfferingId = form.watch("offering_id");
   const selectedOfficerId = form.watch("assigned_officer_id");
+  const selectedSource = form.watch("source");
   const phoneValue = form.watch("phone");
   const emailValue = form.watch("email");
 
@@ -261,6 +283,23 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
       (u) => u.availability_status === "available" || u.availability_status === undefined
     ) || [];
 
+  // Fetch CTV list when source = "referral"
+  const { data: ctvData, isLoading: isLoadingCtv } = useQuery({
+    queryKey: ["collaborators-for-referrer"],
+    queryFn: () => getCollaborators({ status: "active", limit: 100 }),
+    enabled: selectedSource === "referral",
+    staleTime: 30000,
+  });
+
+  const availableCtv = ctvData?.collaborators || [];
+
+  // Clear referrer_id when source changes away from "referral"
+  useEffect(() => {
+    if (selectedSource !== "referral") {
+      form.setValue("referrer_id", null);
+    }
+  }, [selectedSource, form]);
+
   // Destructure stable function references from duplicateValidation
   const { reset: resetDuplicateValidation } = duplicateValidation;
 
@@ -285,6 +324,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
         location: lead.location || null,
         offering_id: lead.offering_id ?? null,
         unit_id: lead.unit_id?.toString() || "",
+        referrer_id: lead.referrer_id ?? null,
         birth_year: lead.birth_year ?? null,
         location_proximity: lead.location_proximity ?? 0,
         occupation_relevance: lead.occupation_relevance ?? 0,
@@ -304,6 +344,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
         offering_id: null,
         unit_id: user?.unit_id?.toString() || "",
         assigned_officer_id: "auto",
+        referrer_id: null,
         birth_year: null,
         location_proximity: 0,
         occupation_relevance: 0,
@@ -345,6 +386,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
               offering_id: null,
               unit_id: data.unit_id,
               assigned_officer_id: "auto",
+              referrer_id: null,
               birth_year: null,
               location_proximity: 0,
               occupation_relevance: 0,
@@ -508,6 +550,83 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                   }}
                 />
               </FormRow>
+
+              {/* CTV Referrer - shown when source = "referral" */}
+              {selectedSource === "referral" && (
+                <FormField
+                  control={form.control}
+                  name="referrer_id"
+                  render={({ field }) => {
+                    const selectedCtv = availableCtv.find((c) => c.id === field.value);
+                    return (
+                      <FormItem className="flex flex-col">
+                        <FormLabel>
+                          <span className="flex items-center gap-1.5">
+                            <Users className="h-3.5 w-3.5" aria-hidden="true" />
+                            CTV giới thiệu
+                          </span>
+                        </FormLabel>
+                        <Popover open={ctvPopoverOpen} onOpenChange={setCtvPopoverOpen}>
+                          <PopoverTrigger asChild>
+                            <FormControl>
+                              <Button
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={ctvPopoverOpen}
+                                className={cn(
+                                  "w-full justify-between font-normal",
+                                  !field.value && "text-muted-foreground"
+                                )}
+                              >
+                                {selectedCtv
+                                  ? `${selectedCtv.full_name} (${selectedCtv.code})`
+                                  : "Chọn CTV giới thiệu"}
+                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                              </Button>
+                            </FormControl>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                            <Command>
+                              <CommandInput placeholder="Tìm theo tên, SĐT, mã CTV…" />
+                              <CommandList>
+                                <CommandEmpty>
+                                  {isLoadingCtv ? "Đang tải…" : "Không tìm thấy CTV"}
+                                </CommandEmpty>
+                                <CommandGroup>
+                                  {availableCtv.map((ctv) => (
+                                    <CommandItem
+                                      key={ctv.id}
+                                      value={`${ctv.full_name} ${ctv.phone} ${ctv.code}`}
+                                      onSelect={() => {
+                                        field.onChange(ctv.id);
+                                        setCtvPopoverOpen(false);
+                                      }}
+                                    >
+                                      <Check
+                                        className={cn(
+                                          "mr-2 h-4 w-4",
+                                          field.value === ctv.id ? "opacity-100" : "opacity-0"
+                                        )}
+                                      />
+                                      <div className="flex flex-col">
+                                        <span className="font-medium">{ctv.full_name}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                          {ctv.code} · {ctv.phone}
+                                        </span>
+                                      </div>
+                                    </CommandItem>
+                                  ))}
+                                </CommandGroup>
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                        <FormMessage />
+                      </FormItem>
+                    );
+                  }}
+                />
+              )}
 
               {/* Row 3: Offering (Ngành quan tâm) */}
               <FormField

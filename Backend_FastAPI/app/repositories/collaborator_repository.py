@@ -94,6 +94,7 @@ class CollaboratorRepository(BaseRepository[models.Collaborator]):
         limit: int = 10,
         status: Optional[str] = None,
         unit_id: Optional[int] = None,
+        managed_by_officer_id: Optional[int] = None,
         search: Optional[str] = None,
         sort_by: str = "created_at",
         order: str = "desc",
@@ -111,6 +112,9 @@ class CollaboratorRepository(BaseRepository[models.Collaborator]):
 
         if unit_id is not None:
             filters.append(models.Collaborator.unit_id == unit_id)
+
+        if managed_by_officer_id is not None:
+            filters.append(models.Collaborator.managed_by_officer_id == managed_by_officer_id)
 
         if search:
             normalized_search = unicodedata.normalize('NFC', search.strip())
