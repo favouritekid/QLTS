@@ -45,20 +45,55 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: deps
+      target: dev
     command: npm run dev
     environment:
       BACKEND_URL: http://backend:8000
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
     ports:
       - "3000:3000"
     deploy:
       resources:
         limits:
           memory: 2G
+    develop:
+      watch:
+        # Source code → sync for HMR (Turbopack picks up inotify natively)
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+          ignore:
+            - "**/*.test.ts"
+            - "**/*.test.tsx"
+            - "**/__tests__/"
+
+        # Public assets → sync
+        - action: sync
+          path: ./frontend/public
+          target: /app/public
+
+        # Config files → sync + restart dev server
+        - action: sync+restart
+          path: ./frontend/next.config.ts
+          target: /app/next.config.ts
+
+        - action: sync+restart
+          path: ./frontend/tailwind.config.ts
+          target: /app/tailwind.config.ts
+
+        - action: sync+restart
+          path: ./frontend/postcss.config.js
+          target: /app/postcss.config.js
+
+        - action: sync+restart
+          path: ./frontend/tsconfig.json
+          target: /app/tsconfig.json
+
+        # Dependencies → rebuild image
+        - action: rebuild
+          path: ./frontend/package.json
+
+        - action: rebuild
+          path: ./frontend/package-lock.json
 
   postgres:
     ports:

@@ -681,6 +681,7 @@ async def create_lead(
         direct_assignment_officer_id = None  # Will be set if direct assignment is needed
         skip_auto_assignment = False
         unit_already_distributed = False  # Flag to skip second distribution call
+        validated_collaborator = None  # Saved after referrer validation for smart routing
 
         if created_by:
             user_role = created_by.role
@@ -797,6 +798,7 @@ async def create_lead(
 
             create_data["referrer_id"] = referrer_id
             create_data["source"] = "referral"
+            validated_collaborator = collaborator  # Save for smart routing later
 
         # === DUPLICATE CHECK ===
         # Phone: Check globally across ALL units (phone must be unique system-wide)
@@ -880,6 +882,38 @@ async def create_lead(
                     routing_rule="WeightedRoundRobin"
                 )
                 create_data["unit_id"] = target_unit_id
+
+        # === SMART AUTO-ASSIGN: Route referral leads to CTV's managing officer ===
+        # When admin/manager creates referral lead WITHOUT specifying officer,
+        # prioritize the CTV's managing officer if they're in the target unit.
+        # This preserves the CTV-Officer relationship and improves conversion rates.
+        if validated_collaborator and not skip_auto_assignment:
+            ctv_officer_id = validated_collaborator.managed_by_officer_id
+            if ctv_officer_id:
+                ctv_officer = await db.get(models.User, ctv_officer_id)
+                if (
+                    ctv_officer
+                    and ctv_officer.status == "active"
+                    and ctv_officer.role == UserRole.OFFICER
+                    and ctv_officer.unit_id == create_data.get("unit_id")
+                ):
+                    direct_assignment_officer_id = ctv_officer.id
+                    skip_auto_assignment = True
+                    log.info(
+                        "Smart auto-assign: routing referral lead to CTV's managing officer",
+                        referrer_id=validated_collaborator.id,
+                        officer_id=ctv_officer.id,
+                        unit_id=create_data.get("unit_id"),
+                    )
+                else:
+                    log.info(
+                        "Smart auto-assign: CTV's officer not eligible for target unit, fallback to round-robin",
+                        referrer_id=validated_collaborator.id,
+                        ctv_officer_id=ctv_officer_id,
+                        target_unit_id=create_data.get("unit_id"),
+                        officer_status=ctv_officer.status if ctv_officer else "not_found",
+                        officer_unit_id=ctv_officer.unit_id if ctv_officer else None,
+                    )
 
         # Calculate lead score before creating the lead
         calculated_score = await calculate_lead_score(

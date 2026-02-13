@@ -14,6 +14,12 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# --- Stage 1b: Development (for docker compose watch) ---
+FROM deps AS dev
+
+WORKDIR /app
+COPY . .
+
 # --- Stage 2: Builder ---
 FROM node:20-alpine AS builder
 
