@@ -26,6 +26,7 @@ from sqlalchemy.orm import selectinload
 import structlog
 
 from app import models
+from app.core.constants import UserRole
 from app.models.pipeline import TriggerTypeEnum, SelectableModeEnum, StatusTypeEnum
 
 log = structlog.get_logger(__name__)
@@ -325,7 +326,7 @@ def _apply_trigger_guard(
 
         # Check role requirement
         if status.selectable_mode == SelectableModeEnum.role:
-            if user_role not in ("manager", "admin"):
+            if user_role not in (UserRole.MANAGER, UserRole.ADMIN):
                 log.debug(
                     "Trigger guard blocked role-based status",
                     status_id=status.id,
@@ -377,7 +378,7 @@ async def _get_universal_activities(
             continue
 
         if status.selectable_mode == SelectableModeEnum.role:
-            if user_role not in ("manager", "admin"):
+            if user_role not in (UserRole.MANAGER, UserRole.ADMIN):
                 continue
 
         safe.append(status)

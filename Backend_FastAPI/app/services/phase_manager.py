@@ -19,6 +19,8 @@ from typing import Set, Optional, TYPE_CHECKING
 
 import structlog
 
+from ..core.constants import UserRole
+
 if TYPE_CHECKING:
     from ..models import AdmissionProfile
 
@@ -171,7 +173,7 @@ def is_status_allowed_for_phase(
     
     # Role-based statuses require manager/admin
     if status_id in ROLE_BASED_STATUSES:
-        if user_role not in ("manager", "admin"):
+        if user_role not in (UserRole.MANAGER, UserRole.ADMIN):
             log.debug(
                 "Status requires manager/admin role",
                 status_id=status_id,
@@ -221,7 +223,7 @@ def get_allowed_statuses_for_phase(
         
         # Check role-based
         if status_id in ROLE_BASED_STATUSES:
-            if user_role in ("manager", "admin"):
+            if user_role in (UserRole.MANAGER, UserRole.ADMIN):
                 allowed.add(status_id)
         else:
             allowed.add(status_id)

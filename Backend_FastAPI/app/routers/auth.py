@@ -40,7 +40,7 @@ from ..database import (
 from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate limits module
 from ..services import session_service, user_service
 from ..services import login_history_service  # Security: Persistent login audit trail
-from ..services import notification_dispatcher  # Security: Suspicious login alerts
+from ..services.notification_dispatcher import safe_dispatch  # Security: Suspicious login alerts
 # PHASE 1: Removed AnomalyDetector import (detection now in login_history_service)
 from ..utils.exceptions import InvalidToken
 from ..core.events import SystemEvents  # Security: Event registry
@@ -168,29 +168,27 @@ async def _complete_login_flow(
             if session:
                 session.is_suspicious = True
                 db.add(session)
-            # Dispatch notification
-            try:
-                notification_ids, notif_callback = await notification_dispatcher.dispatch(
-                    db=db,
-                    event=SystemEvents.SUSPICIOUS_LOGIN,
-                    payload={
-                        "user_id": user.id,
-                        "user_ids": [user.id],
-                        "login_history_id": login_record.id,
-                        "ip_address": ip_address or "unknown",
-                        "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", "),
-                        "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip(),
-                        "risk_score": login_record.risk_score,
-                        "anomalies": anomalies,
-                        "actor_id": user.id,
-                    },
-                )
-                if notif_callback:
-                    post_commit_callbacks.append(notif_callback)
-                if notification_ids and len(notification_ids) > 0:
-                    login_notification_data["notification_id"] = notification_ids[0]
-            except Exception as notif_error:
-                log.error("Failed to dispatch suspicious login notification", user_id=user.id, error=str(notif_error))
+            # Dispatch notification (fire-and-forget after commit)
+            async def _dispatch_suspicious_login():
+                try:
+                    await safe_dispatch(
+                        db=db,
+                        event=SystemEvents.SUSPICIOUS_LOGIN,
+                        payload={
+                            "user_id": user.id,
+                            "user_ids": [user.id],
+                            "login_history_id": login_record.id,
+                            "ip_address": ip_address or "unknown",
+                            "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", "),
+                            "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip(),
+                            "risk_score": login_record.risk_score,
+                            "anomalies": anomalies,
+                            "actor_id": user.id,
+                        },
+                    )
+                except Exception as notif_error:
+                    log.error("Failed to dispatch suspicious login notification", user_id=user.id, error=str(notif_error))
+            post_commit_callbacks.append(_dispatch_suspicious_login)
     except Exception as history_error:
         log.error("Failed to record login history", user_id=user.id, error=str(history_error), exc_info=True)
 

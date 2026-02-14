@@ -24,8 +24,7 @@ import structlog
 
 from app import database, models, schemas
 from app.core import deps
-from app.core.constants import UserRole
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, require_admin
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.accounting_service import AccountingPeriodService, EventIdempotencyService
@@ -100,7 +99,7 @@ async def create_period(
     request: Request,
     data: finance_schemas.AccountingPeriodCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = Depends(require_admin),
 ):
     """
     Create a new accounting period.
@@ -114,13 +113,6 @@ async def create_period(
     - Requires admin role
     - Requires 'accounting:create' permission
     """
-    # Check permission - only admin can create periods
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create accounting periods"
-        )
-
     accounting_service = AccountingPeriodService(db)
 
     try:
@@ -226,7 +218,7 @@ async def close_period(
     period_id: int,
     notes: Optional[str] = Query(None, max_length=500, description="Closing notes"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = Depends(require_admin),
 ):
     """
     Close an accounting period.
@@ -240,13 +232,6 @@ async def close_period(
     - Requires admin role
     - Requires 'accounting:close' permission
     """
-    # Check permission - only admin can close periods
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can close accounting periods"
-        )
-
     # Get period by ID first
     query = select(AccountingPeriod).where(AccountingPeriod.id == period_id)
     result = await db.execute(query)
