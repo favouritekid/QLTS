@@ -16,9 +16,10 @@ from typing import Callable, Coroutine, List, Optional, Tuple, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import UserRole
 from app.models.admission_config import (
-    AdmissionPath, 
-    AdmissionCriteria, 
+    AdmissionPath,
+    AdmissionCriteria,
     CriteriaSubjectGroup,
     DocumentGroup,
     DocumentGroupItem,
@@ -158,7 +159,7 @@ class AdmissionPathService:
             raise BusinessRuleViolation("Cannot update archived path")
         
         # Manager can only edit draft paths (Admin approves = activate)
-        if user.role == "manager" and path.status != "draft":
+        if user.role == UserRole.MANAGER and path.status != "draft":
             raise BusinessRuleViolation(
                 f"Manager can only update paths in 'draft' status. "
                 f"Current status: '{path.status}'. Contact Admin to modify."

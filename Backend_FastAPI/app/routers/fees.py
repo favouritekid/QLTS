@@ -29,6 +29,7 @@ import structlog
 
 from app import database, models, schemas
 from app.core import deps
+from app.core.constants import UserRole
 from app.core.deps import CasbinAuth, RequireAdmin, RequireManager
 from app.core.rate_limits import limiter, RateLimits
 from app.models.finance import FeeTypeEnum
@@ -83,7 +84,7 @@ async def list_fees(
     - Requires 'fees:read' permission
     """
     fee_repo = FeeRepository(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     # Convert page/page_size to skip/limit
     skip = (page - 1) * page_size
@@ -179,7 +180,7 @@ async def calculate_fee(
     invoice_service = InvoiceService(db)
 
     # Determine unit_id for IDOR protection
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         # Get installment plan by code
@@ -297,7 +298,7 @@ async def get_fee(
     - Requires 'fees:read' permission
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         fee = await fee_service.get_fee(fee_id, unit_id)
@@ -335,7 +336,7 @@ async def get_fees_by_profile(
     - Requires 'fees:read' permission
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     fees = await fee_service.get_fees_for_profile(profile_id, unit_id, fee_type)
 
@@ -374,7 +375,7 @@ async def get_profile_finance_summary(
     - Count of pending and overdue invoices
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     summary = await fee_service.get_fee_summary(profile_id, unit_id)
 
@@ -440,7 +441,7 @@ async def waive_fee(
     - Role enforced via RequireManager dependency
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         fee, _ = await fee_service.waive_fee(
@@ -552,7 +553,7 @@ async def recalculate_fee(
     - Role enforced via RequireManager dependency
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         fee, _ = await fee_service.recalculate_fee(
@@ -623,8 +624,8 @@ def _build_fee_response(
     is_terminal = status_value in terminal_statuses
 
     # Role-aware permission computation
-    is_manager_or_admin = current_user_role in ["admin", "manager"]
-    is_admin = current_user_role == "admin"
+    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    is_admin = current_user_role == UserRole.ADMIN
 
     can_waive = not is_terminal and fee.remaining_amount > 0 and is_manager_or_admin
     can_cancel = not is_terminal and fee.paid_amount == 0 and is_admin

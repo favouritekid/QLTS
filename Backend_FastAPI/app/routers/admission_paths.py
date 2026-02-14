@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Query, Path as PathParam
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
+from app.core.constants import UserRole
 from app.core.deps import (
     get_current_active_user,
     check_permission,
@@ -109,7 +110,7 @@ async def get_admission_path_for_user(
         raise ResourceNotFoundError(f"Admission path {path_id} not found")
     
     # Admin/Manager have full access (for config console)
-    if current_user.role in ["admin", "manager"]:
+    if current_user.role in [UserRole.ADMIN, UserRole.MANAGER]:
         return path
     
     # For other roles, return 404 (IDOR protection)

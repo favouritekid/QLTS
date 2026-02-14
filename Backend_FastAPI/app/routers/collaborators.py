@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
+from app.core.constants import UserRole
 from app.core.deps import (
     check_permission,
     get_collaborator_for_user,
@@ -63,11 +64,11 @@ async def list_collaborators(
     repo = CollaboratorRepository(db)
 
     # Manager: force own unit filter
-    if current_user.role == "manager":
+    if current_user.role == UserRole.MANAGER:
         unit_id = current_user.unit_id
 
     # Officer: force own managed CTV only + active status
-    if current_user.role == "officer":
+    if current_user.role == UserRole.OFFICER:
         managed_by_officer_id = current_user.id
         status = "active"
 
@@ -121,7 +122,7 @@ async def list_claims(
 
     # Manager: filter by own unit
     unit_id = None
-    if current_user.role == "manager":
+    if current_user.role == UserRole.MANAGER:
         unit_id = current_user.unit_id
 
     total, claims = await repo.get_filtered(

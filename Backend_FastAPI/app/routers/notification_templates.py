@@ -226,10 +226,10 @@ async def delete_notification_template(
 
         return None
 
-    except PermissionDeniedError as e:
+    except PermissionDeniedError:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e)
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found"  # IDOR protection: return 404 to prevent resource enumeration
         )
     except BadRequest as e:
         raise HTTPException(

@@ -20,6 +20,7 @@ from sqlalchemy import select, func, and_
 import structlog
 
 from app import database, models
+from app.core.constants import UserRole
 from app.core.deps import CasbinAuth
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
@@ -70,7 +71,7 @@ async def get_dashboard_stats(
     - IDOR protection: Only accessible for user's unit
     - Requires 'finance:read' permission
     """
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
     today = date.today()
     month_start = date(today.year, today.month, 1)
     today_start = datetime.combine(today, datetime.min.time())

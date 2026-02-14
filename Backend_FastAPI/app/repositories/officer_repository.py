@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 
 from app import models
+from app.core.constants import UserRole
 from app.repositories.base import BaseRepository
 
 log = structlog.get_logger(__name__)
@@ -907,7 +908,7 @@ class OfficerRepository(BaseRepository[models.User]):
             )
             .join(models.Consultation, models.Consultation.officer_id == models.User.id)
             .where(
-                models.User.role == "officer",
+                models.User.role == UserRole.OFFICER,
                 models.User.status == "active",
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
@@ -986,7 +987,7 @@ class OfficerRepository(BaseRepository[models.User]):
         
         # Build conditions for officers
         conditions = [
-            models.User.role == "officer",
+            models.User.role == UserRole.OFFICER,
             models.User.status == "active",
         ]
         if unit_id:
@@ -1049,7 +1050,7 @@ class OfficerRepository(BaseRepository[models.User]):
         # Simple implementation for officer queries
         query = (
             select(models.User)
-            .where(models.User.role == "officer")
+            .where(models.User.role == UserRole.OFFICER)
             .offset(skip)
             .limit(limit)
         )
@@ -1058,7 +1059,7 @@ class OfficerRepository(BaseRepository[models.User]):
         
         count_query = (
             select(func.count(models.User.id))
-            .where(models.User.role == "officer")
+            .where(models.User.role == UserRole.OFFICER)
         )
         total = (await self.db.execute(count_query)).scalar() or 0
         
@@ -1084,7 +1085,7 @@ class OfficerRepository(BaseRepository[models.User]):
             List of officer user IDs
         """
         conditions = [
-            models.User.role == "officer",
+            models.User.role == UserRole.OFFICER,
             models.User.status == "active",
         ]
         
@@ -1380,7 +1381,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 )
             )
             .where(
-                models.User.role == "officer",
+                models.User.role == UserRole.OFFICER,
                 models.User.status == "active",
             )
         )

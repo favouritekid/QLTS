@@ -24,6 +24,7 @@ import structlog
 
 from app import database, models, schemas
 from app.core import deps
+from app.core.constants import UserRole
 from app.core.deps import CasbinAuth
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
@@ -114,7 +115,7 @@ async def create_period(
     - Requires 'accounting:create' permission
     """
     # Check permission - only admin can create periods
-    if current_user.role != "admin":
+    if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can create accounting periods"
@@ -240,7 +241,7 @@ async def close_period(
     - Requires 'accounting:close' permission
     """
     # Check permission - only admin can close periods
-    if current_user.role != "admin":
+    if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can close accounting periods"

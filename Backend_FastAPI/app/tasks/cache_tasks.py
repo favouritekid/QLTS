@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 
 from ..celery_app import celery_app
+from ..core.constants import UserRole
 from .utils import task_db_session, run_async_task
 
 
@@ -121,7 +122,7 @@ def sync_kpi_ytd_task(self):
             officers_result = await session.execute(
                 select(models.User.id)
                 .where(
-                    models.User.role == "officer",
+                    models.User.role == UserRole.OFFICER,
                     models.User.status == "active",
                 )
             )

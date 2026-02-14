@@ -1625,7 +1625,7 @@ async def export_admissions_csv(
     major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip().isdigit()] if major_id else None
 
     # Determine unit_id for non-admin users (IDOR protection)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     # Get all profiles matching filters (no pagination for export)
     profiles, _ = await admission_service.get_profiles(

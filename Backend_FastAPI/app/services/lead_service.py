@@ -1653,9 +1653,8 @@ async def add_consultation(
                 current_phase = derive_phase_from_admission(admission_profile)
                 
                 # Check if new status is allowed in current phase
-                # Note: officer.role is already a string (e.g., "officer", "admin")
-                user_role = officer.role if isinstance(officer.role, str) else officer.role.value
-                if not is_status_allowed_for_phase(current_phase, data.status_id, user_role):
+                # Note: officer.role is UserRole enum (StrEnum works with both string and enum comparisons)
+                if not is_status_allowed_for_phase(current_phase, data.status_id, officer.role):
                     # Check if it's a universal status (always allowed)
                     if data.status_id not in UNIVERSAL_STATUSES:
                         raise BadRequest(
@@ -1673,8 +1672,7 @@ async def add_consultation(
                     # ✅ SECURITY: Admin can bypass allowed_transitions rules ONLY
                     # Phase guard (is_status_allowed_for_phase) has ALREADY been checked above
                     # Admin bypass does NOT skip phase validation - only transition rules
-                    is_admin = (officer.role == "admin") if isinstance(officer.role, str) else (officer.role == UserRole.ADMIN)
-                    if not is_admin:
+                    if officer.role != UserRole.ADMIN:
                         raise BadRequest(
                             detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{data.status_id}'. "
                                    f"Quy trình không cho phép (Allowed Transitions). "
@@ -2574,8 +2572,7 @@ async def update_consultation(
                     current_phase = derive_phase_from_admission(admission_profile)
 
                     # Check if new status is allowed in current phase
-                    user_role = current_user.role if isinstance(current_user.role, str) else current_user.role.value
-                    if not is_status_allowed_for_phase(current_phase, new_status_id, user_role):
+                    if not is_status_allowed_for_phase(current_phase, new_status_id, current_user.role):
                         if new_status_id not in UNIVERSAL_STATUSES:
                             raise BadRequest(
                                 detail=f"Status '{validated_status.name}' không hợp lệ trong phase '{current_phase.value}'. "
@@ -2591,8 +2588,7 @@ async def update_consultation(
 
                     if not is_valid:
                         # Admin can bypass transition rules (but not phase guards)
-                        is_admin = (current_user.role == "admin") if isinstance(current_user.role, str) else (current_user.role == UserRole.ADMIN)
-                        if not is_admin:
+                        if current_user.role != UserRole.ADMIN:
                             raise BadRequest(
                                 detail=f"Không thể chuyển trạng thái từ '{old_consultation_status_id}' sang '{new_status_id}'. "
                                        f"Quy trình không cho phép (Allowed Transitions). "
@@ -2795,7 +2791,7 @@ async def process_officer_action(
 
     # ✅ FIX: Capture values early to avoid lazy loading issues
     officer_id = officer.id
-    is_admin_or_manager = officer.role in ("admin", "manager")
+    is_admin_or_manager = officer.role in (UserRole.ADMIN, UserRole.MANAGER)
     
     # ✅ QUOTA CHECK: Only apply to Officers, not Admin/Manager
     if action == "reassign" and not is_admin_or_manager:

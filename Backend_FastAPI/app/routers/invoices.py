@@ -25,6 +25,7 @@ import structlog
 
 from app import database, models, schemas
 from app.core import deps
+from app.core.constants import UserRole
 from app.core.deps import CasbinAuth, RequireManager
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
@@ -75,7 +76,7 @@ async def list_invoices(
     - Requires 'invoices:read' permission
     """
     invoice_repo = InvoiceRepository(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     # Convert page/page_size to skip/limit
     skip = (page - 1) * page_size
@@ -152,7 +153,7 @@ async def get_invoice(
     - Requires 'invoices:read' permission
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         invoice = await invoice_service.get_invoice(invoice_id, unit_id)
@@ -185,7 +186,7 @@ async def get_invoices_by_fee(
     - Requires 'invoices:read' permission
     """
     invoice_repo = InvoiceRepository(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     invoices = await invoice_repo.get_by_fee_id(fee_id, unit_id)
 
@@ -233,7 +234,7 @@ async def issue_invoice(
     - Requires 'invoices:issue' permission
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         invoice, _ = await invoice_service.issue_invoice(
@@ -286,7 +287,7 @@ async def cancel_invoice(
     - Role enforced via RequireManager dependency
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         invoice, _ = await invoice_service.cancel_invoice(
@@ -340,7 +341,7 @@ async def apply_penalty(
     - Role enforced via RequireManager dependency
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == "admin" else current_user.unit_id
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
         invoice, _ = await invoice_service.apply_penalty(
@@ -393,7 +394,7 @@ def _build_invoice_response(
     remaining_amount = invoice.amount - invoice.paid_amount
 
     # Role-aware permission computation
-    is_manager_or_admin = current_user_role in ["admin", "manager"]
+    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
 
     can_issue = status_value == "draft"
     can_cancel = (

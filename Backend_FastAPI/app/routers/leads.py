@@ -13,7 +13,7 @@ from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_
 from ..schemas.collaborator import LeadValidityUpdate
 from ..services import distribution_service, insights_service, lead_service
 from ..utils.csv_helpers import sanitize_csv_cell
-from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
+from ..services.notification_dispatcher import safe_dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..core.constants import UserRole
 from app.core.rate_limits import limiter, RateLimits
@@ -502,58 +502,42 @@ async def update_existing_lead(
 
     # ✅ NOTIFICATION 2.0: Dispatch notification if status changed
     if status_changed:
-        try:
-            _, notif_cb = await dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.id,
-                    "lead_name": result.full_name or result.email or f"Lead #{result.id}",
-                    "officer_id": result.assigned_officer_id,
-                    "officer_name": result.assigned_officer.full_name if result.assigned_officer else "Unknown",
-                    "old_status": lead.consultation_status_id or "none",
-                    "new_status": result.consultation_status_id or "none",
-                    "old_stage": lead.pipeline_stage_id,
-                    "new_stage": result.pipeline_stage_id,
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                    "updated_fields": updated_fields,
-                },
-                dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
-            )
-            await db.commit()
-            if notif_cb:
-                await notif_cb()
-        except Exception as e:
-            log.warning(
-                "Failed to dispatch lead status changed notification",
-                lead_id=lead.id,
-                error=str(e)
-            )
-
-    # ✅ REAL-TIME SYNC: Always dispatch LEAD_UPDATED for UI refresh
-    try:
-        _, notif_cb = await dispatch(
+        await safe_dispatch(
             db=db,
-            event=SystemEvents.LEAD_UPDATED,
+            event=SystemEvents.LEAD_STATUS_CHANGED,
             payload={
                 "lead_id": result.id,
-                "updated_fields": updated_fields,
-                "status_changed": status_changed,
+                "lead_name": result.full_name or result.email or f"Lead #{result.id}",
+                "officer_id": result.assigned_officer_id,
+                "officer_name": result.assigned_officer.full_name if result.assigned_officer else "Unknown",
+                "old_status": lead.consultation_status_id or "none",
+                "new_status": result.consultation_status_id or "none",
+                "old_stage": lead.pipeline_stage_id,
+                "new_stage": result.pipeline_stage_id,
                 "actor_id": current_user.id,
-                "updated_by": current_user.full_name or current_user.username,
                 "actor_name": current_user.full_name or current_user.username,
-                "updated_summary": ", ".join(updated_fields[:3]) + ("..." if len(updated_fields) > 3 else ""),
-                "updated_at": datetime.now().isoformat(),
-                "message": f"Lead updated by {current_user.full_name or current_user.username}",
+                "updated_fields": updated_fields,
             },
-            dedupe_key=f"lead_updated:{result.id}:{int(datetime.now().timestamp())}",
+            dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
         )
-        await db.commit()
-        if notif_cb:
-            await notif_cb()
-    except Exception as e:
-        log.warning("Failed to dispatch LEAD_UPDATED notification", lead_id=result.id, error=str(e))
+
+    # ✅ REAL-TIME SYNC: Always dispatch LEAD_UPDATED for UI refresh
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.LEAD_UPDATED,
+        payload={
+            "lead_id": result.id,
+            "updated_fields": updated_fields,
+            "status_changed": status_changed,
+            "actor_id": current_user.id,
+            "updated_by": current_user.full_name or current_user.username,
+            "actor_name": current_user.full_name or current_user.username,
+            "updated_summary": ", ".join(updated_fields[:3]) + ("..." if len(updated_fields) > 3 else ""),
+            "updated_at": datetime.now().isoformat(),
+            "message": f"Lead updated by {current_user.full_name or current_user.username}",
+        },
+        dedupe_key=f"lead_updated:{result.id}:{int(datetime.now().timestamp())}",
+    )
 
     return result
 
@@ -589,26 +573,20 @@ async def delete_lead(
     deleted_lead = await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
     await db.commit()
 
-    # Dispatch notification for lead deletion
-    try:
-        _, notif_cb = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_DELETED,
-            payload={
-                "lead_id": deleted_lead.id,
-                "lead_name": deleted_lead.full_name or "Unknown",
-                "unit_id": deleted_lead.unit_id,
-                "officer_id": deleted_lead.assigned_officer_id,
-                "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,
-            },
-            dedupe_key=f"lead_deleted:{deleted_lead.id}",
-        )
-        await db.commit()
-        if notif_cb:
-            await notif_cb()
-    except Exception as e:
-        log.warning("Failed to dispatch lead deletion notification", error=str(e))
+    # ✅ NOTIFICATION 2.0: Dispatch notification for lead deletion
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.LEAD_DELETED,
+        payload={
+            "lead_id": deleted_lead.id,
+            "lead_name": deleted_lead.full_name or "Unknown",
+            "unit_id": deleted_lead.unit_id,
+            "officer_id": deleted_lead.assigned_officer_id,
+            "actor_id": current_user.id,
+            "actor_name": current_user.full_name or current_user.username,
+        },
+        dedupe_key=f"lead_deleted:{deleted_lead.id}",
+    )
 
     return None
 
@@ -672,32 +650,21 @@ async def add_new_consultation(
     )
     await db.commit()
 
-    # Dispatch notification for consultation created
-    try:
-        _, notif_cb = await dispatch(
-            db=db,
-            event=SystemEvents.CONSULTATION_CREATED,
-            payload={
-                "consultation_id": result.id,
-                "lead_id": lead.id,
-                "officer_id": lead.assigned_officer_id,
-                "status_id": result.consultation_status_id or "",
-                "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,
-                "unit_id": lead.unit_id,
-            },
-            dedupe_key=f"consultation_created:{result.id}",
-        )
-        await db.commit()
-        if notif_cb:
-            await notif_cb()
-    except Exception as e:
-        log.warning(
-            "Failed to dispatch consultation created notification",
-            lead_id=lead.id,
-            consultation_id=result.id,
-            error=str(e)
-        )
+    # ✅ NOTIFICATION 2.0: Dispatch notification for consultation created
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.CONSULTATION_CREATED,
+        payload={
+            "consultation_id": result.id,
+            "lead_id": lead.id,
+            "officer_id": lead.assigned_officer_id,
+            "status_id": result.consultation_status_id or "",
+            "actor_id": current_user.id,
+            "actor_name": current_user.full_name or current_user.username,
+            "unit_id": lead.unit_id,
+        },
+        dedupe_key=f"consultation_created:{result.id}",
+    )
 
     return result
 
@@ -872,26 +839,20 @@ async def update_a_consultation(
 
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
     if result.consultation_status_id != old_status_id:
-        try:
-            _, notif_cb = await dispatch(
-                db=db,
-                event=SystemEvents.CONSULTATION_UPDATED,
-                payload={
-                    "consultation_id": result.id,
-                    "lead_id": lead.id,
-                    "officer_id": lead.assigned_officer_id,
-                    "old_status_id": old_status_id,
-                    "new_status_id": result.consultation_status_id,
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
-            )
-            await db.commit()
-            if notif_cb:
-                await notif_cb()
-        except Exception as e:
-            log.warning("Failed to dispatch CONSULTATION_UPDATED notification", error=str(e))
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.CONSULTATION_UPDATED,
+            payload={
+                "consultation_id": result.id,
+                "lead_id": lead.id,
+                "officer_id": lead.assigned_officer_id,
+                "old_status_id": old_status_id,
+                "new_status_id": result.consultation_status_id,
+                "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,
+            },
+            dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
+        )
 
     return result
 
@@ -923,24 +884,18 @@ async def delete_a_consultation(
     await db.commit()
 
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_DELETED
-    try:
-        _, notif_cb = await dispatch(
-            db=db,
-            event=SystemEvents.CONSULTATION_DELETED,
-            payload={
-                "consultation_id": consultation_id,
-                "lead_id": lead.id,
-                "officer_id": lead.assigned_officer_id,
-                "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,
-            },
-            dedupe_key=f"consultation_deleted:{consultation_id}",
-        )
-        await db.commit()
-        if notif_cb:
-            await notif_cb()
-    except Exception as e:
-        log.warning("Failed to dispatch CONSULTATION_DELETED notification", error=str(e))
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.CONSULTATION_DELETED,
+        payload={
+            "consultation_id": consultation_id,
+            "lead_id": lead.id,
+            "officer_id": lead.assigned_officer_id,
+            "actor_id": current_user.id,
+            "actor_name": current_user.full_name or current_user.username,
+        },
+        dedupe_key=f"consultation_deleted:{consultation_id}",
+    )
 
     return None
 
