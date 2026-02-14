@@ -1,12 +1,9 @@
 # app/services/pipeline_service.py
 """
 Pipeline Configuration Service - Manages pipeline stages and consultation statuses.
-
-✅ REFACTORED: Now uses notification_dispatcher for all config change notifications.
-This ensures notifications are persisted to database AND sent via Socket.IO.
 """
-import json  # ✅ For JSON serialization
-from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
+import json
+from typing import Callable, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import func, select, and_
@@ -14,9 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
-from ..config import settings  # ✅ For cache TTL
-from ..core.events import SystemEvents
-from .notification_dispatcher import dispatch
+from ..config import settings
 # ✅ Import Redis utilities including distributed lock
 from ..database import (
     safe_redis_delete,
@@ -278,26 +273,8 @@ async def create_pipeline_stage(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            # 5. Hủy cache
             await invalidate_pipeline_cache()
             log.info("Created new pipeline stage, cache invalidated", stage_id=db_stage.id)
-
-            # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "pipeline_stage",
-                        "operation": "created",
-                        "resource_id": db_stage.id,
-                        "resource_name": db_stage.name,
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
 
         return db_stage, _post_commit
 
@@ -362,26 +339,8 @@ async def update_pipeline_stage(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            # 4. Hủy cache
             await invalidate_pipeline_cache()
             log.info("Updated pipeline stage, cache invalidated", stage_id=db_stage.id)
-
-            # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "pipeline_stage",
-                        "operation": "updated",
-                        "resource_id": db_stage.id,
-                        "resource_name": db_stage.name,
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
 
         return db_stage, _post_commit
 
@@ -440,31 +399,12 @@ async def delete_pipeline_stage(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            # 3. Hủy cache
             await invalidate_pipeline_cache()
             log.info("Deleted pipeline stage, cache invalidated", stage_id=stage_id)
-
-            # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "pipeline_stage",
-                        "operation": "deleted",
-                        "resource_id": stage_id,
-                        "resource_name": stage_data["name"],
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
 
         return None, _post_commit
 
     except Exception as e:
-        # ✅ Router will handle rollback
         log.error(
             "Failed to delete pipeline stage",
             stage_id=stage_id,
@@ -573,28 +513,10 @@ async def create_consultation_status(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            # 5. Hủy cache
             await invalidate_pipeline_cache()
             log.info(
                 "Created new consultation status, cache invalidated", status_id=db_status.id
             )
-
-            # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "consultation_status",
-                        "operation": "created",
-                        "resource_id": db_status.id,
-                        "resource_name": db_status.name,
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
 
         return db_status, _post_commit
 
@@ -701,28 +623,10 @@ async def update_consultation_status(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            # 4. Hủy cache
             await invalidate_pipeline_cache()
             log.info(
                 "Updated consultation status, cache invalidated", status_id=db_status.id
             )
-
-            # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "consultation_status",
-                        "operation": "updated",
-                        "resource_id": db_status.id,
-                        "resource_name": db_status.name,
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
 
         return db_status, _post_commit
 
@@ -789,31 +693,12 @@ async def delete_consultation_status(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            # 3. Hủy cache
             await invalidate_pipeline_cache()
             log.info("Deleted consultation status, cache invalidated", status_id=status_id)
-
-            # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "consultation_status",
-                        "operation": "deleted",
-                        "resource_id": status_id,
-                        "resource_name": status_data["name"],
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
 
         return None, _post_commit
 
     except Exception as e:
-        # ✅ Router will handle rollback
         log.error(
             "Failed to delete consultation status",
             status_id=status_id,
@@ -901,23 +786,6 @@ async def create_allowed_transition(
                 to_status=transition_in.to_status_id,
             )
 
-            # === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "allowed_transition",
-                        "operation": "created",
-                        "resource_id": str(db_transition.id),
-                        "resource_name": f"{from_name} → {to_name}",
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
-
         return db_transition, _post_commit
 
     except Exception as e:
@@ -970,23 +838,6 @@ async def delete_allowed_transition(
         async def _post_commit():
             """Execute after router commits the transaction."""
             log.info("Deleted allowed transition", transition_id=transition_id)
-
-            # === NOTIFICATION: Dispatch pipeline config updated event ===
-            if current_user:
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                    payload={
-                        "config_type": "allowed_transition",
-                        "operation": "deleted",
-                        "resource_id": str(transition_id),
-                        "resource_name": f"{transition_data['from_status_name']} → {transition_data['to_status_name']}",
-                        "actor_id": current_user.id,
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
 
         return None, _post_commit
 

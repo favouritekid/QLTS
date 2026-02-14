@@ -546,14 +546,14 @@ class TestUpdateLead:
         
         # Act
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock):
-            updated_lead = await lead_service.update_lead(
-                db, 
-                seeded_lead.id, 
-                lead_update, 
+            updated_lead, _ = await lead_service.update_lead(
+                db,
+                seeded_lead.id,
+                lead_update,
                 updated_by=officer_user
             )
             await db.commit()
-        
+
         # Assert
         assert updated_lead.full_name == "Updated Lead Name"
         
@@ -591,11 +591,11 @@ class TestUpdateLead:
                 return {"full_name": "Partial Update Name"}  # Only update name
         
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock):
-            updated_lead = await lead_service.update_lead(
+            updated_lead, _ = await lead_service.update_lead(
                 db, seeded_lead.id, MockLeadUpdate(), updated_by=officer_user
             )
             await db.commit()
-        
+
         # Assert - name updated, phone/email unchanged
         assert updated_lead.full_name == "Partial Update Name"
         assert updated_lead.phone == original_phone
@@ -636,11 +636,11 @@ class TestUpdateLead:
                 return {"full_name": "Admin Updated"}
         
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock):
-            updated = await lead_service.update_lead(
+            updated, _ = await lead_service.update_lead(
                 db, seeded_lead.id, MockLeadUpdate(), updated_by=admin_user
             )
             await db.commit()
-        
+
         assert updated.full_name == "Admin Updated"
     
     async def test_update_lead_non_assigned_officer_fails(
@@ -695,14 +695,14 @@ class TestAssignLead:
         """Test assign_lead_manually assigns lead to officer."""
         # Act
         with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
-            lead = await lead_service.assign_lead_manually(
-                db, 
-                unassigned_lead.id, 
-                officer_user.id, 
+            lead, _ = await lead_service.assign_lead_manually(
+                db,
+                unassigned_lead.id,
+                officer_user.id,
                 assigner=admin_user
             )
             await db.commit()
-        
+
         # Assert
         assert lead.assigned_officer_id == officer_user.id
         assert lead.assigned_at is not None
@@ -819,14 +819,14 @@ class TestAssignLead:
         
         # Act - reassign to second officer
         with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
-            lead = await lead_service.assign_lead_manually(
-                db, 
-                seeded_lead.id, 
-                second_officer.id, 
+            lead, _ = await lead_service.assign_lead_manually(
+                db,
+                seeded_lead.id,
+                second_officer.id,
                 assigner=admin_user
             )
             await db.commit()
-        
+
         # Assert
         assert lead.assigned_officer_id == second_officer.id
         assert lead.assigned_officer_id != original_officer_id

@@ -86,19 +86,11 @@ async def create_application(
     # Load relationships for socket event payload via repository
     new_application = await repo.get_with_lead_for_event(new_application.id)
 
-    # ✅ Create post-commit callback
-    async def _post_commit():
-        """Execute after router commits the transaction."""
-        log.info(
-            "Application created",
-            application_id=new_application.id,
-            lead_id=lead_id,
-            officer_id=current_user.id,
-        )
-
-        # === ✅ REFACTOR: Dispatch notification instead of direct socket emit ===
-        try:
-            _, notif_cb = await dispatch(
+    # Dispatch notification in savepoint (records flushed with main transaction)
+    _notif_cb = None
+    try:
+        async with db.begin_nested():
+            _, _notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.APPLICATION_CREATED,
                 payload={
@@ -110,16 +102,14 @@ async def create_application(
                 },
                 dedupe_key=f"application_created:{new_application.id}",
             )
-            await db.commit()
-            if notif_cb:
-                await notif_cb()
-            log.info("Application creation notification dispatched", application_id=new_application.id)
-        except Exception as e:
-            log.error(
-                "Failed to dispatch application creation notification",
-                application_id=new_application.id,
-                error=str(e)
-            )
+    except Exception as e:
+        log.warning("Dispatch failed, business data preserved", application_id=new_application.id, error=str(e))
+
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Application created", application_id=new_application.id, lead_id=lead_id)
+        if _notif_cb:
+            await _notif_cb()
 
     return new_application, _post_commit
 
@@ -222,21 +212,13 @@ async def update_application(
     repo = ApplicationRepository(db)
     application = await repo.get_full_for_update(application_id)
 
-    # ✅ Create post-commit callback
-    async def _post_commit():
-        """Execute after router commits the transaction."""
-        log.info(
-            "Application updated",
-            application_id=application_id,
-            updated_fields=list(update_dict.keys()),
-        )
-
-        # === ✅ REFACTOR: Dispatch notifications instead of direct socket emits ===
-        if current_user and application.officer_id:
-            # Dispatch status changed notification
-            if status_changed and old_status != application.status:
-                try:
-                    _, notif_cb = await dispatch(
+    # Dispatch notifications in savepoint (records flushed with main transaction)
+    _notif_callbacks = []
+    if current_user and application.officer_id:
+        if status_changed and old_status != application.status:
+            try:
+                async with db.begin_nested():
+                    _, cb = await dispatch(
                         db=db,
                         event=SystemEvents.APPLICATION_STATUS_CHANGED,
                         payload={
@@ -249,21 +231,15 @@ async def update_application(
                         },
                         dedupe_key=f"application_status_changed:{application.id}:{application.status}",
                     )
-                    await db.commit()
-                    if notif_cb:
-                        await notif_cb()
-                    log.info("Application status change notification dispatched", application_id=application.id)
-                except Exception as e:
-                    log.error(
-                        "Failed to dispatch application status change notification",
-                        application_id=application.id,
-                        error=str(e)
-                    )
+                    if cb:
+                        _notif_callbacks.append(cb)
+            except Exception as e:
+                log.warning("Dispatch failed, business data preserved", application_id=application.id, error=str(e))
 
-            # Dispatch documents updated notification
-            if documents_changed and old_documents != application.documents:
-                try:
-                    _, notif_cb = await dispatch(
+        if documents_changed and old_documents != application.documents:
+            try:
+                async with db.begin_nested():
+                    _, cb = await dispatch(
                         db=db,
                         event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
                         payload={
@@ -275,16 +251,16 @@ async def update_application(
                         },
                         dedupe_key=f"application_documents_updated:{application.id}:{datetime.now(timezone.utc).isoformat()}",
                     )
-                    await db.commit()
-                    if notif_cb:
-                        await notif_cb()
-                    log.info("Application documents update notification dispatched", application_id=application.id)
-                except Exception as e:
-                    log.error(
-                        "Failed to dispatch application documents update notification",
-                        application_id=application.id,
-                        error=str(e)
-                    )
+                    if cb:
+                        _notif_callbacks.append(cb)
+            except Exception as e:
+                log.warning("Dispatch failed, business data preserved", application_id=application.id, error=str(e))
+
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Application updated", application_id=application_id, updated_fields=list(update_dict.keys()))
+        for cb in _notif_callbacks:
+            await cb()
 
     return application, _post_commit
 

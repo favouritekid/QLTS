@@ -27,6 +27,8 @@ from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
 from ..utils.csv_helpers import sanitize_csv_cell
+from ..core.events import SystemEvents
+from .notification_dispatcher import dispatch
 
 log = structlog.get_logger(__name__)
 
@@ -1025,19 +1027,11 @@ async def create_lead(
             source="api",
         )
 
-        # ✅ Create post-commit callback with all post-commit actions
-        async def _post_commit():
-            """Execute after router commits the transaction."""
-            log.info(
-                "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
-            )
-
-            # === ✅ REFACTOR: Dispatch LEAD_CREATED notification ===
-            try:
-                from ..core.events import SystemEvents
-                from .notification_dispatcher import dispatch
-
-                _, notif_cb = await dispatch(
+        # ✅ Dispatch LEAD_CREATED notification in savepoint
+        _lead_created_cb = None
+        try:
+            async with db.begin_nested():
+                _, _lead_created_cb = await dispatch(
                     db=db,
                     event=SystemEvents.LEAD_CREATED,
                     payload={
@@ -1050,49 +1044,47 @@ async def create_lead(
                     },
                     dedupe_key=f"lead_created:{db_lead.id}",
                 )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
-                log.info("Lead creation notification dispatched", lead_id=db_lead.id)
+        except Exception as e:
+            log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
+
+        # ✅ Dispatch LEAD_ASSIGNED notification in savepoint (if direct assignment)
+        _lead_assigned_cb = None
+        if skip_auto_assignment and direct_assignment_officer_id:
+            try:
+                async with db.begin_nested():
+                    _, _lead_assigned_cb = await dispatch(
+                        db=db,
+                        event=SystemEvents.LEAD_ASSIGNED,
+                        payload={
+                            "lead_id": db_lead.id,
+                            "officer_id": direct_assignment_officer_id,
+                            "actor_id": created_by.id if created_by else 0,
+                            "actor_name": created_by.full_name or created_by.username if created_by else "System",
+                            "lead_name": db_lead.full_name or "Unknown",
+                            "lead_phone": db_lead.phone or "",
+                            "offering_name": offering_name
+                        },
+                        dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}",
+                    )
             except Exception as e:
-                log.warning("Failed to dispatch lead_created notification", lead_id=db_lead.id, error=str(e))
+                log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
 
-            # === POST-COMMIT ACTIONS ===
+        # ✅ Create post-commit callback with all post-commit actions
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
+            )
+            if _lead_created_cb:
+                await _lead_created_cb()
             if skip_auto_assignment:
-                # Direct assignment was done - dispatch LEAD_ASSIGNED notification
-                if direct_assignment_officer_id:
-                    try:
-                        from ..core.events import SystemEvents
-                        from .notification_dispatcher import dispatch
-
-                        _, notif_cb = await dispatch(
-                            db=db,
-                            event=SystemEvents.LEAD_ASSIGNED,
-                            payload={
-                                "lead_id": db_lead.id,
-                                "officer_id": direct_assignment_officer_id,
-                                "actor_id": created_by.id if created_by else 0,
-                                "actor_name": created_by.full_name or created_by.username if created_by else "System",
-                                "lead_name": db_lead.full_name or "Unknown",
-                                "lead_phone": db_lead.phone or "",
-                                "offering_name": offering_name
-                            },
-                            dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}",
-                        )
-                        await db.commit()
-                        if notif_cb:
-                            await notif_cb()
-                        log.info(
-                            "Direct assignment notification dispatched",
-                            lead_id=db_lead.id,
-                            officer_id=direct_assignment_officer_id
-                        )
-                    except Exception as e:
-                        log.warning(
-                            "Failed to dispatch direct assignment notification",
-                            lead_id=db_lead.id,
-                            error=str(e)
-                        )
+                if direct_assignment_officer_id and _lead_assigned_cb:
+                    await _lead_assigned_cb()
+                    log.info(
+                        "Direct assignment notification dispatched",
+                        lead_id=db_lead.id,
+                        officer_id=direct_assignment_officer_id
+                    )
             else:
                 # Dispatch Celery task for auto-assignment
                 try:
@@ -1123,7 +1115,7 @@ async def create_lead(
 
 async def update_lead(
     db: AsyncSession, lead_id: int, lead_in: schemas.LeadUpdate, updated_by: models.User
-) -> models.Lead:
+) -> Tuple[models.Lead, Callable]:
     """
     Cập nhật Lead một cách an toàn, ghi log lịch sử.
     """
@@ -1523,6 +1515,7 @@ async def update_lead(
             raise e  # Ném lại lỗi để router xử lý
 
         # === POST-COMMIT ACTIONS (Only if transaction succeeded) ===
+        _reassign_cb = None
 
         # 1. Dispatch Celery task for auto-assignment if reassignment was triggered
         if reassignment_triggered:
@@ -1542,32 +1535,25 @@ async def update_lead(
                 )
                 # Don't fail the request - assignment can be done manually
 
-            # 2. Dispatch notification for lead reassignment
+            # 2. Dispatch notification for lead reassignment in savepoint
             try:
-                from .notification_dispatcher import dispatch
-                from ..core.events import SystemEvents
-                _, notif_cb = await dispatch(
-                    db=db,
-                    event=SystemEvents.LEAD_REASSIGNED,
-                    payload={
-                        "lead_id": lead_id,
-                        "old_officer_id": old_officer_id,  # type: ignore
-                        "new_officer_id": None,  # Will be assigned by auto-assignment
-                        "old_unit_id": old_unit_id,  # type: ignore
-                        "new_unit_id": new_target_unit_id,  # type: ignore
-                        "actor_id": updated_by.id,
-                        "actor_name": updated_by.full_name or updated_by.username,
-                        "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
-                        "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
-                    },
-                )
-                await db.commit()
-                if notif_cb:
-                    await notif_cb()
-                log.info(
-                    "Lead reassignment notification dispatched",
-                    lead_id=lead_id
-                )
+                async with db.begin_nested():
+                    _, _reassign_cb = await dispatch(
+                        db=db,
+                        event=SystemEvents.LEAD_REASSIGNED,
+                        payload={
+                            "lead_id": lead_id,
+                            "old_officer_id": old_officer_id,  # type: ignore
+                            "new_officer_id": None,  # Will be assigned by auto-assignment
+                            "old_unit_id": old_unit_id,  # type: ignore
+                            "new_unit_id": new_target_unit_id,  # type: ignore
+                            "actor_id": updated_by.id,
+                            "actor_name": updated_by.full_name or updated_by.username,
+                            "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
+                            "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
+                        },
+                        dedupe_key=f"lead_reassigned:{lead_id}",
+                    )
             except Exception as e:
                 log.error(
                     "Failed to dispatch lead reassignment notification",
@@ -1577,9 +1563,14 @@ async def update_lead(
                 )
                 # Don't fail the request - notifications are non-critical
 
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            if _reassign_cb:
+                await _reassign_cb()
+
         # Trả về lead đã được tải đầy đủ (bao gồm relations)
-        # Gọi lại get_lead_by_id để đảm bảo dữ liệu mới nhất và relations
-        return await get_lead_by_id(db, lead_id)
+        lead = await get_lead_by_id(db, lead_id)
+        return lead, _post_commit
 
 
 async def add_consultation(
@@ -1873,7 +1864,7 @@ async def add_consultation(
 
 async def assign_lead_manually(
     db: AsyncSession, lead_id: int, officer_id: int, assigner: models.User
-) -> models.Lead:
+) -> Tuple[models.Lead, Callable]:
     """
     Gán lead thủ công cho một officer, cập nhật trạng thái và ghi logs.
 
@@ -1965,11 +1956,9 @@ async def assign_lead_manually(
             )
             raise e
 
-    # === ✅ REFACTOR: Dispatch notification after transaction commit ===
+    # === ✅ Dispatch LEAD_ASSIGNED notification in savepoint ===
+    _assign_cb = None
     try:
-        from ..core.events import SystemEvents
-        from .notification_dispatcher import dispatch
-
         # Load lead relationships for notification payload
         await db.refresh(lead, ["offering", "unit"])
 
@@ -1978,31 +1967,20 @@ async def assign_lead_manually(
             "lead_id": lead.id,
             "officer_id": officer.id,
             "actor_id": assigner.id,
-            "actor_name": assigner.full_name or assigner.username,  # ✅ Added for template
+            "actor_name": assigner.full_name or assigner.username,
             "lead_name": lead.full_name or "Unknown",
             "lead_phone": lead.phone or "",
             "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
         }
 
-        # Dispatch notification (saves to DB via flush, then commit + callback)
-        _, notif_cb = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload=notification_payload,
-            dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
-        )
-        await db.commit()
-        if notif_cb:
-            await notif_cb()
-
-        log.info(
-            "Manual assignment notification dispatched",
-            lead_id=lead.id,
-            officer_id=officer.id,
-            assigner_id=assigner.id
-        )
+        async with db.begin_nested():
+            _, _assign_cb = await dispatch(
+                db=db,
+                event=SystemEvents.LEAD_ASSIGNED,
+                payload=notification_payload,
+                dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
+            )
     except Exception as e:
-        # Log but don't fail - lead assignment already succeeded
         log.error(
             "Failed to dispatch assignment notification (lead still assigned successfully)",
             lead_id=lead.id,
@@ -2011,8 +1989,20 @@ async def assign_lead_manually(
             exc_info=True
         )
 
-    # Trả về lead đã được tải đầy đủ sau khi commit thành công
-    return await get_lead_by_id(db, lead_id)
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        if _assign_cb:
+            await _assign_cb()
+            log.info(
+                "Manual assignment notification dispatched",
+                lead_id=lead.id,
+                officer_id=officer.id,
+                assigner_id=assigner.id
+            )
+
+    # Trả về lead đã được tải đầy đủ
+    result_lead = await get_lead_by_id(db, lead_id)
+    return result_lead, _post_commit
 
 
 async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
@@ -3579,7 +3569,7 @@ async def bulk_assign_leads(
     for lead_id in lead_ids:
         try:
             # Assign lead using existing service function
-            lead = await assign_lead_manually(db, lead_id, officer_id, assigner)
+            lead, _cb = await assign_lead_manually(db, lead_id, officer_id, assigner)
             assigned_lead_ids.append(lead.id)
 
         except (ResourceNotFoundError, PermissionDeniedError, BadRequest) as e:

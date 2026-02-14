@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
 from app.core.deps import CasbinAuth  # Phase 2.2
-from app.services.notification_dispatcher import dispatch
+from app.services.notification_dispatcher import safe_dispatch
 from app.core.events import SystemEvents
 
 log = structlog.get_logger(__name__)
@@ -85,39 +85,31 @@ async def create_system_alert(
     ```
     """
     # ✅ NOTIFICATION 2.0: Dispatch SYSTEM_ALERT
-    try:
-        await dispatch(
-            db=db,
-            event=SystemEvents.SYSTEM_ALERT,
-            payload={
-                "severity": severity,
-                "message": message,
-                "action_url": action_url,
-                "expires_at": expires_at.isoformat() if expires_at else None,
-            },
-            dedupe_key=f"system_alert:{datetime.utcnow().isoformat()}"
-        )
-
-        log.info(
-            "System alert created",
-            severity=severity,
-            admin_id=current_admin.id,
-            message=message[:50]
-        )
-
-        return {
-            "success": True,
-            "message": "System alert dispatched to all users",
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.SYSTEM_ALERT,
+        payload={
             "severity": severity,
-            "created_by": current_admin.username,
-        }
+            "message": message,
+            "action_url": action_url,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+        dedupe_key=f"system_alert:{datetime.utcnow().isoformat()}"
+    )
 
-    except Exception as e:
-        log.error(f"Failed to dispatch SYSTEM_ALERT: {e}")
-        return {
-            "success": False,
-            "message": f"Failed to dispatch alert: {str(e)}",
-        }
+    log.info(
+        "System alert created",
+        severity=severity,
+        admin_id=current_admin.id,
+        message=message[:50]
+    )
+
+    return {
+        "success": True,
+        "message": "System alert dispatched to all users",
+        "severity": severity,
+        "created_by": current_admin.username,
+    }
 
 
 # ============================================================================
@@ -167,37 +159,29 @@ async def create_system_announcement(
     ```
     """
     # ✅ NOTIFICATION 2.0: Dispatch SYSTEM_ANNOUNCEMENT
-    try:
-        await dispatch(
-            db=db,
-            event=SystemEvents.SYSTEM_ANNOUNCEMENT,
-            payload={
-                "title": title,
-                "message": message,
-                "priority": priority,
-                "actor_id": current_admin.id,
-            },
-            dedupe_key=f"system_announcement:{datetime.utcnow().isoformat()}"
-        )
-
-        log.info(
-            "System announcement created",
-            priority=priority,
-            admin_id=current_admin.id,
-            title=title
-        )
-
-        return {
-            "success": True,
-            "message": "System announcement dispatched to all users",
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.SYSTEM_ANNOUNCEMENT,
+        payload={
             "title": title,
+            "message": message,
             "priority": priority,
-            "created_by": current_admin.username,
-        }
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"system_announcement:{datetime.utcnow().isoformat()}"
+    )
 
-    except Exception as e:
-        log.error(f"Failed to dispatch SYSTEM_ANNOUNCEMENT: {e}")
-        return {
-            "success": False,
-            "message": f"Failed to dispatch announcement: {str(e)}",
-        }
+    log.info(
+        "System announcement created",
+        priority=priority,
+        admin_id=current_admin.id,
+        title=title
+    )
+
+    return {
+        "success": True,
+        "message": "System announcement dispatched to all users",
+        "title": title,
+        "priority": priority,
+        "created_by": current_admin.username,
+    }

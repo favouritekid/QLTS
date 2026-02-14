@@ -947,64 +947,48 @@ async def update_existing_user(
 
     # ✅ NOTIFICATION 2.0: Dispatch USER_ROLE_CHANGED if role or unit changed
     if "role" in changes or "unit_id" in changes:
-        try:
-            from app.services.notification_dispatcher import dispatch
-            from app.core.events import SystemEvents
+        from app.services.notification_dispatcher import safe_dispatch
+        from app.core.events import SystemEvents
 
-            old_unit_str = changes.get("unit_id", {}).get("old") if "unit_id" in changes else None
-            old_unit_id = None
-            if old_unit_str and old_unit_str != "None":
-                try:
-                    old_unit_id = int(old_unit_str)
-                except (ValueError, TypeError):
-                    pass
+        old_unit_str = changes.get("unit_id", {}).get("old") if "unit_id" in changes else None
+        old_unit_id = None
+        if old_unit_str and old_unit_str != "None":
+            try:
+                old_unit_id = int(old_unit_str)
+            except (ValueError, TypeError):
+                pass
 
-            await dispatch(
-                db=db,
-                event=SystemEvents.USER_ROLE_CHANGED,
-                payload={
-                    "user_id": updated_user.id,
-                    "old_role": changes.get("role", {}).get("old", updated_user.role),
-                    "new_role": changes.get("role", {}).get("new", updated_user.role),
-                    "old_unit_id": old_unit_id,
-                    "new_unit_id": updated_user.unit_id,
-                    "actor_id": current_admin.id,
-                },
-                dedupe_key=f"user_role_changed:{updated_user.id}:{updated_user.role}:{updated_user.unit_id}"
-            )
-            log.info(
-                "USER_ROLE_CHANGED notification dispatched",
-                target_user_id=updated_user.id,
-                admin_id=current_admin.id,
-            )
-        except Exception as e:
-            log.error(f"Failed to dispatch USER_ROLE_CHANGED notification: {e}")
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.USER_ROLE_CHANGED,
+            payload={
+                "user_id": updated_user.id,
+                "old_role": changes.get("role", {}).get("old", updated_user.role),
+                "new_role": changes.get("role", {}).get("new", updated_user.role),
+                "old_unit_id": old_unit_id,
+                "new_unit_id": updated_user.unit_id,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"user_role_changed:{updated_user.id}:{updated_user.role}:{updated_user.unit_id}"
+        )
 
     # Dispatch USER_DEACTIVATED notification if status changed to inactive
     if "status" in changes and changes["status"]["new"] == "inactive":
-        try:
-            from app.services.notification_dispatcher import dispatch
-            from app.core.events import SystemEvents
-            await dispatch(
-                db=db,
-                event=SystemEvents.USER_DEACTIVATED,
-                payload={
-                    "user_id": updated_user.id,
-                    "username": updated_user.username,
-                    "old_status": changes["status"]["old"],
-                    "reason": "Account deactivated by administrator",
-                    "actor_id": current_admin.id,
-                },
-                dedupe_key=f"user_deactivated:{updated_user.id}",
-                skip_preference_check=True  # Critical notification
-            )
-            log.info(
-                "User deactivation notification dispatched",
-                target_user_id=updated_user.id,
-                admin_id=current_admin.id,
-            )
-        except Exception as e:
-            log.error(f"Failed to dispatch user deactivation notification: {e}")
+        from app.services.notification_dispatcher import safe_dispatch
+        from app.core.events import SystemEvents
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.USER_DEACTIVATED,
+            payload={
+                "user_id": updated_user.id,
+                "username": updated_user.username,
+                "old_status": changes["status"]["old"],
+                "reason": "Account deactivated by administrator",
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"user_deactivated:{updated_user.id}",
+            skip_preference_check=True  # Critical notification
+        )
 
     # Send notification to user if admin updated their info
     if current_admin.id != updated_user.id and changes:

@@ -13,7 +13,9 @@ Dependencies: pipeline_service, lead_service (from PHASE 1)
 
 Complexity: MEDIUM (state machine logic, workflow rules)
 """
-from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
+from app.core.rate_limits import limiter, RateLimits
+from app.core.events import SystemEvents
+from app.services.notification_dispatcher import safe_dispatch
 
 from typing import List, Optional
 
@@ -79,24 +81,18 @@ async def create_new_pipeline_stage(
     await db.commit()
     await callback()
 
-    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
-    try:
-        from app.services.notification_dispatcher import dispatch
-        from app.core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-            payload={
-                "config_type": "pipeline_stage",
-                "operation": "create",
-                "resource_id": stage.id,
-                "resource_name": stage.name,
-                "actor_id": current_admin.id,
-            },
-            dedupe_key=f"pipeline_config:create:stage:{stage.id}"
-        )
-    except Exception as e:
-        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "pipeline_stage",
+            "operation": "create",
+            "resource_id": stage.id,
+            "resource_name": stage.name,
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:create:stage:{stage.id}"
+    )
 
     return stage
 
@@ -133,24 +129,18 @@ async def update_existing_pipeline_stage(
     await db.commit()
     await callback()
 
-    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
-    try:
-        from app.services.notification_dispatcher import dispatch
-        from app.core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-            payload={
-                "config_type": "pipeline_stage",
-                "operation": "update",
-                "resource_id": stage_id,
-                "resource_name": stage.name,
-                "actor_id": current_admin.id,
-            },
-            dedupe_key=f"pipeline_config:update:stage:{stage_id}"
-        )
-    except Exception as e:
-        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "pipeline_stage",
+            "operation": "update",
+            "resource_id": stage_id,
+            "resource_name": stage.name,
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:update:stage:{stage_id}"
+    )
 
     return stage
 
@@ -171,24 +161,18 @@ async def delete_existing_pipeline_stage(
     await db.commit()
     await callback()
 
-    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
-    try:
-        from app.services.notification_dispatcher import dispatch
-        from app.core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-            payload={
-                "config_type": "pipeline_stage",
-                "operation": "delete",
-                "resource_id": stage_id,
-                "resource_name": stage_id,
-                "actor_id": current_admin.id,
-            },
-            dedupe_key=f"pipeline_config:delete:stage:{stage_id}"
-        )
-    except Exception as e:
-        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "pipeline_stage",
+            "operation": "delete",
+            "resource_id": stage_id,
+            "resource_name": stage_id,
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:delete:stage:{stage_id}"
+    )
 
     return None
 
@@ -232,24 +216,18 @@ async def create_new_consultation_status(
     await db.commit()
     await callback()
 
-    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
-    try:
-        from app.services.notification_dispatcher import dispatch
-        from app.core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-            payload={
-                "config_type": "consultation_status",
-                "operation": "create",
-                "resource_id": consultation_status.id,
-                "resource_name": consultation_status.name,
-                "actor_id": current_admin.id,
-            },
-            dedupe_key=f"pipeline_config:create:status:{consultation_status.id}"
-        )
-    except Exception as e:
-        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "consultation_status",
+            "operation": "create",
+            "resource_id": consultation_status.id,
+            "resource_name": consultation_status.name,
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:create:status:{consultation_status.id}"
+    )
 
     return consultation_status
 
@@ -286,24 +264,18 @@ async def update_existing_consultation_status(
     await db.commit()
     await callback()
 
-    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
-    try:
-        from app.services.notification_dispatcher import dispatch
-        from app.core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-            payload={
-                "config_type": "consultation_status",
-                "operation": "update",
-                "resource_id": status_id,
-                "resource_name": consultation_status.name,
-                "actor_id": current_admin.id,
-            },
-            dedupe_key=f"pipeline_config:update:status:{status_id}"
-        )
-    except Exception as e:
-        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "consultation_status",
+            "operation": "update",
+            "resource_id": status_id,
+            "resource_name": consultation_status.name,
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:update:status:{status_id}"
+    )
 
     return consultation_status
 
@@ -324,24 +296,18 @@ async def delete_existing_consultation_status(
     await db.commit()
     await callback()
 
-    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
-    try:
-        from app.services.notification_dispatcher import dispatch
-        from app.core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-            payload={
-                "config_type": "consultation_status",
-                "operation": "delete",
-                "resource_id": status_id,
-                "resource_name": status_id,
-                "actor_id": current_admin.id,
-            },
-            dedupe_key=f"pipeline_config:delete:status:{status_id}"
-        )
-    except Exception as e:
-        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "consultation_status",
+            "operation": "delete",
+            "resource_id": status_id,
+            "resource_name": status_id,
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:delete:status:{status_id}"
+    )
 
     return None
 
@@ -382,6 +348,22 @@ async def create_new_allowed_transition(
     transition, callback = await pipeline_service.create_allowed_transition(db, transition_in, current_user=current_admin)
     await db.commit()
     await callback()
+
+    from_name = transition.from_status.name if transition.from_status else "N/A"
+    to_name = transition.to_status.name if transition.to_status else "N/A"
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "allowed_transition",
+            "operation": "create",
+            "resource_id": str(transition.id),
+            "resource_name": f"{from_name} → {to_name}",
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:create:transition:{transition.id}"
+    )
+
     return transition
 
 
@@ -400,6 +382,20 @@ async def delete_existing_allowed_transition(
     _, callback = await pipeline_service.delete_allowed_transition(db, transition_id, current_user=current_admin)
     await db.commit()
     await callback()
+
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+        payload={
+            "config_type": "allowed_transition",
+            "operation": "delete",
+            "resource_id": str(transition_id),
+            "resource_name": str(transition_id),
+            "actor_id": current_admin.id,
+        },
+        dedupe_key=f"pipeline_config:delete:transition:{transition_id}"
+    )
+
     return None
 
 

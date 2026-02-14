@@ -30,7 +30,7 @@ from app.core import deps  # For OrgUnitAccessDep, get_organizational_unit_for_u
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.core.events import SystemEvents
 from app.services import organization_service
-from app.services.notification_dispatcher import dispatch
+from app.services.notification_dispatcher import safe_dispatch
 from app.utils.exceptions import BadRequest
 
 log = structlog.get_logger(__name__)
@@ -48,19 +48,13 @@ async def _dispatch_org_notification(
     db: AsyncSession,
     event: SystemEvents,
     payload: Dict[str, Any],
+    dedupe_key: str | None = None,
 ) -> None:
     """
     Helper to dispatch organization notifications.
-    Wraps dispatch call with error handling to prevent notification failures
-    from affecting the main CRUD operation.
+    Uses safe_dispatch which handles commit + callback + error handling.
     """
-    try:
-        _, notif_cb = await dispatch(db=db, event=event, payload=payload)
-        await db.commit()
-        if notif_cb:
-            await notif_cb()
-    except Exception as e:
-        log.warning(f"Failed to dispatch {event.value} notification: {e}")
+    await safe_dispatch(db=db, event=event, payload=payload, dedupe_key=dedupe_key)
 
 
 # ============================================================================
@@ -92,7 +86,7 @@ async def create_new_organization_unit(
         "unit_type": unit.type,
         "parent_id": unit.parent_id,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"unit_created:{unit.id}")
     
     return unit
 
@@ -164,7 +158,7 @@ async def update_existing_organization_unit(
         "unit_type": updated_unit.type,
         "parent_id": updated_unit.parent_id,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"unit_updated:{updated_unit.id}")
     
     return updated_unit
 
@@ -212,7 +206,7 @@ async def delete_existing_organization_unit(
         "unit_type": unit.type,
         "parent_id": unit.parent_id,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"unit_deleted:{unit.id}")
     
     return None
 
@@ -245,7 +239,7 @@ async def create_new_program(
         "program_name": program.name,
         "program_code": program.code,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"program_created:{program.id}")
     
     return program
 
@@ -288,7 +282,7 @@ async def update_existing_program(
         "program_name": program.name,
         "program_code": program.code,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"program_updated:{program.id}")
     
     return program
 
@@ -316,7 +310,7 @@ async def delete_existing_program(
         "program_name": program.name,
         "program_code": program.code,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"program_deleted:{program_id}")
     
     return None
 
@@ -354,7 +348,7 @@ async def create_new_offering(
         "offering_name": offering.offering_type,
         "program_id": offering.program_id,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"offering_created:{offering.id}")
     
     return offering
 
@@ -404,7 +398,7 @@ async def update_existing_offering(
         "offering_name": offering.offering_type,
         "program_id": offering.program_id,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"offering_updated:{offering.id}")
 
     return offering
 
@@ -433,7 +427,7 @@ async def delete_existing_offering(
         "offering_name": offering.offering_type,
         "program_id": offering.program_id,
         "actor_id": current_admin.id,
-    })
+    }, dedupe_key=f"offering_deleted:{offering_id}")
     
     return None
 

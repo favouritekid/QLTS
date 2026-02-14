@@ -33,7 +33,7 @@ from ..core.deps import (
     # get_admission_for_owner - DEPRECATED: Replaced by token-based confirmation
 )
 from ..services import admission_service
-from ..services.notification_dispatcher import dispatch
+from ..services.notification_dispatcher import safe_dispatch
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
     ResourceNotFoundError,
@@ -185,25 +185,18 @@ async def create_admission_profile(
         await db.refresh(profile)
 
         # Dispatch notification (non-blocking)
-        try:
-            await dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_CREATED,  # Reuse application event
-                payload={
-                    "application_id": profile.id,  # Use profile.id
-                    "lead_id": profile.lead_id,
-                    "officer_id": current_user.id,
-                    "major_program_name": None,
-                    "actor_id": current_user.id,
-                },
-                dedupe_key=f"admission_profile_created:{profile.id}"
-            )
-        except Exception as e:
-            log.warning(
-                "Failed to dispatch admission profile created notification",
-                profile_id=profile.id,
-                error=str(e)
-            )
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.APPLICATION_CREATED,
+            payload={
+                "application_id": profile.id,
+                "lead_id": profile.lead_id,
+                "officer_id": current_user.id,
+                "major_program_name": None,
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"admission_profile_created:{profile.id}"
+        )
 
         return profile
 
@@ -388,25 +381,18 @@ async def submit_admission_profile(
 
         # If approved, dispatch notification
         if result["status"] == "approved":
-            try:
-                await dispatch(
-                    db=db,
-                    event=SystemEvents.APPLICATION_CREATED,  # Reuse event
-                    payload={
-                        "application_id": profile_id,
-                        "lead_id": None,  # Will be fetched by resolver
-                        "officer_id": current_user.id,
-                        "status": "approved",
-                        "actor_id": current_user.id,
-                    },
-                    dedupe_key=f"admission_profile_approved:{profile_id}"
-                )
-            except Exception as e:
-                log.warning(
-                    "Failed to dispatch admission approved notification",
-                    profile_id=profile_id,
-                    error=str(e)
-                )
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_CREATED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": None,
+                    "officer_id": current_user.id,
+                    "status": "approved",
+                    "actor_id": current_user.id,
+                },
+                dedupe_key=f"admission_profile_approved:{profile_id}"
+            )
 
         return result
 
@@ -733,27 +719,20 @@ async def enroll_student(
         await db.commit()
 
         # Dispatch notification (non-blocking)
-        try:
-            await dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_CREATED,  # Reuse event
-                payload={
-                    "application_id": profile_id,
-                    "student_id": result["student_id"],
-                    "student_code": result["student_code"],
-                    "lead_id": None,
-                    "officer_id": current_user.id,
-                    "status": "enrolled",
-                    "actor_id": current_user.id,
-                },
-                dedupe_key=f"student_enrolled:{result['student_id']}"
-            )
-        except Exception as e:
-            log.warning(
-                "Failed to dispatch student enrolled notification",
-                student_id=result["student_id"],
-                error=str(e)
-            )
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.APPLICATION_CREATED,
+            payload={
+                "application_id": profile_id,
+                "student_id": result["student_id"],
+                "student_code": result["student_code"],
+                "lead_id": None,
+                "officer_id": current_user.id,
+                "status": "enrolled",
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"student_enrolled:{result['student_id']}"
+        )
 
         return result
 

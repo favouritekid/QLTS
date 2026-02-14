@@ -908,3 +908,54 @@ async def dispatch_system_alert(
         payload=payload,
         skip_preference_check=(severity == "error")  # Don't skip critical alerts
     )
+
+
+# ============================================================================
+# SAFE DISPATCH — Router-level helper (commit + callback in one call)
+# ============================================================================
+
+async def safe_dispatch(
+    db: AsyncSession,
+    event: SystemEvents,
+    payload: dict,
+    dedupe_key: Optional[str] = None,
+    skip_preference_check: bool = False,
+) -> List[int]:
+    """
+    Dispatch + commit + callback in one call. Use in router layer only.
+
+    Wraps the full dispatch pattern: tuple unpacking, db.commit() for
+    notification records, and callback execution (socket.io/email delivery).
+    Errors are logged but never raised — notifications are non-critical.
+
+    Args:
+        db: Async database session (transaction should already be committed
+            for main business data before calling this)
+        event: The system event to dispatch
+        payload: Event payload with data for resolution and templates
+        dedupe_key: Optional deduplication key
+        skip_preference_check: Skip user preference filtering
+
+    Returns:
+        List of created notification IDs (empty on failure)
+    """
+    try:
+        notif_ids, notif_cb = await dispatch(
+            db=db,
+            event=event,
+            payload=payload,
+            dedupe_key=dedupe_key,
+            skip_preference_check=skip_preference_check,
+        )
+        await db.commit()
+        if notif_cb:
+            await notif_cb()
+        return notif_ids
+    except Exception as e:
+        log.warning(
+            "Notification dispatch failed (non-critical)",
+            event=event.value,
+            dedupe_key=dedupe_key,
+            error=str(e),
+        )
+        return []

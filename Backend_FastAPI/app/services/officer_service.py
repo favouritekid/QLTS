@@ -230,12 +230,11 @@ async def update_officer_availability(
     await db.flush()
     await db.refresh(user)
 
-    # ✅ Create post-commit callback
-    async def _post_commit():
-        """Execute after router commits the transaction."""
-        # Dispatch notification for officer availability change
-        try:
-            _, notif_cb = await dispatch(
+    # ✅ Dispatch notification in savepoint (records flushed with main transaction)
+    _notif_cb = None
+    try:
+        async with db.begin_nested():
+            _, _notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.OFFICER_AVAILABILITY_CHANGED,
                 payload={
@@ -246,16 +245,19 @@ async def update_officer_availability(
                     "unit_id": user.unit_id,
                     "actor_id": officer_id,
                 },
+                dedupe_key=f"officer_availability:{officer_id}:{availability_status}",
             )
-            await db.commit()
-            if notif_cb:
-                await notif_cb()
-        except Exception as e:
-            log.warning(
-                "Failed to dispatch officer availability notification",
-                officer_id=officer_id,
-                error=str(e)
-            )
+    except Exception as e:
+        log.warning(
+            "Dispatch failed, business data preserved",
+            officer_id=officer_id,
+            error=str(e)
+        )
+
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        if _notif_cb:
+            await _notif_cb()
 
     return user, _post_commit
 

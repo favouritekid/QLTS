@@ -491,38 +491,14 @@ async def update_existing_lead(
     update_data = lead_in.model_dump(exclude_unset=True)
     updated_fields = list(update_data.keys())
     status_changed = "consultation_status_id" in updated_fields or "pipeline_stage_id" in updated_fields
-    unit_changed = "unit_id" in updated_fields and update_data.get("unit_id") != lead.unit_id
 
-    # Store old values before update
-    old_unit_id = lead.unit_id
-    old_officer_id = lead.assigned_officer_id
-
-    result = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
+    result, post_commit = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
     await db.commit()
+    await post_commit()
 
-    # ✅ NOTIFICATION 2.0: Dispatch LEAD_REASSIGNED if unit changed
-    if unit_changed:
-        try:
-            _, notif_cb = await dispatch(
-                db=db,
-                event=SystemEvents.LEAD_REASSIGNED,
-                payload={
-                    "lead_id": result.id,
-                    "old_officer_id": old_officer_id,
-                    "new_officer_id": result.assigned_officer_id,
-                    "old_unit_id": old_unit_id,
-                    "new_unit_id": result.unit_id,
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                    "reason": "Unit transfer by admin",
-                },
-                dedupe_key=f"lead_reassigned:{result.id}:{result.unit_id}",
-            )
-            await db.commit()
-            if notif_cb:
-                await notif_cb()
-        except Exception as e:
-            log.warning("Failed to dispatch LEAD_REASSIGNED notification", error=str(e))
+    # Note: LEAD_REASSIGNED notification is dispatched by lead_service.update_lead()
+    # when an offering change triggers unit reassignment. Direct unit_id changes in
+    # the payload are handled by the service's SPECIAL_HANDLED_FIELDS logic.
 
     # ✅ NOTIFICATION 2.0: Dispatch notification if status changed
     if status_changed:
@@ -710,6 +686,7 @@ async def add_new_consultation(
                 "actor_name": current_user.full_name or current_user.username,
                 "unit_id": lead.unit_id,
             },
+            dedupe_key=f"consultation_created:{result.id}",
         )
         await db.commit()
         if notif_cb:
@@ -735,13 +712,11 @@ async def assign_lead_manually(
     db: AsyncSession = Depends(database.get_db),
 ):
     """(Admin/Manager only) Gán thủ công một Lead (Đã xác thực 2 lớp)."""
-    result = await lead_service.assign_lead_manually(
+    result, post_commit = await lead_service.assign_lead_manually(
         db, lead.id, assign_data.officer_id, current_user
     )
     await db.commit()
-
-    # ❌ REDUNDANT: lead_service.assign_lead_manually already dispatches LEAD_ASSIGNED with richer payload
-    # Removed to prevent duplicate notifications.
+    await post_commit()
 
     return result
 
@@ -896,7 +871,7 @@ async def update_a_consultation(
     await db.commit()
 
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
-    if old_status_id and result.consultation_status_id != old_status_id:
+    if result.consultation_status_id != old_status_id:
         try:
             _, notif_cb = await dispatch(
                 db=db,
