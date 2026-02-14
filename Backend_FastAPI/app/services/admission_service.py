@@ -64,7 +64,9 @@ def _check_admin_or_unit_access(
     - Officer: Only access profiles where lead.unit_id == user.unit_id
 
     Raises:
-        PermissionDeniedError: If user doesn't have access
+        ResourceNotFoundError: If user doesn't have access (returns 404 to prevent
+            resource enumeration attacks - never reveal that a resource exists but
+            is owned by someone else)
     """
     if current_user.role == UserRole.ADMIN:
         return  # Admin has full access
@@ -77,8 +79,8 @@ def _check_admin_or_unit_access(
             profile_id=profile.id,
             profile_unit_id=profile.lead.unit_id,
         )
-        raise PermissionDeniedError(
-            "You don't have permission to access this admission profile"
+        raise ResourceNotFoundError(
+            f"Admission profile {profile.id} not found"
         )
 
 
@@ -932,7 +934,7 @@ async def create_profile(
 
     Raises:
         ResourceNotFoundError: Lead, ProgramOffering, or AdmissionPath not found
-        PermissionDeniedError: User doesn't have access to this lead
+        ResourceNotFoundError: User doesn't have access to this lead (IDOR protection)
         BadRequest: Lead already has profile, or path not active
     """
     # ✅ SPRINT 6: Use Repository for lead lookup
@@ -1458,7 +1460,7 @@ async def get_profile(
 
     Raises:
         ResourceNotFoundError: Profile not found
-        PermissionDeniedError: User doesn't have access
+        ResourceNotFoundError: User doesn't have access (IDOR protection - returns 404)
     """
     # ✅ SPRINT 6: Use Repository for profile retrieval
     from app.repositories import AdmissionRepository
@@ -1520,7 +1522,7 @@ async def update_profile(
 
     Raises:
         ResourceNotFoundError: Profile not found
-        PermissionDeniedError: User doesn't have access
+        ResourceNotFoundError: User doesn't have access (IDOR protection - returns 404)
         BadRequest: Status is not 'draft'
     """
     # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
@@ -1889,7 +1891,7 @@ async def submit_and_evaluate(
 
     Raises:
         ResourceNotFoundError: Profile not found
-        PermissionDeniedError: User doesn't have access
+        ResourceNotFoundError: User doesn't have access (IDOR protection - returns 404)
         BadRequest: Status is not 'draft'
     """
     # ✅ CRITICAL FIX #2: Add pessimistic lock to prevent race conditions
@@ -2651,7 +2653,7 @@ async def enroll_student(
 
     Raises:
         ResourceNotFoundError: Profile not found
-        PermissionDeniedError: User doesn't have access
+        ResourceNotFoundError: User doesn't have access (IDOR protection - returns 404)
         BadRequest: Status is not 'confirmed', or tuition fee not cleared
         ConflictError: Unique constraint violation (student_code, citizen_id)
     """
@@ -3784,7 +3786,7 @@ async def delete_profile(
 
     Raises:
         ResourceNotFoundError: Profile not found
-        PermissionDeniedError: User doesn't have access
+        ResourceNotFoundError: User doesn't have access (IDOR protection - returns 404)
         BadRequest: Status is not 'draft'
     """
     from app.repositories import AdmissionRepository
@@ -4128,10 +4130,10 @@ async def bulk_approve(
                 errors[profile_id] = "Profile not found"
                 continue
 
-            # Check IDOR for non-admin
+            # IDOR check for non-admin (return "not found" to prevent enumeration)
             if approver.role != UserRole.ADMIN and profile.lead.unit_id != approver.unit_id:
                 failed_ids.append(profile_id)
-                errors[profile_id] = "Permission denied"
+                errors[profile_id] = "Profile not found"
                 continue
 
             # Check if profile can be approved (status must be submitted/resubmitted)
@@ -4206,9 +4208,10 @@ async def bulk_reject(
                 errors[profile_id] = "Profile not found"
                 continue
 
+            # IDOR check for non-admin (return "not found" to prevent enumeration)
             if rejector.role != UserRole.ADMIN and profile.lead.unit_id != rejector.unit_id:
                 failed_ids.append(profile_id)
-                errors[profile_id] = "Permission denied"
+                errors[profile_id] = "Profile not found"
                 continue
 
             if profile.status not in ["submitted", "resubmitted"]:
@@ -4286,9 +4289,10 @@ async def bulk_assign(
                 errors[profile_id] = "Profile not found"
                 continue
 
+            # IDOR check for non-admin (return "not found" to prevent enumeration)
             if assigner.role != UserRole.ADMIN and profile.lead.unit_id != assigner.unit_id:
                 failed_ids.append(profile_id)
-                errors[profile_id] = "Permission denied"
+                errors[profile_id] = "Profile not found"
                 continue
 
             # Update lead assignment

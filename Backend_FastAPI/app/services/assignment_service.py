@@ -27,7 +27,7 @@ default_log = logging.getLogger(__name__)
 # Thêm tham số logger=None
 async def automatically_assign_lead(
     lead_id: int, db: AsyncSession, logger: logging.Logger = None
-) -> dict:
+) -> tuple[dict, list]:
     """
     Logic nghiệp vụ chính để tự động phân công Lead.
     Sử dụng logger được truyền vào hoặc logger mặc định.
@@ -35,13 +35,16 @@ async def automatically_assign_lead(
     Xử lý lock contention trên Lead bằng Celery Retry.
 
     Returns:
-        dict: Result with "status" key:
+        tuple[dict, list]: (result_dict, post_commit_callbacks)
+            result_dict has "status" key:
             - "assigned": Lead successfully assigned to officer
             - "failed": No officers available or all at capacity
             - "skipped": Lead already assigned or not found
+            post_commit_callbacks: list of async callables to run after commit
     """
     log = logger or default_log
     log.info(f"[Lead ID: {lead_id}] Auto-assign task started")
+    _post_commit_callbacks = []
 
     try:
         # Sử dụng transaction lồng nhau để kiểm soát rollback tốt hơn
@@ -62,20 +65,20 @@ async def automatically_assign_lead(
                 log.warning(
                     f"[Lead ID: {lead_id}] Lead not found, skipping assignment."
                 )
-                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.LEAD_NOT_FOUND, "lead_id": lead_id}
+                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.LEAD_NOT_FOUND, "lead_id": lead_id}, _post_commit_callbacks
             
             # ✅ FIX: Check if lead is deleted (soft delete)
             elif lead.deleted_at is not None:
                 log.warning(
                     f"[Lead ID: {lead_id}] Lead is soft-deleted, skipping assignment."
                 )
-                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.LEAD_DELETED, "lead_id": lead_id}
+                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.LEAD_DELETED, "lead_id": lead_id}, _post_commit_callbacks
             
             elif lead.assigned_officer_id:
                 log.info(
                     f"[Lead ID: {lead_id}] Lead already assigned to officer {lead.assigned_officer_id}, skipping."
                 )
-                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.ALREADY_ASSIGNED, "lead_id": lead_id, "officer_id": lead.assigned_officer_id}
+                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.ALREADY_ASSIGNED, "lead_id": lead_id, "officer_id": lead.assigned_officer_id}, _post_commit_callbacks
             else:
                 lead_unit_id = lead.unit_id
                 # Get blacklisted officers for this lead
@@ -122,7 +125,7 @@ async def automatically_assign_lead(
 
                     # ✅ REFACTOR: Dispatch notification for assignment failure
                     try:
-                        await dispatch(
+                        _, notif_cb = await dispatch(
                             db=db,
                             event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
                             payload={
@@ -130,18 +133,19 @@ async def automatically_assign_lead(
                                 "unit_id": lead_unit_id,
                                 "reason": "No officers available",
                                 "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0,  # System actor
-                                "actor_name": "System",  # ✅ Added for template
+                                "actor_id": 0,
+                                "actor_name": "System",
                             },
                             dedupe_key=f"lead_assignment_failed:{lead_id}:no_officers",
-                            auto_commit=True  # Critical for Celery context
                         )
+                        if notif_cb:
+                            _post_commit_callbacks.append(notif_cb)
                     except Exception as e:
                         log.error(
                             f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
-                    return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.NO_OFFICERS, "lead_id": lead_id, "unit_id": lead_unit_id}
+                    return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.NO_OFFICERS, "lead_id": lead_id, "unit_id": lead_unit_id}, _post_commit_callbacks
 
                 log.debug(
                     f"[Lead ID: {lead_id}] Found {len(available_officers)} available officers for unit {lead_unit_id}."
@@ -217,7 +221,7 @@ async def automatically_assign_lead(
 
                     # ✅ REFACTOR: Dispatch notification for assignment failure
                     try:
-                        await dispatch(
+                        _, notif_cb = await dispatch(
                             db=db,
                             event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
                             payload={
@@ -225,18 +229,19 @@ async def automatically_assign_lead(
                                 "unit_id": lead_unit_id,
                                 "reason": "All officers at full capacity",
                                 "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0,  # System actor
-                                "actor_name": "System",  # ✅ Added for template
+                                "actor_id": 0,
+                                "actor_name": "System",
                             },
                             dedupe_key=f"lead_assignment_failed:{lead_id}:capacity",
-                            auto_commit=True  # Critical for Celery context
                         )
+                        if notif_cb:
+                            _post_commit_callbacks.append(notif_cb)
                     except Exception as e:
                         log.error(
                             f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
-                    return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.AT_CAPACITY, "lead_id": lead_id, "unit_id": lead_unit_id}
+                    return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.AT_CAPACITY, "lead_id": lead_id, "unit_id": lead_unit_id}, _post_commit_callbacks
 
                 # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===
                 # ✅ REFACTORED: Thuật toán mới chống "Flooding" cho nhân viên mới
@@ -314,16 +319,15 @@ async def automatically_assign_lead(
                 "assignment_method": "automatic",  # ✅ NEW: Match AssignmentLog.method
             }
 
-            # Dispatch notification (saves to DB + commits + sends via Socket.IO/Email)
-            # ✅ FIX: Use auto_commit=True so callback executes (socket emit, cache update)
-            # Without this, Celery workers create notifications but never emit to Socket.IO
-            await dispatch(
+            # Dispatch notification (saves to DB via flush, caller commits)
+            _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_ASSIGNED,
                 payload=notification_payload,
                 dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}",
-                auto_commit=True  # Critical for Celery context
             )
+            if notif_cb:
+                _post_commit_callbacks.append(notif_cb)
 
             log.info(
                 f"[Lead ID: {lead_id}] Automatic assignment notification dispatched to officer {chosen_one.id}."
@@ -335,7 +339,7 @@ async def automatically_assign_lead(
             )
 
         # Return success result
-        return {"status": AssignmentResult.ASSIGNED, "lead_id": lead_id, "officer_id": chosen_one.id}
+        return {"status": AssignmentResult.ASSIGNED, "lead_id": lead_id, "officer_id": chosen_one.id}, _post_commit_callbacks
 
     except OperationalError as e:
         # Bắt lỗi "LockNotAvailableError" (chủ yếu cho việc khóa Lead ban đầu)

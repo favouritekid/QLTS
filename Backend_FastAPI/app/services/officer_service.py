@@ -235,7 +235,7 @@ async def update_officer_availability(
         """Execute after router commits the transaction."""
         # Dispatch notification for officer availability change
         try:
-            await dispatch(
+            _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.OFFICER_AVAILABILITY_CHANGED,
                 payload={
@@ -244,10 +244,12 @@ async def update_officer_availability(
                     "old_status": old_status,
                     "username": user.username,
                     "unit_id": user.unit_id,
-                    "actor_id": officer_id,  # Officer changes their own status
+                    "actor_id": officer_id,
                 },
-                auto_commit=True  # ✅ Auto-commit for service callback
             )
+            await db.commit()
+            if notif_cb:
+                await notif_cb()
         except Exception as e:
             log.warning(
                 "Failed to dispatch officer availability notification",

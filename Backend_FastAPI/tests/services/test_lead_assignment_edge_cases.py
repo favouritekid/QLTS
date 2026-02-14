@@ -256,9 +256,9 @@ class TestCeleryAutoAssignment:
         mock_db_session.execute.side_effect = [mock_lead_result, mock_officers_result]
 
         # Patch notification dispatcher to avoid side effects
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
             # Action
-            result = await assignment_service.automatically_assign_lead(
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -297,9 +297,9 @@ class TestCeleryAutoAssignment:
             mock_workload_result,
         ]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
             # Action
-            result = await assignment_service.automatically_assign_lead(
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -334,8 +334,8 @@ class TestCeleryAutoAssignment:
 
         mock_db_session.execute.side_effect = [mock_lead_result, mock_officers_result]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
-            result = await assignment_service.automatically_assign_lead(
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -367,8 +367,8 @@ class TestCeleryAutoAssignment:
 
         mock_db_session.execute.side_effect = [mock_lead_result, mock_officers_result]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
-            result = await assignment_service.automatically_assign_lead(
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -397,8 +397,8 @@ class TestCeleryAutoAssignment:
 
         mock_db_session.execute.side_effect = [mock_lead_result, mock_officers_result]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
-            result = await assignment_service.automatically_assign_lead(
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -436,8 +436,8 @@ class TestCeleryAutoAssignment:
             mock_workload_result,
         ]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
-            result = await assignment_service.automatically_assign_lead(
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -454,7 +454,7 @@ class TestCeleryAutoAssignment:
 
         mock_db_session.execute.return_value = mock_lead_result
 
-        result = await assignment_service.automatically_assign_lead(
+        result, _callbacks = await assignment_service.automatically_assign_lead(
             lead_assigned.id, mock_db_session
         )
 
@@ -469,7 +469,7 @@ class TestCeleryAutoAssignment:
 
         mock_db_session.execute.return_value = mock_lead_result
 
-        result = await assignment_service.automatically_assign_lead(
+        result, _callbacks = await assignment_service.automatically_assign_lead(
             NON_EXISTENT_ID, mock_db_session
         )
 
@@ -492,7 +492,7 @@ class TestCeleryAutoAssignment:
 
         mock_db_session.execute.return_value = mock_lead_result
 
-        result = await assignment_service.automatically_assign_lead(
+        result, _callbacks = await assignment_service.automatically_assign_lead(
             lead_unassigned.id, mock_db_session
         )
 
@@ -562,7 +562,7 @@ class TestConcurrencyDataIntegrity:
         mock_db_session.execute.return_value = mock_lead_result
 
         # Second task should skip
-        result = await assignment_service.automatically_assign_lead(
+        result, _callbacks = await assignment_service.automatically_assign_lead(
             lead_assigned.id, mock_db_session
         )
 
@@ -744,8 +744,8 @@ class TestLoggingAudit:
             mock_workload_result,
         ]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
-            result = await assignment_service.automatically_assign_lead(
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -777,8 +777,8 @@ class TestLoggingAudit:
             mock_workload_result,
         ]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
-            result = await assignment_service.automatically_assign_lead(
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 
@@ -830,8 +830,8 @@ class TestBlacklistHandling:
             mock_workload_result,
         ]
 
-        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock):
-            result = await assignment_service.automatically_assign_lead(
+        with patch("app.services.assignment_service.dispatch", new_callable=AsyncMock, return_value=([], None)):
+            result, _callbacks = await assignment_service.automatically_assign_lead(
                 lead_unassigned.id, mock_db_session
             )
 

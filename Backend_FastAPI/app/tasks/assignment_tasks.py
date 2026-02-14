@@ -36,11 +36,13 @@ def process_automatic_lead_assignment_task(self, lead_id: int):
         from ..services import assignment_service
 
         async with task_db_session() as session:
-            result = await assignment_service.automatically_assign_lead(
+            result, callbacks = await assignment_service.automatically_assign_lead(
                 lead_id, session, logger=task_log
             )
             await session.commit()
-        
+            for cb in callbacks:
+                await cb()
+
         return result
 
     # Run with standardized error handling and validation

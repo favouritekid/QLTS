@@ -1037,7 +1037,7 @@ async def create_lead(
                 from ..core.events import SystemEvents
                 from .notification_dispatcher import dispatch
 
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.LEAD_CREATED,
                     payload={
@@ -1046,11 +1046,13 @@ async def create_lead(
                         "lead_name": db_lead.full_name or "Unknown",
                         "source": db_lead.source or "Unknown",
                         "actor_id": created_by.id if created_by else 0,
-                        "actor_name": created_by.full_name or created_by.username if created_by else "System",  # ✅ Added for template
+                        "actor_name": created_by.full_name or created_by.username if created_by else "System",
                     },
                     dedupe_key=f"lead_created:{db_lead.id}",
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
                 log.info("Lead creation notification dispatched", lead_id=db_lead.id)
             except Exception as e:
                 log.warning("Failed to dispatch lead_created notification", lead_id=db_lead.id, error=str(e))
@@ -1063,21 +1065,23 @@ async def create_lead(
                         from ..core.events import SystemEvents
                         from .notification_dispatcher import dispatch
 
-                        await dispatch(
+                        _, notif_cb = await dispatch(
                             db=db,
                             event=SystemEvents.LEAD_ASSIGNED,
                             payload={
                                 "lead_id": db_lead.id,
                                 "officer_id": direct_assignment_officer_id,
                                 "actor_id": created_by.id if created_by else 0,
-                                "actor_name": created_by.full_name or created_by.username if created_by else "System",  # ✅ Added for template
+                                "actor_name": created_by.full_name or created_by.username if created_by else "System",
                                 "lead_name": db_lead.full_name or "Unknown",
                                 "lead_phone": db_lead.phone or "",
                                 "offering_name": offering_name
                             },
                             dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}",
-                            auto_commit=True  # ✅ Auto-commit for service callback
                         )
+                        await db.commit()
+                        if notif_cb:
+                            await notif_cb()
                         log.info(
                             "Direct assignment notification dispatched",
                             lead_id=db_lead.id,
@@ -1542,7 +1546,7 @@ async def update_lead(
             try:
                 from .notification_dispatcher import dispatch
                 from ..core.events import SystemEvents
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.LEAD_REASSIGNED,
                     payload={
@@ -1552,12 +1556,14 @@ async def update_lead(
                         "old_unit_id": old_unit_id,  # type: ignore
                         "new_unit_id": new_target_unit_id,  # type: ignore
                         "actor_id": updated_by.id,
-                        "actor_name": updated_by.full_name or updated_by.username,  # ✅ Added for template
+                        "actor_name": updated_by.full_name or updated_by.username,
                         "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
                         "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
                 log.info(
                     "Lead reassignment notification dispatched",
                     lead_id=lead_id
@@ -1978,14 +1984,16 @@ async def assign_lead_manually(
             "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
         }
 
-        # Dispatch notification (saves to DB + sends via Socket.IO/Email)
-        await dispatch(
+        # Dispatch notification (saves to DB via flush, then commit + callback)
+        _, notif_cb = await dispatch(
             db=db,
             event=SystemEvents.LEAD_ASSIGNED,
             payload=notification_payload,
             dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
-            auto_commit=True  # ✅ Auto-commit for service callback
         )
+        await db.commit()
+        if notif_cb:
+            await notif_cb()
 
         log.info(
             "Manual assignment notification dispatched",
@@ -2272,29 +2280,8 @@ async def delete_consultation(
         new_lead_status=_new_status_id,
     )
 
-    # Dispatch notification for consultation deleted
-    try:
-        from .notification_dispatcher import dispatch
-        from ..core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.CONSULTATION_DELETED,
-            payload={
-                "consultation_id": _consultation_id,
-                "lead_id": _lead_id,
-                "officer_id": _officer_id,
-                "actor_id": current_user.id,
-            },
-            auto_commit=True  # ✅ Auto-commit for service callback
-        )
-    except Exception as e:
-        log.error(
-            "Failed to dispatch consultation deleted notification",
-            lead_id=_lead_id,
-            consultation_id=_consultation_id,
-            error=str(e),
-            exc_info=True
-        )
+    # Note: Consultation deleted notification is dispatched by the router after commit.
+    # The service only flushes; the router handles commit and notification dispatch.
 
 
 async def restore_consultation(
@@ -2757,31 +2744,8 @@ async def update_consultation(
         status_changed=_status_changed,
     )
 
-    # Dispatch notification for consultation updated
-    try:
-        from .notification_dispatcher import dispatch
-        from ..core.events import SystemEvents
-        await dispatch(
-            db=db,
-            event=SystemEvents.CONSULTATION_UPDATED,
-            payload={
-                "consultation_id": _consultation_id,
-                "lead_id": _lead_id,
-                "officer_id": _officer_id,
-                "old_status_id": None,  # Could be tracked if needed
-                "new_status_id": _consultation_status_id,
-                "actor_id": current_user.id,
-            },
-            auto_commit=True  # ✅ Auto-commit for service callback
-        )
-    except Exception as e:
-        log.error(
-            "Failed to dispatch consultation updated notification",
-            lead_id=_lead_id,
-            consultation_id=_consultation_id,
-            error=str(e),
-            exc_info=True
-        )
+    # Note: Consultation updated notification is dispatched by the router after commit.
+    # The service only flushes; the router handles commit and notification dispatch.
 
     return consultation
 

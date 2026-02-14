@@ -206,6 +206,7 @@ def check_consultation_reminders_task(self):
         from ..services import notification_dispatcher
 
         result = {"checked": 0, "sent": 0, "failed": 0}
+        post_commit_callbacks = []
 
         async with task_db_session() as session:
             app_tz = pytz.timezone(settings.TIMEZONE)
@@ -217,8 +218,8 @@ def check_consultation_reminders_task(self):
                 .join(Lead, Consultation.lead_id == Lead.id)
                 .where(
                     and_(
-                        Lead.deleted_at.is_(None),  # Exclude deleted leads
-                        Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+                        Lead.deleted_at.is_(None),
+                        Consultation.deleted_at.is_(None),
                         Consultation.scheduled_at.isnot(None),
                         Consultation.scheduled_at > now,
                         Consultation.scheduled_at <= reminder_window,
@@ -236,11 +237,11 @@ def check_consultation_reminders_task(self):
                     scheduled = consultation.scheduled_at
                     if scheduled.tzinfo is None:
                         scheduled = app_tz.localize(scheduled)
-                    
+
                     time_diff = scheduled - now
                     minutes_until = max(0, int(time_diff.total_seconds() / 60))
 
-                    await notification_dispatcher.dispatch(
+                    _, notif_cb = await notification_dispatcher.dispatch(
                         db=session,
                         event=SystemEvents.CONSULTATION_REMINDER,
                         payload={
@@ -252,8 +253,9 @@ def check_consultation_reminders_task(self):
                             "scheduled_at": consultation.scheduled_at.isoformat(),
                             "minutes_until": minutes_until,
                         },
-                        auto_commit=True,
                     )
+                    if notif_cb:
+                        post_commit_callbacks.append(notif_cb)
 
                     consultation.reminder_sent = True
                     result["sent"] += 1
@@ -268,6 +270,8 @@ def check_consultation_reminders_task(self):
                     result["failed"] += 1
 
             await session.commit()
+            for cb in post_commit_callbacks:
+                await cb()
 
         return result
 

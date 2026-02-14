@@ -98,7 +98,7 @@ async def create_application(
 
         # === ✅ REFACTOR: Dispatch notification instead of direct socket emit ===
         try:
-            await dispatch(
+            _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.APPLICATION_CREATED,
                 payload={
@@ -109,8 +109,10 @@ async def create_application(
                     "actor_id": current_user.id
                 },
                 dedupe_key=f"application_created:{new_application.id}",
-                auto_commit=True  # ✅ Auto-commit for service callback
             )
+            await db.commit()
+            if notif_cb:
+                await notif_cb()
             log.info("Application creation notification dispatched", application_id=new_application.id)
         except Exception as e:
             log.error(
@@ -234,7 +236,7 @@ async def update_application(
             # Dispatch status changed notification
             if status_changed and old_status != application.status:
                 try:
-                    await dispatch(
+                    _, notif_cb = await dispatch(
                         db=db,
                         event=SystemEvents.APPLICATION_STATUS_CHANGED,
                         payload={
@@ -246,8 +248,10 @@ async def update_application(
                             "actor_id": current_user.id
                         },
                         dedupe_key=f"application_status_changed:{application.id}:{application.status}",
-                        auto_commit=True  # ✅ Auto-commit for service callback
                     )
+                    await db.commit()
+                    if notif_cb:
+                        await notif_cb()
                     log.info("Application status change notification dispatched", application_id=application.id)
                 except Exception as e:
                     log.error(
@@ -259,7 +263,7 @@ async def update_application(
             # Dispatch documents updated notification
             if documents_changed and old_documents != application.documents:
                 try:
-                    await dispatch(
+                    _, notif_cb = await dispatch(
                         db=db,
                         event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
                         payload={
@@ -270,8 +274,10 @@ async def update_application(
                             "actor_id": current_user.id
                         },
                         dedupe_key=f"application_documents_updated:{application.id}:{datetime.now(timezone.utc).isoformat()}",
-                        auto_commit=True  # ✅ Auto-commit for service callback
                     )
+                    await db.commit()
+                    if notif_cb:
+                        await notif_cb()
                     log.info("Application documents update notification dispatched", application_id=application.id)
                 except Exception as e:
                     log.error(

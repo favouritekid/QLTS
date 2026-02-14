@@ -14,7 +14,7 @@ Called after:
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -184,20 +184,21 @@ async def update_lead_cache(
 async def batch_update_lead_caches(
     db: AsyncSession,
     lead_ids: list[int]
-) -> int:
+) -> tuple[int, Callable]:
     """
     Batch update cached fields for multiple leads.
-    
+
     Used by:
     - Nightly cron job (recalculate all urgency scores)
     - Backfill script
-    
+
     Args:
         db: SQLAlchemy session
         lead_ids: List of Lead IDs to update
-        
+
     Returns:
-        Number of leads updated
+        Tuple of (number_of_leads_updated, post_commit_callback)
+        Router/caller is responsible for calling db.commit() then callback().
     """
     updated = 0
     for lead_id in lead_ids:
@@ -206,6 +207,13 @@ async def batch_update_lead_caches(
             updated += 1
         except Exception as e:
             log.error("Failed to update lead cache", lead_id=lead_id, error=str(e))
-    
-    await db.commit()
-    return updated
+
+    # ✅ TRANSACTION FIX: Flush only, let caller commit
+    await db.flush()
+
+    final_count = updated
+    async def _post_commit():
+        """Execute after caller commits the transaction."""
+        log.info("Batch lead cache update committed", updated_count=final_count, total_requested=len(lead_ids))
+
+    return updated, _post_commit

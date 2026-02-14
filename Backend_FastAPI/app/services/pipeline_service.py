@@ -284,7 +284,7 @@ async def create_pipeline_stage(
 
             # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -294,8 +294,10 @@ async def create_pipeline_stage(
                         "resource_name": db_stage.name,
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return db_stage, _post_commit
 
@@ -366,7 +368,7 @@ async def update_pipeline_stage(
 
             # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -376,8 +378,10 @@ async def update_pipeline_stage(
                         "resource_name": db_stage.name,
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return db_stage, _post_commit
 
@@ -442,7 +446,7 @@ async def delete_pipeline_stage(
 
             # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -452,8 +456,10 @@ async def delete_pipeline_stage(
                         "resource_name": stage_data["name"],
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return None, _post_commit
 
@@ -575,7 +581,7 @@ async def create_consultation_status(
 
             # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -585,8 +591,10 @@ async def create_consultation_status(
                         "resource_name": db_status.name,
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return db_status, _post_commit
 
@@ -701,7 +709,7 @@ async def update_consultation_status(
 
             # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -711,8 +719,10 @@ async def update_consultation_status(
                         "resource_name": db_status.name,
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return db_status, _post_commit
 
@@ -785,7 +795,7 @@ async def delete_consultation_status(
 
             # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -795,8 +805,10 @@ async def delete_consultation_status(
                         "resource_name": status_data["name"],
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return None, _post_commit
 
@@ -891,7 +903,7 @@ async def create_allowed_transition(
 
             # === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -901,8 +913,10 @@ async def create_allowed_transition(
                         "resource_name": f"{from_name} → {to_name}",
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return db_transition, _post_commit
 
@@ -959,7 +973,7 @@ async def delete_allowed_transition(
 
             # === NOTIFICATION: Dispatch pipeline config updated event ===
             if current_user:
-                await dispatch(
+                _, notif_cb = await dispatch(
                     db=db,
                     event=SystemEvents.PIPELINE_CONFIG_UPDATED,
                     payload={
@@ -969,8 +983,10 @@ async def delete_allowed_transition(
                         "resource_name": f"{transition_data['from_status_name']} → {transition_data['to_status_name']}",
                         "actor_id": current_user.id,
                     },
-                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
+                await db.commit()
+                if notif_cb:
+                    await notif_cb()
 
         return None, _post_commit
 

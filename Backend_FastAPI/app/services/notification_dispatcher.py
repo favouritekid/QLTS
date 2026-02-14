@@ -169,7 +169,6 @@ async def dispatch(
     payload: dict,
     dedupe_key: Optional[str] = None,
     skip_preference_check: bool = False,
-    auto_commit: bool = False,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification event.
@@ -185,13 +184,10 @@ async def dispatch(
                    If provided, prevents duplicate notifications for same key+user
         skip_preference_check: If True, skip user preference filtering
                               Use for critical system notifications
-        auto_commit: If True, commits transaction and executes callback immediately
-                    (for use in service callbacks where router already committed)
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
-        - If auto_commit=False: Returns tuple with callback to execute after commit
-        - If auto_commit=True: Commits and executes callback, returns (ids, None)
+        Caller is responsible for calling db.commit() then callback().
 
     Flow:
         1. Lookup event config from registry
@@ -199,11 +195,11 @@ async def dispatch(
         3. Filter recipients by preferences (unless skipped)
         4. Apply deduplication logic
         5. Bulk insert notifications
-        6. Commit transaction
-        7. Dispatch Celery task for async delivery
+        6. Flush (caller commits)
+        7. Return post-commit callback for channel delivery
 
     Example:
-        notification_ids = await dispatch(
+        notification_ids, callback = await dispatch(
             db=db,
             event=SystemEvents.LEAD_ASSIGNED,
             payload={
@@ -214,6 +210,9 @@ async def dispatch(
             },
             dedupe_key="lead_assigned:123:456"
         )
+        await db.commit()
+        if callback:
+            await callback()
     """
     log.info(
         "Dispatching notification event",
@@ -243,12 +242,7 @@ async def dispatch(
         # Domain events are for broadcasting data changes to ALL clients
         async def _domain_only_callback():
             await _emit_domain_event(event, payload)
-        
-        # auto_commit mode for service callbacks
-        if auto_commit:
-            await _domain_only_callback()
-            return [], None
-        
+
         return [], _domain_only_callback
 
     log.info(
@@ -270,9 +264,6 @@ async def dispatch(
             )
             async def _domain_only_callback():
                 await _emit_domain_event(event, payload)
-            if auto_commit:
-                await _domain_only_callback()
-                return [], None
             return [], _domain_only_callback
 
     # Step 2: Resolve recipients
@@ -287,18 +278,12 @@ async def dispatch(
         )
         async def _domain_only_callback():
             await _emit_domain_event(event, payload)
-        if auto_commit:
-            await _domain_only_callback()
-            return [], None
         return [], _domain_only_callback
 
     if not user_ids:
         log.info("No recipients resolved for event (still emitting domain event)", event_type=event.value)
         async def _domain_only_callback():
             await _emit_domain_event(event, payload)
-        if auto_commit:
-            await _domain_only_callback()
-            return [], None
         return [], _domain_only_callback
 
     log.info(
@@ -325,9 +310,6 @@ async def dispatch(
             )
             async def _domain_only_callback():
                 await _emit_domain_event(event, payload)
-            if auto_commit:
-                await _domain_only_callback()
-                return [], None
             return [], _domain_only_callback
 
         log.info(
@@ -349,9 +331,6 @@ async def dispatch(
             )
             async def _domain_only_callback():
                 await _emit_domain_event(event, payload)
-            if auto_commit:
-                await _domain_only_callback()
-                return [], None
             return [], _domain_only_callback
 
         log.info(
@@ -497,12 +476,6 @@ async def dispatch(
                 channels=config.channel_values,
                 fallback="Notifications are in DB but delivery failed"
             )
-
-    # ✅ AUTO_COMMIT MODE: For service callbacks that need dispatch() to self-commit
-    if auto_commit:
-        await db.commit()
-        await _post_commit()
-        return notification_ids, None
 
     return notification_ids, _post_commit
 
@@ -847,7 +820,7 @@ async def dispatch_to_user(
     event: SystemEvents,
     payload: dict,
     dedupe_key: Optional[str] = None
-) -> List[int]:
+) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification to a specific user.
 
@@ -862,7 +835,8 @@ async def dispatch_to_user(
         dedupe_key: Optional deduplication key
 
     Returns:
-        List of created notification IDs (typically [id] or [])
+        Tuple of (notification_ids, post_commit_callback)
+        Caller is responsible for calling db.commit() then callback().
     """
     payload["user_id"] = user_id
     return await dispatch(db, event, payload, dedupe_key)
@@ -874,7 +848,7 @@ async def dispatch_to_users(
     event: SystemEvents,
     payload: dict,
     dedupe_key: Optional[str] = None
-) -> List[int]:
+) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification to multiple specific users.
 
@@ -889,7 +863,8 @@ async def dispatch_to_users(
         dedupe_key: Optional deduplication key
 
     Returns:
-        List of created notification IDs
+        Tuple of (notification_ids, post_commit_callback)
+        Caller is responsible for calling db.commit() then callback().
     """
     payload["user_ids"] = user_ids
     return await dispatch(db, event, payload, dedupe_key)
@@ -901,7 +876,7 @@ async def dispatch_system_alert(
     message: str,
     action_url: Optional[str] = None,
     user_ids: Optional[List[int]] = None
-) -> List[int]:
+) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a system alert to all users or specific users.
 
@@ -915,7 +890,8 @@ async def dispatch_system_alert(
         user_ids: Optional list of specific users (default: all users)
 
     Returns:
-        List of created notification IDs
+        Tuple of (notification_ids, post_commit_callback)
+        Caller is responsible for calling db.commit() then callback().
     """
     payload = {
         "severity": severity,

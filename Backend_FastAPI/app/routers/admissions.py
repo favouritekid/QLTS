@@ -168,8 +168,7 @@ async def create_admission_profile(
     - Created AdmissionProfile with status='draft'
 
     **Errors:**
-    - 404: Lead or ProgramOffering not found
-    - 403: User doesn't have access to this lead
+    - 404: Lead or ProgramOffering not found (or IDOR protection)
     - 400: Lead already has profile, or no admission_rules configured
     """
     try:
@@ -213,10 +212,11 @@ async def create_admission_profile(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    except PermissionDeniedError as e:
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
     except BadRequest as e:
         raise HTTPException(
@@ -247,8 +247,7 @@ async def get_admission_profile(
     - AdmissionProfile with relationships (lead, student)
 
     **Errors:**
-    - 404: Profile not found
-    - 403: User doesn't have access to this profile
+    - 404: Profile not found (or IDOR protection)
     """
     try:
         profile = await admission_service.get_profile(
@@ -264,10 +263,11 @@ async def get_admission_profile(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    except PermissionDeniedError as e:
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
 
 
@@ -302,8 +302,7 @@ async def update_admission_profile(
     - Updated AdmissionProfile
 
     **Errors:**
-    - 404: Profile not found
-    - 403: User doesn't have access to this profile
+    - 404: Profile not found (or IDOR protection)
     - 400: Profile is not in draft status
     """
     try:
@@ -328,10 +327,11 @@ async def update_admission_profile(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    except PermissionDeniedError as e:
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
     except BadRequest as e:
         raise HTTPException(
@@ -373,8 +373,7 @@ async def submit_admission_profile(
     - Snapshot: Validates against applied_rules (never queries ProgramOffering)
 
     **Errors:**
-    - 404: Profile not found
-    - 403: User doesn't have access
+    - 404: Profile not found (or IDOR protection)
     - 400: Profile is not in draft status
     """
     try:
@@ -416,10 +415,11 @@ async def submit_admission_profile(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    except PermissionDeniedError as e:
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
     except BadRequest as e:
         raise HTTPException(
@@ -468,8 +468,9 @@ async def upload_document(
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except PermissionDeniedError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -515,8 +516,9 @@ async def mark_document_paper_submitted(
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except PermissionDeniedError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -565,8 +567,9 @@ async def verify_document_format_endpoint(
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except PermissionDeniedError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -612,8 +615,9 @@ async def reject_document_endpoint(
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except PermissionDeniedError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -665,8 +669,9 @@ async def reset_document_endpoint(
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except PermissionDeniedError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -712,8 +717,7 @@ async def enroll_student(
     - { student_id, student_code, enrollment_date }
 
     **Errors:**
-    - 404: Profile not found
-    - 403: User doesn't have access
+    - 404: Profile not found (or IDOR protection)
     - 400: Profile is not confirmed, or tuition fee not cleared
     - 409: Unique constraint violation (student_code or citizen_id)
     - 429: Rate limit exceeded
@@ -758,10 +762,11 @@ async def enroll_student(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    except PermissionDeniedError as e:
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
     except BadRequest as e:
         raise HTTPException(
@@ -795,8 +800,7 @@ async def delete_admission_profile(
     - State Locking: Only draft profiles can be deleted
 
     **Errors:**
-    - 404: Profile not found
-    - 403: User doesn't have access to this profile
+    - 404: Profile not found (or IDOR protection)
     - 400: Profile is not in draft status
     """
     try:
@@ -822,10 +826,11 @@ async def delete_admission_profile(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    except PermissionDeniedError as e:
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
     except BadRequest as e:
         raise HTTPException(
@@ -1341,17 +1346,19 @@ async def finalize_enrollment(
     summary="Get confirmation token info",
     description="""
     Get token info to display confirmation form.
-    
+
     **PUBLIC ENDPOINT** - No authentication required.
     Token itself serves as the authentication.
-    
+
     **Returns:**
     - Lead name (for "Xin chào, [Tên]...")
     - Token validity status (valid, expired, locked, already_used)
     - Attempts remaining
     """,
 )
+@limiter.limit(RateLimits.PUBLIC_READ)  # 100/hour - prevent token enumeration
 async def get_confirm_token_info(
+    request: Request,
     token: str,
     db: AsyncSession = Depends(database.get_db),
 ):

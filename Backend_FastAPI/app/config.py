@@ -421,25 +421,32 @@ class Settings(BaseSettings):
         self._generate_dev_secrets()
 
     def _generate_dev_secrets(self):
-        """Auto-generate random secrets in non-production to avoid using insecure defaults."""
-        import secrets as _secrets
-
+        """Auto-generate random secrets in test mode; warn in dev if using insecure defaults."""
         if self.APP_ENV == "production":
             return
 
+        # In test mode: auto-generate ephemeral secrets (OK for CI/test isolation)
+        if self.APP_ENV == "test":
+            import secrets as _secrets
+            if self.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
+                self.DEVICE_FINGERPRINT_SALT = _secrets.token_urlsafe(32)
+            if not self.MFA_ENCRYPTION_KEY:
+                from cryptography.fernet import Fernet
+                self.MFA_ENCRYPTION_KEY = Fernet.generate_key().decode()
+            return
+
+        # In development: require persistent values in .env for stable behavior
         if self.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
-            self.DEVICE_FINGERPRINT_SALT = _secrets.token_urlsafe(32)
             print(
-                "WARNING [config.py]: ⚠️ DEVICE_FINGERPRINT_SALT using auto-generated random value. "
-                "Set a permanent value in .env for consistent device fingerprinting across restarts."
+                "WARNING [config.py]: ⚠️ DEVICE_FINGERPRINT_SALT not set in .env. "
+                "Device fingerprinting will be inconsistent. "
+                "Add DEVICE_FINGERPRINT_SALT to your .env file."
             )
 
         if not self.MFA_ENCRYPTION_KEY:
-            from cryptography.fernet import Fernet
-            self.MFA_ENCRYPTION_KEY = Fernet.generate_key().decode()
             print(
-                "WARNING [config.py]: ⚠️ MFA_ENCRYPTION_KEY auto-generated for development. "
-                "Set a permanent value in .env to persist MFA secrets across restarts."
+                "WARNING [config.py]: ⚠️ MFA_ENCRYPTION_KEY not set in .env. "
+                "MFA will not work. Add MFA_ENCRYPTION_KEY to your .env file."
             )
 
 

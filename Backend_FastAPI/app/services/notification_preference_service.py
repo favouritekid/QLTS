@@ -18,32 +18,31 @@ log = structlog.get_logger(__name__)
 
 
 async def get_user_preference(
-    db: AsyncSession, user_id: int, auto_commit: bool = False
+    db: AsyncSession, user_id: int
 ) -> Tuple[models.NotificationPreference, Optional[Callable]]:
     """
     Get notification preference for a user.
     Creates default preference if not exists.
+
+    Returns:
+        Tuple of (preference, post_commit_callback)
+        Router is responsible for calling db.commit() then callback().
     """
     repo = NotificationPreferenceRepository(db)
-    
+
     # Check if preference exists
     preference = await repo.get_by_user_id(user_id)
-    
+
     if not preference:
         log.info("Creating default notification preference", user_id=user_id)
         preference = await repo.get_or_create(user_id)
 
-        if auto_commit:
-            await db.commit()
-            await db.refresh(preference)
-            return preference, None
-        else:
-            # ✅ TRANSACTION FIX: Flush and return callback (already flushed in repo.get_or_create)
-            async def _post_commit():
-                """Execute after router commits the transaction."""
-                log.info("Default notification preference created", user_id=user_id)
+        # ✅ TRANSACTION FIX: Flush only, let router commit
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("Default notification preference created", user_id=user_id)
 
-            return preference, _post_commit
+        return preference, _post_commit
 
     return preference, None
 

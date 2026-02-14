@@ -694,7 +694,7 @@ class TestAssignLead:
     ):
         """Test assign_lead_manually assigns lead to officer."""
         # Act
-        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock):
+        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
             lead = await lead_service.assign_lead_manually(
                 db, 
                 unassigned_lead.id, 
@@ -818,7 +818,7 @@ class TestAssignLead:
         original_officer_id = seeded_lead.assigned_officer_id
         
         # Act - reassign to second officer
-        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock):
+        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
             lead = await lead_service.assign_lead_manually(
                 db, 
                 seeded_lead.id, 
@@ -1406,7 +1406,7 @@ class TestBulkAssign:
         lead_ids = [lead.id for lead in multiple_leads[:3]]
         
         # Act
-        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock):
+        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
             result = await lead_service.bulk_assign_leads(
                 db, 
                 lead_ids, 
@@ -1466,7 +1466,7 @@ class TestBulkAssign:
         lead_ids = [multiple_leads[0].id, 999999, multiple_leads[1].id]
         
         # Act
-        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock):
+        with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
             result = await lead_service.bulk_assign_leads(
                 db, lead_ids, officer_user.id, assigner=admin_user
             )

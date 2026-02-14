@@ -55,7 +55,10 @@ async def _dispatch_org_notification(
     from affecting the main CRUD operation.
     """
     try:
-        await dispatch(db=db, event=event, payload=payload, auto_commit=True)
+        _, notif_cb = await dispatch(db=db, event=event, payload=payload)
+        await db.commit()
+        if notif_cb:
+            await notif_cb()
     except Exception as e:
         log.warning(f"Failed to dispatch {event.value} notification: {e}")
 

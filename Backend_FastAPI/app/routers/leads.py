@@ -503,7 +503,7 @@ async def update_existing_lead(
     # ✅ NOTIFICATION 2.0: Dispatch LEAD_REASSIGNED if unit changed
     if unit_changed:
         try:
-            await dispatch(
+            _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_REASSIGNED,
                 payload={
@@ -513,19 +513,21 @@ async def update_existing_lead(
                     "old_unit_id": old_unit_id,
                     "new_unit_id": result.unit_id,
                     "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
+                    "actor_name": current_user.full_name or current_user.username,
                     "reason": "Unit transfer by admin",
                 },
                 dedupe_key=f"lead_reassigned:{result.id}:{result.unit_id}",
-                auto_commit=True  # Already committed above
             )
+            await db.commit()
+            if notif_cb:
+                await notif_cb()
         except Exception as e:
             log.warning("Failed to dispatch LEAD_REASSIGNED notification", error=str(e))
 
     # ✅ NOTIFICATION 2.0: Dispatch notification if status changed
     if status_changed:
         try:
-            await dispatch(
+            _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_STATUS_CHANGED,
                 payload={
@@ -538,12 +540,14 @@ async def update_existing_lead(
                     "old_stage": lead.pipeline_stage_id,
                     "new_stage": result.pipeline_stage_id,
                     "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
+                    "actor_name": current_user.full_name or current_user.username,
                     "updated_fields": updated_fields,
                 },
                 dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
-                auto_commit=True  # Already committed above
             )
+            await db.commit()
+            if notif_cb:
+                await notif_cb()
         except Exception as e:
             log.warning(
                 "Failed to dispatch lead status changed notification",
@@ -553,7 +557,7 @@ async def update_existing_lead(
 
     # ✅ REAL-TIME SYNC: Always dispatch LEAD_UPDATED for UI refresh
     try:
-        await dispatch(
+        _, notif_cb = await dispatch(
             db=db,
             event=SystemEvents.LEAD_UPDATED,
             payload={
@@ -561,15 +565,17 @@ async def update_existing_lead(
                 "updated_fields": updated_fields,
                 "status_changed": status_changed,
                 "actor_id": current_user.id,
-                "updated_by": current_user.full_name or current_user.username,  # Frontend expects updated_by
-                "actor_name": current_user.full_name or current_user.username,  # ✅ FIX: Missing for template
-                "updated_summary": ", ".join(updated_fields[:3]) + ("..." if len(updated_fields) > 3 else ""), # ✅ FIX: For template
+                "updated_by": current_user.full_name or current_user.username,
+                "actor_name": current_user.full_name or current_user.username,
+                "updated_summary": ", ".join(updated_fields[:3]) + ("..." if len(updated_fields) > 3 else ""),
                 "updated_at": datetime.now().isoformat(),
                 "message": f"Lead updated by {current_user.full_name or current_user.username}",
             },
             dedupe_key=f"lead_updated:{result.id}:{int(datetime.now().timestamp())}",
-            auto_commit=True  # Already committed above
         )
+        await db.commit()
+        if notif_cb:
+            await notif_cb()
     except Exception as e:
         log.warning("Failed to dispatch LEAD_UPDATED notification", lead_id=result.id, error=str(e))
 
@@ -609,20 +615,22 @@ async def delete_lead(
 
     # Dispatch notification for lead deletion
     try:
-        await dispatch(
+        _, notif_cb = await dispatch(
             db=db,
             event=SystemEvents.LEAD_DELETED,
             payload={
                 "lead_id": deleted_lead.id,
                 "lead_name": deleted_lead.full_name or "Unknown",
                 "unit_id": deleted_lead.unit_id,
-                "officer_id": deleted_lead.assigned_officer_id,  # May be None
+                "officer_id": deleted_lead.assigned_officer_id,
                 "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
+                "actor_name": current_user.full_name or current_user.username,
             },
             dedupe_key=f"lead_deleted:{deleted_lead.id}",
-            auto_commit=True  # Already committed above, emit domain event immediately
         )
+        await db.commit()
+        if notif_cb:
+            await notif_cb()
     except Exception as e:
         log.warning("Failed to dispatch lead deletion notification", error=str(e))
 
@@ -690,9 +698,7 @@ async def add_new_consultation(
 
     # Dispatch notification for consultation created
     try:
-        from ..services.notification_dispatcher import dispatch
-        from ..core.events import SystemEvents
-        await dispatch(
+        _, notif_cb = await dispatch(
             db=db,
             event=SystemEvents.CONSULTATION_CREATED,
             payload={
@@ -701,11 +707,13 @@ async def add_new_consultation(
                 "officer_id": lead.assigned_officer_id,
                 "status_id": result.consultation_status_id or "",
                 "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
-                "unit_id": lead.unit_id,  # For unit managers notification
+                "actor_name": current_user.full_name or current_user.username,
+                "unit_id": lead.unit_id,
             },
-            auto_commit=True  # Already committed, emit domain event immediately
         )
+        await db.commit()
+        if notif_cb:
+            await notif_cb()
     except Exception as e:
         log.warning(
             "Failed to dispatch consultation created notification",
@@ -890,7 +898,7 @@ async def update_a_consultation(
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
     if old_status_id and result.consultation_status_id != old_status_id:
         try:
-            await dispatch(
+            _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.CONSULTATION_UPDATED,
                 payload={
@@ -900,11 +908,13 @@ async def update_a_consultation(
                     "old_status_id": old_status_id,
                     "new_status_id": result.consultation_status_id,
                     "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
+                    "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
-                auto_commit=True  # Already committed above, emit domain event immediately
             )
+            await db.commit()
+            if notif_cb:
+                await notif_cb()
         except Exception as e:
             log.warning("Failed to dispatch CONSULTATION_UPDATED notification", error=str(e))
 
@@ -939,7 +949,7 @@ async def delete_a_consultation(
 
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_DELETED
     try:
-        await dispatch(
+        _, notif_cb = await dispatch(
             db=db,
             event=SystemEvents.CONSULTATION_DELETED,
             payload={
@@ -947,11 +957,13 @@ async def delete_a_consultation(
                 "lead_id": lead.id,
                 "officer_id": lead.assigned_officer_id,
                 "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
+                "actor_name": current_user.full_name or current_user.username,
             },
             dedupe_key=f"consultation_deleted:{consultation_id}",
-            auto_commit=True  # Already committed above, emit domain event immediately
         )
+        await db.commit()
+        if notif_cb:
+            await notif_cb()
     except Exception as e:
         log.warning("Failed to dispatch CONSULTATION_DELETED notification", error=str(e))
 
