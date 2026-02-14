@@ -1,14 +1,19 @@
 /**
- * React Query Hooks for Installment Plans Lookup
+ * React Query Hooks for Installment Plans
  *
  * @see lib/api/payments.ts
  */
 
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { AxiosError } from "axios"
+import { toast } from "sonner"
 import { paymentsApi } from "@/lib/api/payments"
 import type { ApiErrorResponse } from "@/types/api.types"
-import type { InstallmentPlan } from "@/types/finance.types"
+import type {
+  InstallmentPlan,
+  InstallmentPlanCreateRequest,
+  InstallmentPlanUpdateRequest,
+} from "@/types/finance.types"
 
 // =====================================================================
 // QUERY KEYS
@@ -17,6 +22,7 @@ import type { InstallmentPlan } from "@/types/finance.types"
 export const installmentPlansKeys = {
   all: ["installmentPlans"] as const,
   list: () => [...installmentPlansKeys.all, "list"] as const,
+  adminList: () => [...installmentPlansKeys.all, "adminList"] as const,
   detail: (id: number) => [...installmentPlansKeys.all, "detail", id] as const,
 }
 
@@ -25,19 +31,7 @@ export const installmentPlansKeys = {
 // =====================================================================
 
 /**
- * Get list of active installment plans
- *
- * @example
- * ```tsx
- * const { data: plans, isLoading } = useInstallmentPlans()
- *
- * // Display plan options
- * plans?.map(plan => (
- *   <option key={plan.code} value={plan.code}>
- *     {plan.name} ({plan.installment_count} đợt)
- *   </option>
- * ))
- * ```
+ * Get list of active installment plans (public endpoint)
  */
 export function useInstallmentPlans(options?: { enabled?: boolean }) {
   return useQuery<InstallmentPlan[], AxiosError<ApiErrorResponse>>({
@@ -50,9 +44,19 @@ export function useInstallmentPlans(options?: { enabled?: boolean }) {
 }
 
 /**
+ * Get all installment plans (admin endpoint - includes inactive)
+ */
+export function useAdminInstallmentPlans(options?: { enabled?: boolean }) {
+  return useQuery<InstallmentPlan[], AxiosError<ApiErrorResponse>>({
+    queryKey: installmentPlansKeys.adminList(),
+    queryFn: () => paymentsApi.getAdminInstallmentPlans(),
+    staleTime: 1000 * 60 * 5, // 5 minutes for admin
+    enabled: options?.enabled ?? true,
+  })
+}
+
+/**
  * Get single installment plan by ID
- *
- * @param id - Installment plan ID
  */
 export function useInstallmentPlan(id: number, options?: { enabled?: boolean }) {
   return useQuery<InstallmentPlan, AxiosError<ApiErrorResponse>>({
@@ -81,13 +85,78 @@ export function useInstallmentPlanByCode(
 }
 
 // =====================================================================
+// MUTATIONS (Admin CRUD)
+// =====================================================================
+
+/**
+ * Create a new installment plan
+ */
+export function useCreateInstallmentPlan() {
+  const queryClient = useQueryClient()
+
+  return useMutation<InstallmentPlan, AxiosError<ApiErrorResponse>, InstallmentPlanCreateRequest>({
+    mutationFn: (data) => paymentsApi.createInstallmentPlan(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: installmentPlansKeys.all })
+      toast.success("Tạo phương án trả góp thành công")
+    },
+    onError: (error) => {
+      const message = error.response?.data?.detail || "Không thể tạo phương án trả góp"
+      toast.error(typeof message === "string" ? message : "Không thể tạo phương án trả góp")
+    },
+  })
+}
+
+/**
+ * Update an installment plan
+ */
+export function useUpdateInstallmentPlan() {
+  const queryClient = useQueryClient()
+
+  return useMutation<
+    InstallmentPlan,
+    AxiosError<ApiErrorResponse>,
+    { id: number; data: InstallmentPlanUpdateRequest }
+  >({
+    mutationFn: ({ id, data }) => paymentsApi.updateInstallmentPlan(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: installmentPlansKeys.all })
+      toast.success("Cập nhật phương án trả góp thành công")
+    },
+    onError: (error) => {
+      const message = error.response?.data?.detail || "Không thể cập nhật phương án trả góp"
+      toast.error(typeof message === "string" ? message : "Không thể cập nhật phương án trả góp")
+    },
+  })
+}
+
+/**
+ * Delete an installment plan
+ */
+export function useDeleteInstallmentPlan() {
+  const queryClient = useQueryClient()
+
+  return useMutation<void, AxiosError<ApiErrorResponse>, { id: number; hardDelete?: boolean }>({
+    mutationFn: ({ id, hardDelete }) => paymentsApi.deleteInstallmentPlan(id, hardDelete),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: installmentPlansKeys.all })
+      toast.success("Xóa phương án trả góp thành công")
+    },
+    onError: (error) => {
+      const message = error.response?.data?.detail || "Không thể xóa phương án trả góp"
+      toast.error(typeof message === "string" ? message : "Không thể xóa phương án trả góp")
+    },
+  })
+}
+
+// =====================================================================
 // SELECT OPTIONS
 // =====================================================================
 
 export interface InstallmentPlanOption {
   value: string // code
   label: string
-  // [TODO_BACKEND] Add description to InstallmentPlanResponse
+  description: string | null
   installment_count: number
   has_penalty: boolean
   disabled: boolean
@@ -107,6 +176,7 @@ export function toInstallmentPlanOptions(
     .map((p) => ({
       value: p.code,
       label: `${p.name} (${p.installment_count} đợt)`,
+      description: p.description,
       installment_count: p.installment_count,
       has_penalty: parseFloat(p.penalty_rate) > 0,
       disabled: !p.is_active,
@@ -159,7 +229,6 @@ export function toScheduleDisplay(
 
 /**
  * Get penalty description for a plan
- * [TODO_BACKEND] Add penalty_type, grace_period_days to InstallmentPlanResponse
  */
 export function getPenaltyDescription(plan: InstallmentPlan | null | undefined): string {
   if (!plan) return ""
@@ -167,9 +236,13 @@ export function getPenaltyDescription(plan: InstallmentPlan | null | undefined):
   const rate = parseFloat(plan.penalty_rate)
   if (rate <= 0) return "Không áp dụng phí trễ hạn"
 
-  // [TODO_BACKEND] When penalty_type is available, format correctly
-  // For now, assume percentage
-  const rateFormatted = `${rate}%`
+  const rateFormatted = plan.penalty_type === "fixed"
+    ? new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND", maximumFractionDigits: 0 }).format(rate)
+    : `${rate}%`
 
-  return `Phí trễ hạn: ${rateFormatted}`
+  const graceInfo = plan.grace_period_days > 0
+    ? ` (sau ${plan.grace_period_days} ngày ân hạn)`
+    : ""
+
+  return `Phí trễ hạn: ${rateFormatted}${graceInfo}`
 }

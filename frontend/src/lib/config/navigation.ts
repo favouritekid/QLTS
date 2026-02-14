@@ -222,6 +222,12 @@ export const navigationConfig: NavigationConfig = {
           icon: Percent,
           roles: ["admin", "manager"],
         },
+        {
+          label: "Installment Plans",
+          href: "/admin/installment-plans",
+          icon: CreditCard,
+          roles: ["admin", "accountant"],
+        },
       ],
     },
 

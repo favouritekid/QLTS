@@ -35,6 +35,9 @@ from . import sync
 # Tuition Discount Policy router
 from . import tuition_discount
 
+# Installment Plans router
+from . import installment_plans
+
 # Cache Management router
 from . import cache
 
@@ -103,6 +106,9 @@ router.include_router(sync.router)          # /api/admin/sync/status, /api/admin
 
 # Include Tuition Discount Policy router
 router.include_router(tuition_discount.router)  # /api/admin/tuition-discount-policies/*
+
+# Include Installment Plans router
+router.include_router(installment_plans.router)  # /api/admin/installment-plans/*
 
 # Include Cache Management router
 router.include_router(cache.router)  # /api/admin/cache/*

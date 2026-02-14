@@ -57,16 +57,111 @@ class InstallmentScheduleItem(BaseModel):
 class InstallmentPlanBase(BaseModel):
     """Base schema for installment plans."""
     code: str = Field(..., min_length=1, max_length=50)
-    name: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=500)
     installment_count: int = Field(..., ge=1, le=12)
     schedule: List[InstallmentScheduleItem]
+    penalty_type: str = Field(default="percentage", pattern=r"^(percentage|fixed)$")
     penalty_rate: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    grace_period_days: int = Field(default=7, ge=0, le=365)
     is_active: bool = True
 
     @field_validator('name')
     @classmethod
     def sanitize_name(cls, v: str) -> str:
         return html.escape(v.strip())
+
+    @field_validator('description')
+    @classmethod
+    def sanitize_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InstallmentPlanCreate(BaseModel):
+    """Schema for creating a new installment plan."""
+    code: str = Field(..., min_length=1, max_length=50, pattern=r"^[A-Z0-9_]+$")
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=500)
+    installment_count: int = Field(..., ge=1, le=12)
+    schedule: List[InstallmentScheduleItem]
+    penalty_type: str = Field(default="percentage", pattern=r"^(percentage|fixed)$")
+    penalty_rate: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    grace_period_days: int = Field(default=7, ge=0, le=365)
+    is_active: bool = True
+
+    @field_validator('name')
+    @classmethod
+    def sanitize_name(cls, v: str) -> str:
+        return html.escape(v.strip())
+
+    @field_validator('description')
+    @classmethod
+    def sanitize_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return html.escape(v.strip())
+
+    @field_validator('schedule')
+    @classmethod
+    def validate_schedule(cls, v: List[InstallmentScheduleItem], info) -> List[InstallmentScheduleItem]:
+        installment_count = info.data.get('installment_count')
+        if installment_count is not None and len(v) != installment_count:
+            raise ValueError(f"Schedule must have exactly {installment_count} items, got {len(v)}")
+        total_percent = sum(item.percent for item in v)
+        if total_percent != Decimal("100"):
+            raise ValueError(f"Schedule percentages must sum to 100, got {total_percent}")
+        nos = [item.installment_no for item in v]
+        if len(set(nos)) != len(nos):
+            raise ValueError("Duplicate installment_no in schedule")
+        return v
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InstallmentPlanUpdate(BaseModel):
+    """Schema for updating an installment plan (all fields optional)."""
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=500)
+    installment_count: Optional[int] = Field(None, ge=1, le=12)
+    schedule: Optional[List[InstallmentScheduleItem]] = None
+    penalty_type: Optional[str] = Field(None, pattern=r"^(percentage|fixed)$")
+    penalty_rate: Optional[Decimal] = Field(None, ge=0, le=100)
+    grace_period_days: Optional[int] = Field(None, ge=0, le=365)
+    is_active: Optional[bool] = None
+
+    @field_validator('name')
+    @classmethod
+    def sanitize_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return html.escape(v.strip())
+
+    @field_validator('description')
+    @classmethod
+    def sanitize_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return html.escape(v.strip())
+
+    @field_validator('schedule')
+    @classmethod
+    def validate_schedule(cls, v: Optional[List[InstallmentScheduleItem]], info) -> Optional[List[InstallmentScheduleItem]]:
+        if v is None:
+            return v
+        installment_count = info.data.get('installment_count')
+        if installment_count is not None and len(v) != installment_count:
+            raise ValueError(f"Schedule must have exactly {installment_count} items, got {len(v)}")
+        total_percent = sum(item.percent for item in v)
+        if total_percent != Decimal("100"):
+            raise ValueError(f"Schedule percentages must sum to 100, got {total_percent}")
+        nos = [item.installment_no for item in v]
+        if len(set(nos)) != len(nos):
+            raise ValueError("Duplicate installment_no in schedule")
+        return v
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -75,6 +170,7 @@ class InstallmentPlanResponse(InstallmentPlanBase):
     """Response schema for installment plan."""
     id: int
     created_at: datetime
+    updated_at: datetime
 
 
 # ==============================================================================

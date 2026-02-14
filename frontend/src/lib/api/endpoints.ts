@@ -143,6 +143,13 @@ export const API_ENDPOINTS = {
       DELETE: (id: number) => `/api/admin/tuition-discount-policies/${id}`,
       CALCULATE: "/api/admin/tuition-discount-policies/calculate",
     },
+    // Installment Plans
+    INSTALLMENT_PLANS: {
+      LIST: "/api/admin/installment-plans",
+      CREATE: "/api/admin/installment-plans",
+      UPDATE: (id: number) => `/api/admin/installment-plans/${id}`,
+      DELETE: (id: number) => `/api/admin/installment-plans/${id}`,
+    },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/users/statistics",
   },

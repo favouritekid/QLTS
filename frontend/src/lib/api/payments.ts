@@ -21,6 +21,8 @@ import type {
   PaymentRejectRequest,
   FinanceDashboardStats,
   InstallmentPlan,
+  InstallmentPlanCreateRequest,
+  InstallmentPlanUpdateRequest,
 } from "@/types/finance.types"
 
 // ============================================================================
@@ -226,6 +228,43 @@ export async function getInstallmentPlan(id: number): Promise<InstallmentPlan> {
 }
 
 // ============================================================================
+// ADMIN INSTALLMENT PLAN CRUD
+// ============================================================================
+
+/**
+ * Get all installment plans (admin - includes inactive)
+ */
+export async function getAdminInstallmentPlans(): Promise<InstallmentPlan[]> {
+  const response = await api.get<InstallmentPlan[]>(API_ENDPOINTS.ADMIN.INSTALLMENT_PLANS.LIST)
+  return response.data
+}
+
+/**
+ * Create a new installment plan
+ */
+export async function createInstallmentPlan(data: InstallmentPlanCreateRequest): Promise<InstallmentPlan> {
+  const response = await api.post<InstallmentPlan>(API_ENDPOINTS.ADMIN.INSTALLMENT_PLANS.CREATE, data)
+  return response.data
+}
+
+/**
+ * Update an installment plan
+ */
+export async function updateInstallmentPlan(id: number, data: InstallmentPlanUpdateRequest): Promise<InstallmentPlan> {
+  const response = await api.put<InstallmentPlan>(API_ENDPOINTS.ADMIN.INSTALLMENT_PLANS.UPDATE(id), data)
+  return response.data
+}
+
+/**
+ * Delete an installment plan
+ */
+export async function deleteInstallmentPlan(id: number, hardDelete?: boolean): Promise<void> {
+  await api.delete(API_ENDPOINTS.ADMIN.INSTALLMENT_PLANS.DELETE(id), {
+    params: hardDelete ? { hard_delete: true } : undefined,
+  })
+}
+
+// ============================================================================
 // DASHBOARD
 // ============================================================================
 
@@ -276,6 +315,11 @@ export const paymentsApi = {
   getPaymentMethods,
   getInstallmentPlans,
   getInstallmentPlan,
+  // Admin Installment Plans
+  getAdminInstallmentPlans,
+  createInstallmentPlan,
+  updateInstallmentPlan,
+  deleteInstallmentPlan,
   // Dashboard
   getFinanceDashboard,
 }

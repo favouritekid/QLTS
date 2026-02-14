@@ -95,12 +95,16 @@ def _build_plan_response(plan: InstallmentPlan) -> finance_schemas.InstallmentPl
         id=plan.id,
         code=plan.code,
         name=plan.name,
+        description=plan.description,
         installment_count=plan.installment_count,
         schedule=[
             finance_schemas.InstallmentScheduleItem(**item)
             for item in plan.schedule
         ],
+        penalty_type=plan.penalty_type,
         penalty_rate=plan.penalty_rate,
+        grace_period_days=plan.grace_period_days,
         is_active=plan.is_active,
         created_at=plan.created_at,
+        updated_at=plan.updated_at,
     )

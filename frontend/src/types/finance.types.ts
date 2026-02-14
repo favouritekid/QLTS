@@ -34,12 +34,38 @@ export interface InstallmentPlan {
   id: number
   code: string
   name: string
+  description: string | null
   installment_count: number
   schedule: InstallmentScheduleItem[]
+  penalty_type: string
   penalty_rate: string // Decimal → string
+  grace_period_days: number
   is_active: boolean
   created_at: string
-  // [TODO_BACKEND] Add: description, penalty_type, grace_period_days
+  updated_at: string
+}
+
+export interface InstallmentPlanCreateRequest {
+  code: string
+  name: string
+  description?: string | null
+  installment_count: number
+  schedule: InstallmentScheduleItem[]
+  penalty_type?: string
+  penalty_rate?: string
+  grace_period_days?: number
+  is_active?: boolean
+}
+
+export interface InstallmentPlanUpdateRequest {
+  name?: string
+  description?: string | null
+  installment_count?: number
+  schedule?: InstallmentScheduleItem[]
+  penalty_type?: string
+  penalty_rate?: string
+  grace_period_days?: number
+  is_active?: boolean
 }
 
 // ============================================================================
