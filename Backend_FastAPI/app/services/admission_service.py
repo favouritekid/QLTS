@@ -1297,6 +1297,21 @@ async def create_profile(
         mandatory_docs_count=len(mandatory_docs),
     )
     
+    # Step 14b: Lookup offering_admission_config for this path
+    offering_config_id = None
+    if admission_path.criteria_id:
+        from sqlalchemy import select as sa_select
+        oac_result = await db.execute(
+            sa_select(models.OfferingAdmissionConfig.id).where(
+                models.OfferingAdmissionConfig.academic_info_id == academic_info.id,
+                models.OfferingAdmissionConfig.criteria_id == admission_path.criteria_id,
+                models.OfferingAdmissionConfig.is_active == True,
+            )
+        )
+        oac_row = oac_result.scalars().first()
+        if oac_row:
+            offering_config_id = oac_row
+
     # Step 15: Create AdmissionProfile
     new_profile = models.AdmissionProfile(
         lead_id=lead_id,
@@ -1305,6 +1320,7 @@ async def create_profile(
         applied_rules=applied_rules,  # Snapshot from relational data
         family_info=[],
         academic_history=[],
+        offering_admission_config_id=offering_config_id,
         # Pre-fill from Lead
         full_name=lead.full_name,
         phone=lead.phone,
@@ -3579,61 +3595,6 @@ async def override_profile(
 
     await db.flush()
 
-    # ✅ FIX #8: Assignment Workflow (Claim Profile)
-    # MOVED OUT of override_profile scope (indentation fix)
-async def claim_review(
-    db: AsyncSession,
-    profile: models.AdmissionProfile,
-    reviewer: models.User,
-    expected_version: Optional[int] = None
-):
-    """
-    Manager claims a profile for review (Assignment Workflow).
-    
-    Business Rules:
-    1. Status MUST be 'submitted' (cannot claim draft/approved) # ADMISSION_RULE_008
-    2. Profile must NOT be already claimed by someone else
-    3. Version check (optimistic locking)
-    """
-    if profile.status != 'submitted':
-        raise BusinessRuleViolation(
-            f"Cannot claim profile in status '{profile.status}'. Only 'submitted' profiles can be claimed."
-        )
-
-    # 3. Version Check (CRITICAL FIX: Prevent Race Condition)
-    if expected_version is not None and profile.version != expected_version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {expected_version}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
-
-    if profile.assigned_reviewer_id:
-        if profile.assigned_reviewer_id == reviewer.id:
-            # Idempotent success (already claimed by self)
-            return
-        
-        # Already claimed by someone else
-        raise BusinessRuleViolation(
-            f"Profile is already claimed by another reviewer (ID: {profile.assigned_reviewer_id})"
-        )
-
-    # STATE CHANGE
-    profile.assigned_reviewer_id = reviewer.id
-    profile.assigned_at = datetime.now(timezone.utc)
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
-
-    # Audit Log (Internal)
-    log.info(
-        "Profile claimed for review",
-        profile_id=profile.id,
-        reviewer_id=reviewer.id
-    )
-
-    await db.flush()
-
-
     # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11)
     # TODO: Implement proper audit log table
     log.warning(
@@ -3656,6 +3617,59 @@ async def claim_review(
         )
 
     return profile, post_commit
+
+
+async def claim_review(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    reviewer: models.User,
+    expected_version: Optional[int] = None
+):
+    """
+    Manager claims a profile for review (Assignment Workflow).
+
+    Business Rules:
+    1. Status MUST be 'submitted' (cannot claim draft/approved) # ADMISSION_RULE_008
+    2. Profile must NOT be already claimed by someone else
+    3. Version check (optimistic locking)
+    """
+    if profile.status != 'submitted':
+        raise BusinessRuleViolation(
+            f"Cannot claim profile in status '{profile.status}'. Only 'submitted' profiles can be claimed."
+        )
+
+    # 3. Version Check (CRITICAL FIX: Prevent Race Condition)
+    if expected_version is not None and profile.version != expected_version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {expected_version}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    if profile.assigned_reviewer_id:
+        if profile.assigned_reviewer_id == reviewer.id:
+            # Idempotent success (already claimed by self)
+            return
+
+        # Already claimed by someone else
+        raise BusinessRuleViolation(
+            f"Profile is already claimed by another reviewer (ID: {profile.assigned_reviewer_id})"
+        )
+
+    # STATE CHANGE
+    profile.assigned_reviewer_id = reviewer.id
+    profile.assigned_at = datetime.now(timezone.utc)
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # Audit Log (Internal)
+    log.info(
+        "Profile claimed for review",
+        profile_id=profile.id,
+        reviewer_id=reviewer.id
+    )
+
+    await db.flush()
 
 
 async def finalize_profile(

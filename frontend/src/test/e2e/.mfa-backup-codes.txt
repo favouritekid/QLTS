@@ -1,0 +1,14 @@
+# Admin MFA Backup Codes (each code is ONE-TIME USE only)
+# Used codes will be marked with [USED]
+# Generated: 2026-02-14
+#
+# [USED] f72fdc8bd3  ← used by E2E test run
+# a16a2890e7
+# 0dc3df20d7
+# 5440b050ff
+# bf97cddeb7
+# d0b40e5e08
+# d20b9fc514
+# 15f59626e4
+# e9cc8c722a
+# f481429a29

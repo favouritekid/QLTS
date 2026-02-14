@@ -470,7 +470,11 @@ class FeeCalculationService:
         query = (
             select(models.AdmissionProfile)
             .join(models.Lead)
-            .options(selectinload(models.AdmissionProfile.lead))  # Load lead for sync
+            .options(
+                selectinload(models.AdmissionProfile.lead),
+                selectinload(models.AdmissionProfile.offering_admission_config)
+                .selectinload(models.OfferingAdmissionConfig.academic_info),
+            )
             .where(models.AdmissionProfile.id == profile_id)
         )
 

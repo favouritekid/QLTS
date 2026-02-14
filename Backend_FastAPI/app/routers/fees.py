@@ -19,9 +19,11 @@ Endpoints:
 - POST /api/fees/{fee_id}/recalculate - Recalculate fee amount
 """
 
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -126,7 +128,7 @@ async def list_fees(
         items.append(finance_schemas.FeeListItem(
             id=fee.id,
             fee_type=fee.fee_type,
-            academic_year=fee.academic_year,
+            academic_year=f"{fee.academic_year}-{fee.academic_year + 1}",
             final_amount=fee.final_amount,
             paid_amount=fee.paid_amount,
             remaining_amount=fee.remaining_amount,
@@ -192,16 +194,31 @@ async def calculate_fee(
 
         # Get base amount from offering's tuition fee
         base_amount = Decimal("0")
-        if profile.offering and profile.offering.academic_info:
-            base_amount = profile.offering.academic_info.tuition_fee_per_year or Decimal("0")
+        academic_info = None
+        oac = profile.offering_admission_config
+        if oac and oac.academic_info:
+            academic_info = oac.academic_info
+
+        # Fallback: lookup via applied_rules.academic_info_id (for profiles created before OAC linkage)
+        if not academic_info and profile.applied_rules:
+            ai_id = profile.applied_rules.get("academic_info_id")
+            if ai_id:
+                from app.models.offering_academic_info import OfferingAcademicInfo
+                ai_result = await db.execute(
+                    sa.select(OfferingAcademicInfo).where(OfferingAcademicInfo.id == int(ai_id))
+                )
+                academic_info = ai_result.scalars().first()
+
+        if academic_info:
+            base_amount = academic_info.tuition_fee_per_year or Decimal("0")
 
         if base_amount <= 0:
             raise BadRequest("Cannot calculate fee: No tuition fee configured for this offering")
 
         # Get applicable discount policy IDs
         discount_policy_ids = []
-        if profile.offering and profile.offering.academic_info:
-            discount_policy_ids = profile.offering.academic_info.applied_discount_policy_ids or []
+        if academic_info:
+            discount_policy_ids = academic_info.applied_discount_policy_ids or []
 
         # Calculate fee
         fee, post_commit = await fee_service.calculate_fee(
@@ -218,7 +235,9 @@ async def calculate_fee(
         # Generate invoices based on installment plan
         invoices, _ = await invoice_service.generate_invoices_for_fee(
             fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
             user_id=current_user.id,
+            unit_id=unit_id,
             auto_issue=False,
         )
 
@@ -616,7 +635,7 @@ def _build_fee_response(
         admission_profile_id=fee.admission_profile_id,
         installment_plan_id=fee.installment_plan_id,
         fee_type=fee.fee_type,
-        academic_year=fee.academic_year,
+        academic_year=f"{fee.academic_year}-{fee.academic_year + 1}",
         base_amount=fee.base_amount,
         total_discount=fee.total_discount,
         final_amount=fee.final_amount,

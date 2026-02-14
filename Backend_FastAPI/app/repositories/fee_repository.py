@@ -23,7 +23,8 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app import models
 from app.models.finance import (
-    Fee, FeeAppliedDiscount, Invoice, FeeStatusEnum, InvoiceStatusEnum
+    Fee, FeeAppliedDiscount, Invoice, FeeStatusEnum, InvoiceStatusEnum,
+    InstallmentPlan,
 )
 from app.repositories.base import BaseRepository
 
@@ -371,6 +372,26 @@ class FeeRepository(BaseRepository[Fee]):
         await self.db.flush()
         await self.db.refresh(fee)
         return fee
+
+
+    async def get_installment_plan_by_code(
+        self,
+        code: str,
+    ) -> Optional["InstallmentPlan"]:
+        """
+        Get installment plan by its unique code.
+
+        Args:
+            code: Plan code (e.g., "FULL", "TWO_TERM", "QUARTERLY")
+
+        Returns:
+            InstallmentPlan or None
+        """
+        query = select(InstallmentPlan).where(
+            and_(InstallmentPlan.code == code, InstallmentPlan.is_active == True)
+        )
+        result = await self.db.execute(query)
+        return result.scalars().first()
 
 
 class InvoiceRepository(BaseRepository[Invoice]):
