@@ -1481,6 +1481,7 @@ async def send_confirmation_link(
             token_expires_at=token_obj.expires_at,
             sent_to_email=lead.email if lead else None,
             sent_to_phone=lead.phone if lead else None,
+            token_value=token_obj.token,
         )
 
     except BadRequest as e:

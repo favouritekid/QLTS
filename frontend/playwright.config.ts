@@ -98,6 +98,14 @@ export default defineConfig({
       dependencies: ['setup'],
     },
 
+    // E2E workflow tests (no shared auth - tests login inline)
+    {
+      name: 'e2e-workflow',
+      use: {
+        ...devices['Desktop Chrome'],
+      },
+    },
+
     /* Test against branded browsers. */
     // {
     //   name: 'Microsoft Edge',

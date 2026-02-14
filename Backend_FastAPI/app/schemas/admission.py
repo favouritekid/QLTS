@@ -1099,6 +1099,10 @@ class SendConfirmationResponse(BaseModel):
     token_expires_at: datetime
     sent_to_email: Optional[str] = None
     sent_to_phone: Optional[str] = None
+    token_value: Optional[str] = Field(
+        None,
+        description="Token value for admin/officer to share confirmation link manually"
+    )
 
 
 __all__ = [

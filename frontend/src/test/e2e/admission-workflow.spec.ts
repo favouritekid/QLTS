@@ -17,7 +17,7 @@ const OFFICER_USERNAME = process.env.E2E_OFFICER_USERNAME || "vothuhien";
 const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "@Matkhau123!";
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@12345";
-const ADMIN_MFA_CODE = process.env.E2E_ADMIN_MFA_CODE || "a16a2890e7"; // Backup code for 2FA
+const ADMIN_MFA_CODE = process.env.E2E_ADMIN_MFA_CODE || "a99e854aaa"; // Backup code for 2FA
 
 // Shared state across test steps
 let createdLeadId: number;
@@ -1117,5 +1117,16 @@ test.describe("Full Admission Workflow", () => {
         console.log(`Student code verified: ${studentCode}`);
       }
     });
+  });
+
+  // Cleanup: log test data for manual cleanup if needed
+  test.afterAll(async () => {
+    console.log(`\n========== CLEANUP INFO ==========`);
+    console.log(`Test data created during this run:`);
+    console.log(`  Lead ID:    ${createdLeadId || "N/A"}`);
+    console.log(`  Profile ID: ${createdProfileId || "N/A"}`);
+    console.log(`  Student:    ${studentCode || "N/A"}`);
+    console.log(`To clean up, delete lead ${createdLeadId} via admin API.`);
+    console.log(`==================================\n`);
   });
 });
