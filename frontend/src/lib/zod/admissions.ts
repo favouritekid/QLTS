@@ -860,9 +860,36 @@ export interface AdmissionListParams {
   status?: string       // comma-separated for multi-select
   search?: string
   major_id?: string     // comma-separated
+  academic_year?: number
+  degree_level?: string
+  payment_status?: string  // paid | unpaid | partial | no_fee
   date_from?: string    // ISO date string
   date_to?: string      // ISO date string
   sort_by?: 'created_at' | 'updated_at' | 'full_name' | 'status'
   order?: 'asc' | 'desc'
+}
+
+/**
+ * Status Counts Response
+ * From GET /api/admissions/status-counts
+ */
+export interface AdmissionStatusCounts {
+  counts: Record<string, number>
+  total: number
+}
+
+/**
+ * Aggregate Stats Response
+ * From GET /api/admissions/stats
+ */
+export interface AdmissionStats {
+  total_profiles: number
+  draft_count: number
+  submitted_count: number
+  approved_count: number
+  enrolled_count: number
+  rejected_count: number
+  conversion_rate: number
+  avg_completion: number
 }
 

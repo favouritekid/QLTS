@@ -17,6 +17,8 @@ import type {
   AdmissionProfileUpdate,
   AdmissionListParams,
   AdmissionsPage,
+  AdmissionStatusCounts,
+  AdmissionStats,
   BulkApproveRequest,
   BulkRejectRequest,
   BulkAssignRequest,
@@ -36,6 +38,9 @@ export const admissionsKeys = {
   list: (filters?: Record<string, unknown>) => [...admissionsKeys.lists(), filters] as const,
   details: () => [...admissionsKeys.all, "detail"] as const,
   detail: (id: number) => [...admissionsKeys.details(), id] as const,
+  academicYears: () => [...admissionsKeys.all, "academic-years"] as const,
+  statusCounts: (filters?: Record<string, unknown>) => [...admissionsKeys.all, "status-counts", filters] as const,
+  stats: (academicYear?: number) => [...admissionsKeys.all, "stats", academicYear] as const,
 }
 
 // ============================================
@@ -54,6 +59,9 @@ export function useListAdmissions(
       status: filters?.status,
       search: filters?.search,
       major_id: filters?.major_id,
+      academic_year: filters?.academic_year,
+      degree_level: filters?.degree_level,
+      payment_status: filters?.payment_status,
       date_from: filters?.date_from,
       date_to: filters?.date_to,
       sort_by: filters?.sort_by,
@@ -62,6 +70,50 @@ export function useListAdmissions(
     staleTime: 15000, // 15 seconds
     placeholderData: (previousData) => previousData, // Keep showing old data while fetching new page
     initialData: options?.initialData,
+  })
+}
+
+export function useAcademicYears() {
+  return useQuery({
+    queryKey: admissionsKeys.academicYears(),
+    queryFn: () => admissionsApi.getAcademicYears(),
+    staleTime: 60 * 60 * 1000, // 1 hour - data rarely changes
+  })
+}
+
+/**
+ * Fetch degree levels via public admission-config endpoint
+ * (accessible to all authenticated staff, not admin-only)
+ */
+export function useDegreeLevelsPublic() {
+  return useQuery<Array<{ id: number; code: string; name: string }>>({
+    queryKey: ["admission-config", "degree-levels"],
+    queryFn: async () => {
+      const { api } = await import("@/lib/api/client")
+      const response = await api.get("/api/admission-config/degree-levels")
+      return response.data
+    },
+    staleTime: 60 * 60 * 1000, // 1 hour
+  })
+}
+
+export function useAdmissionStatusCounts(
+  filters?: Omit<AdmissionListParams, 'page' | 'page_size' | 'status' | 'sort_by' | 'order'>
+) {
+  return useQuery({
+    queryKey: admissionsKeys.statusCounts(filters as Record<string, unknown> | undefined),
+    queryFn: () => admissionsApi.getStatusCounts(filters),
+    staleTime: 30_000, // 30 seconds
+  })
+}
+
+export function useAdmissionStats(academicYear?: number) {
+  return useQuery({
+    queryKey: admissionsKeys.stats(academicYear),
+    queryFn: () => admissionsApi.getAdmissionStats(
+      academicYear !== undefined ? { academic_year: academicYear } : undefined
+    ),
+    staleTime: 30_000, // 30 seconds
   })
 }
 

@@ -19,7 +19,7 @@ Endpoints:
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
@@ -68,6 +68,9 @@ async def list_admission_profiles(
     status: str | None = Query(None, description="Filter by status (comma-separated for multi-select)"),
     search: str | None = Query(None, description="Search by name, email, or citizen ID"),
     major_id: str | None = Query(None, description="Filter by major/program ID (comma-separated)"),
+    academic_year: int | None = Query(None, description="Filter by academic year"),
+    degree_level: str | None = Query(None, description="Filter by degree level"),
+    payment_status: str | None = Query(None, description="Filter by payment status (paid/unpaid/partial/no_fee)"),
     date_from: datetime | None = Query(None, description="Filter from date (created_at)"),
     date_to: datetime | None = Query(None, description="Filter to date (created_at)"),
     sort_by: str = Query("created_at", description="Sort field (created_at, updated_at, full_name, status)"),
@@ -83,17 +86,6 @@ async def list_admission_profiles(
     **Security:**
     - Admin: Can see all profiles
     - Officer: Only profiles where lead.unit_id == user.unit_id
-
-    **Query Parameters:**
-    - status: Filter by status (comma-separated for multi-select, e.g., "draft,submitted")
-    - search: Search by name, email, or citizen ID
-    - major_id: Filter by major/program ID (comma-separated)
-    - date_from: Filter profiles created after this date
-    - date_to: Filter profiles created before this date
-    - sort_by: Sort field (created_at, updated_at, full_name, status)
-    - order: Sort order (asc, desc)
-    - page: Page number (default: 1)
-    - page_size: Items per page (default: 20, max: 100)
 
     **Returns:**
     - Paginated list of AdmissionProfiles with total count
@@ -114,6 +106,10 @@ async def list_admission_profiles(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid major_id format")
 
+    # Validate payment_status
+    if payment_status and payment_status not in ("paid", "unpaid", "partial", "no_fee"):
+        raise HTTPException(status_code=400, detail="Invalid payment_status. Must be: paid, unpaid, partial, no_fee")
+
     profiles, total_count = await admission_service.get_profiles(
         db=db,
         skip=skip,
@@ -122,6 +118,9 @@ async def list_admission_profiles(
         search=search,
         statuses=statuses,
         major_ids=major_ids,
+        academic_year=academic_year,
+        degree_level=degree_level,
+        payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
         sort_by=sort_by,
@@ -133,6 +132,82 @@ async def list_admission_profiles(
         page=page,
         page_size=page_size,
         profiles=profiles,
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/academic-years",
+    response_model=List[int],
+    summary="Get distinct academic years with data",
+)
+async def get_academic_years(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Get list of academic years that have admission profiles. IDOR-filtered."""
+    return await admission_service.get_academic_years(db=db, current_user=current_user)
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/status-counts",
+    summary="Get profile counts grouped by status",
+)
+async def get_status_counts(
+    request: Request,
+    search: str | None = Query(None),
+    major_id: str | None = Query(None),
+    academic_year: int | None = Query(None),
+    degree_level: str | None = Query(None),
+    payment_status: str | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Get admission profile counts grouped by status.
+    Applies all filters EXCEPT status (to populate tab badges).
+    """
+    major_ids: Optional[List[int]] = None
+    if major_id:
+        try:
+            major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid major_id format")
+
+    return await admission_service.get_status_counts(
+        db=db,
+        current_user=current_user,
+        search=search or None,
+        major_ids=major_ids,
+        academic_year=academic_year,
+        degree_level=degree_level,
+        payment_status=payment_status,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/stats",
+    response_model=schemas.AdmissionStats,
+    summary="Get aggregate admission statistics",
+)
+async def get_admission_stats(
+    request: Request,
+    academic_year: int | None = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Get aggregate statistics (totals, conversion rate, avg completion). IDOR-filtered."""
+    return await admission_service.get_admission_stats(
+        db=db,
+        current_user=current_user,
+        academic_year=academic_year,
     )
 
 

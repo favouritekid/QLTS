@@ -23,10 +23,12 @@ from app.core.deps import (
 )
 from app.models.admission_config.criteria import AdmissionCriteria
 from app.database import get_db
+from app.schemas.organization import ConfigDegreeLevel
 from app.models import User
 from app.repositories.admission_config_repository import AdmissionConfigRepository
 from app.services.admission_scoring_service import AdmissionScoringService
 from app.services.admission_config_service import AdmissionConfigService
+from app.services import config_service
 from app.schemas.admission_config import (
     SubjectResponse,
     SubjectListResponse,
@@ -53,6 +55,23 @@ from app.schemas.admission_config import (
 )
 
 router = APIRouter(prefix="/admission-config", tags=["Admission Config"])
+
+
+# =============================================================================
+# DEGREE LEVELS (Public read-only - accessible to all authenticated staff)
+# =============================================================================
+
+@router.get("/degree-levels", response_model=list[ConfigDegreeLevel])
+async def list_degree_levels(
+    active_only: bool = True,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Get degree levels. Accessible to all authenticated staff (not admin-only).
+    Used by admission filters dropdown.
+    """
+    return await config_service.get_degree_levels(db, active_only)
 
 
 # =============================================================================

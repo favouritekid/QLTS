@@ -4,16 +4,16 @@
  *
  * Features:
  * - TanStack Table with sorting and selection
- * - Multi-select status filter
- * - Search by name, email, citizen ID
- * - Date range filter
+ * - Advanced filters: status, major, academic year, degree level, payment status, date range
+ * - Status tabs with count badges
+ * - Stats cards (totals, conversion rate, avg completion)
  * - Mobile card view
  * - Bulk actions (approve, reject, assign, export)
  */
 
 "use client"
 
-import { useState, useMemo, useCallback, useEffect } from "react"
+import { useState, useMemo, useCallback, useEffect, memo } from "react"
 import {
   useReactTable,
   getCoreRowModel,
@@ -30,11 +30,13 @@ import {
   X,
   Calendar,
   Filter,
-  User,
-  ArrowRight,
-  CheckCircle,
-  XCircle,
   MoreVertical,
+  FileText,
+  Users,
+  CheckCircle2,
+  GraduationCap,
+  TrendingUp,
+  BarChart3,
 } from "lucide-react"
 import Link from "next/link"
 
@@ -86,16 +88,20 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
 import { Pagination } from "@/components/common/table/Pagination"
-import { MobileFilterSheet } from "@/components/common/MobileFilterSheet"
 import { cn } from "@/lib/utils"
 
 import {
   useListAdmissions,
+  useAcademicYears,
+  useDegreeLevelsPublic,
+  useAdmissionStatusCounts,
+  useAdmissionStats,
   useBulkApproveAdmissions,
   useBulkRejectAdmissions,
   useBulkAssignAdmissions,
   useExportAdmissions,
 } from "@/hooks/admissions"
+import { useMajorPrograms } from "@/hooks/admissions/useProgramData"
 import type { AdmissionProfileResponse, AdmissionListParams, AdmissionsPage } from "@/lib/zod/admissions"
 import { getColumns, STATUS_CONFIG, ELIGIBILITY_CONFIG } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
@@ -107,6 +113,7 @@ import { BulkAssignDialog } from "./dialogs/BulkAssignDialog"
 // =============================================================================
 
 const DEFAULT_PAGE_SIZE = 20
+const CURRENT_YEAR = new Date().getFullYear()
 
 const STATUS_OPTIONS = [
   { value: "draft", label: "Nháp" },
@@ -118,6 +125,50 @@ const STATUS_OPTIONS = [
   { value: "overridden", label: "Đã override" },
   { value: "enrolled", label: "Đã nhập học" },
 ]
+
+const PAYMENT_STATUS_OPTIONS = [
+  { value: "paid", label: "Đã thanh toán" },
+  { value: "unpaid", label: "Chưa thanh toán" },
+  { value: "partial", label: "Thanh toán một phần" },
+  { value: "no_fee", label: "Chưa có học phí" },
+]
+
+/** Tab definitions - group statuses for quick filtering */
+const STATUS_TABS = [
+  { key: "all", label: "Tất cả", statuses: [] as string[] },
+  { key: "draft", label: "Nháp", statuses: ["draft"] },
+  { key: "pending", label: "Chờ duyệt", statuses: ["submitted", "resubmitted"] },
+  { key: "approved", label: "Đã duyệt", statuses: ["approved", "confirmed", "overridden"] },
+  { key: "enrolled", label: "Đã nhập học", statuses: ["enrolled"] },
+  { key: "rejected", label: "Từ chối", statuses: ["rejected"] },
+] as const
+
+// =============================================================================
+// STAT CARD COMPONENT
+// =============================================================================
+
+interface StatCardProps {
+  label: string
+  value: number | string
+  icon: React.ReactNode
+  className?: string
+}
+
+const StatCard = memo(function StatCard({ label, value, icon, className }: StatCardProps) {
+  return (
+    <Card className={cn("p-4", className)}>
+      <div className="flex items-center gap-3">
+        <div className="flex-shrink-0 rounded-lg bg-muted p-2">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="text-2xl font-bold tracking-tight">{value}</p>
+          <p className="text-xs text-muted-foreground truncate">{label}</p>
+        </div>
+      </div>
+    </Card>
+  )
+})
 
 // =============================================================================
 // MAIN COMPONENT
@@ -132,17 +183,23 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([])
+  const [selectedMajorId, setSelectedMajorId] = useState<string | undefined>()
+  const [selectedYear, setSelectedYear] = useState<number | undefined>(CURRENT_YEAR)
+  const [selectedDegreeLevel, setSelectedDegreeLevel] = useState<string | undefined>()
+  const [selectedPaymentStatus, setSelectedPaymentStatus] = useState<string | undefined>()
   const [dateFrom, setDateFrom] = useState<Date | undefined>()
   const [dateTo, setDateTo] = useState<Date | undefined>()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState<string>("all")
 
   // Table state
   const [sorting, setSorting] = useState<SortingState>([])
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
 
   // Dialog state
-  const [filterSheetOpen, setFilterSheetOpen] = useState(false)
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
   const [assignDialogOpen, setAssignDialogOpen] = useState(false)
 
@@ -150,10 +207,21 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search)
-      setPage(1) // Reset to page 1 on search
+      setPage(1)
     }, 300)
     return () => clearTimeout(timer)
   }, [search])
+
+  // Reference data queries
+  const { data: majorPrograms } = useMajorPrograms()
+  const { data: academicYears } = useAcademicYears()
+  const { data: degreeLevels } = useDegreeLevelsPublic()
+
+  // Year options: from API or fallback
+  const yearOptions = useMemo(() => {
+    if (academicYears && academicYears.length > 0) return academicYears
+    return [CURRENT_YEAR + 1, CURRENT_YEAR, CURRENT_YEAR - 1]
+  }, [academicYears])
 
   // Build filters
   const filters: AdmissionListParams = useMemo(() => ({
@@ -161,14 +229,31 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     page_size: pageSize,
     status: selectedStatuses.length > 0 ? selectedStatuses.join(",") : undefined,
     search: debouncedSearch || undefined,
+    major_id: selectedMajorId || undefined,
+    academic_year: selectedYear,
+    degree_level: selectedDegreeLevel,
+    payment_status: selectedPaymentStatus,
     date_from: dateFrom ? format(dateFrom, "yyyy-MM-dd") : undefined,
     date_to: dateTo ? format(dateTo, "yyyy-MM-dd") : undefined,
     sort_by: sorting[0]?.id as AdmissionListParams["sort_by"],
     order: sorting[0]?.desc ? "desc" : "asc",
-  }), [page, pageSize, selectedStatuses, debouncedSearch, dateFrom, dateTo, sorting])
+  }), [page, pageSize, selectedStatuses, debouncedSearch, selectedMajorId, selectedYear, selectedDegreeLevel, selectedPaymentStatus, dateFrom, dateTo, sorting])
 
-  // Query - use initialData for first render (SSR prefetch)
+  // Filters without status/page for status-counts query (separate queryKey)
+  const countFilters = useMemo(() => ({
+    search: debouncedSearch || undefined,
+    major_id: selectedMajorId || undefined,
+    academic_year: selectedYear,
+    degree_level: selectedDegreeLevel,
+    payment_status: selectedPaymentStatus,
+    date_from: dateFrom ? format(dateFrom, "yyyy-MM-dd") : undefined,
+    date_to: dateTo ? format(dateTo, "yyyy-MM-dd") : undefined,
+  }), [debouncedSearch, selectedMajorId, selectedYear, selectedDegreeLevel, selectedPaymentStatus, dateFrom, dateTo])
+
+  // Queries
   const { data, isLoading, isError, isFetching } = useListAdmissions(filters, { initialData })
+  const { data: statusCounts } = useAdmissionStatusCounts(countFilters)
+  const { data: stats } = useAdmissionStats(selectedYear)
 
   // Mutations
   const bulkApprove = useBulkApproveAdmissions()
@@ -179,7 +264,7 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   const profiles = data?.profiles ?? []
   const totalCount = data?.total_count ?? 0
 
-  // Column definitions (approve/reject handled in detail page, not list dropdown)
+  // Column definitions
   const columns = useMemo(() => getColumns(), [])
 
   // Table instance
@@ -191,14 +276,10 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     onSortingChange: setSorting,
     onRowSelectionChange: setRowSelection,
     enableRowSelection: true,
-    state: {
-      sorting,
-      rowSelection,
-    },
+    state: { sorting, rowSelection },
     getRowId: (row) => String(row.id),
   })
 
-  // Get selected profiles
   const selectedProfiles = useMemo(() => {
     return table.getSelectedRowModel().rows.map((row) => row.original)
   }, [table, rowSelection])
@@ -207,38 +288,61 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     return selectedProfiles.map((p) => p.id)
   }, [selectedProfiles])
 
-  // Clear selection
   const clearSelection = useCallback(() => {
     setRowSelection({})
   }, [])
 
-  // Reset to page 1 when filters change
   const handleFilterChange = useCallback(() => {
     setPage(1)
   }, [])
 
-  // Handle status filter change
+  // Handle status filter change (dropdown multi-select)
   const handleStatusToggle = useCallback((status: string) => {
     setSelectedStatuses((prev) => {
-      const newStatuses = prev.includes(status)
+      return prev.includes(status)
         ? prev.filter((s) => s !== status)
         : [...prev, status]
-      return newStatuses
     })
+    setActiveTab("all") // Reset tab when manually selecting statuses
     handleFilterChange()
   }, [handleFilterChange])
+
+  // Handle tab click
+  const handleTabClick = useCallback((tabKey: string) => {
+    setActiveTab(tabKey)
+    const tab = STATUS_TABS.find((t) => t.key === tabKey)
+    setSelectedStatuses(tab?.statuses ? [...tab.statuses] : [])
+    setPage(1)
+  }, [])
+
+  // Precompute tab counts to avoid re-creating function reference on every statusCounts update
+  const tabCounts = useMemo(() => {
+    if (!statusCounts?.counts) return undefined
+    const result: Record<string, number> = { all: statusCounts.total }
+    for (const tab of STATUS_TABS) {
+      if (tab.key !== "all") {
+        result[tab.key] = tab.statuses.reduce((sum, s) => sum + (statusCounts.counts[s] ?? 0), 0)
+      }
+    }
+    return result
+  }, [statusCounts])
 
   // Clear all filters
   const clearFilters = useCallback(() => {
     setSearch("")
     setDebouncedSearch("")
     setSelectedStatuses([])
+    setSelectedMajorId(undefined)
+    setSelectedYear(CURRENT_YEAR) // Reset to current year, not undefined
+    setSelectedDegreeLevel(undefined)
+    setSelectedPaymentStatus(undefined)
     setDateFrom(undefined)
     setDateTo(undefined)
+    setActiveTab("all")
     setPage(1)
   }, [])
 
-  // Handle bulk actions
+  // Bulk actions
   const handleBulkApprove = useCallback(async () => {
     if (selectedIds.length === 0) return
     await bulkApprove.mutateAsync({ profile_ids: selectedIds })
@@ -268,8 +372,10 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     })
   }, [exportCsv, selectedStatuses, debouncedSearch, dateFrom, dateTo])
 
-  // Check if any filters are active
+  // Check if any filters are active (beyond default year)
   const hasActiveFilters = selectedStatuses.length > 0 || debouncedSearch || dateFrom || dateTo
+    || selectedMajorId || selectedDegreeLevel || selectedPaymentStatus
+    || (selectedYear !== undefined && selectedYear !== CURRENT_YEAR)
 
   const isAnyLoading = bulkApprove.isPending || bulkReject.isPending || bulkAssign.isPending || exportCsv.isPending
 
@@ -278,7 +384,7 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
-          <ClipboardCheck className="h-7 w-7 md:h-8 md:w-8 text-primary" />
+          <ClipboardCheck className="h-7 w-7 md:h-8 md:w-8 text-primary" aria-hidden="true" />
           <div>
             <h1 className="text-xl md:text-2xl font-bold font-display">Hồ sơ tuyển sinh</h1>
             <p className="text-sm text-muted-foreground">
@@ -289,133 +395,294 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
         </div>
       </div>
 
-      {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row gap-3 mt-4">
-        {/* Search */}
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Tìm kiếm theo tên, email, CCCD..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mt-4">
+          <StatCard
+            label="Tổng hồ sơ"
+            value={stats.total_profiles ?? 0}
+            icon={<FileText className="h-4 w-4 text-muted-foreground" />}
           />
-          {search && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
-              onClick={() => setSearch("")}
-            >
+          <StatCard
+            label="Chờ duyệt"
+            value={stats.submitted_count ?? 0}
+            icon={<Users className="h-4 w-4 text-info-600" />}
+          />
+          <StatCard
+            label="Đã duyệt"
+            value={stats.approved_count ?? 0}
+            icon={<CheckCircle2 className="h-4 w-4 text-success-600" />}
+          />
+          <StatCard
+            label="Đã nhập học"
+            value={stats.enrolled_count ?? 0}
+            icon={<GraduationCap className="h-4 w-4 text-blue-600" />}
+          />
+          <StatCard
+            label="Tỷ lệ chuyển đổi"
+            value={`${stats.conversion_rate ?? 0}%`}
+            icon={<TrendingUp className="h-4 w-4 text-emerald-600" />}
+          />
+          <StatCard
+            label="TB hoàn thiện"
+            value={`${stats.avg_completion ?? 0}%`}
+            icon={<BarChart3 className="h-4 w-4 text-amber-600" />}
+          />
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="flex flex-col gap-3 mt-4">
+        {/* Row 1: Search + Primary Filters */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          {/* Search */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            <Input
+              placeholder="Tìm kiếm theo tên, email, CCCD..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-10"
+            />
+            {search && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+                onClick={() => setSearch("")}
+                aria-label="Xóa tìm kiếm"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+
+          {/* Academic Year */}
+          <Select
+            value={selectedYear !== undefined ? String(selectedYear) : "all"}
+            onValueChange={(val) => {
+              setSelectedYear(val === "all" ? undefined : Number(val))
+              handleFilterChange()
+            }}
+          >
+            <SelectTrigger className="w-full sm:w-[140px]">
+              <SelectValue placeholder="Năm học" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tất cả năm</SelectItem>
+              {yearOptions.map((year) => (
+                <SelectItem key={year} value={String(year)}>
+                  {year}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Major Program */}
+          <Select
+            value={selectedMajorId ?? "all"}
+            onValueChange={(val) => {
+              setSelectedMajorId(val === "all" ? undefined : val)
+              handleFilterChange()
+            }}
+          >
+            <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectValue placeholder="Ngành" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tất cả ngành</SelectItem>
+              {majorPrograms?.map((program: { id: number; name: string }) => (
+                <SelectItem key={program.id} value={String(program.id)}>
+                  {program.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Status Filter (dropdown multi-select) */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="w-full sm:w-auto gap-2">
+                <Filter className="h-4 w-4" aria-hidden="true" />
+                Trạng thái
+                {selectedStatuses.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 h-5 px-1.5">
+                    {selectedStatuses.length}
+                  </Badge>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Lọc theo trạng thái</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {STATUS_OPTIONS.map((option) => (
+                <DropdownMenuCheckboxItem
+                  key={option.value}
+                  checked={selectedStatuses.includes(option.value)}
+                  onCheckedChange={() => handleStatusToggle(option.value)}
+                >
+                  {option.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+              {selectedStatuses.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => { setSelectedStatuses([]); setActiveTab("all") }}>
+                    Xóa bộ lọc
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        {/* Row 2: Secondary Filters */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          {/* Degree Level */}
+          <Select
+            value={selectedDegreeLevel ?? "all"}
+            onValueChange={(val) => {
+              setSelectedDegreeLevel(val === "all" ? undefined : val)
+              handleFilterChange()
+            }}
+          >
+            <SelectTrigger className="w-full sm:w-[160px]">
+              <SelectValue placeholder="Trình độ" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tất cả trình độ</SelectItem>
+              {degreeLevels?.map((level) => (
+                <SelectItem key={level.code} value={level.code}>
+                  {level.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Payment Status */}
+          <Select
+            value={selectedPaymentStatus ?? "all"}
+            onValueChange={(val) => {
+              setSelectedPaymentStatus(val === "all" ? undefined : val)
+              handleFilterChange()
+            }}
+          >
+            <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectValue placeholder="Học phí" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tất cả học phí</SelectItem>
+              {PAYMENT_STATUS_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Date Range Filter */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-full sm:w-auto gap-2">
+                <Calendar className="h-4 w-4" aria-hidden="true" />
+                {dateFrom || dateTo ? (
+                  <span className="text-xs">
+                    {dateFrom ? format(dateFrom, "dd/MM") : "…"} -{" "}
+                    {dateTo ? format(dateTo, "dd/MM") : "…"}
+                  </span>
+                ) : (
+                  "Ngày tạo"
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <div className="flex flex-col sm:flex-row">
+                <div className="p-2">
+                  <p className="text-xs font-medium mb-2 text-muted-foreground">Từ ngày</p>
+                  <CalendarComponent
+                    mode="single"
+                    selected={dateFrom}
+                    onSelect={(date) => {
+                      setDateFrom(date)
+                      handleFilterChange()
+                    }}
+                    locale={vi}
+                  />
+                </div>
+                <div className="p-2 border-t sm:border-t-0 sm:border-l">
+                  <p className="text-xs font-medium mb-2 text-muted-foreground">Đến ngày</p>
+                  <CalendarComponent
+                    mode="single"
+                    selected={dateTo}
+                    onSelect={(date) => {
+                      setDateTo(date)
+                      handleFilterChange()
+                    }}
+                    locale={vi}
+                  />
+                </div>
+              </div>
+              {(dateFrom || dateTo) && (
+                <div className="p-2 border-t">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      setDateFrom(undefined)
+                      setDateTo(undefined)
+                      handleFilterChange()
+                    }}
+                  >
+                    Xóa bộ lọc ngày
+                  </Button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+
+          {/* Clear all filters */}
+          {hasActiveFilters && (
+            <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1">
               <X className="h-4 w-4" />
+              Xóa bộ lọc
             </Button>
           )}
         </div>
+      </div>
 
-        {/* Status Filter */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="w-full sm:w-auto gap-2">
-              <Filter className="h-4 w-4" />
-              Trạng thái
-              {selectedStatuses.length > 0 && (
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5">
-                  {selectedStatuses.length}
-                </Badge>
+      {/* Status Tabs */}
+      <div className="flex items-center gap-1 mt-4 overflow-x-auto pb-1" role="tablist">
+        {STATUS_TABS.map((tab) => {
+          const count = tabCounts?.[tab.key]
+          const isActive = activeTab === tab.key
+          return (
+            <button
+              key={tab.key}
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => handleTabClick(tab.key)}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors",
+                isActive
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
               )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel>Lọc theo trạng thái</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {STATUS_OPTIONS.map((option) => (
-              <DropdownMenuCheckboxItem
-                key={option.value}
-                checked={selectedStatuses.includes(option.value)}
-                onCheckedChange={() => handleStatusToggle(option.value)}
-              >
-                {option.label}
-              </DropdownMenuCheckboxItem>
-            ))}
-            {selectedStatuses.length > 0 && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setSelectedStatuses([])}>
-                  Xóa bộ lọc
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Date Range Filter */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" className="w-full sm:w-auto gap-2">
-              <Calendar className="h-4 w-4" />
-              {dateFrom || dateTo ? (
-                <span className="text-xs">
-                  {dateFrom ? format(dateFrom, "dd/MM") : "..."} -{" "}
-                  {dateTo ? format(dateTo, "dd/MM") : "..."}
+            >
+              {tab.label}
+              {count !== undefined && (
+                <span className={cn(
+                  "inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium",
+                  isActive
+                    ? "bg-primary-foreground/20 text-primary-foreground"
+                    : "bg-muted text-muted-foreground"
+                )}>
+                  {count}
                 </span>
-              ) : (
-                "Ngày tạo"
               )}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="end">
-            <div className="flex flex-col sm:flex-row">
-              <div className="p-2">
-                <p className="text-xs font-medium mb-2 text-muted-foreground">Từ ngày</p>
-                <CalendarComponent
-                  mode="single"
-                  selected={dateFrom}
-                  onSelect={(date) => {
-                    setDateFrom(date)
-                    handleFilterChange()
-                  }}
-                  locale={vi}
-                />
-              </div>
-              <div className="p-2 border-t sm:border-t-0 sm:border-l">
-                <p className="text-xs font-medium mb-2 text-muted-foreground">Đến ngày</p>
-                <CalendarComponent
-                  mode="single"
-                  selected={dateTo}
-                  onSelect={(date) => {
-                    setDateTo(date)
-                    handleFilterChange()
-                  }}
-                  locale={vi}
-                />
-              </div>
-            </div>
-            {(dateFrom || dateTo) && (
-              <div className="p-2 border-t">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => {
-                    setDateFrom(undefined)
-                    setDateTo(undefined)
-                    handleFilterChange()
-                  }}
-                >
-                  Xóa bộ lọc ngày
-                </Button>
-              </div>
-            )}
-          </PopoverContent>
-        </Popover>
-
-        {/* Clear all filters */}
-        {hasActiveFilters && (
-          <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1">
-            <X className="h-4 w-4" />
-            Xóa bộ lọc
-          </Button>
-        )}
+            </button>
+          )
+        })}
       </div>
 
       {/* Content */}
@@ -423,7 +690,6 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
         {/* Loading state */}
         {isLoading && (
           <div className="space-y-3">
-            {/* Desktop skeleton */}
             <div className="hidden md:block rounded-md border">
               <Table>
                 <TableHeader>
@@ -448,7 +714,6 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
                 </TableBody>
               </Table>
             </div>
-            {/* Mobile skeleton */}
             <div className="md:hidden grid gap-3">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Card key={i}>
@@ -538,7 +803,6 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
 
             {/* Mobile: Card View */}
             <div className={cn("md:hidden space-y-2", isFetching && "opacity-60")}>
-              {/* Select All header */}
               <div className="flex items-center gap-2 px-1 py-2">
                 <Checkbox
                   checked={
@@ -551,7 +815,6 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
                 <span className="text-sm text-muted-foreground">Chọn tất cả</span>
               </div>
 
-              {/* Profile Cards */}
               {profiles.map((profile) => (
                 <AdmissionCard
                   key={profile.id}
@@ -676,7 +939,7 @@ function AdmissionCard({ profile, isSelected, onSelect }: AdmissionCardProps) {
       <CardActions>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
+            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Thao tác">
               <MoreVertical className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>

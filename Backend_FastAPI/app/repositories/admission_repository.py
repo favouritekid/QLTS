@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 import unicodedata
 
-from sqlalchemy import select, or_, and_, func, desc, asc
+from sqlalchemy import select, or_, and_, func, desc, asc, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -90,6 +90,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         search: Optional[str] = None,
         statuses: Optional[List[str]] = None,
         major_ids: Optional[List[int]] = None,
+        academic_year: Optional[int] = None,
+        degree_level: Optional[str] = None,
+        payment_status: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         sort_by: str = "created_at",
@@ -106,6 +109,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             search: Search term for name, email, citizen_id
             statuses: List of statuses to filter (multi-select)
             major_ids: List of major/program IDs to filter
+            academic_year: Filter by academic year
+            degree_level: Filter by degree level (via Lead → ProgramOffering → MajorProgram)
+            payment_status: Filter by payment status (paid/unpaid/partial/no_fee)
             date_from: Filter profiles created after this date
             date_to: Filter profiles created before this date
             sort_by: Field to sort by (created_at, updated_at, full_name)
@@ -148,6 +154,19 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if major_ids and len(major_ids) > 0:
             base_conditions.append(models.Lead.offering_id.in_(major_ids))
 
+        # Academic year filter
+        if academic_year is not None:
+            base_conditions.append(models.AdmissionProfile.academic_year == academic_year)
+
+        # Degree level filter (requires JOIN through ProgramOffering → MajorProgram)
+        needs_program_join = bool(degree_level)
+        if degree_level:
+            base_conditions.append(models.MajorProgram.degree_level == degree_level)
+
+        # Payment status filter (subquery EXISTS pattern - no JOIN needed)
+        if payment_status:
+            self._apply_payment_status_filter(base_conditions, payment_status)
+
         # Date range filter
         if date_from:
             base_conditions.append(models.AdmissionProfile.created_at >= date_from)
@@ -159,6 +178,12 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             select(func.count(models.AdmissionProfile.id))
             .join(models.Lead)
         )
+        if needs_program_join:
+            count_query = count_query.join(
+                models.ProgramOffering, models.Lead.offering_id == models.ProgramOffering.id
+            ).join(
+                models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
+            )
         if base_conditions:
             count_query = count_query.where(and_(*base_conditions))
 
@@ -180,7 +205,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         data_query = (
             select(models.AdmissionProfile)
             .join(models.Lead)
-            .options(
+        )
+        if needs_program_join:
+            data_query = data_query.join(
+                models.ProgramOffering, models.Lead.offering_id == models.ProgramOffering.id
+            ).join(
+                models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
+            )
+        data_query = data_query.options(
                 selectinload(models.AdmissionProfile.lead).options(
                     selectinload(models.Lead.offering).options(
                         selectinload(models.ProgramOffering.program),
@@ -189,11 +221,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
-            )
-            .order_by(order_func(sort_column))
-            .offset(skip)
-            .limit(limit)
-        )
+            ).order_by(order_func(sort_column)).offset(skip).limit(limit)
         if base_conditions:
             data_query = data_query.where(and_(*base_conditions))
 
@@ -209,6 +237,228 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             object.__setattr__(profile, 'program_name', program_name)
 
         return profiles, total_count
+
+    @staticmethod
+    def _apply_payment_status_filter(base_conditions: list, payment_status: str) -> None:
+        """Apply payment status subquery filter to base_conditions."""
+        from app.models import Fee, FeeStatusEnum
+
+        if payment_status == "paid":
+            # All fees are paid/waived (no unpaid fees exist) AND has at least one fee
+            unpaid_exists = select(Fee.id).where(
+                Fee.admission_profile_id == models.AdmissionProfile.id,
+                Fee.status.notin_([FeeStatusEnum.paid, FeeStatusEnum.waived, FeeStatusEnum.cancelled])
+            ).correlate(models.AdmissionProfile).exists()
+            has_fees = select(Fee.id).where(
+                Fee.admission_profile_id == models.AdmissionProfile.id
+            ).correlate(models.AdmissionProfile).exists()
+            base_conditions.append(has_fees)
+            base_conditions.append(~unpaid_exists)
+        elif payment_status == "unpaid":
+            unpaid_exists = select(Fee.id).where(
+                Fee.admission_profile_id == models.AdmissionProfile.id,
+                Fee.status.in_([FeeStatusEnum.pending, FeeStatusEnum.calculated, FeeStatusEnum.overdue])
+            ).correlate(models.AdmissionProfile).exists()
+            base_conditions.append(unpaid_exists)
+        elif payment_status == "partial":
+            partial_exists = select(Fee.id).where(
+                Fee.admission_profile_id == models.AdmissionProfile.id,
+                Fee.status == FeeStatusEnum.partial
+            ).correlate(models.AdmissionProfile).exists()
+            base_conditions.append(partial_exists)
+        elif payment_status == "no_fee":
+            no_fees = ~select(Fee.id).where(
+                Fee.admission_profile_id == models.AdmissionProfile.id
+            ).correlate(models.AdmissionProfile).exists()
+            base_conditions.append(no_fees)
+
+    # =========================================================================
+    # AGGREGATE QUERY METHODS (Phase 2 & 3)
+    # =========================================================================
+
+    def _build_base_conditions(
+        self,
+        unit_id: Optional[int] = None,
+        search: Optional[str] = None,
+        major_ids: Optional[List[int]] = None,
+        academic_year: Optional[int] = None,
+        degree_level: Optional[str] = None,
+        payment_status: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> Tuple[list, bool]:
+        """Build shared filter conditions for aggregate queries.
+
+        Returns:
+            Tuple of (conditions list, needs_program_join bool)
+        """
+        conditions = []
+        if unit_id is not None:
+            conditions.append(models.Lead.unit_id == unit_id)
+        if search:
+            normalized_search = unicodedata.normalize('NFC', search.strip())
+            search_term = f"%{normalized_search}%"
+            conditions.append(or_(
+                models.Lead.full_name.ilike(search_term),
+                models.Lead.email.ilike(search_term),
+                models.AdmissionProfile.citizen_id.ilike(search_term),
+            ))
+        if major_ids and len(major_ids) > 0:
+            conditions.append(models.Lead.offering_id.in_(major_ids))
+        if academic_year is not None:
+            conditions.append(models.AdmissionProfile.academic_year == academic_year)
+        needs_join = bool(degree_level)
+        if degree_level:
+            conditions.append(models.MajorProgram.degree_level == degree_level)
+        if payment_status:
+            self._apply_payment_status_filter(conditions, payment_status)
+        if date_from:
+            conditions.append(models.AdmissionProfile.created_at >= date_from)
+        if date_to:
+            conditions.append(models.AdmissionProfile.created_at <= date_to)
+        return conditions, needs_join
+
+    async def get_status_counts(
+        self,
+        unit_id: Optional[int] = None,
+        search: Optional[str] = None,
+        major_ids: Optional[List[int]] = None,
+        academic_year: Optional[int] = None,
+        degree_level: Optional[str] = None,
+        payment_status: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> dict:
+        """
+        Get count of profiles grouped by status.
+        Applies all filters EXCEPT status (to count for all tabs).
+
+        Returns:
+            dict with 'counts' (status -> count) and 'total'
+        """
+        conditions, needs_join = self._build_base_conditions(
+            unit_id=unit_id, search=search, major_ids=major_ids,
+            academic_year=academic_year, degree_level=degree_level,
+            payment_status=payment_status, date_from=date_from, date_to=date_to,
+        )
+
+        query = (
+            select(
+                models.AdmissionProfile.status,
+                func.count(models.AdmissionProfile.id)
+            )
+            .join(models.Lead)
+        )
+        if needs_join:
+            query = query.join(
+                models.ProgramOffering, models.Lead.offering_id == models.ProgramOffering.id
+            ).join(
+                models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
+            )
+        if conditions:
+            query = query.where(and_(*conditions))
+        query = query.group_by(models.AdmissionProfile.status)
+
+        result = await self.db.execute(query)
+        rows = result.all()
+
+        counts = {row[0]: row[1] for row in rows}
+        total = sum(counts.values())
+        return {"counts": counts, "total": total}
+
+    async def get_aggregate_stats(
+        self,
+        unit_id: Optional[int] = None,
+        academic_year: Optional[int] = None,
+    ) -> dict:
+        """
+        Get aggregate statistics for admission profiles.
+
+        Returns:
+            dict with total_profiles, status counts, conversion_rate, avg_completion
+        """
+        conditions = []
+        if unit_id is not None:
+            conditions.append(models.Lead.unit_id == unit_id)
+        if academic_year is not None:
+            conditions.append(models.AdmissionProfile.academic_year == academic_year)
+
+        # Status counts + avg completion in one query
+        query = (
+            select(
+                models.AdmissionProfile.status,
+                func.count(models.AdmissionProfile.id),
+                func.avg(models.AdmissionProfile.completion_percentage),
+            )
+            .join(models.Lead)
+        )
+        if conditions:
+            query = query.where(and_(*conditions))
+        query = query.group_by(models.AdmissionProfile.status)
+
+        result = await self.db.execute(query)
+        rows = result.all()
+
+        status_counts = {}
+        total = 0
+        completion_sum = 0.0
+        count_for_avg = 0
+        for status_val, cnt, avg_comp in rows:
+            status_counts[status_val] = cnt
+            total += cnt
+            if avg_comp is not None:
+                completion_sum += float(avg_comp) * cnt
+                count_for_avg += cnt
+
+        avg_completion = round(completion_sum / count_for_avg, 1) if count_for_avg > 0 else 0.0
+
+        draft_count = status_counts.get("draft", 0)
+        submitted_count = status_counts.get("submitted", 0) + status_counts.get("resubmitted", 0)
+        approved_count = (
+            status_counts.get("approved", 0) +
+            status_counts.get("confirmed", 0) +
+            status_counts.get("overridden", 0)
+        )
+        enrolled_count = status_counts.get("enrolled", 0)
+        rejected_count = status_counts.get("rejected", 0)
+        conversion_rate = round((enrolled_count / total) * 100, 1) if total > 0 else 0.0
+
+        return {
+            "total_profiles": total,
+            "draft_count": draft_count,
+            "submitted_count": submitted_count,
+            "approved_count": approved_count,
+            "enrolled_count": enrolled_count,
+            "rejected_count": rejected_count,
+            "conversion_rate": conversion_rate,
+            "avg_completion": avg_completion,
+        }
+
+    async def get_distinct_academic_years(
+        self,
+        unit_id: Optional[int] = None,
+    ) -> List[int]:
+        """
+        Get distinct academic years that have admission profiles.
+        Ordered descending (most recent first).
+
+        Args:
+            unit_id: Filter by lead.unit_id (IDOR)
+
+        Returns:
+            List of academic years (integers)
+        """
+        query = (
+            select(distinct(models.AdmissionProfile.academic_year))
+            .join(models.Lead)
+            .where(models.AdmissionProfile.academic_year.isnot(None))
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+        query = query.order_by(desc(models.AdmissionProfile.academic_year))
+
+        result = await self.db.execute(query)
+        return [row[0] for row in result.all()]
 
     # =========================================================================
     # CREATE PROFILE METHODS

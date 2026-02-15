@@ -179,6 +179,9 @@ from .admission import (
     ConfirmTokenResponse,
     ConfirmTokenInfoResponse,
     SendConfirmationResponse,
+    # Aggregate schemas
+    AdmissionStatusCounts,
+    AdmissionStats,
 )
 
 # --- Từ permissions.py ---

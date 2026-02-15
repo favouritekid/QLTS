@@ -1385,10 +1385,14 @@ async def get_profiles(
     db: AsyncSession,
     skip: int,
     limit: int,
-    current_user: models.User,
+    current_user: models.User = None,
+    unit_id: Optional[int] = None,
     search: Optional[str] = None,
     statuses: Optional[List[str]] = None,
     major_ids: Optional[List[int]] = None,
+    academic_year: Optional[int] = None,
+    degree_level: Optional[str] = None,
+    payment_status: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     sort_by: str = "created_at",
@@ -1399,28 +1403,15 @@ async def get_profiles(
 
     Security:
     - IDOR: Automatically filters by unit_id for non-admin users.
-
-    Args:
-        db: Database session
-        skip: Pagination offset
-        limit: Page size
-        current_user: Current authenticated user
-        search: Search term for name, email, citizen_id
-        statuses: List of statuses to filter (multi-select)
-        major_ids: List of major/program IDs to filter
-        date_from: Filter profiles created after this date
-        date_to: Filter profiles created before this date
-        sort_by: Field to sort by
-        order: Sort order (asc, desc)
-
-    Returns:
-        Tuple of (List of AdmissionProfile, total_count)
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
     # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
-    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    if unit_id is None and current_user is not None:
+        unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    else:
+        unit_filter = unit_id
 
     # Get profiles using repository with count
     profiles, total_count = await admission_repo.get_filtered_with_count(
@@ -1430,6 +1421,9 @@ async def get_profiles(
         search=search,
         statuses=statuses,
         major_ids=major_ids,
+        academic_year=academic_year,
+        degree_level=degree_level,
+        payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
         sort_by=sort_by,
@@ -1437,6 +1431,65 @@ async def get_profiles(
     )
 
     return profiles, total_count
+
+
+async def get_status_counts(
+    db: AsyncSession,
+    current_user: models.User,
+    search: Optional[str] = None,
+    major_ids: Optional[List[int]] = None,
+    academic_year: Optional[int] = None,
+    degree_level: Optional[str] = None,
+    payment_status: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> dict:
+    """Get status counts for admission profiles (all filters except status)."""
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+
+    return await admission_repo.get_status_counts(
+        unit_id=unit_filter,
+        search=search,
+        major_ids=major_ids,
+        academic_year=academic_year,
+        degree_level=degree_level,
+        payment_status=payment_status,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+async def get_admission_stats(
+    db: AsyncSession,
+    current_user: models.User,
+    academic_year: Optional[int] = None,
+) -> dict:
+    """Get aggregate statistics for admission profiles."""
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+
+    return await admission_repo.get_aggregate_stats(
+        unit_id=unit_filter,
+        academic_year=academic_year,
+    )
+
+
+async def get_academic_years(
+    db: AsyncSession,
+    current_user: models.User,
+) -> List[int]:
+    """Get distinct academic years for the current user's scope."""
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+
+    return await admission_repo.get_distinct_academic_years(unit_id=unit_filter)
 
 
 async def get_profile(

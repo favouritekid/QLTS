@@ -1105,6 +1105,24 @@ class SendConfirmationResponse(BaseModel):
     )
 
 
+class AdmissionStatusCounts(BaseModel):
+    """Status counts for tab badges. From GET /admissions/status-counts."""
+    counts: Dict[str, int]
+    total: int
+
+
+class AdmissionStats(BaseModel):
+    """Aggregate statistics. From GET /admissions/stats."""
+    total_profiles: int = 0
+    draft_count: int = 0
+    submitted_count: int = 0
+    approved_count: int = 0
+    enrolled_count: int = 0
+    rejected_count: int = 0
+    conversion_rate: float = 0.0
+    avg_completion: float = 0.0
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -1135,4 +1153,7 @@ __all__ = [
     "ConfirmTokenResponse",
     "ConfirmTokenInfoResponse",
     "SendConfirmationResponse",
+    # Aggregate schemas
+    "AdmissionStatusCounts",
+    "AdmissionStats",
 ]

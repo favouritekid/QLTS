@@ -23,6 +23,10 @@ export {
   // Queries
   useListAdmissions,
   useGetAdmission,
+  useAcademicYears,
+  useDegreeLevelsPublic,
+  useAdmissionStatusCounts,
+  useAdmissionStats,
   // Mutations
   useCreateAdmission,
   useUpdateAdmission,

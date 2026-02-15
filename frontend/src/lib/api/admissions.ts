@@ -13,6 +13,8 @@ import type {
   EnrollStudentResponse,
   AdmissionsPage,
   AdmissionListParams,
+  AdmissionStatusCounts,
+  AdmissionStats,
   BulkApproveRequest,
   BulkRejectRequest,
   BulkAssignRequest,
@@ -248,6 +250,41 @@ export async function resetDocument(
 }
 
 // ============================================
+// AGGREGATE ENDPOINTS
+// ============================================
+
+/**
+ * Get distinct academic years with data
+ * GET /api/admissions/academic-years
+ */
+export async function getAcademicYears(): Promise<number[]> {
+  const response = await api.get<number[]>('/api/admissions/academic-years')
+  return response.data
+}
+
+/**
+ * Get status counts grouped by status (for tab badges)
+ * GET /api/admissions/status-counts
+ */
+export async function getStatusCounts(
+  params?: Omit<AdmissionListParams, 'page' | 'page_size' | 'status' | 'sort_by' | 'order'>
+): Promise<AdmissionStatusCounts> {
+  const response = await api.get<AdmissionStatusCounts>('/api/admissions/status-counts', { params })
+  return response.data
+}
+
+/**
+ * Get aggregate admission statistics
+ * GET /api/admissions/stats
+ */
+export async function getAdmissionStats(
+  params?: { academic_year?: number }
+): Promise<AdmissionStats> {
+  const response = await api.get<AdmissionStats>('/api/admissions/stats', { params })
+  return response.data
+}
+
+// ============================================
 // BULK ACTIONS
 // ============================================
 
@@ -330,6 +367,10 @@ export const admissionsApi = {
   verifyDocumentFormat,
   rejectDocument,
   resetDocument,
+  // Aggregate
+  getAcademicYears,
+  getStatusCounts,
+  getAdmissionStats,
   // Bulk actions
   bulkApproveAdmissions,
   bulkRejectAdmissions,
