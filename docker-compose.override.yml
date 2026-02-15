@@ -51,13 +51,20 @@ services:
       BACKEND_URL: http://backend:8000
     ports:
       - "3000:3000"
+    volumes:
+      # Persist Turbopack cache between restarts — avoids cold recompilation
+      # (saves 5-17s per page on first visit after restart)
+      - frontend_next_cache:/app/.next
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 3G
     develop:
       watch:
-        # Source code → sync for HMR (Turbopack picks up inotify natively)
+        # Source code → sync into container, inotify triggers Turbopack HMR
+        # NOTE: On Windows, bind mounts don't propagate inotify events.
+        # docker compose watch handles this by copying files, which generates
+        # real inotify events inside the Linux container.
         - action: sync
           path: ./frontend/src
           target: /app/src
@@ -105,3 +112,6 @@ services:
   redis:
     ports:
       - "127.0.0.1:6380:6379"
+
+volumes:
+  frontend_next_cache:
