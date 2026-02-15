@@ -227,8 +227,11 @@ migration_data/
 # ===================================
 .agent/
 .agents/
-.claude/skills/
+.claude/
 docs/
+
+# Debug scripts
+Backend_FastAPI/debug_*.py
 
 # Lint & debug output
 frontend/lint_output.txt
