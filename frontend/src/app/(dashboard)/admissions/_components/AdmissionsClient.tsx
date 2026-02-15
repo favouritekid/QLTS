@@ -111,10 +111,11 @@ const DEFAULT_PAGE_SIZE = 20
 const STATUS_OPTIONS = [
   { value: "draft", label: "Nháp" },
   { value: "submitted", label: "Chờ duyệt" },
-  { value: "resubmitted", label: "Nộp lại" },
+  { value: "resubmitted", label: "Đã nộp lại" },
   { value: "approved", label: "Đã duyệt" },
   { value: "rejected", label: "Từ chối" },
   { value: "confirmed", label: "Đã xác nhận" },
+  { value: "overridden", label: "Đã override" },
   { value: "enrolled", label: "Đã nhập học" },
 ]
 
@@ -178,11 +179,8 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   const profiles = data?.profiles ?? []
   const totalCount = data?.total_count ?? 0
 
-  // Column definitions with actions
-  const columns = useMemo(() => getColumns({
-    canApprove: true,
-    canReject: true,
-  }), [])
+  // Column definitions (approve/reject handled in detail page, not list dropdown)
+  const columns = useMemo(() => getColumns(), [])
 
   // Table instance
   const table = useReactTable({

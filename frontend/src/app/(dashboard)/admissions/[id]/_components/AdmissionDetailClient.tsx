@@ -402,6 +402,10 @@ export function AdmissionDetailClient({
           onSave={handleSave}
           onSubmit={handleSubmit}
           onEnroll={handleEnroll}
+          onApprove={handleApprove}
+          onReject={handleReject}
+          isApproving={approveMutation.isPending}
+          isRejecting={rejectMutation.isPending}
           onDelete={handleDelete}
           isDeleting={deleteMutation.isPending}
           onCheckCondition={handleCheckCondition}

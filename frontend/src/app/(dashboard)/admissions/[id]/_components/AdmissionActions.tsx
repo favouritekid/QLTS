@@ -165,31 +165,27 @@ export function AdmissionActions({
             </>
           )}
 
-          {/* Manager Actions - Only when status = submitted */}
-          {profile.status === 'submitted' && (
-            <>
-              {can('approve') && onApprove && (
-                <Button
-                  onClick={onApprove}
-                  disabled={isApproving}
-                  className="bg-success-600 hover:bg-success-700"
-                >
-                  {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
-                  Phê duyệt
-                </Button>
-              )}
+          {/* Manager Actions - Permission-based (ADR-FE-002) */}
+          {can('approve') && onApprove && (
+            <Button
+              onClick={onApprove}
+              disabled={isApproving}
+              className="bg-success-600 hover:bg-success-700"
+            >
+              {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+              Phê duyệt
+            </Button>
+          )}
 
-              {can('reject') && onReject && (
-                <Button
-                  onClick={onReject}
-                  disabled={isRejecting}
-                  variant="destructive"
-                >
-                  {isRejecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
-                  Từ chối
-                </Button>
-              )}
-            </>
+          {can('reject') && onReject && (
+            <Button
+              onClick={onReject}
+              disabled={isRejecting}
+              variant="destructive"
+            >
+              {isRejecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
+              Từ chối
+            </Button>
           )}
 
           {/* Enroll - can('enroll') when status = approved */}

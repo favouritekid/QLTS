@@ -37,12 +37,13 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 export const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   draft: { label: "Nháp", color: "bg-muted text-muted-foreground" },
-  submitted: { label: "Chờ duyệt", color: "bg-warning-100 text-warning-700" },
-  resubmitted: { label: "Nộp lại", color: "bg-warning-100 text-warning-700" },
+  submitted: { label: "Chờ duyệt", color: "bg-info-100 text-info-700" },
+  resubmitted: { label: "Đã nộp lại", color: "bg-info-100 text-info-700" },
   approved: { label: "Đã duyệt", color: "bg-success-100 text-success-700" },
   rejected: { label: "Từ chối", color: "bg-error-100 text-error-700" },
-  confirmed: { label: "Đã xác nhận", color: "bg-success-100 text-success-700" },
-  enrolled: { label: "Đã nhập học", color: "bg-info-100 text-info-700" },
+  confirmed: { label: "Đã xác nhận", color: "bg-emerald-100 text-emerald-700" },
+  overridden: { label: "Đã override", color: "bg-purple-100 text-purple-700" },
+  enrolled: { label: "Đã nhập học", color: "bg-blue-100 text-blue-700" },
 }
 
 export const ELIGIBILITY_CONFIG: Record<string, { label: string; color: string }> = {
