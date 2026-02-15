@@ -339,7 +339,7 @@ def _compute_frontend_fields(
         "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status == "rejected" and (is_owner or is_officer),
-        "enroll": status == "approved" and is_officer,
+        "enroll": status in ["confirmed", "overridden"] and is_officer,
         "delete": status == "draft" and is_admin,
         "view": True,
     }
