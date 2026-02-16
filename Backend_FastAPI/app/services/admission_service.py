@@ -784,7 +784,7 @@ async def _create_admission_milestone_consultation(
         log.warning(
             "Skipping admission milestone consultation: lead already converted",
             lead_id=lead.id,
-            event=event,
+            admission_event=event,
             current_status="converted",
             attempted_stage=projection.pipeline_stage_id,
             attempted_status=projection.consultation_status_id,
@@ -799,7 +799,7 @@ async def _create_admission_milestone_consultation(
     if not consultation_status:
         log.error(
             "ConsultationStatus not found for admission event",
-            event=event,
+            admission_event=event,
             consultation_status_id=projection.consultation_status_id,
         )
         raise ResourceNotFoundError(
@@ -1911,7 +1911,7 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     
     # STRICT RULE: Check required subject count
     applied_rules = profile.applied_rules or {}
-    required_count = applied_rules.get("required_subject_count", 3)
+    required_count = applied_rules.get("required_subject_count") or 3
     
     current_count = len(target_scores) if target_scores else 0
     

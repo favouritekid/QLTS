@@ -28,7 +28,7 @@ pytestmark = pytest.mark.asyncio
 # ==============================================================================
 
 
-async def create_test_lead(unit_id: int, offering_id: int = None) -> int:
+async def create_test_lead(unit_id: int, offering_id: int = None, assigned_officer_id: int = None) -> int:
     """Create a test lead for admission profile."""
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -39,6 +39,7 @@ async def create_test_lead(unit_id: int, offering_id: int = None) -> int:
                 source="website",
                 unit_id=unit_id,
                 offering_id=offering_id,
+                assigned_officer_id=assigned_officer_id,
             )
             session.add(lead)
             await session.flush()
@@ -66,7 +67,59 @@ async def create_admission_profile_direct(
             session.add(profile)
             await session.flush()
             profile_id = profile.id
-        
+
+        result = await session.execute(
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.id == profile_id)
+        )
+        return result.scalar_one()
+
+
+async def create_submittable_profile_direct(
+    lead_id: int,
+    citizen_id: str,
+    academic_year: int = 2025,
+) -> models.AdmissionProfile:
+    """Create a profile that can be submitted (with subject scores, family_info, etc.)."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            subj = (await session.execute(
+                select(models.Subject).where(models.Subject.code == "TOAN")
+            )).scalar_one_or_none()
+            if not subj:
+                subj = models.Subject(code="TOAN", name_vi="Toan", is_active=True)
+                session.add(subj)
+                await session.flush()
+
+            profile = models.AdmissionProfile(
+                lead_id=lead_id,
+                status="draft",
+                citizen_id=citizen_id,
+                academic_year=academic_year,
+                version=1,
+                applied_rules={
+                    "min_gpa": 0,
+                    "mandatory_docs": [],
+                    "allowed_subject_codes": ["TOAN"],
+                    "scoring_method": "sum",
+                    "required_subject_count": 1,
+                    "subject_selection_mode": "fixed",
+                },
+                family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
+                academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+            )
+            session.add(profile)
+            await session.flush()
+
+            score = models.ProfileSubjectScore(
+                profile_id=profile.id,
+                subject_id=subj.id,
+                score=8.0,
+            )
+            session.add(score)
+            await session.flush()
+            profile_id = profile.id
+
         result = await session.execute(
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
@@ -125,19 +178,18 @@ class TestFullAdmissionLifecycle:
         """
         unit_id = seed_lead_dependencies["unit_id"]
         
-        # Create profile in draft status
-        lead_id = await create_test_lead(unit_id)
-        profile = await create_admission_profile_direct(
+        # Create submittable profile (assigned to officer for 3-tier IDOR)
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
+        profile = await create_submittable_profile_direct(
             lead_id=lead_id,
             citizen_id="100000000001",
             academic_year=2025,
-            status="draft",
         )
-        
+
         officer_headers = await get_auth_headers(client, officer_user_in_db)
         manager_headers = await get_auth_headers(client, manager_user_in_db)
         admin_headers = await get_auth_headers(client, admin_user_in_db)
-        
+
         # Step 1: Officer submits profile
         submit_response = await client.post(
             f"/api/admissions/{profile.id}/submit",
@@ -158,10 +210,20 @@ class TestFullAdmissionLifecycle:
         assert updated_profile.status == "approved"
         assert updated_profile.approved_by_id is not None
         
-        # Step 3: Skip confirm (uses magic link, not API endpoint)
-        # Instead, admin can directly enroll from approved status
-        
-        # Step 4: Admin enrolls student (from approved status)
+        # Step 3: Simulate confirmation (token-based in production)
+        # Set status to 'confirmed' directly in DB (token flow tested in state_transitions)
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == profile.id)
+                )
+                p = result.scalar_one()
+                p.status = "confirmed"
+                p.version += 1
+
+        # Step 4: Admin enrolls student (from confirmed status)
+        confirmed_profile = await reload_profile(profile.id)
         enroll_response = await client.post(
             f"/api/admissions/{profile.id}/enroll",
             headers=admin_headers,
@@ -238,8 +300,8 @@ class TestRejectionAndResubmitFlow:
         Verifies officer can resubmit after manager rejection.
         """
         unit_id = seed_lead_dependencies["unit_id"]
-        
-        lead_id = await create_test_lead(unit_id)
+
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
         profile = await create_admission_profile_direct(
             lead_id=lead_id,
             citizen_id="100000000003",
@@ -340,15 +402,15 @@ class TestOptimisticLocking:
         Verifies optimistic locking via version field.
         """
         unit_id = seed_lead_dependencies["unit_id"]
-        
-        lead_id = await create_test_lead(unit_id)
+
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
         profile = await create_admission_profile_direct(
             lead_id=lead_id,
             citizen_id="100000000005",
             academic_year=2025,
             status="draft",
         )
-        
+
         officer_headers = await get_auth_headers(client, officer_user_in_db)
         
         # First update (should succeed)
@@ -381,15 +443,15 @@ class TestOptimisticLocking:
         Test that approving with stale version is rejected.
         """
         unit_id = seed_lead_dependencies["unit_id"]
-        
-        lead_id = await create_test_lead(unit_id)
+
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
         profile = await create_admission_profile_direct(
             lead_id=lead_id,
             citizen_id="100000000006",
             academic_year=2025,
             status="submitted",
         )
-        
+
         officer_headers = await get_auth_headers(client, officer_user_in_db)
         manager_headers = await get_auth_headers(client, manager_user_in_db)
         

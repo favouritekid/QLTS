@@ -26,7 +26,7 @@ pytestmark = pytest.mark.asyncio
 # ==============================================================================
 
 
-async def create_test_lead(unit_id: int) -> int:
+async def create_test_lead(unit_id: int, assigned_officer_id: int = None) -> int:
     """Create a test lead for admission profile."""
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -36,6 +36,7 @@ async def create_test_lead(unit_id: int) -> int:
                 email=f"upload_{datetime.now().timestamp():.0f}@test.com",
                 source="website",
                 unit_id=unit_id,
+                assigned_officer_id=assigned_officer_id,
             )
             session.add(lead)
             await session.flush()
@@ -93,8 +94,8 @@ class TestDocumentUploadEndpoint:
         Document upload endpoint should exist and respond.
         """
         unit_id = seed_lead_dependencies["unit_id"]
-        
-        lead_id = await create_test_lead(unit_id)
+
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
         profile_id = await create_admission_profile(lead_id, "300000000001")
         
         headers = await get_auth_headers(client, officer_user_in_db)
@@ -178,8 +179,8 @@ class TestUploadAccessControl:
         Officer should be able to upload documents for profiles in their unit.
         """
         unit_id = seed_lead_dependencies["unit_id"]
-        
-        lead_id = await create_test_lead(unit_id)
+
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
         profile_id = await create_admission_profile(lead_id, "300000000003")
         
         headers = await get_auth_headers(client, officer_user_in_db)

@@ -28,7 +28,7 @@ pytestmark = pytest.mark.asyncio
 # ==============================================================================
 
 
-async def create_test_lead(unit_id: int, offering_id: int = None) -> int:
+async def create_test_lead(unit_id: int, offering_id: int = None, assigned_officer_id: int = None) -> int:
     """Create a test lead for admission profile."""
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -39,6 +39,7 @@ async def create_test_lead(unit_id: int, offering_id: int = None) -> int:
                 source="website",
                 unit_id=unit_id,
                 offering_id=offering_id,
+                assigned_officer_id=assigned_officer_id,
             )
             session.add(lead)
             await session.flush()
@@ -66,7 +67,59 @@ async def create_admission_profile_direct(
             session.add(profile)
             await session.flush()
             profile_id = profile.id
-        
+
+        result = await session.execute(
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.id == profile_id)
+        )
+        return result.scalar_one()
+
+
+async def create_submittable_profile_direct(
+    lead_id: int,
+    citizen_id: str,
+    academic_year: int = 2025,
+) -> models.AdmissionProfile:
+    """Create a profile that can be submitted (with subject scores, family_info, etc.)."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            subj = (await session.execute(
+                select(models.Subject).where(models.Subject.code == "TOAN")
+            )).scalar_one_or_none()
+            if not subj:
+                subj = models.Subject(code="TOAN", name_vi="Toan", is_active=True)
+                session.add(subj)
+                await session.flush()
+
+            profile = models.AdmissionProfile(
+                lead_id=lead_id,
+                status="draft",
+                citizen_id=citizen_id,
+                academic_year=academic_year,
+                version=1,
+                applied_rules={
+                    "min_gpa": 0,
+                    "mandatory_docs": [],
+                    "allowed_subject_codes": ["TOAN"],
+                    "scoring_method": "sum",
+                    "required_subject_count": 1,
+                    "subject_selection_mode": "fixed",
+                },
+                family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
+                academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+            )
+            session.add(profile)
+            await session.flush()
+
+            score = models.ProfileSubjectScore(
+                profile_id=profile.id,
+                subject_id=subj.id,
+                score=8.0,
+            )
+            session.add(score)
+            await session.flush()
+            profile_id = profile.id
+
         result = await session.execute(
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
@@ -78,14 +131,17 @@ async def get_auth_headers(client: AsyncClient, user_info: dict) -> dict:
     """Login and get auth headers."""
     login_data = {"username": user_info["username"], "password": user_info["password"]}
     res = await client.post("/api/auth/login", data=login_data)
-    
+
     if res.status_code != 200:
         pytest.fail(f"Login failed: {res.status_code} - {res.text}")
-    
+
     access_token = res.cookies.get("access_token")
     if not access_token:
         pytest.fail("Login succeeded but access_token cookie not found")
-    
+
+    # Clear cookies to prevent cross-user contamination in multi-user tests
+    client.cookies.delete("access_token")
+
     return {"Authorization": f"Bearer {access_token}"}
 
 
@@ -121,13 +177,12 @@ class TestPessimisticLocking:
         """
         unit_id = seed_lead_dependencies["unit_id"]
         
-        # Create profile in draft status
-        lead_id = await create_test_lead(unit_id)
-        profile = await create_admission_profile_direct(
+        # Create submittable profile (assigned to officer for 3-tier IDOR)
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
+        profile = await create_submittable_profile_direct(
             lead_id=lead_id,
             citizen_id="333322221111",
             academic_year=2025,
-            status="draft",
         )
         
         headers = await get_auth_headers(client, officer_user_in_db)

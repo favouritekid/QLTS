@@ -327,122 +327,137 @@ def _verify_test_database_safety():
     log.info(f"✅ Safety check passed: APP_ENV={current_env}, DB_URL={db_url[:60]}...")
 
 
+# ===============================================================
+# === SCHEMA MANAGEMENT: Create once, truncate per test ===
+# ===============================================================
+#
+# Strategy:
+#   1. First test in session: DROP SCHEMA CASCADE + CREATE all (clean slate)
+#   2. Subsequent tests: TRUNCATE all tables (fast, no DDL, no asyncpg cache issues)
+#
+# Why not DROP/CREATE per test?
+#   - asyncpg caches prepared statements keyed by SQL text. DDL operations
+#     (CREATE/DROP TYPE) on different connections cause stale cache entries,
+#     leading to "enum already exists" or "table does not exist" errors.
+#   - TRUNCATE is DML, not DDL — it never touches pg_type or pg_class,
+#     so asyncpg's cache stays valid.
+# ===============================================================
+
+_schema_initialized = False
+
+
+async def _init_schema_once():
+    """Create the full schema from scratch. Called once per pytest session."""
+    from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
+
+    # Use a SEPARATE short-lived engine for schema DDL.
+    # This avoids polluting the main engine's asyncpg connection cache
+    # with DDL operations that would become stale after DROP/CREATE.
+    setup_engine = _create_engine(
+        settings.DATABASE_URL,
+        pool_size=2,
+        max_overflow=0,
+        connect_args={"command_timeout": 60},
+    )
+
+    try:
+        # Step 1: Nuke everything via DROP SCHEMA CASCADE (clean slate).
+        # Safe because this is a short-lived engine — no other code holds
+        # connections from it. The main engine gets fresh connections after.
+        async with setup_engine.begin() as conn:
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+        log.info("[Schema Init] Step 1: DROP SCHEMA CASCADE complete")
+
+        # Must dispose to clear asyncpg cache of the old schema
+        await setup_engine.dispose()
+
+        # Step 2: Recreate with a fresh engine (new connections, no stale cache)
+        setup_engine = _create_engine(
+            settings.DATABASE_URL,
+            pool_size=2,
+            max_overflow=0,
+            connect_args={"command_timeout": 60},
+        )
+        async with setup_engine.begin() as conn:
+            await conn.run_sync(AppBase.metadata.create_all)
+
+            if CasbinBase:
+                await conn.run_sync(CasbinBase.metadata.create_all)
+                await conn.execute(text("""
+                    DO $$ BEGIN
+                        ALTER TABLE casbin_rule
+                        ADD COLUMN IF NOT EXISTS template_id VARCHAR(50),
+                        ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP,
+                        ADD COLUMN IF NOT EXISTS applied_by INTEGER;
+                        CREATE INDEX IF NOT EXISTS ix_casbin_rule_template_id
+                        ON casbin_rule(template_id);
+                    EXCEPTION WHEN undefined_table THEN
+                        NULL;
+                    END $$;
+                """))
+
+            tc = await conn.execute(text(
+                "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"
+            ))
+            table_count = tc.scalar()
+            log.info(f"[Schema Init] Step 2: Created {table_count} tables")
+            if table_count == 0:
+                raise RuntimeError(
+                    "Schema init produced 0 tables! "
+                    "Fix: DROP DATABASE qlts_test; CREATE DATABASE qlts_test;"
+                )
+    finally:
+        await setup_engine.dispose()
+
+    log.info("[Schema Init] Schema initialization complete")
+
+
+async def _truncate_all_tables():
+    """Truncate all data from all tables in a single statement.
+
+    Uses a single TRUNCATE for all tables (much faster than one-by-one)
+    and temporarily disables statement_timeout to avoid 30s cutoff.
+    """
+    async with engine.begin() as conn:
+        # Disable statement_timeout for bulk truncate (default 30s is too short)
+        await conn.execute(text("SET LOCAL statement_timeout = 0"))
+        result = await conn.execute(text(
+            "SELECT string_agg(quote_ident(tablename), ', ') "
+            "FROM pg_tables WHERE schemaname = 'public'"
+        ))
+        tables = result.scalar()
+        if tables:
+            await conn.execute(
+                text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
+            )
+
+
 @pytest_asyncio.fixture(scope="function", autouse=False)
 async def setup_test_database(manage_engine):
+    global _schema_initialized
+
     # 🚨 CRITICAL: Verify safety before ANY database operations!
     _verify_test_database_safety()
 
-    log.info(
-        "--- [FUNCTION SETUP] Setting up test database (drop + create all tables) ---"
-    )
+    if not _schema_initialized:
+        log.info("--- [FUNCTION SETUP] First test: initializing schema (DROP + CREATE) ---")
+        # Dispose main engine so it gets fresh connections after schema change
+        await engine.dispose()
+        await _init_schema_once()
+        # Dispose again so main engine connects to the new schema
+        await engine.dispose()
+        _schema_initialized = True
+        log.info("--- [FUNCTION SETUP] Schema ready ---")
+    else:
+        log.info("--- [FUNCTION SETUP] Truncating all tables ---")
+        await _truncate_all_tables()
+        log.info("--- [FUNCTION SETUP] Truncate complete ---")
 
-    # ✅ FIX: Use metadata.drop_all() — NOT DROP SCHEMA CASCADE.
-    #
-    # DROP SCHEMA CASCADE changes the schema OID, which permanently breaks
-    # asyncpg connections — even new connections from the same engine bind
-    # to the old OID and can't access the re-created schema.
-    #
-    # metadata.drop_all() drops tables individually, preserving the schema
-    # OID so connections continue to work correctly.
-    #
-    # PREREQUISITE: The test database must NOT have orphaned enum types
-    # (from previous DROP SCHEMA CASCADE operations). If tests fail with
-    # UniqueViolationError on pg_type_typname_nsp_index, recreate the
-    # test database: DROP DATABASE qlts_test; CREATE DATABASE qlts_test;
-
-    await engine.dispose()
-
-    # --- Transaction 1: Drop all tables and enum types ---
-    async with engine.begin() as conn:
-        # CasbinBase.drop_all may fail if casbin_rule doesn't exist yet
-        # (first run). Use SAVEPOINT to protect the outer transaction.
-        if CasbinBase:
-            try:
-                async with conn.begin_nested():
-                    await conn.run_sync(CasbinBase.metadata.drop_all)
-            except Exception:
-                log.debug("CasbinBase.drop_all failed (table may not exist), continuing")
-
-        await conn.run_sync(AppBase.metadata.drop_all)
-
-        # Drop all enum types in public schema
-        await conn.execute(text("""
-            DO $$ DECLARE r RECORD; BEGIN
-                FOR r IN SELECT typname FROM pg_type tp
-                    JOIN pg_namespace ns ON tp.typnamespace = ns.oid
-                    WHERE tp.typtype = 'e' AND ns.nspname = 'public'
-                LOOP
-                    EXECUTE 'DROP TYPE IF EXISTS public.' || quote_ident(r.typname) || ' CASCADE';
-                END LOOP;
-            END $$;
-        """))
-    log.info("Step 1: drop_all + drop enums complete")
-
-    # CRITICAL: Dispose engine between drop and create.
-    # asyncpg caches prepared statement results per connection. If we reuse
-    # the same connection, checkfirst returns stale "table exists" results.
-    await engine.dispose()
-
-    # --- Transaction 2: Create everything (fresh connection) ---
-    async with engine.begin() as conn:
-        await conn.run_sync(AppBase.metadata.create_all)
-
-        if CasbinBase:
-            await conn.run_sync(CasbinBase.metadata.create_all)
-            await conn.execute(text("""
-                DO $$ BEGIN
-                    ALTER TABLE casbin_rule
-                    ADD COLUMN IF NOT EXISTS template_id VARCHAR(50),
-                    ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP,
-                    ADD COLUMN IF NOT EXISTS applied_by INTEGER;
-                    CREATE INDEX IF NOT EXISTS ix_casbin_rule_template_id
-                    ON casbin_rule(template_id);
-                EXCEPTION WHEN undefined_table THEN
-                    NULL;
-                END $$;
-            """))
-
-        tc = await conn.execute(text(
-            "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"
-        ))
-        table_count = tc.scalar()
-        log.info(f"Step 2: Tables after create_all: {table_count}")
-        if table_count == 0:
-            raise RuntimeError(
-                "setup_test_database: create_all produced 0 tables! "
-                "This likely means orphaned enum types exist. "
-                "Fix: DROP DATABASE qlts_test; CREATE DATABASE qlts_test;"
-            )
-
-    log.info("--- [FUNCTION SETUP] Test database setup complete ---")
     yield
 
-    log.info(
-        "\n--- [FUNCTION TEARDOWN] Tearing down test database ---"
-    )
-    try:
-        import app.database as _db_mod
-        async with _db_mod.engine.begin() as conn:
-            if CasbinBase:
-                try:
-                    async with conn.begin_nested():
-                        await conn.run_sync(CasbinBase.metadata.drop_all)
-                except Exception:
-                    pass
-            await conn.run_sync(AppBase.metadata.drop_all)
-            await conn.execute(text("""
-                DO $$ DECLARE r RECORD; BEGIN
-                    FOR r IN SELECT typname FROM pg_type tp
-                        JOIN pg_namespace ns ON tp.typnamespace = ns.oid
-                        WHERE tp.typtype = 'e' AND ns.nspname = 'public'
-                    LOOP
-                        EXECUTE 'DROP TYPE IF EXISTS public.' || quote_ident(r.typname) || ' CASCADE';
-                    END LOOP;
-                END $$;
-            """))
-    except Exception as e:
-        log.warning(f"Teardown failed: {e}")
-    log.info("--- [FUNCTION TEARDOWN] Test database teardown complete ---")
+    # No teardown needed — next test's setup will truncate.
+    # Final cleanup happens via manage_engine's engine.dispose().
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -730,6 +745,36 @@ async def seed_lead_dependencies(setup_test_database):
                     status_lost,
                 ]
             )
+            await session.flush()
+
+            # Admission pipeline stages + statuses (required by admission events)
+            admission_stages = [
+                models.PipelineStage(id="stg01", name="Moi", order=1001),
+                models.PipelineStage(id="stg02", name="Dang tu van", order=1002),
+                models.PipelineStage(id="stg03", name="Da nop ho so", order=1003),
+                models.PipelineStage(id="stg04", name="Cho nhap hoc", order=1004),
+                models.PipelineStage(id="stg05", name="Da nop hoc phi", order=1005),
+                models.PipelineStage(id="stg06", name="Da nhap hoc", order=1006),
+                models.PipelineStage(id="stg07", name="Khong di hoc", order=1007),
+            ]
+            session.add_all(admission_stages)
+            await session.flush()
+
+            admission_statuses = [
+                models.ConsultationStatus(id="sts00", name="Chua lien he", color_code="#999999", stage_id="stg01"),
+                models.ConsultationStatus(id="sts05", name="Hen lien he lai", color_code="#FFA500", stage_id="stg02"),
+                models.ConsultationStatus(id="sts06", name="Dong y tu van", color_code="#00FF00", stage_id="stg02"),
+                models.ConsultationStatus(id="sts07", name="Da nop ho so", color_code="#0088FF", stage_id="stg03"),
+                models.ConsultationStatus(id="sts09", name="Du dieu kien nhap hoc", color_code="#00CC00", stage_id="stg04"),
+                models.ConsultationStatus(id="sts10", name="Da nop hoc phi", color_code="#008800", stage_id="stg05"),
+                models.ConsultationStatus(id="sts11", name="Da nhap hoc", color_code="#006600", stage_id="stg06"),
+                models.ConsultationStatus(id="sts12", name="Khong di hoc", color_code="#CC0000", stage_id="stg07"),
+                models.ConsultationStatus(id="sts13", name="Dang xu ly", color_code="#FFCC00", stage_id="stg03"),
+                models.ConsultationStatus(id="sts14", name="Xac nhan nhap hoc", color_code="#009900", stage_id="stg05"),
+                models.ConsultationStatus(id="sts16", name="Ho so khong dat", color_code="#FF0000", stage_id="stg04"),
+                models.ConsultationStatus(id="sts18", name="Da hoan hoc phi", color_code="#008888", stage_id="stg05"),
+            ]
+            session.add_all(admission_statuses)
     log.info("--- [FIXTURE conftest.py] Lead dependencies seeded ---")
     return {
         "unit_id": unit_data["id"],

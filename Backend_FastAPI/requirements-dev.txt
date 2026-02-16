@@ -2,7 +2,7 @@
 -r requirements.txt
 
 # Testing
-Faker==35.3.0
+Faker==35.2.2
 fakeredis==2.32.0
 iniconfig==2.3.0
 pluggy==1.6.0

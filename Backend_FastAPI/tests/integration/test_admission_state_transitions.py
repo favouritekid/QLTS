@@ -296,7 +296,8 @@ class TestReplayAttack:
             # Wait, if I want to emulate Replay, I reuse the old payload (ver 1).
             headers=headers,
         )
-        assert response2.status_code == 400, f"Second approve should fail: {response2.text}"
+        # Second approve should fail (400=state error or 409=version conflict)
+        assert response2.status_code in [400, 409], f"Second approve should fail: {response2.text}"
 
         # Verify status is still approved (not corrupted)
         updated_profile = await reload_profile(profile.id)
@@ -312,7 +313,7 @@ class TestReplayAttack:
         unit_id = seed_lead_dependencies["unit_id"]
         lead_id = await create_test_lead(unit_id)
         profile = await create_admission_profile(lead_id, status="submitted")
-        
+
         headers = await get_auth_headers(client, manager_user_in_db)
 
         # First rejection
@@ -323,13 +324,13 @@ class TestReplayAttack:
         )
         assert response1.status_code == 200
 
-        # Second rejection - should fail
+        # Second rejection - should fail (400=state error or 409=version conflict)
         response2 = await client.post(
             f"/api/admissions/{profile.id}/reject",
             json={"reason": "Replay attack rejection", "version": profile.version},
             headers=headers,
         )
-        assert response2.status_code == 400
+        assert response2.status_code in [400, 409]
 
     async def test_confirm_already_confirmed_profile(
         self,
@@ -676,7 +677,7 @@ class TestStateTransitionWorkflows:
         Workflow: SUBMITTED → REJECTED → RESUBMITTED → APPROVED
         """
         unit_id = seed_lead_dependencies["unit_id"]
-        lead_id = await create_test_lead(unit_id)
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
         profile = await create_admission_profile(lead_id, status="submitted")
         
         manager_headers = await get_auth_headers(client, manager_user_in_db)
@@ -692,17 +693,10 @@ class TestStateTransitionWorkflows:
         assert reject_response.json()["status"] == "rejected"
 
         # 2. Officer resubmits after fixing
+        # Reject incremented version from 1 to 2, so resubmit must send 2
         resubmit_response = await client.post(
             f"/api/admissions/{profile.id}/resubmit",
-            json={"notes": "Uploaded missing ID card document", "version": 1}, # Rejected profile version?
-            # Wait, Reject increments version. So now version is 2.
-            # But profile.version is 1 (stale object).
-            # Need to reload or manual?
-            # Let's rely on previous step.
-            # Initial: 1. Reject -> 2.
-            # So Resubmit must send 2.
-            # Wait, `profile` object is not reloaded in the test.
-            # I need to update the version being sent.
+            json={"notes": "Uploaded missing ID card document", "version": 2},
             headers=officer_headers,
         )
         assert resubmit_response.status_code == 200, f"Resubmit failed: {resubmit_response.text}"
@@ -931,3 +925,247 @@ class TestTokenBasedConfirmation:
         # New token should work
         new_token_response = await client.get(f"/api/admissions/confirm/{new_token}")
         assert new_token_response.status_code == 200
+
+
+# ==============================================================================
+# CLAIM/UNCLAIM WORKFLOW TESTS
+# ==============================================================================
+
+
+class TestClaimUnclaimWorkflow:
+    """
+    Test claim/unclaim workflow for admission profile review.
+
+    Claim = Manager/Admin "locks" a submitted profile for review.
+    Unclaim = Release the lock (self or admin override).
+    """
+
+    async def test_manager_can_claim_submitted_profile(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Manager claims submitted profile → 200, assigned_reviewer_id set."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": profile.version},
+            headers=headers,
+        )
+
+        assert response.status_code == 200, f"Claim failed: {response.text}"
+        data = response.json()
+        assert data["assigned_reviewer_id"] == manager_user_in_db["id"], \
+            f"Expected reviewer_id={manager_user_in_db['id']}, got {data.get('assigned_reviewer_id')}"
+
+    async def test_claim_already_claimed_by_another_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Double claim by different users → 400."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        # Manager claims first
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+        response1 = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": profile.version},
+            headers=manager_headers,
+        )
+        assert response1.status_code == 200
+
+        # Admin tries to claim same profile
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+        new_version = response1.json()["version"]
+        response2 = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": new_version},
+            headers=admin_headers,
+        )
+        assert response2.status_code == 400, \
+            f"Double claim should fail: {response2.status_code} - {response2.text}"
+
+    async def test_cannot_claim_draft_profile(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Draft profile → claim → 400 (only submitted/resubmitted can be claimed)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="draft")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": profile.version},
+            headers=headers,
+        )
+
+        assert response.status_code == 400, \
+            f"Should not claim draft: {response.status_code} - {response.text}"
+
+    async def test_manager_can_claim_resubmitted_profile(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Resubmitted profile → claim → 200."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="resubmitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": profile.version},
+            headers=headers,
+        )
+
+        assert response.status_code == 200, f"Claim resubmitted failed: {response.text}"
+        assert response.json()["assigned_reviewer_id"] == manager_user_in_db["id"]
+
+    async def test_manager_can_unclaim_own_profile(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Manager unclaims own claimed profile → 200, reviewer_id = null."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        # Claim first
+        claim_resp = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": profile.version},
+            headers=headers,
+        )
+        assert claim_resp.status_code == 200
+        claimed_version = claim_resp.json()["version"]
+
+        # Unclaim
+        unclaim_resp = await client.post(
+            f"/api/admissions/{profile.id}/unclaim",
+            json={"version": claimed_version},
+            headers=headers,
+        )
+
+        assert unclaim_resp.status_code == 200, f"Unclaim failed: {unclaim_resp.text}"
+        assert unclaim_resp.json()["assigned_reviewer_id"] is None, \
+            "Reviewer should be null after unclaim"
+
+    async def test_unclaim_not_owned_by_manager_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Manager cannot unclaim profile claimed by another user → 400."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        # Admin claims the profile
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+        claim_resp = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": profile.version},
+            headers=admin_headers,
+        )
+        assert claim_resp.status_code == 200
+        claimed_version = claim_resp.json()["version"]
+
+        # Manager tries to unclaim admin's profile
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+        unclaim_resp = await client.post(
+            f"/api/admissions/{profile.id}/unclaim",
+            json={"version": claimed_version},
+            headers=manager_headers,
+        )
+
+        assert unclaim_resp.status_code == 400, \
+            f"Manager should not unclaim admin's profile: {unclaim_resp.status_code} - {unclaim_resp.text}"
+
+    async def test_admin_can_unclaim_anyone(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Admin can unclaim profile claimed by any manager → 200."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        # Manager claims the profile
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+        claim_resp = await client.post(
+            f"/api/admissions/{profile.id}/claim",
+            json={"version": profile.version},
+            headers=manager_headers,
+        )
+        assert claim_resp.status_code == 200
+        claimed_version = claim_resp.json()["version"]
+
+        # Admin unclaims
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+        unclaim_resp = await client.post(
+            f"/api/admissions/{profile.id}/unclaim",
+            json={"version": claimed_version},
+            headers=admin_headers,
+        )
+
+        assert unclaim_resp.status_code == 200, \
+            f"Admin should unclaim anyone: {unclaim_resp.status_code} - {unclaim_resp.text}"
+        assert unclaim_resp.json()["assigned_reviewer_id"] is None
+
+    async def test_unclaim_no_reviewer_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Unclaim profile with no reviewer → 400."""
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/unclaim",
+            json={"version": profile.version},
+            headers=headers,
+        )
+
+        assert response.status_code == 400, \
+            f"Should not unclaim when no reviewer: {response.status_code} - {response.text}"

@@ -50,7 +50,7 @@ async def create_second_unit() -> int:
             return unit.id
 
 
-async def create_test_lead(unit_id: int) -> int:
+async def create_test_lead(unit_id: int, assigned_officer_id: int = None) -> int:
     """Create a test lead in specific unit."""
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -60,6 +60,7 @@ async def create_test_lead(unit_id: int) -> int:
                 email=f"idor_{datetime.now().timestamp():.0f}@test.com",
                 source="website",
                 unit_id=unit_id,
+                assigned_officer_id=assigned_officer_id,
             )
             session.add(lead)
             await session.flush()
@@ -320,3 +321,98 @@ class TestManagerAccessScope:
         # Manager should be denied (IDOR returns 404)
         assert response.status_code in [403, 404], \
             f"Manager should not access other unit: {response.status_code}"
+
+
+# ==============================================================================
+# TEST: OFFICER ASSIGNMENT IDOR (3-TIER)
+# ==============================================================================
+
+
+class TestOfficerAssignmentIDOR:
+    """
+    Test 3-tier IDOR: Officer can only access profiles for leads assigned to them.
+
+    After 3-tier IDOR implementation:
+    - Admin: Full access
+    - Manager: Unit-level access
+    - Officer: Must be lead.assigned_officer_id == officer.id AND same unit
+    """
+
+    async def test_officer_same_unit_different_assignment_gets_404(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Officer in same unit but NOT assigned to the lead should get 404.
+
+        This tests the officer-level tier of IDOR protection.
+        Lead is in officer's unit but assigned to a different officer (or None).
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        # Create lead in officer's unit but NOT assigned to this officer
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=None)
+        profile_id = await create_admission_profile(lead_id, "666600001111")
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        response = await client.get(
+            f"/api/admissions/{profile_id}",
+            headers=headers,
+        )
+
+        # Officer should be denied even though unit matches
+        assert response.status_code in [403, 404], \
+            f"IDOR BUG: Officer accessed unassigned lead's profile! Got {response.status_code}, expected 403/404"
+
+    async def test_officer_can_access_own_assigned_profile(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Officer assigned to the lead should access the profile successfully.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        # Create lead assigned TO this officer
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
+        profile_id = await create_admission_profile(lead_id, "666600002222")
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        response = await client.get(
+            f"/api/admissions/{profile_id}",
+            headers=headers,
+        )
+
+        assert response.status_code == 200, \
+            f"Officer should access own assigned profile: {response.status_code} - {response.text}"
+
+    async def test_officer_cannot_submit_unassigned_lead_profile(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Officer should not be able to submit a profile for a lead not assigned to them.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+
+        # Create lead NOT assigned to this officer
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=None)
+        profile_id = await create_admission_profile(lead_id, "666600003333")
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/submit",
+            headers=headers,
+        )
+
+        assert response.status_code in [403, 404], \
+            f"Officer should not submit unassigned lead's profile: {response.status_code}"
