@@ -31,7 +31,7 @@ def upgrade() -> None:
                 SELECT u.id FROM "user" u
                 WHERE u.unit_id = l.unit_id
                 AND u.role = 'officer'
-                AND u.is_active = true
+                AND u.status = 'active'
                 ORDER BY u.id
                 LIMIT 1
             ) AS officer_id

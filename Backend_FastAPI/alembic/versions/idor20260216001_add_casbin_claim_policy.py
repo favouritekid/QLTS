@@ -10,6 +10,7 @@ Adds Casbin policies for the new claim/unclaim admission endpoints:
 - role:admin inherits via wildcard (no explicit entry needed)
 """
 from alembic import op
+import sqlalchemy as sa
 
 
 revision = "idor20260216001"
@@ -31,17 +32,19 @@ def upgrade() -> None:
     for ptype, v0, v1, v2 in POLICIES:
         # Check if policy already exists (idempotent)
         result = conn.execute(
-            op.inline_literal(
-                f"SELECT id FROM casbin_rule "
-                f"WHERE ptype = '{ptype}' AND v0 = '{v0}' AND v1 = '{v1}' AND v2 = '{v2}'"
-            )
+            sa.text(
+                "SELECT id FROM casbin_rule "
+                "WHERE ptype = :ptype AND v0 = :v0 AND v1 = :v1 AND v2 = :v2"
+            ),
+            {"ptype": ptype, "v0": v0, "v1": v1, "v2": v2},
         )
         if result.fetchone() is None:
             conn.execute(
-                op.inline_literal(
-                    f"INSERT INTO casbin_rule (ptype, v0, v1, v2) "
-                    f"VALUES ('{ptype}', '{v0}', '{v1}', '{v2}')"
-                )
+                sa.text(
+                    "INSERT INTO casbin_rule (ptype, v0, v1, v2) "
+                    "VALUES (:ptype, :v0, :v1, :v2)"
+                ),
+                {"ptype": ptype, "v0": v0, "v1": v1, "v2": v2},
             )
 
 
@@ -50,8 +53,9 @@ def downgrade() -> None:
 
     for ptype, v0, v1, v2 in POLICIES:
         conn.execute(
-            op.inline_literal(
-                f"DELETE FROM casbin_rule "
-                f"WHERE ptype = '{ptype}' AND v0 = '{v0}' AND v1 = '{v1}' AND v2 = '{v2}'"
-            )
+            sa.text(
+                "DELETE FROM casbin_rule "
+                "WHERE ptype = :ptype AND v0 = :v0 AND v1 = :v1 AND v2 = :v2"
+            ),
+            {"ptype": ptype, "v0": v0, "v1": v1, "v2": v2},
         )
