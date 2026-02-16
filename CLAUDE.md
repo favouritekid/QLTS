@@ -1,17 +1,18 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with this repository.
 
 ---
 
 ## Project Overview
 
-**QLTS** (Quản Lý Tuyển Sinh) is a comprehensive Educational Admission Management System for managing student admissions workflows in Vietnamese educational institutions. The system handles:
+**QLTS** (Quan Ly Tuyen Sinh) is a comprehensive Educational Admission Management System for managing student admissions workflows in Vietnamese educational institutions. The system handles:
 
 - **Lead Management**: Prospective student tracking through pipeline states
 - **Admission Profiles**: Complete enrollment applications with document requirements and validation
 - **Admission Paths**: Configurable pathways combining academic programs, admission methods, and document requirements
 - **Notifications**: Dynamic rule-based notification system for applicants and officers
+- **Finance**: Tuition fees, invoices, payments, installment plans
 - **KPI Tracking**: Admission metrics and performance monitoring
 
 ---
@@ -20,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Backend
 - **Framework**: FastAPI (Python 3.12)
-- **Database**: PostgreSQL (production), SQLite (testing)
+- **Database**: PostgreSQL 16 (production & development via Docker)
 - **ORM**: SQLAlchemy 2.0 with asyncpg driver
 - **Authentication**: JWT tokens with Redis-backed blacklist
 - **Authorization**: Casbin RBAC with dynamic policy enforcement
@@ -39,50 +40,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
-## Architecture Philosophy
+## Docker Infrastructure
 
-### Core Principles
+All services run in Docker containers. **Never run backend/frontend directly on the host.**
 
-1. **Security by Design**: Architecture enforces security at the framework level, not by developer discipline
-2. **Thin Client Philosophy**: Frontend is presentation-only; backend is source of truth for all business logic
-3. **Layered Backend**: Smart Dependencies (security gateway), Dumb Routers (HTTP translation), Pure Services (business logic), Repositories (data access)
-4. **Explicit Data Flow**: Data flows DOWN (Router → Service → Repository), Errors flow UP (Exceptions)
+### Services
 
-### Backend Architecture (V3.0)
+| Service | Image/Build | Purpose |
+|---------|-------------|---------|
+| `backend` | `Backend_FastAPI/Dockerfile` | FastAPI + Gunicorn (prod) / Uvicorn --reload (dev) |
+| `frontend` | `frontend/Dockerfile` | Next.js standalone (prod) / npm run dev (dev) |
+| `postgres` | `postgres:16-alpine` | PostgreSQL database |
+| `redis` | `redis:7-alpine` | Cache, rate limiting, Celery broker |
+| `celery-worker` | Same as backend | Background task processing |
+| `celery-beat` | Same as backend | Periodic task scheduler (singleton) |
+| `nginx` | `nginx:1.27-alpine` | Reverse proxy + SSL (production profile only) |
 
+### Dev vs Production
+
+```bash
+# Development (auto-loads docker-compose.override.yml)
+docker compose up -d
+# - Backend: uvicorn --reload with bind mount (hot-reload)
+# - Frontend: npm run dev with docker compose watch (HMR)
+# - Ports exposed: backend:8000, frontend:3000, postgres:5433, redis:6380
+
+# Production
+docker compose --profile production up -d
+# - Backend: gunicorn with workers
+# - Frontend: Next.js standalone build
+# - Nginx: SSL termination + reverse proxy
 ```
-ROUTER (Dumb HTTP Translator)
-  ↓ (Dependency Injection)
-SECURITY GATEWAY (Permissions, IDOR, Context)
-  ↓ (Business Logic)
-SERVICE (Pure Python Logic)
-  ↓ (Data Access)
-REPOSITORY (SQLAlchemy ORM)
-```
 
-**Key Rules**:
-- **Smart Dependencies, Dumb Routers**: ALL auth, authorization, and IDOR checks in `Backend_FastAPI/app/core/deps.py`
-- **Service Isolation**: Services never import FastAPI (`Request`, `HTTPException`, etc.) - they are pure Python
-- **Transaction Responsibility**: Router commits (`await db.commit()`), Service only flushes
-- **Post-Commit Callbacks**: Services return `(result, async_callback)` for side effects after transaction
+### Key Docker facts
+- `Backend_FastAPI/Dockerfile` only installs `requirements.txt` (production deps)
+- `tests/` is in `.dockerignore` -- excluded from image, available in dev via bind mount
+- Test deps (`requirements-dev.txt`) must be installed manually into running container
+- `docker-entrypoint.sh` runs `alembic upgrade head` on container start
 
-**Detailed Documentation**: See `Backend_FastAPI/MASTER_ARCHITECTURE.md` and `Backend_FastAPI/CLAUDE.md`
+---
 
-### Frontend Architecture (V3.0)
+## Environment Files
 
-**Thin Client Philosophy**:
-- NO business logic in frontend (no eligibility calculations, scoring, workflow transitions)
-- Display exactly what backend returns (trust `status`, `can_edit`, `available_actions`)
-- Control visibility via API permission flags, NOT `user.role` checks
-- Zod schemas strictly mirror Backend Pydantic models
+| File | Purpose | Used by |
+|------|---------|---------|
+| `.env` | Docker Compose vars (POSTGRES_USER, POSTGRES_PASSWORD) | `docker compose` |
+| `.env.production` | Production backend config | Backend container (prod) |
+| `Backend_FastAPI/.env` | Development backend config | Backend container (dev, via override) |
+| `frontend/.env.local` | Frontend env vars | Frontend container |
 
-**State Classification**:
-- **Server State**: React Query (leads, profiles, configurations)
-- **UI State**: Zustand (sidebar, modals) - NEVER cache server state here
-- **URL State**: Next.js router (filters, pagination)
-- **Form State**: React Hook Form (draft inputs)
+**Important**: `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL` are constructed in `docker-compose.yml` from `POSTGRES_*` vars. Do NOT set them in `.env.production`.
 
-**Detailed Documentation**: See `frontend/FRONTEND_ARCHITECTURE_V3.md` and `frontend/CLAUDE.md`
+### Redis DB Allocation
+
+| DB | Purpose | Used by |
+|----|---------|---------|
+| 1 | Cache + Socket.IO | Backend, Celery |
+| 2 | Celery broker | Celery worker/beat |
+| 3 | Celery results | Celery worker |
 
 ---
 
@@ -90,406 +105,172 @@ REPOSITORY (SQLAlchemy ORM)
 
 ```
 Backend_FastAPI/
-├── app/
-│   ├── core/              # deps.py (dependency injection), config, events
-│   ├── routers/           # HTTP endpoints (dumb coordinators)
-│   ├── services/          # Business logic (pure Python)
-│   ├── repositories/      # Data access layer
-│   ├── models/            # SQLAlchemy ORM models
-│   ├── schemas/           # Pydantic validation models
-│   ├── security/          # JWT, OAuth2, password hashing
-│   ├── tasks/             # Celery async tasks
-│   ├── middleware/        # Exception handlers, logging
-│   └── casbin_config/     # RBAC policy templates
-├── alembic/               # Database migrations
-├── tests/                 # Pytest test suite
-└── monitoring/            # Prometheus metrics
+  app/
+    core/              # deps.py (dependency injection), config, events
+    routers/           # HTTP endpoints (dumb coordinators)
+    services/          # Business logic (pure Python)
+    repositories/      # Data access layer
+    models/            # SQLAlchemy ORM models
+    schemas/           # Pydantic validation models
+    security/          # JWT, OAuth2, password hashing
+    tasks/             # Celery async tasks
+    middleware/        # Exception handlers, logging
+    casbin_config/     # RBAC policy templates
+  alembic/             # Database migrations
+  tests/               # Pytest test suite
+  requirements.txt     # Production dependencies
+  requirements-dev.txt # Test/dev dependencies (extends requirements.txt)
 
 frontend/
-├── src/
-│   ├── app/               # Next.js App Router
-│   │   ├── (auth)/        # Authentication routes
-│   │   └── (dashboard)/   # Protected dashboard routes
-│   ├── components/        # Reusable React components
-│   ├── hooks/             # React Query + custom hooks
-│   ├── lib/
-│   │   ├── api/           # Axios-based API clients
-│   │   ├── zod/           # Zod validation schemas
-│   │   ├── stores/        # Zustand UI state stores
-│   │   └── socket/        # Socket.IO real-time updates
-│   └── types/             # TypeScript type definitions
-└── tests/                 # Vitest + Playwright tests
+  src/
+    app/               # Next.js App Router
+      (auth)/          # Authentication routes
+      (dashboard)/     # Protected dashboard routes
+    components/        # Reusable React components
+    hooks/             # React Query + custom hooks
+    lib/
+      api/             # Axios-based API clients
+      zod/             # Zod validation schemas
+      stores/          # Zustand UI state stores
+      socket/          # Socket.IO real-time updates
+    types/             # TypeScript type definitions
+  tests/               # Vitest + Playwright tests
 ```
 
 ---
 
 ## Common Development Commands
 
-### Backend (run from `Backend_FastAPI/` directory)
+All commands use `docker compose exec` to run inside containers.
+
+### Backend Testing (IMPORTANT)
 
 ```bash
-# Start development server
-uvicorn app.main:app --reload
+# Step 1: Install test deps (required once per container lifecycle, lost on restart)
+docker compose exec backend pip install -r requirements-dev.txt
 
-# Run all tests
-pytest tests/
-
-# Run specific test file
-pytest tests/api/test_leads.py -v
-
-# Run tests by marker
-pytest -m unit          # Unit tests only
-pytest -m integration   # Integration tests only
-pytest -m security      # Security tests only
-
-# Database migrations
-alembic revision --autogenerate -m "description"  # Create migration
-alembic upgrade head                               # Apply migrations
-alembic downgrade -1                               # Rollback one migration
-
-# Code formatting & linting
-black .                 # Format code
-isort .                 # Sort imports
-flake8 .                # Lint code
+# Step 2: Run tests
+docker compose exec backend pytest tests/ -v                          # All tests
+docker compose exec backend pytest tests/api/test_leads.py -v         # Specific file
+docker compose exec backend pytest tests/api/test_leads.py::test_fn -v  # Single test
+docker compose exec backend pytest -m unit                             # By marker
+docker compose exec backend pytest -m security
 ```
 
-### Frontend (run from `frontend/` directory)
+### Backend Other
 
 ```bash
-# Start development server
-npm run dev
+# Migrations
+docker compose exec backend alembic revision --autogenerate -m "description"
+docker compose exec backend alembic upgrade head
+docker compose exec backend alembic downgrade -1
 
-# Build for production
-npm run build
+# Code quality
+docker compose exec backend black .
+docker compose exec backend isort .
+docker compose exec backend flake8 .
 
-# Type checking
-npm run type-check
-
-# Linting & formatting
-npm run lint            # Check linting
-npm run lint:fix        # Fix linting issues
-npm run format          # Format code with Prettier
-
-# Testing
-npm run test            # Run Vitest tests
-npm run test:ui         # Run tests with UI
-npm run test:coverage   # Generate coverage report
-npm run test:watch      # Watch mode
-
-# E2E Testing
-npm run test:e2e        # Run Playwright tests
-npm run test:e2e:ui     # Run with Playwright UI
-npm run test:e2e:debug  # Debug mode
+# Logs
+docker compose logs backend -f --tail=50
+docker compose logs celery-worker -f --tail=50
 ```
+
+### Frontend
+
+```bash
+docker compose exec frontend npm run test            # Vitest
+docker compose exec frontend npm run test:coverage    # Coverage
+docker compose exec frontend npm run type-check       # TypeScript
+docker compose exec frontend npm run lint             # ESLint
+docker compose exec frontend npm run build            # Production build
+```
+
+---
+
+## Architecture (Summary)
+
+### Backend Architecture (V3.0)
+
+```
+ROUTER (Dumb HTTP Translator)
+  | Dependency Injection
+SECURITY GATEWAY (deps.py: Auth, RBAC, IDOR)
+  | Business Logic
+SERVICE (Pure Python, no FastAPI imports)
+  | Data Access
+REPOSITORY (SQLAlchemy ORM)
+```
+
+**Key Rules**:
+- ALL auth/authorization/IDOR checks in `app/core/deps.py`
+- Services never import FastAPI -- raise domain exceptions, not HTTPException
+- Router commits (`await db.commit()`), Service only flushes
+- Services return `(result, post_commit_callback)` for side effects
+
+**Detailed docs**: `Backend_FastAPI/MASTER_ARCHITECTURE.md`, `Backend_FastAPI/CLAUDE.md`
+
+### Frontend Architecture (V3.0)
+
+**Thin Client Philosophy**: Frontend is presentation-only. Backend is source of truth.
+- NO business logic (no eligibility calculations, scoring, workflow transitions)
+- Display exactly what backend returns (trust `status`, `can_edit`, `available_actions`)
+- Control visibility via API permission flags, NOT `user.role` checks
+
+**Detailed docs**: `frontend/FRONTEND_ARCHITECTURE_V3.md`, `frontend/CLAUDE.md`
 
 ---
 
 ## Security & Authorization
 
-### Authentication Flow
-
-1. JWT tokens (15 min expiry, 30 day refresh)
-2. Redis-backed logout blacklist
-3. Active status check (`is_active` flag)
-4. Trusted device tracking
+### Authentication
+- JWT tokens (15 min access, 30 day refresh)
+- Redis-backed logout blacklist
+- Active status + trusted device tracking
 
 ### Authorization (Casbin RBAC)
-
-**System Roles**: `admin`, `manager`, `officer`, `user`
-
-**Policy Framework**:
-- Templates defined in `Backend_FastAPI/app/casbin_config/policy_templates.py`
-- Dynamic enforcement via Casbin adapter
-- Policy versioning with drift detection
-- Auto-sync in development mode
-
-**Dependency Gates** (in `Backend_FastAPI/app/core/deps.py`):
-- `get_current_active_user`: JWT + active check (DEFAULT for business APIs)
-- `check_permission`: Casbin enforcement
-- `require_admin`, `require_admin_or_manager`: Role-based static checks
-- `get_[resource]_for_user`: IDOR protection (raises 404 on unauthorized, NOT 403)
+- **Roles**: `admin`, `manager`, `officer`, `accountant`, `user`
+- **Diamond inheritance**: admin > (manager + accountant) > officer > user
+- Templates: `Backend_FastAPI/app/casbin_config/policy_templates.py`
+- Dependency gates in `deps.py`: `get_current_active_user`, `check_permission`, `require_admin`
 
 ### IDOR Protection
-
-**CRITICAL**: When checking resource ownership, ALWAYS return 404 (not 403) to avoid leaking resource existence.
-
-```python
-# ✅ CORRECT
-async def get_lead_for_user(lead_id: int, user: User):
-    lead = await repo.get_lead_by_id_and_unit(lead_id, user.unit_id)
-    if not lead:
-        raise ResourceNotFoundError("Lead not found")  # Returns 404
-    return lead
-
-# ❌ WRONG
-async def get_lead(lead_id: int, user: User):
-    lead = await repo.get_lead_by_id(lead_id)
-    if lead.owner_id != user.id:
-        raise HTTPException(403, "Forbidden")  # Leaks existence!
-    return lead
-```
+- **3-tier**: Admin (all) > Manager (unit scope) > Officer (assigned + unit scope)
+- ALWAYS return 404 (not 403) to avoid leaking resource existence
+- Detailed guide: `Backend_FastAPI/AUTHORIZATION_GUIDELINES.md`
 
 ---
 
-## Database & Migrations
+## Key Workflows
 
-### Database Setup
+### Admission Profile State Machine
 
-**Development**:
-```bash
-# Set DATABASE_URL in .env
-DATABASE_URL=postgresql+asyncpg://user:pass@localhost/qlts
-
-# Run migrations
-cd Backend_FastAPI
-alembic upgrade head
+```
+draft -> submitted -> approved -> confirmed -> enrolled
+                   -> rejected -> resubmitted -> (re-evaluation)
+                   -> overridden (manager/admin override)
 ```
 
-**Testing**: SQLite in-memory database (auto-configured)
+### Claim/Unclaim (Soft Review Assignment)
+- Manager/Admin can claim a profile for review (soft bookmark, doesn't block others)
+- Tracked via `assigned_reviewer_id` + `assigned_at` on AdmissionProfile
 
-### Creating Migrations
-
-1. Modify SQLAlchemy models in `Backend_FastAPI/app/models/`
-2. Generate migration: `alembic revision --autogenerate -m "description"`
-3. Review generated migration in `Backend_FastAPI/alembic/versions/`
-4. Apply: `alembic upgrade head`
-
-### ORM Best Practices
-
-- Use `selectinload()` or `joinedload()` to prevent N+1 queries
-- Avoid lazy loading in async code
-- Use explicit relationships with `back_populates`
-- Set appropriate cascade rules
-
----
-
-## Key Architectural Patterns
-
-### Admission Workflow State Machine
-
-States: `draft` → `submitted` → `approved`/`rejected` → `enrolled`
-
-**Critical Rules**:
-- Applied rules are snapshot at creation (immutable)
-- IDOR protection via `lead.unit_id` checks
-- Transaction atomicity with savepoints for multi-step operations
-- State transitions controlled by backend service layer
-
-### Notification System
-
-- Rule-based triggering (event → template + recipients)
-- Multiple channels (email, SMS, in-app notifications)
-- Template variables for dynamic content
-- User preference management (opt-out capability)
-
-### Configuration as Code
-
-- Policy templates in `Backend_FastAPI/app/casbin_config/policy_templates.py`
-- Auto-seeding in dev/test on startup
-- Drift detection with manual/auto-sync capability
-- Version tracking for applied policies
-
-### Post-Commit Callbacks
-
-Services return `(result, callback)` to execute side effects AFTER transaction commits:
-
-```python
-async def create_lead(db, data, user):
-    lead = Lead(**data)
-    db.add(lead)
-    await db.flush()
-
-    # Define side effect (email, notification, etc.)
-    async def post_commit():
-        await send_welcome_email(lead)
-
-    return lead, post_commit
-
-# Router commits and executes callback
-lead, callback = await service.create_lead(db, data, user)
-await db.commit()
-await callback()
-```
+### Background Jobs (Celery)
+- Celery worker and beat run as separate Docker services (auto-started)
+- Tasks in `Backend_FastAPI/app/tasks/`: email, notifications, cache sync, KPI updates
+- Monitor: `docker compose logs celery-worker -f`
 
 ---
 
 ## Error Handling
 
-### Backend Domain Exceptions
+### Backend Domain Exceptions (`app/utils/exceptions.py`)
+- `ResourceNotFoundError` -> 404
+- `DuplicateResourceError` -> 409
+- `BusinessRuleViolation` -> 400
+- `ValidationError` -> 400
+- `ConflictError` -> 409
 
-Defined in `Backend_FastAPI/app/utils/exceptions.py`:
-
-- `ResourceNotFoundError` → HTTP 404
-- `DuplicateResourceError` → HTTP 409
-- `BusinessRuleViolation` → HTTP 400
-- `ValidationError` → HTTP 400
-- `ConflictError` → HTTP 409
-
-**NEVER** raise `HTTPException` in services - use domain exceptions only.
-
-### Frontend Error Handling
-
-- API errors handled by React Query error boundaries
-- Toast notifications for user-facing errors
-- Error states rendered conditionally
-- Retry logic for transient failures
-
----
-
-## Testing Strategy
-
-### Backend Tests
-
-**Test Markers**:
-- `@pytest.mark.unit`: Fast, isolated tests
-- `@pytest.mark.integration`: Database interactions
-- `@pytest.mark.security`: Authorization & IDOR tests
-- `@pytest.mark.e2e`: Full workflow tests
-
-**Running Specific Tests**:
-```bash
-pytest tests/api/test_leads.py::test_create_lead -v
-pytest -m "security and not slow"
-```
-
-### Frontend Tests
-
-**Unit Tests**: Component logic with Vitest
-```bash
-npm run test -- src/components/LeadCard.test.tsx
-```
-
-**E2E Tests**: User workflows with Playwright
-```bash
-npm run test:e2e -- tests/admission-flow.spec.ts
-```
-
----
-
-## Background Jobs (Celery)
-
-### Task Categories
-
-Located in `Backend_FastAPI/app/tasks/`:
-
-- **Email Tasks**: Transactional emails, bulk notifications
-- **Notification Tasks**: Rule-based notification processing
-- **Cache Tasks**: Redis cache synchronization
-- **Assignment Tasks**: Lead auto-assignment based on rules
-- **Scheduled Tasks**: KPI updates, consultation reminders, cleanup
-
-### Running Celery Worker
-
-```bash
-cd Backend_FastAPI
-celery -A app.celery_app worker --loglevel=info
-
-# With beat scheduler for periodic tasks
-celery -A app.celery_app worker --beat --loglevel=info
-```
-
----
-
-## Critical Anti-Patterns
-
-### Backend ❌ NEVER DO
-
-```python
-# ❌ Logic in Router
-@router.post("/leads")
-async def create(data, user = Depends(get_current_active_user)):
-    if user.role != "admin":  # ❌ WRONG - move to deps.py
-        raise HTTPException(403)
-
-# ❌ HTTPException in Service
-class LeadService:
-    async def create(self, data):
-        if exists:
-            raise HTTPException(409)  # ❌ WRONG - use DuplicateResourceError
-
-# ❌ Commit in Service
-async def update_lead(self, db, lead):
-    lead.status = "updated"
-    await db.commit()  # ❌ WRONG - Router commits, Service flushes
-
-# ❌ Return 403 for IDOR
-async def get_lead_for_user(lead_id, user):
-    if lead.owner_id != user.id:
-        raise HTTPException(403)  # ❌ WRONG - should be 404
-```
-
-### Frontend ❌ NEVER DO
-
-```tsx
-// ❌ Calculate eligibility locally
-const isEligible = gpa >= minGpa && docs >= requiredDocs; // WRONG
-
-// ✅ Read from API
-const { eligibility_status } = profile;
-<Button disabled={eligibility_status !== "eligible"}>Submit</Button>
-
-// ❌ Check role string
-{user.role === "admin" && <ApproveButton />} // WRONG
-
-// ✅ Check permission flag
-{profile.can_approve && <ApproveButton />}
-
-// ❌ Infer state
-const isPending = status === "submitted" && !approved_at; // WRONG
-
-// ✅ Use exact backend status
-<Badge>{STATUS_CONFIG[status]?.label ?? status}</Badge>
-```
-
----
-
-## Performance Considerations
-
-- **Backend**: Use `selectinload()`/`joinedload()` to prevent N+1 queries
-- **Frontend**: React Query caching with staleTime/cacheTime tuning
-- **Database**: Connection pooling (pool_size=20, max_overflow=40)
-- **Redis**: Circuit breaker for fault tolerance
-- **Statement Timeout**: 30s for long-running queries
-
----
-
-## Real-time Features
-
-### Socket.IO Integration
-
-**Backend**: `Backend_FastAPI/app/socket_manager.py`
-**Frontend**: `frontend/src/lib/socket/`
-
-**Events**:
-- Lead updates (assignment, status changes)
-- Notification broadcasts
-- KPI metric updates
-- Admission status changes
-
-**Connection Management**:
-- JWT-based authentication for socket connections
-- Room-based broadcasts (per unit/organization)
-- Automatic reconnection on disconnect
-
----
-
-## Environment Configuration
-
-### Backend `.env` (in `Backend_FastAPI/`)
-
-```bash
-DATABASE_URL=postgresql+asyncpg://user:pass@localhost/qlts
-JWT_SECRET_KEY=your-secret-key
-REDIS_URL=redis://localhost:6379/0
-CELERY_BROKER_URL=redis://localhost:6379/1
-```
-
-### Frontend `.env.local` (in `frontend/`)
-
-```bash
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_SOCKET_URL=http://localhost:8000
-```
+**NEVER** raise `HTTPException` in services.
 
 ---
 

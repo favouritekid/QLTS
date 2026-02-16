@@ -87,10 +87,63 @@ async def get_lead_for_user(lead_id, user):
 
 ---
 
-## �🛠️ Common Commands (WSL/Bash)
-- **Run Tests**: `pytest tests/`
-- **Run Single Test**: `pytest tests/path/to/test.py -v`
-- **Migration (New)**: `alembic revision --autogenerate -m "message"`
-- **Migration (Up)**: `alembic upgrade head`
-- **Start Server**: `uvicorn app.main:app --reload`
+## Running Tests (MANDATORY PROCEDURE)
+
+Development runs inside Docker. The production image does NOT include test dependencies or test files.
+
+### Before running tests -- install test deps (once per container lifecycle)
+
+```bash
+# Check if pytest is available, install if missing
+docker compose exec backend python -c "import pytest" 2>/dev/null || \
+  docker compose exec backend pip install -r requirements-dev.txt
+```
+
+**Why**: `Dockerfile` only installs `requirements.txt`. Test deps (`pytest`, `pytest-asyncio`, `httpx`, etc.) live in `requirements-dev.txt` and must be installed manually into the running container. They are **ephemeral** -- lost on container restart/recreate.
+
+### Run tests
+
+```bash
+# All tests
+docker compose exec backend pytest tests/ -v
+
+# Specific file
+docker compose exec backend pytest tests/api/test_leads.py -v
+
+# By marker
+docker compose exec backend pytest -m unit
+docker compose exec backend pytest -m integration
+docker compose exec backend pytest -m security
+
+# Single test function
+docker compose exec backend pytest tests/api/test_leads.py::test_create_lead -v
+```
+
+### Key facts
+- `tests/` is in `.dockerignore` (excluded from image) but available in dev via bind mount (`./Backend_FastAPI:/app`)
+- `pytest.ini` configures: `asyncio_mode = auto`, strict markers, `-v --tb=short`
+- NEVER add test deps to `requirements.txt` -- production image must stay clean
+- After `docker compose down && up`, reinstall test deps
+
+---
+
+## Common Commands
+
+```bash
+# Migration
+docker compose exec backend alembic revision --autogenerate -m "description"
+docker compose exec backend alembic upgrade head
+docker compose exec backend alembic downgrade -1
+
+# Start server (dev mode -- auto-configured by docker-compose.override.yml)
+docker compose up -d
+
+# Logs
+docker compose logs backend -f --tail=50
+
+# Code formatting (inside container)
+docker compose exec backend black .
+docker compose exec backend isort .
+docker compose exec backend flake8 .
+```
 

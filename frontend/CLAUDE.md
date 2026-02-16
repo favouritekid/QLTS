@@ -76,10 +76,18 @@ const score = data.score; // Zod will fail if missing
 
 ---
 
-## 🛠️ Common Commands (WSL/Bash)
-- **Dev Server**: `npm run dev`
-- **Build**: `npm run build`
-- **Type Check**: `npm run type-check`
-- **Lint**: `npm run lint:fix`
-- **Install Package**: `npm install [package]`
+## Common Commands (Docker)
+
+All commands run inside the frontend container via `docker compose exec`.
+
+```bash
+docker compose exec frontend npm run dev             # Dev server (auto-started by override)
+docker compose exec frontend npm run build            # Production build
+docker compose exec frontend npm run type-check       # TypeScript checking
+docker compose exec frontend npm run lint             # ESLint check
+docker compose exec frontend npm run lint:fix         # ESLint auto-fix
+docker compose exec frontend npm run test             # Vitest
+docker compose exec frontend npm run test:coverage    # Coverage report
+docker compose exec frontend npm install [package]    # Install package
+```
 
