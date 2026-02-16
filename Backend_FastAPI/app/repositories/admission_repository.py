@@ -383,12 +383,13 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if academic_year is not None:
             conditions.append(models.AdmissionProfile.academic_year == academic_year)
 
-        # Status counts + avg completion in one query
+        # Status counts in one query
+        # Note: completion_percent is computed at service layer (not a DB column),
+        # so we cannot use func.avg() here. avg_completion defaults to 0.
         query = (
             select(
                 models.AdmissionProfile.status,
                 func.count(models.AdmissionProfile.id),
-                func.avg(models.AdmissionProfile.completion_percentage),
             )
             .join(models.Lead)
         )
@@ -401,16 +402,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
 
         status_counts = {}
         total = 0
-        completion_sum = 0.0
-        count_for_avg = 0
-        for status_val, cnt, avg_comp in rows:
+        for status_val, cnt in rows:
             status_counts[status_val] = cnt
             total += cnt
-            if avg_comp is not None:
-                completion_sum += float(avg_comp) * cnt
-                count_for_avg += cnt
-
-        avg_completion = round(completion_sum / count_for_avg, 1) if count_for_avg > 0 else 0.0
 
         draft_count = status_counts.get("draft", 0)
         submitted_count = status_counts.get("submitted", 0) + status_counts.get("resubmitted", 0)

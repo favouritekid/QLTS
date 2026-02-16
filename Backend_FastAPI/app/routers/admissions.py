@@ -1745,7 +1745,7 @@ async def export_admissions_csv(
             lead.phone if lead else "",
             profile.citizen_id or "",
             profile.status,
-            f"{profile.completion_percentage}%",
+            f"{getattr(profile, 'completion_percent', 0)}%",
             lead.offering.program.name if lead and lead.offering and lead.offering.program else "",
             profile.created_at.strftime("%Y-%m-%d %H:%M") if profile.created_at else "",
             profile.updated_at.strftime("%Y-%m-%d %H:%M") if profile.updated_at else "",
