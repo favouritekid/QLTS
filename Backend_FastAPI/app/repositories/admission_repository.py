@@ -87,6 +87,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         skip: int = 0,
         limit: int = 50,
         unit_id: Optional[int] = None,
+        assigned_officer_id: Optional[int] = None,
         search: Optional[str] = None,
         statuses: Optional[List[str]] = None,
         major_ids: Optional[List[int]] = None,
@@ -105,7 +106,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         Args:
             skip: Number of records to skip
             limit: Maximum records to return
-            unit_id: Filter by lead.unit_id (for IDOR protection)
+            unit_id: Filter by lead.unit_id (IDOR - manager scope)
+            assigned_officer_id: Filter by lead.assigned_officer_id (IDOR - officer scope)
             search: Search term for name, email, citizen_id
             statuses: List of statuses to filter (multi-select)
             major_ids: List of major/program IDs to filter
@@ -124,7 +126,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         # Base query for filtering
         base_conditions = []
 
-        # IDOR Filter: Filter at DB level for non-admin users
+        # IDOR Filter: Filter at DB level
+        if assigned_officer_id is not None:
+            base_conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
             base_conditions.append(models.Lead.unit_id == unit_id)
 
@@ -150,16 +154,17 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             )
             base_conditions.append(search_conditions)
 
-        # Major/Program filter via Lead.offering_id
+        # Major/Program filter via ProgramOffering.program_id (MajorProgram ID)
+        # Requires JOIN through Lead → ProgramOffering → MajorProgram
         if major_ids and len(major_ids) > 0:
-            base_conditions.append(models.Lead.offering_id.in_(major_ids))
+            base_conditions.append(models.ProgramOffering.program_id.in_(major_ids))
 
         # Academic year filter
         if academic_year is not None:
             base_conditions.append(models.AdmissionProfile.academic_year == academic_year)
 
-        # Degree level filter (requires JOIN through ProgramOffering → MajorProgram)
-        needs_program_join = bool(degree_level)
+        # Degree level or major filter requires JOIN through ProgramOffering → MajorProgram
+        needs_program_join = bool(degree_level) or bool(major_ids)
         if degree_level:
             base_conditions.append(models.MajorProgram.degree_level == degree_level)
 
@@ -213,7 +218,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
             )
         data_query = data_query.options(
+                selectinload(models.AdmissionProfile.assigned_reviewer),
                 selectinload(models.AdmissionProfile.lead).options(
+                    selectinload(models.Lead.assigned_officer),
                     selectinload(models.Lead.offering).options(
                         selectinload(models.ProgramOffering.program),
                     ),
@@ -279,6 +286,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
     def _build_base_conditions(
         self,
         unit_id: Optional[int] = None,
+        assigned_officer_id: Optional[int] = None,
         search: Optional[str] = None,
         major_ids: Optional[List[int]] = None,
         academic_year: Optional[int] = None,
@@ -293,6 +301,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             Tuple of (conditions list, needs_program_join bool)
         """
         conditions = []
+        if assigned_officer_id is not None:
+            conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
             conditions.append(models.Lead.unit_id == unit_id)
         if search:
@@ -304,10 +314,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 models.AdmissionProfile.citizen_id.ilike(search_term),
             ))
         if major_ids and len(major_ids) > 0:
-            conditions.append(models.Lead.offering_id.in_(major_ids))
+            conditions.append(models.ProgramOffering.program_id.in_(major_ids))
         if academic_year is not None:
             conditions.append(models.AdmissionProfile.academic_year == academic_year)
-        needs_join = bool(degree_level)
+        needs_join = bool(degree_level) or bool(major_ids)
         if degree_level:
             conditions.append(models.MajorProgram.degree_level == degree_level)
         if payment_status:
@@ -321,6 +331,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
     async def get_status_counts(
         self,
         unit_id: Optional[int] = None,
+        assigned_officer_id: Optional[int] = None,
         search: Optional[str] = None,
         major_ids: Optional[List[int]] = None,
         academic_year: Optional[int] = None,
@@ -337,7 +348,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             dict with 'counts' (status -> count) and 'total'
         """
         conditions, needs_join = self._build_base_conditions(
-            unit_id=unit_id, search=search, major_ids=major_ids,
+            unit_id=unit_id, assigned_officer_id=assigned_officer_id,
+            search=search, major_ids=major_ids,
             academic_year=academic_year, degree_level=degree_level,
             payment_status=payment_status, date_from=date_from, date_to=date_to,
         )
@@ -369,6 +381,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
     async def get_aggregate_stats(
         self,
         unit_id: Optional[int] = None,
+        assigned_officer_id: Optional[int] = None,
         academic_year: Optional[int] = None,
     ) -> dict:
         """
@@ -378,6 +391,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             dict with total_profiles, status counts, conversion_rate, avg_completion
         """
         conditions = []
+        if assigned_officer_id is not None:
+            conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
             conditions.append(models.Lead.unit_id == unit_id)
         if academic_year is not None:
@@ -431,13 +446,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
     async def get_distinct_academic_years(
         self,
         unit_id: Optional[int] = None,
+        assigned_officer_id: Optional[int] = None,
     ) -> List[int]:
         """
         Get distinct academic years that have admission profiles.
         Ordered descending (most recent first).
 
         Args:
-            unit_id: Filter by lead.unit_id (IDOR)
+            unit_id: Filter by lead.unit_id (IDOR - manager)
+            assigned_officer_id: Filter by lead.assigned_officer_id (IDOR - officer)
 
         Returns:
             List of academic years (integers)
@@ -447,6 +464,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .join(models.Lead)
             .where(models.AdmissionProfile.academic_year.isnot(None))
         )
+        if assigned_officer_id is not None:
+            query = query.where(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
             query = query.where(models.Lead.unit_id == unit_id)
         query = query.order_by(desc(models.AdmissionProfile.academic_year))
@@ -553,7 +572,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
             .options(
-                joinedload(models.AdmissionProfile.lead),
+                joinedload(models.AdmissionProfile.lead).options(
+                    selectinload(models.Lead.assigned_officer),
+                ),
+                selectinload(models.AdmissionProfile.assigned_reviewer),
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),

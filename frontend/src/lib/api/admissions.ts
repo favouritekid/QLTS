@@ -352,6 +352,41 @@ export async function exportAdmissionsCsv(
   return response.data
 }
 
+/**
+ * Get major programs that have admission profiles
+ * GET /api/admission-config/programs
+ */
+export async function getAdmissionPrograms(): Promise<
+  Array<{ id: number; name: string; code: string; degree_level: string }>
+> {
+  const response = await api.get('/api/admission-config/programs')
+  return response.data
+}
+
+/**
+ * Claim admission profile for review (Officer action)
+ * POST /api/admissions/{id}/claim
+ *
+ * Assigns the current user as reviewer
+ * Requires version for optimistic locking
+ */
+async function claimAdmissionProfile(id: number, data: { version: number }) {
+  const response = await api.post(`/api/admissions/${id}/claim`, data)
+  return response.data
+}
+
+/**
+ * Unclaim admission profile (release review assignment)
+ * POST /api/admissions/{id}/unclaim
+ *
+ * Removes the current user as reviewer
+ * Requires version for optimistic locking
+ */
+async function unclaimAdmissionProfile(id: number, data: { version: number }) {
+  const response = await api.post(`/api/admissions/${id}/unclaim`, data)
+  return response.data
+}
+
 export const admissionsApi = {
   listAdmissions,
   getAdmission,
@@ -367,10 +402,14 @@ export const admissionsApi = {
   verifyDocumentFormat,
   rejectDocument,
   resetDocument,
-  // Aggregate
+  // Aggregate & Config
   getAcademicYears,
   getStatusCounts,
   getAdmissionStats,
+  getAdmissionPrograms,
+  // Claim/unclaim
+  claimAdmissionProfile,
+  unclaimAdmissionProfile,
   // Bulk actions
   bulkApproveAdmissions,
   bulkRejectAdmissions,

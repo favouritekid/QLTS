@@ -40,6 +40,7 @@ from ..core.constants import UserRole
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
+    BusinessRuleViolation,
     PermissionDeniedError,
     ConflictError,
 )
@@ -52,36 +53,68 @@ log = structlog.get_logger(__name__)
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def _check_admin_or_unit_access(
+def _resolve_idor_filters(current_user: models.User) -> tuple[Optional[int], Optional[int]]:
+    """
+    Resolve IDOR filter parameters based on user role.
+
+    Returns (unit_id, assigned_officer_id) for repository queries.
+    - Admin: (None, None) — see all
+    - Manager: (unit_id, None) — see unit
+    - Officer: (unit_id, officer_id) — see only assigned
+    """
+    if current_user.role == UserRole.ADMIN:
+        return None, None
+    elif current_user.role == UserRole.MANAGER:
+        return current_user.unit_id, None
+    elif current_user.role == UserRole.OFFICER:
+        return current_user.unit_id, current_user.id
+    else:
+        raise PermissionDeniedError(f"Unexpected role '{current_user.role}' for admission access")
+
+
+def _check_idor_access(
     profile: models.AdmissionProfile,
-    current_user: models.User
+    current_user: models.User,
 ) -> None:
     """
-    IDOR Protection: Check if user has access to this admission profile.
+    3-tier IDOR Protection for admission profiles.
 
     Rules:
     - Admin: Full access to all profiles
-    - Officer: Only access profiles where lead.unit_id == user.unit_id
+    - Manager: Access profiles where lead.unit_id == user.unit_id
+    - Officer: Access profiles where lead.assigned_officer_id == user.id AND lead.unit_id == user.unit_id
 
     Raises:
-        ResourceNotFoundError: If user doesn't have access (returns 404 to prevent
-            resource enumeration attacks - never reveal that a resource exists but
-            is owned by someone else)
+        ResourceNotFoundError: Returns 404 to prevent resource enumeration
     """
     if current_user.role == UserRole.ADMIN:
-        return  # Admin has full access
+        return
 
-    if profile.lead.unit_id != current_user.unit_id:
-        log.warning(
-            "IDOR attempt: User tried to access profile from different unit",
-            user_id=current_user.id,
-            user_unit_id=current_user.unit_id,
+    if not profile.lead:
+        log.error(
+            "Data integrity: profile without lead",
             profile_id=profile.id,
-            profile_unit_id=profile.lead.unit_id,
         )
-        raise ResourceNotFoundError(
-            f"Admission profile {profile.id} not found"
-        )
+        raise ResourceNotFoundError(f"Admission profile {profile.id} not found")
+
+    if current_user.role == UserRole.MANAGER:
+        if profile.lead.unit_id == current_user.unit_id:
+            return
+    elif current_user.role == UserRole.OFFICER:
+        if (profile.lead.assigned_officer_id == current_user.id
+                and profile.lead.unit_id == current_user.unit_id):
+            return
+
+    log.warning(
+        "IDOR attempt: User tried to access profile without permission",
+        user_id=current_user.id,
+        user_role=current_user.role,
+        user_unit_id=current_user.unit_id,
+        profile_id=profile.id,
+        profile_unit_id=profile.lead.unit_id if profile.lead else None,
+        profile_officer_id=profile.lead.assigned_officer_id if profile.lead else None,
+    )
+    raise ResourceNotFoundError(f"Admission profile {profile.id} not found")
 
 
 async def check_enrollment_fee_eligibility(
@@ -322,24 +355,29 @@ def _compute_frontend_fields(
     user_role = current_user.role                                   
     is_admin = user_role == UserRole.ADMIN                          
     is_manager = user_role == UserRole.MANAGER                      
-    is_officer = user_role in [UserRole.OFFICER,UserRole.MANAGER, UserRole.ADMIN]  
+    is_officer = user_role == UserRole.OFFICER
 
 
     # Check if user owns this profile (for applicant self-actions)
-    # Corrected: Lead uses assigned_officer_id, not user_id
-    is_owner = profile.lead and profile.lead.assigned_officer_id == current_user.id
-    
+    is_owner = (profile.lead
+                and profile.lead.assigned_officer_id is not None
+                and profile.lead.assigned_officer_id == current_user.id)
+
     # =========================================================================
     # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
     # =========================================================================
     permissions = {
-        "edit": status in ["draft", "rejected"] and (is_owner or is_officer),
-        "save": status in ["draft", "rejected"] and (is_owner or is_officer),
-        "submit": status == "draft" and (is_owner or is_officer),
+        "edit": status in ["draft", "rejected"] and (is_owner or is_manager or is_admin),
+        "save": status in ["draft", "rejected"] and (is_owner or is_manager or is_admin),
+        "submit": status == "draft" and (is_owner or is_manager or is_admin),
         "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
-        "resubmit": status == "rejected" and (is_owner or is_officer),
-        "enroll": status in ["confirmed", "overridden"] and is_officer,
+        "resubmit": status == "rejected" and (is_owner or is_manager or is_admin),
+        "enroll": status in ["confirmed", "overridden"] and (is_owner or is_manager or is_admin),
+        "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
+                  and not profile.assigned_reviewer_id),
+        "unclaim": (bool(profile.assigned_reviewer_id)
+                    and (profile.assigned_reviewer_id == current_user.id or is_admin)),
         "delete": status == "draft" and is_admin,
         "view": True,
     }
@@ -349,7 +387,21 @@ def _compute_frontend_fields(
     # 2. AVAILABLE ACTIONS (list of action names that are currently allowed)
     # =========================================================================
     profile.available_actions = [action for action, allowed in permissions.items() if allowed]
-    
+
+    # Denormalized display names (avoid N+1 in frontend)
+    profile.assigned_reviewer_name = (
+        profile.assigned_reviewer.full_name
+        if hasattr(profile, 'assigned_reviewer') and profile.assigned_reviewer
+        else None
+    )
+    profile.assigned_officer_name = (
+        profile.lead.assigned_officer.full_name
+        if (profile.lead
+            and hasattr(profile.lead, 'assigned_officer')
+            and profile.lead.assigned_officer)
+        else None
+    )
+
     # =========================================================================
     # 3. ELIGIBILITY STATUS & VALIDATION ERRORS
     # =========================================================================
@@ -954,7 +1006,7 @@ async def create_profile(
         log.warning("Lead not found", lead_id=lead_id, user_id=current_user.id)
         raise ResourceNotFoundError(f"Lead with ID {lead_id} not found")
 
-    # Step 2: IDOR Check
+    # Step 2: IDOR Check (3-tier)
     if current_user.role != UserRole.ADMIN:
         if lead.unit_id != current_user.unit_id:
             log.warning(
@@ -964,8 +1016,21 @@ async def create_profile(
                 lead_id=lead_id,
                 lead_unit_id=lead.unit_id,
             )
-            # FAKE 404 for security (inference protection)
             raise ResourceNotFoundError(f"Lead with ID {lead_id} not found")
+
+        # C1: Officer-level IDOR — block creating profile for lead assigned to another officer
+        if current_user.role == UserRole.OFFICER:
+            if lead.assigned_officer_id and lead.assigned_officer_id != current_user.id:
+                log.warning(
+                    "IDOR attempt: Officer tried to create profile for lead assigned to another officer",
+                    user_id=current_user.id,
+                    lead_id=lead_id,
+                    assigned_officer_id=lead.assigned_officer_id,
+                )
+                raise ResourceNotFoundError(f"Lead with ID {lead_id} not found")
+            # Auto-assign officer if NULL and same unit
+            if lead.assigned_officer_id is None:
+                lead.assigned_officer_id = current_user.id
 
     # ✅ SPRINT 7 FIX: Concurrency Control
     # Prevent race conditions where multiple requests create duplicate profiles
@@ -1336,6 +1401,15 @@ async def create_profile(
         log.error("IntegrityError during profile creation (race condition)", error=str(e))
         raise ConflictError(f"Lead {lead_id} already has an admission profile (detected at DB layer)")
 
+    # Audit trail: log profile creation
+    from ..services import audit_service
+    await audit_service.log_created(
+        db, "AdmissionProfile", new_profile.id,
+        actor_user_id=current_user.id,
+        new_values={"lead_id": lead_id, "status": "draft", "academic_year": new_profile.academic_year},
+        source="api",
+    )
+
     # Step 16: Initialize ProfileDocument records
     await admission_repo.initialize_documents_for_profile(
         profile_id=new_profile.id,
@@ -1407,17 +1481,15 @@ async def get_profiles(
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
-    if unit_id is None and current_user is not None:
-        unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
-    else:
-        unit_filter = unit_id
+    # IDOR: 3-tier filtering (Admin=all, Manager=unit, Officer=assigned+unit)
+    unit_filter, officer_filter = _resolve_idor_filters(current_user) if current_user else (unit_id, None)
 
     # Get profiles using repository with count
     profiles, total_count = await admission_repo.get_filtered_with_count(
         skip=skip,
         limit=min(limit, 100),
         unit_id=unit_filter,
+        assigned_officer_id=officer_filter,
         search=search,
         statuses=statuses,
         major_ids=major_ids,
@@ -1448,10 +1520,11 @@ async def get_status_counts(
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_filter, officer_filter = _resolve_idor_filters(current_user)
 
     return await admission_repo.get_status_counts(
         unit_id=unit_filter,
+        assigned_officer_id=officer_filter,
         search=search,
         major_ids=major_ids,
         academic_year=academic_year,
@@ -1471,10 +1544,11 @@ async def get_admission_stats(
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_filter, officer_filter = _resolve_idor_filters(current_user)
 
     return await admission_repo.get_aggregate_stats(
         unit_id=unit_filter,
+        assigned_officer_id=officer_filter,
         academic_year=academic_year,
     )
 
@@ -1487,9 +1561,12 @@ async def get_academic_years(
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_filter, officer_filter = _resolve_idor_filters(current_user)
 
-    return await admission_repo.get_distinct_academic_years(unit_id=unit_filter)
+    return await admission_repo.get_distinct_academic_years(
+        unit_id=unit_filter,
+        assigned_officer_id=officer_filter,
+    )
 
 
 async def get_profile(
@@ -1526,7 +1603,7 @@ async def get_profile(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR Check
-    _check_admin_or_unit_access(profile, current_user)
+    _check_idor_access(profile, current_user)
 
     log.debug(
         "Admission profile retrieved",
@@ -1596,7 +1673,7 @@ async def update_profile(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR Check (MOVED CHECK AFTER LOCK)
-    _check_admin_or_unit_access(profile, current_user)
+    _check_idor_access(profile, current_user)
 
     # Initialize Repo
     from app.repositories import AdmissionRepository
@@ -1796,6 +1873,16 @@ async def update_profile(
     # ✅ Fix: Re-compute validation errors/status with new scores
     _compute_frontend_fields(profile, current_user)
 
+    # Audit trail: log profile update with field-level changes
+    from ..services import audit_service
+    updated_fields = {k: v for k, v in data.items() if k not in ("version",)}
+    await audit_service.log_changes(
+        db, "AdmissionProfile", profile.id, "updated",
+        changes={"updated_fields": list(updated_fields.keys()), "updated_by": current_user.id},
+        actor_user_id=current_user.id,
+        source="api",
+    )
+
     log.info(
         "Admission profile updated",
         profile_id=profile_id,
@@ -1968,7 +2055,7 @@ async def submit_and_evaluate(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR check (after lock acquired)
-    _check_admin_or_unit_access(profile, current_user)
+    _check_idor_access(profile, current_user)
 
     # Initialize repository for document/citizen_id checks
     from app.repositories import AdmissionRepository
@@ -2172,6 +2259,15 @@ async def submit_and_evaluate(
             )
 
         await db.flush()
+
+        # Audit trail: log submission
+        from ..services import audit_service
+        await audit_service.log_status_change(
+            db, "AdmissionProfile", profile.id,
+            old_status="draft", new_status=profile.status,
+            actor_user_id=current_user.id,
+            source="api",
+        )
 
         log.info(
             "Admission profile submitted successfully",
@@ -2735,7 +2831,7 @@ async def enroll_student(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR check (after lock acquired)
-    _check_admin_or_unit_access(profile, current_user)
+    _check_idor_access(profile, current_user)
 
     # ✅ HIGH PRIORITY FIX #7: Idempotency check - return existing student if already enrolled
     # MUST be BEFORE status check to handle idempotent requests correctly
@@ -2896,6 +2992,7 @@ async def enroll_student(
                 db.add(doc)
 
             # Step 4: Update AdmissionProfile status
+            _old_status_for_enroll = profile.status
             profile.status = "enrolled"
             profile.updated_at = datetime.now(timezone.utc)
             profile.version += 1  # Increment version on enrollment
@@ -2911,6 +3008,15 @@ async def enroll_student(
             )
 
             await db.flush()
+
+            # Audit trail: log enrollment
+            from ..services import audit_service
+            await audit_service.log_status_change(
+                db, "AdmissionProfile", profile.id,
+                old_status=_old_status_for_enroll, new_status="enrolled",
+                actor_user_id=current_user.id,
+                source="api",
+            )
 
             # ✅ SYNC: Update lead consultation status to match admission status (enrolled → sts11)
             from .lead_admission_sync import sync_lead_from_admission
@@ -3021,7 +3127,7 @@ async def approve_profile(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR Check (MOVED CHECK AFTER LOCK)
-    _check_admin_or_unit_access(profile, approver)
+    _check_idor_access(profile, approver)
     from .admission_state_machine import validate_transition
 
     # STATE VALIDATION (Business Rule)
@@ -3072,6 +3178,7 @@ async def approve_profile(
         )
 
     # STATE CHANGE
+    _old_status_for_audit = profile.status
     profile.status = "approved"
     profile.approved_at = datetime.now(timezone.utc)
     profile.approved_by_id = approver.id
@@ -3090,6 +3197,16 @@ async def approve_profile(
         )
 
     await db.flush()  # Flush, don't commit! Router commits.
+
+    # Audit trail: log approval
+    from ..services import audit_service
+    await audit_service.log_status_change(
+        db, "AdmissionProfile", profile.id,
+        old_status=_old_status_for_audit, new_status="approved",
+        actor_user_id=approver.id,
+        reason=data.get("notes"),
+        source="api",
+    )
 
     # ✅ SYNC: Update lead consultation status to match admission status (approved → sts09)
     from .lead_admission_sync import sync_lead_from_admission
@@ -3165,7 +3282,7 @@ async def reject_profile(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR Check (MOVED CHECK AFTER LOCK)
-    _check_admin_or_unit_access(profile, rejector)
+    _check_idor_access(profile, rejector)
     
     from .admission_state_machine import validate_transition
 
@@ -3201,6 +3318,7 @@ async def reject_profile(
         )
 
     # STATE CHANGE
+    _old_status_for_audit = profile.status
     profile.status = "rejected"
     profile.rejected_at = datetime.now(timezone.utc)
     profile.rejected_by_id = rejector.id
@@ -3220,6 +3338,16 @@ async def reject_profile(
         )
 
     await db.flush()
+
+    # Audit trail: log rejection
+    from ..services import audit_service
+    await audit_service.log_status_change(
+        db, "AdmissionProfile", profile.id,
+        old_status=_old_status_for_audit, new_status="rejected",
+        actor_user_id=rejector.id,
+        reason=data["reason"],
+        source="api",
+    )
 
     # ✅ SYNC: Update lead consultation status to match admission status (rejected → sts16)
     from .lead_admission_sync import sync_lead_from_admission
@@ -3429,7 +3557,7 @@ async def resubmit_profile(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR Check (MOVED CHECK AFTER LOCK)
-    _check_admin_or_unit_access(profile, officer)
+    _check_idor_access(profile, officer)
     
     from .admission_state_machine import validate_transition
 
@@ -3454,12 +3582,29 @@ async def resubmit_profile(
         )
 
     # STATE CHANGE
+    _old_status_for_audit = profile.status
     profile.status = "resubmitted"
     profile.resubmitted_at = datetime.now(timezone.utc)
     profile.resubmitted_by_id = officer.id
     profile.resubmit_notes = data.get("notes")
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
+
+    # Clear reviewer assignment on resubmit (manager can re-claim)
+    old_reviewer = profile.assigned_reviewer_id
+    if old_reviewer:
+        from ..services import audit_service as _audit_svc
+        await _audit_svc.log_changes(
+            db, "AdmissionProfile", profile.id, "reviewer_cleared",
+            changes={
+                "assigned_reviewer_id": {"old": old_reviewer, "new": None},
+                "assigned_at": {"old": str(profile.assigned_at) if profile.assigned_at else None, "new": None},
+            },
+            actor_user_id=officer.id,
+            source="api",
+        )
+    profile.assigned_reviewer_id = None
+    profile.assigned_at = None
 
     # ✅ PIPELINE SYNC: Create system consultation for resubmission milestone
     if profile.lead:
@@ -3472,6 +3617,15 @@ async def resubmit_profile(
         )
 
     await db.flush()
+
+    # Audit trail: log resubmission
+    from ..services import audit_service
+    await audit_service.log_status_change(
+        db, "AdmissionProfile", profile.id,
+        old_status=_old_status_for_audit, new_status="resubmitted",
+        actor_user_id=officer.id,
+        source="api",
+    )
 
     log.info(
         "Admission profile resubmitted",
@@ -3688,9 +3842,9 @@ async def claim_review(
     2. Profile must NOT be already claimed by someone else
     3. Version check (optimistic locking)
     """
-    if profile.status != 'submitted':
+    if profile.status not in ['submitted', 'resubmitted']:
         raise BusinessRuleViolation(
-            f"Cannot claim profile in status '{profile.status}'. Only 'submitted' profiles can be claimed."
+            f"Cannot claim profile in status '{profile.status}'. Only submitted/resubmitted profiles can be claimed."
         )
 
     # 3. Version Check (CRITICAL FIX: Prevent Race Condition)
@@ -3708,7 +3862,7 @@ async def claim_review(
 
         # Already claimed by someone else
         raise BusinessRuleViolation(
-            f"Profile is already claimed by another reviewer (ID: {profile.assigned_reviewer_id})"
+            "Profile is already claimed by another reviewer"
         )
 
     # STATE CHANGE
@@ -3717,14 +3871,85 @@ async def claim_review(
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
 
-    # Audit Log (Internal)
+    await db.flush()
+
+    # Audit trail
+    from ..services import audit_service
+    await audit_service.log_changes(
+        db, "AdmissionProfile", profile.id, "claimed",
+        changes={
+            "assigned_reviewer_id": {"old": None, "new": reviewer.id},
+            "assigned_at": {"old": None, "new": str(profile.assigned_at)},
+        },
+        actor_user_id=reviewer.id,
+        source="api",
+    )
+
     log.info(
         "Profile claimed for review",
         profile_id=profile.id,
-        reviewer_id=reviewer.id
+        reviewer_id=reviewer.id,
     )
 
+
+async def unclaim_review(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    current_user: models.User,
+    expected_version: Optional[int] = None,
+):
+    """
+    Unclaim a profile from review (Manager self-unclaim or Admin override).
+
+    Business Rules:
+    1. Profile must have an assigned reviewer
+    2. Only assigned reviewer can unclaim (Admin can unclaim anyone)
+    3. Version check (optimistic locking)
+    """
+    from app.utils.exceptions import BusinessRuleViolation
+
+    if expected_version is not None and profile.version != expected_version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {expected_version}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    if profile.assigned_reviewer_id is None:
+        raise BusinessRuleViolation("No reviewer to unclaim")
+
+    if current_user.role != UserRole.ADMIN:
+        if profile.assigned_reviewer_id != current_user.id:
+            raise BusinessRuleViolation("Only assigned reviewer or Admin can unclaim")
+
+    old_reviewer = profile.assigned_reviewer_id
+    old_at = profile.assigned_at
+
+    profile.assigned_reviewer_id = None
+    profile.assigned_at = None
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
     await db.flush()
+
+    # Audit trail
+    from ..services import audit_service
+    await audit_service.log_changes(
+        db, "AdmissionProfile", profile.id, "unclaimed",
+        changes={
+            "assigned_reviewer_id": {"old": old_reviewer, "new": None},
+            "assigned_at": {"old": str(old_at) if old_at else None, "new": None},
+        },
+        actor_user_id=current_user.id,
+        source="api",
+    )
+
+    log.info(
+        "Profile unclaimed from review",
+        profile_id=profile.id,
+        unclaimed_by=current_user.id,
+        previous_reviewer=old_reviewer,
+    )
 
 
 async def finalize_profile(
@@ -3853,7 +4078,7 @@ async def delete_profile(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # IDOR check
-    _check_admin_or_unit_access(profile, current_user)
+    _check_idor_access(profile, current_user)
 
     # State check: Only draft profiles can be deleted
     if profile.status != "draft":
@@ -3891,6 +4116,15 @@ async def delete_profile(
         profile_id=profile_id,
         consultation_status_id=lead.consultation_status_id,
         actor_id=current_user.id,
+    )
+
+    # Audit trail: log deletion
+    from ..services import audit_service
+    await audit_service.log_deleted(
+        db, "AdmissionProfile", profile.id,
+        actor_user_id=current_user.id,
+        old_values={"lead_id": profile.lead_id, "status": profile.status},
+        source="api",
     )
 
     # Delete the profile
@@ -4183,11 +4417,12 @@ async def bulk_approve(
                 errors[profile_id] = "Profile not found"
                 continue
 
-            # IDOR check for non-admin (return "not found" to prevent enumeration)
-            if approver.role != UserRole.ADMIN and profile.lead.unit_id != approver.unit_id:
-                failed_ids.append(profile_id)
-                errors[profile_id] = "Profile not found"
-                continue
+            # IDOR check (3-tier: Admin=all, Manager=unit, Officer not allowed per Casbin)
+            if approver.role != UserRole.ADMIN:
+                if profile.lead.unit_id != approver.unit_id:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = "Profile not found"
+                    continue
 
             # Check if profile can be approved (status must be submitted/resubmitted)
             if profile.status not in ["submitted", "resubmitted"]:
@@ -4197,6 +4432,7 @@ async def bulk_approve(
 
             # Perform approval
             now = datetime.now(timezone.utc)
+            _old_status = profile.status
             profile.status = "approved"
             profile.approved_at = now
             profile.approved_by_id = approver.id
@@ -4204,6 +4440,15 @@ async def bulk_approve(
             profile.version += 1
 
             success_count += 1
+
+            # Audit trail
+            from ..services import audit_service
+            await audit_service.log_status_change(
+                db, "AdmissionProfile", profile.id,
+                old_status=_old_status, new_status="approved",
+                actor_user_id=approver.id,
+                source="bulk_api",
+            )
 
         except Exception as e:
             log.error("Bulk approve failed for profile", profile_id=profile_id, error=str(e))
@@ -4261,11 +4506,12 @@ async def bulk_reject(
                 errors[profile_id] = "Profile not found"
                 continue
 
-            # IDOR check for non-admin (return "not found" to prevent enumeration)
-            if rejector.role != UserRole.ADMIN and profile.lead.unit_id != rejector.unit_id:
-                failed_ids.append(profile_id)
-                errors[profile_id] = "Profile not found"
-                continue
+            # IDOR check (3-tier: Admin=all, Manager=unit, Officer not allowed per Casbin)
+            if rejector.role != UserRole.ADMIN:
+                if profile.lead.unit_id != rejector.unit_id:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = "Profile not found"
+                    continue
 
             if profile.status not in ["submitted", "resubmitted"]:
                 failed_ids.append(profile_id)
@@ -4273,6 +4519,7 @@ async def bulk_reject(
                 continue
 
             now = datetime.now(timezone.utc)
+            _old_status = profile.status
             profile.status = "rejected"
             profile.rejected_at = now
             profile.rejected_by_id = rejector.id
@@ -4280,6 +4527,16 @@ async def bulk_reject(
             profile.version += 1
 
             success_count += 1
+
+            # Audit trail
+            from ..services import audit_service
+            await audit_service.log_status_change(
+                db, "AdmissionProfile", profile.id,
+                old_status=_old_status, new_status="rejected",
+                actor_user_id=rejector.id,
+                reason=reason,
+                source="bulk_api",
+            )
 
         except Exception as e:
             log.error("Bulk reject failed for profile", profile_id=profile_id, error=str(e))
@@ -4329,6 +4586,11 @@ async def bulk_assign(
     if not officer:
         raise ResourceNotFoundError("Officer not found")
 
+    # M4: Validate officer unit matches assigner unit (Admin bypass)
+    if assigner.role != UserRole.ADMIN:
+        if officer.unit_id != assigner.unit_id:
+            raise BadRequest("Cannot assign to officer from different unit")
+
     repo = AdmissionRepository(db)
     success_count = 0
     failed_ids = []
@@ -4349,8 +4611,18 @@ async def bulk_assign(
                 continue
 
             # Update lead assignment
+            _old_officer_id = profile.lead.assigned_officer_id
             profile.lead.assigned_officer_id = officer_id
             success_count += 1
+
+            # Audit trail
+            from ..services import audit_service
+            await audit_service.log_changes(
+                db, "Lead", profile.lead.id, "assigned",
+                changes={"assigned_officer_id": {"old": _old_officer_id, "new": officer_id}},
+                actor_user_id=assigner.id,
+                source="bulk_api",
+            )
 
         except Exception as e:
             log.error("Bulk assign failed for profile", profile_id=profile_id, error=str(e))

@@ -118,6 +118,18 @@ export function useAdmissionStats(academicYear?: number) {
   })
 }
 
+/**
+ * Fetch major programs that have admission profiles.
+ * Uses admission-config endpoint (accessible to all staff, no CasbinAuth).
+ */
+export function useAdmissionPrograms() {
+  return useQuery<Array<{ id: number; name: string; code: string; degree_level: string }>>({
+    queryKey: [...admissionsKeys.all, "programs"],
+    queryFn: () => admissionsApi.getAdmissionPrograms(),
+    staleTime: 60 * 60 * 1000, // 1 hour - programs rarely change
+  })
+}
+
 export function useGetAdmission(
   id: number,
   options?: {
@@ -555,6 +567,58 @@ export function useBulkAssignAdmissions() {
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "phân công hàng loạt" })
+    },
+  })
+}
+
+/**
+ * Claim Admission Hook
+ * Officer action - claim a profile for review
+ *
+ * Architecture Compliance:
+ * - Uses centralized error handling (handleApiError)
+ * - Handles 409 Conflict (optimistic locking)
+ * - Invalidates cache on success
+ */
+export function useClaimAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { version: number }) =>
+      admissionsApi.claimAdmissionProfile(id, data),
+    onSuccess: () => {
+      toast.success("Đã nhận duyệt hồ sơ")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "nhận duyệt hồ sơ" })
+    },
+  })
+}
+
+/**
+ * Unclaim Admission Hook
+ * Officer action - release review assignment
+ *
+ * Architecture Compliance:
+ * - Uses centralized error handling (handleApiError)
+ * - Handles 409 Conflict (optimistic locking)
+ * - Invalidates cache on success
+ */
+export function useUnclaimAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { version: number }) =>
+      admissionsApi.unclaimAdmissionProfile(id, data),
+    onSuccess: () => {
+      toast.success("Đã bỏ nhận duyệt hồ sơ")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "bỏ nhận duyệt hồ sơ" })
     },
   })
 }

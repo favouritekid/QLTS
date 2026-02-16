@@ -940,6 +940,39 @@ async def claim_admission_review(
     return profile
 
 
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/unclaim",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Unclaim admission profile from review (Manager/Admin)",
+)
+async def unclaim_admission_review(
+    request: Request,
+    profile_id: int,
+    data: schemas.ClaimRequest,
+    current_user: models.User = CasbinAuth,
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Unclaim a profile from review - Manager/Admin action.
+
+    **Business Rules**:
+    - Profile must have an assigned reviewer
+    - Only assigned reviewer can unclaim (Admin can unclaim anyone)
+    - Optimistic locking via version check
+    """
+    await admission_service.unclaim_review(
+        db=db,
+        profile=profile,
+        current_user=current_user,
+        expected_version=data.version,
+    )
+
+    await db.commit()
+    return profile
+
+
 # ==============================================================================
 # APPLICATION FEE ENDPOINTS
 # ==============================================================================
@@ -1699,15 +1732,14 @@ async def export_admissions_csv(
     statuses = [s.strip() for s in status.split(",")] if status else None
     major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip().isdigit()] if major_id else None
 
-    # Determine unit_id for non-admin users (IDOR protection)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
-
+    # IDOR: Admin=all, Manager=unit, Officer=own assigned leads
+    # Pass current_user to service for proper scoping
     # Get all profiles matching filters (no pagination for export)
     profiles, _ = await admission_service.get_profiles(
         db=db,
         skip=0,
         limit=10000,  # Max export limit
-        unit_id=unit_id,
+        current_user=current_user,
         search=search,
         statuses=statuses,
         major_ids=major_ids,

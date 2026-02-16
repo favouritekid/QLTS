@@ -365,6 +365,53 @@ async def get_degree_levels(
     return await repo.get_all_active(active_only)
 
 
+async def get_programs_with_admissions(
+    db: AsyncSession,
+    current_user: "models.User" = None,
+) -> list:
+    """
+    Get distinct MajorPrograms that have at least one admission profile.
+
+    Used by admission list page filter dropdown.
+    Only returns active programs linked to real admission data.
+
+    IDOR:
+    - Admin: all programs
+    - Manager + Officer: programs within their unit
+    """
+    from sqlalchemy import select
+    from ..core.constants import UserRole
+
+    query = (
+        select(models.MajorProgram)
+        .join(
+            models.ProgramOffering,
+            models.ProgramOffering.program_id == models.MajorProgram.id,
+        )
+        .join(
+            models.Lead,
+            models.Lead.offering_id == models.ProgramOffering.id,
+        )
+        .join(
+            models.AdmissionProfile,
+            models.AdmissionProfile.lead_id == models.Lead.id,
+        )
+        .where(models.MajorProgram.is_active == True)
+        .distinct()
+        .order_by(models.MajorProgram.name)
+    )
+
+    if current_user:
+        if current_user.role == UserRole.ADMIN:
+            pass  # no filter
+        else:
+            # Manager + Officer: unit scope
+            query = query.where(models.Lead.unit_id == current_user.unit_id)
+
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
 async def get_degree_level_by_id(
     db: AsyncSession,
     level_id: int

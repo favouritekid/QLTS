@@ -37,6 +37,8 @@ import {
   useRejectAdmission,   // ✅ NEW
   useEnrollStudent,
   useDeleteAdmission,
+  useClaimAdmission,
+  useUnclaimAdmission,
 } from "@/hooks/admissions"
 import {
   admissionProfileUpdateSchema,
@@ -85,6 +87,8 @@ export function AdmissionDetailClient({
   const rejectMutation = useRejectAdmission(profileId)    // ✅ NEW
   const enrollMutation = useEnrollStudent(profileId)
   const deleteMutation = useDeleteAdmission(profileId)
+  const claimMutation = useClaimAdmission(profileId)
+  const unclaimMutation = useUnclaimAdmission(profileId)
 
   // =========================================================================
   // 2. Permission-Based Rendering (from ViewModel)
@@ -344,6 +348,17 @@ export function AdmissionDetailClient({
     deleteMutation.mutate()
   }
 
+  // Claim/Unclaim Handlers
+  const handleClaim = () => {
+    if (!vm?.version) return
+    claimMutation.mutate({ version: vm.version })
+  }
+
+  const handleUnclaim = () => {
+    if (!vm?.version) return
+    unclaimMutation.mutate({ version: vm.version })
+  }
+
   const handleCheckCondition = () => {
     // Navigate to first error step using backend-computed status
     if (stepsStatusRecord[1] === "error") handleStepChange(1)
@@ -406,6 +421,10 @@ export function AdmissionDetailClient({
           onReject={handleReject}
           isApproving={approveMutation.isPending}
           isRejecting={rejectMutation.isPending}
+          onClaim={handleClaim}
+          onUnclaim={handleUnclaim}
+          isClaiming={claimMutation.isPending}
+          isUnclaiming={unclaimMutation.isPending}
           onDelete={handleDelete}
           isDeleting={deleteMutation.isPending}
           onCheckCondition={handleCheckCondition}

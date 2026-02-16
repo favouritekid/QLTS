@@ -422,7 +422,7 @@ export const admissionProfileResponseSchema = z.object({
   party_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_official_entry_date: z.string().datetime({ offset: true }).nullable(),
   // Status (extended for async-first workflow)
-  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "confirmed", "enrolled"]),
+  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "confirmed", "overridden", "enrolled"]),
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year
   applied_rules: appliedRulesSchema, // ✅ NEW: Properly typed with 18 fields
@@ -433,7 +433,18 @@ export const admissionProfileResponseSchema = z.object({
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
   // Nested relationships (optional)
-  lead: z.any().optional().nullable(),
+  lead: z.object({
+    id: z.number(),
+    full_name: z.string(),
+    phone: z.string().nullable().optional(),
+    email: z.string().nullable().optional(),
+    unit_id: z.number().nullable().optional(),
+    assigned_officer_id: z.number().nullable().optional(),
+    assigned_officer: z.object({
+      id: z.number(),
+      full_name: z.string(),
+    }).nullable().optional(),
+  }).nullable().optional(),
   student: z.any().optional().nullable(),
 
   // Denormalized fields for list display
@@ -540,6 +551,12 @@ export const admissionProfileResponseSchema = z.object({
   rejected_at: z.string().datetime({ offset: true }).nullable().optional(),
   rejected_by_id: z.number().nullable().optional(),
   rejection_reason: z.string().nullable().optional(),
+
+  // Claim/assignment fields
+  assigned_reviewer_id: z.number().nullable().optional(),
+  assigned_reviewer_name: z.string().nullable().optional(),
+  assigned_at: z.string().datetime({ offset: true }).nullable().optional(),
+  assigned_officer_name: z.string().nullable().optional(),
 
   // Ticket #2: Backend-computed qualification status
   is_qualified: z.boolean().nullable().optional().describe("Whether profile meets admission criteria. Computed by backend."),

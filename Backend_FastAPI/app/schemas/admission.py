@@ -553,6 +553,12 @@ class AdmissionProfileResponse(BaseModel):
     rejected_by_id: Optional[int] = None
     rejection_reason: Optional[str] = None
 
+    # Claim/assignment fields
+    assigned_reviewer_id: Optional[int] = None
+    assigned_reviewer_name: Optional[str] = None
+    assigned_at: Optional[datetime] = None
+    assigned_officer_name: Optional[str] = None
+
     # ✅ Ticket #2: Qualification Status
     # Computed by backend: True if all academic criteria met
     is_qualified: Optional[bool] = None
@@ -673,6 +679,7 @@ class LeadShallowForAdmission(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     unit_id: Optional[int] = None
+    assigned_officer_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 

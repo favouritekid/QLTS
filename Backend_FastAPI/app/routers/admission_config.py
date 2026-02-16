@@ -23,7 +23,7 @@ from app.core.deps import (
 )
 from app.models.admission_config.criteria import AdmissionCriteria
 from app.database import get_db
-from app.schemas.organization import ConfigDegreeLevel
+from app.schemas.organization import ConfigDegreeLevel, MajorProgramShallow
 from app.models import User
 from app.repositories.admission_config_repository import AdmissionConfigRepository
 from app.services.admission_scoring_service import AdmissionScoringService
@@ -72,6 +72,24 @@ async def list_degree_levels(
     Used by admission filters dropdown.
     """
     return await config_service.get_degree_levels(db, active_only)
+
+
+# =============================================================================
+# PROGRAMS (Distinct programs that have admission profiles)
+# =============================================================================
+
+@router.get("/programs", response_model=list[MajorProgramShallow])
+async def list_admission_programs(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Get major programs that have at least one admission profile.
+    Accessible to all authenticated staff (not admin-only).
+    Used by admission list page filter dropdown.
+    IDOR: non-admin users only see programs within their unit.
+    """
+    return await config_service.get_programs_with_admissions(db, current_user=current_user)
 
 
 # =============================================================================

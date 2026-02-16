@@ -275,6 +275,8 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/approve", "action": "POST"},  # Approve profile
         {"subject": "{role}", "object": "/api/admissions/{id}/reject", "action": "POST"},  # Reject profile
         {"subject": "{role}", "object": "/api/admissions/{id}/override", "action": "POST"},  # Override decision
+        {"subject": "{role}", "object": "/api/admissions/{id}/claim", "action": "POST"},  # Claim profile for review
+        {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
         # Admission Configuration Console (Phase 1: Admission Path Management)
         # NOTE: Manager can create/edit paths, but ONLY ADMIN can activate/deactivate

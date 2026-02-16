@@ -25,6 +25,7 @@ export {
   useGetAdmission,
   useAcademicYears,
   useDegreeLevelsPublic,
+  useAdmissionPrograms,
   useAdmissionStatusCounts,
   useAdmissionStats,
   // Mutations
@@ -44,6 +45,8 @@ export {
   useBulkApproveAdmissions,
   useBulkRejectAdmissions,
   useBulkAssignAdmissions,
+  useClaimAdmission,
+  useUnclaimAdmission,
   useExportAdmissions,
 } from "./useAdmissions"
 

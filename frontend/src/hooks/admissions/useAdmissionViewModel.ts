@@ -90,7 +90,13 @@ export interface AdmissionViewModel {
   approved_by_id?: number | null
   rejected_at?: string | null
   rejected_by_id?: number | null
-  
+
+  // Claim/assignment fields
+  assigned_reviewer_id?: number | null
+  assigned_reviewer_name?: string | null
+  assigned_at?: string | null
+  assigned_officer_name?: string | null
+
   // -------------------------------------------------------------------------
   // UX Derivations (computed from backend data - allowed per 2.6.4)
   // -------------------------------------------------------------------------
@@ -112,7 +118,9 @@ export interface AdmissionViewModel {
   canReject: boolean
   canEnroll: boolean
   canDelete: boolean
-  
+  canClaim: boolean
+  canUnclaim: boolean
+
   // -------------------------------------------------------------------------
   // Backend-Computed State (pass-through, NOT calculated)
   // -------------------------------------------------------------------------
@@ -247,7 +255,15 @@ export function useAdmissionViewModel(
       canReject: available_actions.includes("reject"),
       canEnroll: available_actions.includes("enroll"),
       canDelete: available_actions.includes("delete"),
-      
+      canClaim: available_actions.includes("claim"),
+      canUnclaim: available_actions.includes("unclaim"),
+
+      // Claim/assignment display fields
+      assigned_reviewer_id: data.assigned_reviewer_id,
+      assigned_reviewer_name: data.assigned_reviewer_name,
+      assigned_at: data.assigned_at,
+      assigned_officer_name: data.assigned_officer_name,
+
       // Backend-computed state (pass-through)
       eligibilityStatus: eligibility_status as EligibilityStatus,
       isEligible: eligibility_status === "eligible",

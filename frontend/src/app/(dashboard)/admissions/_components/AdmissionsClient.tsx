@@ -25,6 +25,7 @@ import {
   type RowSelectionState,
 } from "@tanstack/react-table"
 import { useQueryClient } from "@tanstack/react-query"
+import { AxiosError } from "axios"
 import { format } from "date-fns"
 import { vi } from "date-fns/locale"
 import {
@@ -42,6 +43,7 @@ import {
   BarChart3,
 } from "lucide-react"
 import Link from "next/link"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -100,6 +102,7 @@ import {
   useAdmissionStatusCounts,
   useAdmissionStats,
   useAdmissionsFilter,
+  useAdmissionPrograms,
   admissionsKeys,
   useBulkApproveAdmissions,
   useBulkRejectAdmissions,
@@ -107,7 +110,7 @@ import {
   useExportAdmissions,
 } from "@/hooks/admissions"
 import { admissionsApi } from "@/lib/api/admissions"
-import { useMajorPrograms } from "@/hooks/admissions/useProgramData"
+import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
 import type { AdmissionProfileResponse, AdmissionsPage } from "@/lib/zod/admissions"
 import { getColumns, STATUS_CONFIG, ELIGIBILITY_CONFIG } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
@@ -231,7 +234,7 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   )
 
   // ── Reference data queries ────────────────────────────────────────────
-  const { data: majorPrograms } = useMajorPrograms()
+  const { data: majorPrograms } = useAdmissionPrograms()
   const { data: academicYears } = useAcademicYears()
   const { data: degreeLevels } = useDegreeLevelsPublic()
 
@@ -271,8 +274,22 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     }
   }, [state.page, state.pageSize, totalCount, apiFilters, queryClient, data])
 
+  // ── Claim handler (list view) ────────────────────────────────────────
+  const handleClaimFromList = useCallback(async (profile: AdmissionProfileResponse) => {
+    if (profile.version == null) return
+    try {
+      await admissionsApi.claimAdmissionProfile(profile.id, { version: profile.version })
+      toast.success("Đã nhận duyệt hồ sơ")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    } catch (error) {
+      handleApiError(error as AxiosError<ApiErrorResponse>, { context: "nhận duyệt hồ sơ" })
+    }
+  }, [queryClient])
+
   // ── Table instance ────────────────────────────────────────────────────
-  const columns = useMemo(() => getColumns(), [])
+  const columns = useMemo(() => getColumns({
+    onClaim: handleClaimFromList,
+  }), [handleClaimFromList])
 
   const table = useReactTable({
     data: profiles,

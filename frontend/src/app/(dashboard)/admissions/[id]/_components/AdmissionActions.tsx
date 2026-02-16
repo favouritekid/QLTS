@@ -43,6 +43,11 @@ interface AdmissionActionsProps {
   onReject?: () => void
   isApproving?: boolean
   isRejecting?: boolean
+  // Claim/unclaim actions
+  onClaim?: () => void
+  onUnclaim?: () => void
+  isClaiming?: boolean
+  isUnclaiming?: boolean
   // Delete action
   onDelete?: () => void
   isDeleting?: boolean
@@ -63,6 +68,10 @@ export function AdmissionActions({
   onReject,
   isApproving = false,
   isRejecting = false,
+  onClaim,
+  onUnclaim,
+  isClaiming = false,
+  isUnclaiming = false,
   onDelete,
   isDeleting = false,
 }: AdmissionActionsProps) {
@@ -186,6 +195,57 @@ export function AdmissionActions({
               {isRejecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
               Từ chối
             </Button>
+          )}
+
+          {/* Claim/Unclaim Actions */}
+          {can('claim') && onClaim && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" disabled={isClaiming}>
+                  {isClaiming ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ClipboardCheck className="w-4 h-4 mr-2" />}
+                  Nhận duyệt
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Nhận duyệt hồ sơ?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Bạn sẽ được gán là người duyệt hồ sơ này. Bạn có thể bỏ nhận bất cứ lúc nào.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Hủy</AlertDialogCancel>
+                  <AlertDialogAction onClick={onClaim}>
+                    Nhận duyệt
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+
+          {can('unclaim') && onUnclaim && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" disabled={isUnclaiming}>
+                  {isUnclaiming ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
+                  Bỏ nhận
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Bỏ nhận duyệt?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Bạn sẽ không còn là người duyệt hồ sơ này. Manager khác có thể nhận duyệt.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Hủy</AlertDialogCancel>
+                  <AlertDialogAction onClick={onUnclaim}>
+                    Bỏ nhận
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
 
           {/* Enroll - can('enroll') when status = approved */}

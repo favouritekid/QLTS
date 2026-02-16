@@ -15,7 +15,7 @@
 import { createColumnHelper, type ColumnDef } from "@tanstack/react-table"
 import { format } from "date-fns"
 import { vi } from "date-fns/locale"
-import { ArrowUpDown, MoreHorizontal, Eye, CheckCircle, XCircle } from "lucide-react"
+import { ArrowUpDown, MoreHorizontal, Eye, CheckCircle, XCircle, ClipboardCheck } from "lucide-react"
 import Link from "next/link"
 
 import { Badge } from "@/components/ui/badge"
@@ -65,6 +65,7 @@ const columnHelper = createColumnHelper<AdmissionProfileResponse>()
 interface ColumnOptions {
   onApprove?: (profile: AdmissionProfileResponse) => void
   onReject?: (profile: AdmissionProfileResponse) => void
+  onClaim?: (profile: AdmissionProfileResponse) => void
   canApprove?: boolean
   canReject?: boolean
 }
@@ -189,6 +190,34 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       size: 150,
     }) as ColumnDef<AdmissionProfileResponse, unknown>,
 
+    // Assigned officer column
+    columnHelper.accessor("assigned_officer_name", {
+      header: "Phụ trách",
+      cell: ({ getValue }) => {
+        const name = getValue()
+        return (
+          <span className="text-sm text-muted-foreground truncate max-w-[120px] block">
+            {name ?? "—"}
+          </span>
+        )
+      },
+      size: 120,
+    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+
+    // Assigned reviewer column
+    columnHelper.accessor("assigned_reviewer_name", {
+      header: "Người duyệt",
+      cell: ({ getValue }) => {
+        const name = getValue()
+        return (
+          <span className="text-sm text-muted-foreground truncate max-w-[120px] block">
+            {name ?? "—"}
+          </span>
+        )
+      },
+      size: 120,
+    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+
     // Created date column
     columnHelper.accessor("created_at", {
       header: ({ column }) => (
@@ -258,6 +287,16 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
                 >
                   <XCircle className="mr-2 h-4 w-4" />
                   Từ chối
+                </DropdownMenuItem>
+              )}
+
+              {profile.available_actions?.includes("claim") && (
+                <DropdownMenuItem
+                  onClick={() => options?.onClaim?.(profile)}
+                  className="text-blue-600"
+                >
+                  <ClipboardCheck className="mr-2 h-4 w-4" />
+                  Nhận duyệt
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>

@@ -1721,7 +1721,10 @@ async def get_admission_for_manager(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead))
+        .options(
+            selectinload(models.AdmissionProfile.lead),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update()  # ✅ CRITICAL: Prevent concurrent approve/reject
     )
     result = await db.execute(stmt)
@@ -1730,10 +1733,9 @@ async def get_admission_for_manager(
     if not profile:
         raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
-    # IDOR CHECK (after lock acquired)
+    # IDOR CHECK (after lock acquired) — 3-tier: Admin→all, Manager→unit, Officer→assigned+unit
     if current_user.role != UserRole.ADMIN:
         if not profile.lead or profile.lead.unit_id != current_user.unit_id:
-            # Fake 404 to prevent information leakage
             log.warning(
                 "IDOR attempt: Manager tried to access profile from different unit",
                 user_id=current_user.id,
@@ -1742,6 +1744,16 @@ async def get_admission_for_manager(
                 profile_unit_id=profile.lead.unit_id if profile.lead else None,
             )
             raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+        # Officer: must also be the assigned officer
+        if current_user.role == UserRole.OFFICER:
+            if profile.lead.assigned_officer_id != current_user.id:
+                log.warning(
+                    "IDOR attempt: Officer tried to access profile not assigned to them",
+                    user_id=current_user.id,
+                    profile_id=profile_id,
+                    assigned_officer_id=profile.lead.assigned_officer_id,
+                )
+                raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
     return profile
 
@@ -1786,7 +1798,10 @@ async def get_admission_for_user(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead))
+        .options(
+            selectinload(models.AdmissionProfile.lead),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update()
     )
     result = await db.execute(stmt)
@@ -1795,10 +1810,9 @@ async def get_admission_for_user(
     if not profile:
         raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
-    # IDOR CHECK
+    # IDOR CHECK — 3-tier: Admin→all, Manager→unit, Officer→assigned+unit
     if current_user.role != UserRole.ADMIN:
         if not profile.lead or profile.lead.unit_id != current_user.unit_id:
-            # Fake 404 to prevent information leakage
             log.warning(
                 "IDOR attempt: User tried to access profile from different unit",
                 user_id=current_user.id,
@@ -1807,6 +1821,16 @@ async def get_admission_for_user(
                 profile_unit_id=profile.lead.unit_id if profile.lead else None,
             )
             raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+        # Officer: must also be the assigned officer
+        if current_user.role == UserRole.OFFICER:
+            if profile.lead.assigned_officer_id != current_user.id:
+                log.warning(
+                    "IDOR attempt: Officer tried to access profile not assigned to them",
+                    user_id=current_user.id,
+                    profile_id=profile_id,
+                    assigned_officer_id=profile.lead.assigned_officer_id,
+                )
+                raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
     return profile
 

@@ -47,8 +47,17 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
 
       {/* Officer Name */}
       <span className="text-xs md:text-sm text-muted-foreground hidden md:inline">
-        Phụ trách: {profile?.lead?.assigned_officer?.full_name || "Chưa phân công"}
+        Phụ trách: {profile?.assigned_officer_name ?? "Chưa phân công"}
       </span>
+
+      {profile?.assigned_reviewer_name && (
+        <>
+          <span className="text-muted-foreground hidden md:inline">·</span>
+          <span className="text-xs md:text-sm text-muted-foreground hidden md:inline">
+            Người duyệt: {profile.assigned_reviewer_name}
+          </span>
+        </>
+      )}
     </div>
   )
 }
