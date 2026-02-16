@@ -425,7 +425,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             "enrolled_count": enrolled_count,
             "rejected_count": rejected_count,
             "conversion_rate": conversion_rate,
-            "avg_completion": avg_completion,
+            "avg_completion": 0.0,
         }
 
     async def get_distinct_academic_years(
