@@ -157,11 +157,21 @@ async def get_all_consultation_statuses(
                 "name": s.name,
                 "color_code": s.color_code,
                 "stage_id": s.stage_id,
-                "outcome_type": s.outcome_type.value,  # Convert enum to string
+                "outcome_type": s.outcome_type.value,
+                "is_universal": s.is_universal,
+                "updates_pipeline": s.updates_pipeline,
+                # FSM v3.0 fields (previously missing)
+                "code": s.code,
+                "is_final": s.is_final,
+                "status_type": s.status_type.value,
+                "selectable_mode": s.selectable_mode.value,
+                "counts_for_funnel": s.counts_for_funnel,
+                "phase": s.phase,
+                "description": s.description,
+                "display_order": s.display_order,
+                # Deprecated (backward compat)
                 "is_final_status": s.is_final_status,
-                "legacy_status": s.legacy_status,  # Backward compatibility
-                "is_universal": s.is_universal,  # ✅ Universal status support
-                "updates_pipeline": s.updates_pipeline,  # ✅ Pipeline update control
+                "legacy_status": s.legacy_status,
             }
             for s in statuses_models
         ]
