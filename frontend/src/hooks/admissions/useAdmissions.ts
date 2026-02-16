@@ -68,6 +68,7 @@ export function useListAdmissions(
       order: filters?.order,
     }),
     staleTime: 15000, // 15 seconds
+    gcTime: 5 * 60 * 1000, // 5 min — keep cached pages for back-navigation
     placeholderData: (previousData) => previousData, // Keep showing old data while fetching new page
     initialData: options?.initialData,
   })

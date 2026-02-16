@@ -9,6 +9,8 @@
  * - Stats cards (totals, conversion rate, avg completion)
  * - Mobile card view
  * - Bulk actions (approve, reject, assign, export)
+ * - URL sync + localStorage persistence (via useAdmissionsFilter)
+ * - Next page prefetch for instant pagination
  */
 
 "use client"
@@ -22,6 +24,7 @@ import {
   type SortingState,
   type RowSelectionState,
 } from "@tanstack/react-table"
+import { useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import { vi } from "date-fns/locale"
 import {
@@ -96,13 +99,16 @@ import {
   useDegreeLevelsPublic,
   useAdmissionStatusCounts,
   useAdmissionStats,
+  useAdmissionsFilter,
+  admissionsKeys,
   useBulkApproveAdmissions,
   useBulkRejectAdmissions,
   useBulkAssignAdmissions,
   useExportAdmissions,
 } from "@/hooks/admissions"
+import { admissionsApi } from "@/lib/api/admissions"
 import { useMajorPrograms } from "@/hooks/admissions/useProgramData"
-import type { AdmissionProfileResponse, AdmissionListParams, AdmissionsPage } from "@/lib/zod/admissions"
+import type { AdmissionProfileResponse, AdmissionsPage } from "@/lib/zod/admissions"
 import { getColumns, STATUS_CONFIG, ELIGIBILITY_CONFIG } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
 import { BulkRejectDialog } from "./dialogs/BulkRejectDialog"
@@ -112,7 +118,6 @@ import { BulkAssignDialog } from "./dialogs/BulkAssignDialog"
 // CONSTANTS
 // =============================================================================
 
-const DEFAULT_PAGE_SIZE = 20
 const CURRENT_YEAR = new Date().getFullYear()
 
 const STATUS_OPTIONS = [
@@ -171,6 +176,23 @@ const StatCard = memo(function StatCard({ label, value, icon, className }: StatC
 })
 
 // =============================================================================
+// DATE HELPERS
+// =============================================================================
+
+/** Parse yyyy-MM-dd string to Date (noon to avoid timezone issues) */
+function parseDate(str: string): Date | undefined {
+  if (!str) return undefined
+  return new Date(str + "T12:00:00")
+}
+
+/** Format Date to dd/MM display string */
+function formatShortDate(str: string): string {
+  if (!str) return "…"
+  // str is "yyyy-MM-dd"
+  return str.slice(8, 10) + "/" + str.slice(5, 7)
+}
+
+// =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
@@ -179,81 +201,52 @@ interface AdmissionsClientProps {
 }
 
 export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
-  // Filter state
-  const [search, setSearch] = useState("")
-  const [debouncedSearch, setDebouncedSearch] = useState("")
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([])
-  const [selectedMajorId, setSelectedMajorId] = useState<string | undefined>()
-  const [selectedYear, setSelectedYear] = useState<number | undefined>(CURRENT_YEAR)
-  const [selectedDegreeLevel, setSelectedDegreeLevel] = useState<string | undefined>()
-  const [selectedPaymentStatus, setSelectedPaymentStatus] = useState<string | undefined>()
-  const [dateFrom, setDateFrom] = useState<Date | undefined>()
-  const [dateTo, setDateTo] = useState<Date | undefined>()
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+  const queryClient = useQueryClient()
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState<string>("all")
+  // ── Filter state (URL sync + localStorage) ────────────────────────────
+  const { state, handlers, hasActiveFilters, apiFilters, countFilters } = useAdmissionsFilter()
 
-  // Table state
-  const [sorting, setSorting] = useState<SortingState>([])
+  // ── Table state (local only — not persisted) ──────────────────────────
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
-
-  // Dialog state
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
   const [assignDialogOpen, setAssignDialogOpen] = useState(false)
 
-  // Debounce search
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(search)
-      setPage(1)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [search])
+  // Derive TanStack sorting from hook state
+  const tableSorting: SortingState = useMemo(() => {
+    if (state.sortBy === "created_at" && state.sortOrder === "desc") return []
+    return [{ id: state.sortBy, desc: state.sortOrder === "desc" }]
+  }, [state.sortBy, state.sortOrder])
 
-  // Reference data queries
+  const handleSortingChange = useCallback(
+    (updaterOrValue: SortingState | ((prev: SortingState) => SortingState)) => {
+      const newSorting =
+        typeof updaterOrValue === "function" ? updaterOrValue(tableSorting) : updaterOrValue
+      if (newSorting.length > 0) {
+        handlers.handleSortChange(newSorting[0].id, newSorting[0].desc ? "desc" : "asc")
+      } else {
+        handlers.handleSortChange("created_at", "desc")
+      }
+    },
+    [tableSorting, handlers],
+  )
+
+  // ── Reference data queries ────────────────────────────────────────────
   const { data: majorPrograms } = useMajorPrograms()
   const { data: academicYears } = useAcademicYears()
   const { data: degreeLevels } = useDegreeLevelsPublic()
 
-  // Year options: from API or fallback
   const yearOptions = useMemo(() => {
     if (academicYears && academicYears.length > 0) return academicYears
     return [CURRENT_YEAR + 1, CURRENT_YEAR, CURRENT_YEAR - 1]
   }, [academicYears])
 
-  // Build filters
-  const filters: AdmissionListParams = useMemo(() => ({
-    page,
-    page_size: pageSize,
-    status: selectedStatuses.length > 0 ? selectedStatuses.join(",") : undefined,
-    search: debouncedSearch || undefined,
-    major_id: selectedMajorId || undefined,
-    academic_year: selectedYear,
-    degree_level: selectedDegreeLevel,
-    payment_status: selectedPaymentStatus,
-    date_from: dateFrom ? format(dateFrom, "yyyy-MM-dd") : undefined,
-    date_to: dateTo ? format(dateTo, "yyyy-MM-dd") : undefined,
-    sort_by: sorting[0]?.id as AdmissionListParams["sort_by"],
-    order: sorting[0]?.desc ? "desc" : "asc",
-  }), [page, pageSize, selectedStatuses, debouncedSearch, selectedMajorId, selectedYear, selectedDegreeLevel, selectedPaymentStatus, dateFrom, dateTo, sorting])
-
-  // Filters without status/page for status-counts query (separate queryKey)
-  const countFilters = useMemo(() => ({
-    search: debouncedSearch || undefined,
-    major_id: selectedMajorId || undefined,
-    academic_year: selectedYear,
-    degree_level: selectedDegreeLevel,
-    payment_status: selectedPaymentStatus,
-    date_from: dateFrom ? format(dateFrom, "yyyy-MM-dd") : undefined,
-    date_to: dateTo ? format(dateTo, "yyyy-MM-dd") : undefined,
-  }), [debouncedSearch, selectedMajorId, selectedYear, selectedDegreeLevel, selectedPaymentStatus, dateFrom, dateTo])
-
-  // Queries
-  const { data, isLoading, isError, isFetching } = useListAdmissions(filters, { initialData })
+  // ── Data queries ──────────────────────────────────────────────────────
+  // Only use SSR initialData when filters match server defaults (no filters, page 1).
+  // Otherwise React Query treats stale initialData as "fresh" and skips refetch.
+  const safeInitialData = !hasActiveFilters && state.page === 1 ? initialData : undefined
+  const { data, isLoading, isError, isFetching } = useListAdmissions(apiFilters, { initialData: safeInitialData })
   const { data: statusCounts } = useAdmissionStatusCounts(countFilters)
-  const { data: stats } = useAdmissionStats(selectedYear)
+  const { data: stats } = useAdmissionStats(state.academicYear)
 
   // Mutations
   const bulkApprove = useBulkApproveAdmissions()
@@ -264,24 +257,38 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   const profiles = data?.profiles ?? []
   const totalCount = data?.total_count ?? 0
 
-  // Column definitions
+  // ── Prefetch next page ────────────────────────────────────────────────
+  useEffect(() => {
+    if (data) {
+      const totalPages = Math.ceil(totalCount / state.pageSize)
+      if (state.page < totalPages) {
+        queryClient.prefetchQuery({
+          queryKey: admissionsKeys.list({ ...apiFilters, page: state.page + 1 } as Record<string, unknown>),
+          queryFn: () => admissionsApi.listAdmissions({ ...apiFilters, page: state.page + 1 }),
+          staleTime: 30_000,
+        })
+      }
+    }
+  }, [state.page, state.pageSize, totalCount, apiFilters, queryClient, data])
+
+  // ── Table instance ────────────────────────────────────────────────────
   const columns = useMemo(() => getColumns(), [])
 
-  // Table instance
   const table = useReactTable({
     data: profiles,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    onSortingChange: setSorting,
+    onSortingChange: handleSortingChange,
     onRowSelectionChange: setRowSelection,
     enableRowSelection: true,
-    state: { sorting, rowSelection },
+    state: { sorting: tableSorting, rowSelection },
     getRowId: (row) => String(row.id),
   })
 
   const selectedProfiles = useMemo(() => {
     return table.getSelectedRowModel().rows.map((row) => row.original)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [table, rowSelection])
 
   const selectedIds = useMemo(() => {
@@ -292,30 +299,15 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     setRowSelection({})
   }, [])
 
-  const handleFilterChange = useCallback(() => {
-    setPage(1)
-  }, [])
-
-  // Handle status filter change (dropdown multi-select)
+  // ── Status toggle handler (dropdown multi-select) ─────────────────────
   const handleStatusToggle = useCallback((status: string) => {
-    setSelectedStatuses((prev) => {
-      return prev.includes(status)
-        ? prev.filter((s) => s !== status)
-        : [...prev, status]
-    })
-    setActiveTab("all") // Reset tab when manually selecting statuses
-    handleFilterChange()
-  }, [handleFilterChange])
+    const newStatuses = state.statusFilters.includes(status)
+      ? state.statusFilters.filter((s) => s !== status)
+      : [...state.statusFilters, status]
+    handlers.handleStatusChange(newStatuses)
+  }, [state.statusFilters, handlers])
 
-  // Handle tab click
-  const handleTabClick = useCallback((tabKey: string) => {
-    setActiveTab(tabKey)
-    const tab = STATUS_TABS.find((t) => t.key === tabKey)
-    setSelectedStatuses(tab?.statuses ? [...tab.statuses] : [])
-    setPage(1)
-  }, [])
-
-  // Precompute tab counts to avoid re-creating function reference on every statusCounts update
+  // ── Tab counts ────────────────────────────────────────────────────────
   const tabCounts = useMemo(() => {
     if (!statusCounts?.counts) return undefined
     const result: Record<string, number> = { all: statusCounts.total }
@@ -327,22 +319,7 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     return result
   }, [statusCounts])
 
-  // Clear all filters
-  const clearFilters = useCallback(() => {
-    setSearch("")
-    setDebouncedSearch("")
-    setSelectedStatuses([])
-    setSelectedMajorId(undefined)
-    setSelectedYear(CURRENT_YEAR) // Reset to current year, not undefined
-    setSelectedDegreeLevel(undefined)
-    setSelectedPaymentStatus(undefined)
-    setDateFrom(undefined)
-    setDateTo(undefined)
-    setActiveTab("all")
-    setPage(1)
-  }, [])
-
-  // Bulk actions
+  // ── Bulk actions ──────────────────────────────────────────────────────
   const handleBulkApprove = useCallback(async () => {
     if (selectedIds.length === 0) return
     await bulkApprove.mutateAsync({ profile_ids: selectedIds })
@@ -365,17 +342,12 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
 
   const handleExport = useCallback(() => {
     exportCsv.mutate({
-      status: selectedStatuses.length > 0 ? selectedStatuses.join(",") : undefined,
-      search: debouncedSearch || undefined,
-      date_from: dateFrom ? format(dateFrom, "yyyy-MM-dd") : undefined,
-      date_to: dateTo ? format(dateTo, "yyyy-MM-dd") : undefined,
+      status: state.statusFilters.length > 0 ? state.statusFilters.join(",") : undefined,
+      search: state.search || undefined,
+      date_from: state.dateFrom || undefined,
+      date_to: state.dateTo || undefined,
     })
-  }, [exportCsv, selectedStatuses, debouncedSearch, dateFrom, dateTo])
-
-  // Check if any filters are active (beyond default year)
-  const hasActiveFilters = selectedStatuses.length > 0 || debouncedSearch || dateFrom || dateTo
-    || selectedMajorId || selectedDegreeLevel || selectedPaymentStatus
-    || (selectedYear !== undefined && selectedYear !== CURRENT_YEAR)
+  }, [exportCsv, state.statusFilters, state.search, state.dateFrom, state.dateTo])
 
   const isAnyLoading = bulkApprove.isPending || bulkReject.isPending || bulkAssign.isPending || exportCsv.isPending
 
@@ -440,16 +412,16 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
             <Input
               placeholder="Tìm kiếm theo tên, email, CCCD..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={state.search}
+              onChange={(e) => handlers.handleSearchChange(e.target.value)}
               className="pl-10"
             />
-            {search && (
+            {state.search && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
-                onClick={() => setSearch("")}
+                onClick={() => handlers.handleSearchChange("")}
                 aria-label="Xóa tìm kiếm"
               >
                 <X className="h-4 w-4" />
@@ -459,11 +431,8 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
 
           {/* Academic Year */}
           <Select
-            value={selectedYear !== undefined ? String(selectedYear) : "all"}
-            onValueChange={(val) => {
-              setSelectedYear(val === "all" ? undefined : Number(val))
-              handleFilterChange()
-            }}
+            value={state.academicYear !== undefined ? String(state.academicYear) : "all"}
+            onValueChange={(val) => handlers.handleYearChange(val === "all" ? undefined : Number(val))}
           >
             <SelectTrigger className="w-full sm:w-[140px]">
               <SelectValue placeholder="Năm học" />
@@ -480,11 +449,8 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
 
           {/* Major Program */}
           <Select
-            value={selectedMajorId ?? "all"}
-            onValueChange={(val) => {
-              setSelectedMajorId(val === "all" ? undefined : val)
-              handleFilterChange()
-            }}
+            value={state.majorFilter || "all"}
+            onValueChange={(val) => handlers.handleMajorChange(val === "all" ? "" : val)}
           >
             <SelectTrigger className="w-full sm:w-[180px]">
               <SelectValue placeholder="Ngành" />
@@ -505,9 +471,9 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
               <Button variant="outline" className="w-full sm:w-auto gap-2">
                 <Filter className="h-4 w-4" aria-hidden="true" />
                 Trạng thái
-                {selectedStatuses.length > 0 && (
+                {state.statusFilters.length > 0 && (
                   <Badge variant="secondary" className="ml-1 h-5 px-1.5">
-                    {selectedStatuses.length}
+                    {state.statusFilters.length}
                   </Badge>
                 )}
               </Button>
@@ -518,16 +484,16 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
               {STATUS_OPTIONS.map((option) => (
                 <DropdownMenuCheckboxItem
                   key={option.value}
-                  checked={selectedStatuses.includes(option.value)}
+                  checked={state.statusFilters.includes(option.value)}
                   onCheckedChange={() => handleStatusToggle(option.value)}
                 >
                   {option.label}
                 </DropdownMenuCheckboxItem>
               ))}
-              {selectedStatuses.length > 0 && (
+              {state.statusFilters.length > 0 && (
                 <>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => { setSelectedStatuses([]); setActiveTab("all") }}>
+                  <DropdownMenuItem onClick={() => handlers.handleStatusChange([])}>
                     Xóa bộ lọc
                   </DropdownMenuItem>
                 </>
@@ -540,11 +506,8 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
         <div className="flex flex-col sm:flex-row gap-3">
           {/* Degree Level */}
           <Select
-            value={selectedDegreeLevel ?? "all"}
-            onValueChange={(val) => {
-              setSelectedDegreeLevel(val === "all" ? undefined : val)
-              handleFilterChange()
-            }}
+            value={state.degreeLevelFilter || "all"}
+            onValueChange={(val) => handlers.handleDegreeLevelChange(val === "all" ? "" : val)}
           >
             <SelectTrigger className="w-full sm:w-[160px]">
               <SelectValue placeholder="Trình độ" />
@@ -561,11 +524,8 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
 
           {/* Payment Status */}
           <Select
-            value={selectedPaymentStatus ?? "all"}
-            onValueChange={(val) => {
-              setSelectedPaymentStatus(val === "all" ? undefined : val)
-              handleFilterChange()
-            }}
+            value={state.paymentStatusFilter || "all"}
+            onValueChange={(val) => handlers.handlePaymentStatusChange(val === "all" ? "" : val)}
           >
             <SelectTrigger className="w-full sm:w-[180px]">
               <SelectValue placeholder="Học phí" />
@@ -585,10 +545,10 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
             <PopoverTrigger asChild>
               <Button variant="outline" className="w-full sm:w-auto gap-2">
                 <Calendar className="h-4 w-4" aria-hidden="true" />
-                {dateFrom || dateTo ? (
+                {state.dateFrom || state.dateTo ? (
                   <span className="text-xs">
-                    {dateFrom ? format(dateFrom, "dd/MM") : "…"} -{" "}
-                    {dateTo ? format(dateTo, "dd/MM") : "…"}
+                    {formatShortDate(state.dateFrom)} -{" "}
+                    {formatShortDate(state.dateTo)}
                   </span>
                 ) : (
                   "Ngày tạo"
@@ -601,11 +561,10 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
                   <p className="text-xs font-medium mb-2 text-muted-foreground">Từ ngày</p>
                   <CalendarComponent
                     mode="single"
-                    selected={dateFrom}
-                    onSelect={(date) => {
-                      setDateFrom(date)
-                      handleFilterChange()
-                    }}
+                    selected={parseDate(state.dateFrom)}
+                    onSelect={(date) =>
+                      handlers.handleDateFromChange(date ? format(date, "yyyy-MM-dd") : "")
+                    }
                     locale={vi}
                   />
                 </div>
@@ -613,25 +572,23 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
                   <p className="text-xs font-medium mb-2 text-muted-foreground">Đến ngày</p>
                   <CalendarComponent
                     mode="single"
-                    selected={dateTo}
-                    onSelect={(date) => {
-                      setDateTo(date)
-                      handleFilterChange()
-                    }}
+                    selected={parseDate(state.dateTo)}
+                    onSelect={(date) =>
+                      handlers.handleDateToChange(date ? format(date, "yyyy-MM-dd") : "")
+                    }
                     locale={vi}
                   />
                 </div>
               </div>
-              {(dateFrom || dateTo) && (
+              {(state.dateFrom || state.dateTo) && (
                 <div className="p-2 border-t">
                   <Button
                     variant="ghost"
                     size="sm"
                     className="w-full"
                     onClick={() => {
-                      setDateFrom(undefined)
-                      setDateTo(undefined)
-                      handleFilterChange()
+                      handlers.handleDateFromChange("")
+                      handlers.handleDateToChange("")
                     }}
                   >
                     Xóa bộ lọc ngày
@@ -643,7 +600,7 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
 
           {/* Clear all filters */}
           {hasActiveFilters && (
-            <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1">
+            <Button variant="ghost" size="sm" onClick={handlers.resetFilters} className="gap-1">
               <X className="h-4 w-4" />
               Xóa bộ lọc
             </Button>
@@ -655,13 +612,13 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
       <div className="flex items-center gap-1 mt-4 overflow-x-auto pb-1" role="tablist">
         {STATUS_TABS.map((tab) => {
           const count = tabCounts?.[tab.key]
-          const isActive = activeTab === tab.key
+          const isActive = state.activeTab === tab.key
           return (
             <button
               key={tab.key}
               role="tab"
               aria-selected={isActive}
-              onClick={() => handleTabClick(tab.key)}
+              onClick={() => handlers.handleTabClick(tab.key)}
               className={cn(
                 "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors",
                 isActive
@@ -754,7 +711,7 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
                 }
                 action={
                   hasActiveFilters && (
-                    <Button variant="outline" onClick={clearFilters}>
+                    <Button variant="outline" onClick={handlers.resetFilters}>
                       Xóa bộ lọc
                     </Button>
                   )
@@ -831,18 +788,13 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
             </div>
 
             {/* Pagination */}
-            {totalCount > pageSize && (
+            {totalCount > state.pageSize && (
               <Pagination
-                page={page}
-                pageSize={pageSize}
+                page={state.page}
+                pageSize={state.pageSize}
                 total={totalCount}
-                onPageChange={setPage}
-                onPageSizeChange={(size) => {
-                  setPageSize(size)
-                  setPage(1)
-                }}
+                onPageChange={handlers.setPage}
                 isLoading={isFetching}
-                showPageSizeSelector
                 showTotal
                 className="border-t mt-4"
               />

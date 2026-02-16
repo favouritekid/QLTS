@@ -43,11 +43,10 @@ const ADMIN_ROUTES = ["/admin"];
 const FINANCE_ROUTES = ["/finance"];
 
 /**
- * Protected routes that require authentication
- * Note: Currently not used - all non-public routes are treated as protected by default
- * Kept for potential future use if specific route handling is needed
+ * Routes to skip entirely (browser/devtool auto-requests)
+ * These never need auth checks and should not be logged.
  */
-// const PROTECTED_ROUTES = ["/dashboard", "/profile", "/settings"];
+const IGNORED_ROUTES = ["/.well-known"];
 
 // ============================================
 // 🔐 PROXY LOGIC
@@ -60,13 +59,18 @@ export function proxy(request: NextRequest) {
   // STEP 1: Check if route requires auth
   // ========================================
 
+  // Skip browser/devtool auto-requests silently (e.g. /.well-known/*)
+  const isIgnored = IGNORED_ROUTES.some((route) => pathname.startsWith(route));
+  if (isIgnored) {
+    return NextResponse.next();
+  }
+
   const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
   const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
   const isFinanceRoute = FINANCE_ROUTES.some((route) => pathname.startsWith(route));
 
   // Allow public routes without auth check
   if (isPublicRoute) {
-    console.log(`[Proxy] Public route: ${pathname}`);
     return NextResponse.next();
   }
 
@@ -77,9 +81,7 @@ export function proxy(request: NextRequest) {
   const accessToken = request.cookies.get("access_token")?.value;
 
   if (!accessToken) {
-    console.warn(`[Proxy] ❌ No access token for protected route: ${pathname}`);
-
-    // Redirect to login with return URL
+    // Expected for unauthenticated visitors — redirect silently
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("redirect", pathname);
     return NextResponse.redirect(loginUrl);

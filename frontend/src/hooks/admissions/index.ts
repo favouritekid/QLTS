@@ -48,6 +48,16 @@ export {
 } from "./useAdmissions"
 
 // ============================================================================
+// FILTER HOOK (URL sync + localStorage + tab management)
+// ============================================================================
+export { useAdmissionsFilter } from "./useAdmissionsFilter"
+export type {
+  AdmissionsFilterState,
+  AdmissionsFilterHandlers,
+  UseAdmissionsFilterReturn,
+} from "./useAdmissionsFilter"
+
+// ============================================================================
 // VIEW MODEL HOOKS (Phase 3 - Architecture Compliance)
 // ============================================================================
 export { useAdmissionViewModel } from "./useAdmissionViewModel"
