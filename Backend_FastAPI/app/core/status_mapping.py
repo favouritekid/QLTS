@@ -9,7 +9,7 @@ The Hybrid Approach uses two strategies:
 1. **Database-driven mapping**: If `consultation_status.legacy_status` is set,
    use it directly (allows Admin to override)
 2. **Dynamic derivation**: If `legacy_status` is NULL, derive from attributes
-   (stage_id, outcome_type, is_final_status)
+   (stage_id, outcome_type, is_final)
 
 This ensures backward compatibility while allowing the system to evolve.
 
@@ -74,13 +74,13 @@ class ConsultationStatusInfo:
         id: Unique status identifier (e.g., "sts00", "sts06")
         stage_id: Parent pipeline stage ID (e.g., "stg01", "stg02")
         outcome_type: Outcome classification ("positive", "neutral", "negative")
-        is_final_status: Whether this status marks end of lead lifecycle
+        is_final: Whether this status marks end of lead lifecycle
         legacy_status: Explicit mapping override (if set in DB)
     """
     id: str
     stage_id: str
     outcome_type: str  # "positive" | "neutral" | "negative"
-    is_final_status: bool
+    is_final: bool
     legacy_status: Optional[str] = None
 
 
@@ -124,13 +124,13 @@ def derive_lead_status(status_info: Optional[ConsultationStatusInfo]) -> str:
 
         >>> derive_lead_status(ConsultationStatusInfo(
         ...     id="sts06", stage_id="stg02", outcome_type="positive",
-        ...     is_final_status=False, legacy_status="qualified"
+        ...     is_final=False, legacy_status="qualified"
         ... ))
         "qualified"  # Uses explicit legacy_status
 
         >>> derive_lead_status(ConsultationStatusInfo(
         ...     id="sts11", stage_id="stg06", outcome_type="positive",
-        ...     is_final_status=True, legacy_status=None
+        ...     is_final=True, legacy_status=None
         ... ))
         "converted"  # Derived from stg06
     """
@@ -151,7 +151,7 @@ def derive_lead_status(status_info: Optional[ConsultationStatusInfo]) -> str:
     # Priority 2: Derive from attributes
     stage_id = status_info.stage_id
     outcome_type = status_info.outcome_type
-    is_final = status_info.is_final_status
+    is_final = status_info.is_final
 
     # Rule 1: Final negative statuses → rejected/unqualified
     if is_final and outcome_type == "negative":
@@ -214,7 +214,7 @@ def create_status_info_from_model(
         outcome_type=consultation_status.outcome_type.value if hasattr(
             consultation_status.outcome_type, 'value'
         ) else str(consultation_status.outcome_type),
-        is_final_status=consultation_status.is_final_status,
+        is_final=consultation_status.is_final,
         legacy_status=consultation_status.legacy_status,
     )
 

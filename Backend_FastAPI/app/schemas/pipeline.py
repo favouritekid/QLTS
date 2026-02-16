@@ -118,11 +118,7 @@ class ConsultationStatusBase(BaseModel):
     description: Optional[str] = Field(None, description="Optional status description")
     display_order: int = Field(default=0, description="Sort order for displaying statuses")
 
-    # ✅ DEPRECATED fields (kept for backward compatibility)
-    is_final_status: Optional[bool] = Field(default=None, description="DEPRECATED: Use is_final")
-    legacy_status: Optional[str] = Field(default=None, description="DEPRECATED")
-    selectable_by_user: Optional[str] = Field(default=None, description="DEPRECATED: Use selectable_mode")
-    counts_for_kpi: Optional[bool] = Field(default=None, description="DEPRECATED: Use counts_for_funnel")
+    legacy_status: Optional[str] = Field(default=None, description="Legacy status mapping")
 
     model_config = ConfigDict(use_enum_values=True, from_attributes=True)
 
@@ -157,11 +153,7 @@ class ConsultationStatusUpdate(BaseModel):
     description: Optional[str] = None
     display_order: Optional[int] = None
 
-    # DEPRECATED fields
-    is_final_status: Optional[bool] = None
     legacy_status: Optional[str] = None
-    selectable_by_user: Optional[str] = None
-    counts_for_kpi: Optional[bool] = None
 
     model_config = ConfigDict(use_enum_values=True)
 

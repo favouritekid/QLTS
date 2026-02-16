@@ -361,7 +361,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         
         Uses:
         - PipelineStage.is_final_stage == True
-        - ConsultationStatus.counts_for_kpi == True
+        - ConsultationStatus.counts_for_funnel == True
         
         Args:
             officer_id: Officer ID
@@ -379,7 +379,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
             .where(
                 models.Lead.assigned_officer_id == officer_id,
                 models.PipelineStage.is_final_stage == True,
-                models.ConsultationStatus.counts_for_kpi == True,
+                models.ConsultationStatus.counts_for_funnel == True,
                 models.Lead.deleted_at.is_(None),
                 models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
                 models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),

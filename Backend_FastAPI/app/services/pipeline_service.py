@@ -169,8 +169,6 @@ async def get_all_consultation_statuses(
                 "phase": s.phase,
                 "description": s.description,
                 "display_order": s.display_order,
-                # Deprecated (backward compat)
-                "is_final_status": s.is_final_status,
                 "legacy_status": s.legacy_status,
             }
             for s in statuses_models

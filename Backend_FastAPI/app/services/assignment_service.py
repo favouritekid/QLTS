@@ -166,9 +166,9 @@ async def automatically_assign_lead(
                     )
                     .where(
                         models.Lead.assigned_officer_id.in_(officer_ids),
-                        # Chỉ đếm lead chưa kết thúc (is_final_status = False hoặc NULL)
-                        (models.ConsultationStatus.is_final_status == False) |
-                        (models.ConsultationStatus.is_final_status.is_(None))
+                        # Chỉ đếm lead chưa kết thúc (is_final = False hoặc NULL)
+                        (models.ConsultationStatus.is_final == False) |
+                        (models.ConsultationStatus.is_final.is_(None))
                     )
                     .group_by(models.Lead.assigned_officer_id)
                 )

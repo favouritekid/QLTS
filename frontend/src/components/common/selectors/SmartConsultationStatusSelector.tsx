@@ -158,8 +158,7 @@ function processStatuses(
       // Exclude specific IDs
       if (excludeStatusIds && excludeStatusIds.includes(status.id)) return false;
 
-      // Filter by final status (FSM v3.0: use is_final, fallback to is_final_status)
-      const isFinal = status.is_final ?? status.is_final_status ?? false;
+      const isFinal = status.is_final;
       if (finalOnly && !isFinal) return false;
       if (nonFinalOnly && isFinal) return false;
 
@@ -216,8 +215,7 @@ function StatusItem({
           {OUTCOME_TYPE_OPTIONS.find((o) => o.value === status.outcome_type)?.label}
         </Badge>
       )}
-      {/* FSM v3.0: use is_final, fallback to is_final_status */}
-      {(status.is_final ?? status.is_final_status) && (
+      {status.is_final && (
         <Badge variant="secondary" className="text-xs shrink-0">
           Final
         </Badge>

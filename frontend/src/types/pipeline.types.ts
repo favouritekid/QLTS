@@ -125,11 +125,7 @@ export interface ConsultationStatus {
   updates_pipeline: boolean; // False if only records activity
   counts_for_funnel: boolean; // True if counted in funnel analytics
 
-  // ✅ DEPRECATED fields (kept for backward compatibility)
-  is_final_status?: boolean; // Use is_final instead
   legacy_status?: string | null;
-  counts_for_kpi?: boolean; // Use counts_for_funnel instead
-  selectable_by_user?: string; // Use selectable_mode instead
 
   // Relationship
   stage?: PipelineStage;
@@ -160,10 +156,7 @@ export interface ConsultationStatusCreate {
   updates_pipeline?: boolean; // Default: true
   counts_for_funnel?: boolean; // Default: true
 
-  // DEPRECATED
-  is_final_status?: boolean;
   legacy_status?: string | null;
-  counts_for_kpi?: boolean;
 }
 
 /**
@@ -187,10 +180,7 @@ export interface ConsultationStatusUpdate {
   updates_pipeline?: boolean;
   counts_for_funnel?: boolean;
 
-  // DEPRECATED
-  is_final_status?: boolean;
   legacy_status?: string | null;
-  counts_for_kpi?: boolean;
 }
 
 // ============================================

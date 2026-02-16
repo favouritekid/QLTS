@@ -257,7 +257,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                   {status.outcome_type}
                                 </Badge>
 
-                                {status.is_final_status && (
+                                {status.is_final && (
                                   <Badge
                                     variant="outline"
                                     className="border-primary text-primary h-5 px-1.5 text-[10px]"

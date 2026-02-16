@@ -62,6 +62,7 @@ import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
+import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
 import { ActionBanner } from "@/components/leads/ActionBanner";
 import { LeadScoringCollapsible } from "@/components/leads/LeadScoringCollapsible";
 import { AdmissionReadinessChecklist } from "@/components/leads/AdmissionReadinessChecklist";
@@ -401,28 +402,51 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
 
           {/* ===== RIGHT PANEL (8 cols): Quick Actions ===== */}
           <div className="col-span-12 lg:col-span-8 space-y-4">
-            {/* Quick Consultation Form */}
-            <Card
-              id="quick-consultation-section"
-              className="rounded-2xl border-border transition-colors duration-300"
-            >
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
-                    <Zap className="w-5 h-5 text-white" />
+            {/* A/B Comparison: V1 vs V2 */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {/* V1: Original */}
+              <Card
+                id="quick-consultation-section"
+                className="rounded-2xl border-border transition-colors duration-300"
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
+                      <Zap className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base">Ghi nhận tư vấn</CardTitle>
+                      <p className="text-xs text-muted-foreground">
+                        V1 — Bản hiện tại
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <CardTitle className="text-base">Ghi nhận tư vấn</CardTitle>
-                    <p className="text-xs text-muted-foreground">
-                      Ghi lại kết quả cuộc gọi / liên hệ
-                    </p>
+                </CardHeader>
+                <CardContent>
+                  <QuickConsultationSection leadId={lead.id} />
+                </CardContent>
+              </Card>
+
+              {/* V2: Proposed */}
+              <Card className="rounded-2xl border-primary/30 transition-colors duration-300 ring-1 ring-primary/10">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center">
+                      <Zap className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base">Ghi nhận tư vấn</CardTitle>
+                      <p className="text-xs text-muted-foreground">
+                        V2 — Status-first + Progressive Disclosure
+                      </p>
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <QuickConsultationSection leadId={lead.id} />
-              </CardContent>
-            </Card>
+                </CardHeader>
+                <CardContent>
+                  <QuickConsultationSectionV2 leadId={lead.id} />
+                </CardContent>
+              </Card>
+            </div>
 
             {/* Recent Consultation History - Compact */}
             <Card className="rounded-2xl border-border">

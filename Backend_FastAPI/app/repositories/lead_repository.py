@@ -1144,7 +1144,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 models.Lead.deleted_at.is_(None),
                 models.Lead.updated_at < threshold_date,
                 # Only non-final status leads are considered stale
-                models.ConsultationStatus.is_final_status == False,
+                models.ConsultationStatus.is_final == False,
             )
         )
         result = await self.db.execute(query)

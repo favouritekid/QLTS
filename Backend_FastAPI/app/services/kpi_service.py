@@ -262,7 +262,7 @@ async def sync_officer_ytd(
     
     Uses PipelineStage + ConsultationStatus for consistency with funnel chart:
     - PipelineStage.is_final_stage == True (lead has completed the funnel)
-    - ConsultationStatus.counts_for_kpi == True (successful conversion)
+    - ConsultationStatus.counts_for_funnel == True (successful conversion)
     
     Returns:
         Dict of kpi_code -> actual YTD value
@@ -276,7 +276,7 @@ async def sync_officer_ytd(
     repo = KpiRepository(db)
     
     # Sync enrollments YTD via repository
-    # Count leads that reached FINAL pipeline stage with counts_for_kpi=True
+    # Count leads that reached FINAL pipeline stage with counts_for_funnel=True
     enrollments_ytd = await repo.count_enrollments_ytd(officer_id, fiscal_year)
     synced["enrollments"] = enrollments_ytd
     

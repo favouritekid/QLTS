@@ -163,14 +163,12 @@ export function ConsultationStatusDialog({
           color_code: status.color_code,
           stage_id: status.stage_id || null,
           outcome_type: status.outcome_type || "neutral",
-          // ✅ FSM v3.0: is_final with fallback to is_final_status
-          is_final: status.is_final ?? status.is_final_status ?? false,
+          is_final: status.is_final ?? false,
           legacy_status: status.legacy_status || null,
           // ✅ Universal status fields
           is_universal: status.is_universal ?? false,
           updates_pipeline: status.updates_pipeline ?? true,
-          // ✅ FSM v3.0: counts_for_funnel with fallback to counts_for_kpi
-          counts_for_funnel: status.counts_for_funnel ?? status.counts_for_kpi ?? true,
+          counts_for_funnel: status.counts_for_funnel ?? true,
           // ✅ FSM v3.0: New fields
           code: status.code || null,
           status_type: status.status_type || "transition",

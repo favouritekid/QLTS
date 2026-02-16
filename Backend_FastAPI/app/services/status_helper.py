@@ -39,7 +39,7 @@ class StatusHelper:
     Helper class for database-driven status management.
 
     Instead of hardcoding status IDs like "TTHV000", we query statuses
-    by their characteristics (legacy_status, is_final_status, outcome_type).
+    by their characteristics (legacy_status, is_final, outcome_type).
     """
 
     @staticmethod
@@ -47,7 +47,7 @@ class StatusHelper:
         """
         Get the initial consultation status for new leads.
 
-        Query: legacy_status = "new" AND is_final_status = false
+        Query: legacy_status = "new" AND is_final = false
         Expected result: sts00 (Chưa liên hệ)
 
         Returns:
@@ -58,7 +58,7 @@ class StatusHelper:
             .where(
                 and_(
                     models.ConsultationStatus.legacy_status == "new",
-                    models.ConsultationStatus.is_final_status == False
+                    models.ConsultationStatus.is_final == False
                 )
             )
             .order_by(models.ConsultationStatus.id)
@@ -83,7 +83,7 @@ class StatusHelper:
         """
         Get the rejected/lost consultation status for leads that are rejected.
 
-        Query: legacy_status = "rejected" AND is_final_status = true
+        Query: legacy_status = "rejected" AND is_final = true
         Expected result: sts03 (Nhầm số) or sts04 (Không đồng ý)
 
         Returns:
@@ -94,7 +94,7 @@ class StatusHelper:
             .where(
                 and_(
                     models.ConsultationStatus.legacy_status == "rejected",
-                    models.ConsultationStatus.is_final_status == True
+                    models.ConsultationStatus.is_final == True
                 )
             )
             .order_by(models.ConsultationStatus.id)
@@ -125,7 +125,7 @@ class StatusHelper:
         Args:
             db: Database session
             legacy_status: One of: new, contacted, qualified, unqualified, converted, rejected
-            is_final: Optional filter for is_final_status
+            is_final: Optional filter for is_final
 
         Returns:
             ConsultationStatus or None if not found
@@ -135,7 +135,7 @@ class StatusHelper:
         )
 
         if is_final is not None:
-            query = query.where(models.ConsultationStatus.is_final_status == is_final)
+            query = query.where(models.ConsultationStatus.is_final == is_final)
 
         query = query.order_by(models.ConsultationStatus.id).limit(1)
 

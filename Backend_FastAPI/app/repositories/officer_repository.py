@@ -723,8 +723,8 @@ class OfficerRepository(BaseRepository[models.User]):
                     case((
                         and_(
                             or_(
-                                models.ConsultationStatus.is_final_status == False,
-                                models.ConsultationStatus.is_final_status.is_(None)
+                                models.ConsultationStatus.is_final == False,
+                                models.ConsultationStatus.is_final.is_(None)
                             )
                         ), 1
                     ))
@@ -732,7 +732,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.count(
                     case((
                         and_(
-                            models.ConsultationStatus.is_final_status == True,
+                            models.ConsultationStatus.is_final == True,
                             models.ConsultationStatus.outcome_type == "positive"
                         ), 1
                     ))
@@ -781,8 +781,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Lead.assigned_officer_id == officer_id,
                 models.Lead.deleted_at.is_(None),
                 or_(
-                    models.ConsultationStatus.is_final_status == False,
-                    models.ConsultationStatus.is_final_status.is_(None)
+                    models.ConsultationStatus.is_final == False,
+                    models.ConsultationStatus.is_final.is_(None)
                 )
             )
             .order_by(models.Lead.lead_score.desc().nulls_last())
@@ -812,8 +812,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Lead.deleted_at.is_(None),
                 models.Lead.updated_at < stale_threshold,
                 or_(
-                    models.ConsultationStatus.is_final_status == False,
-                    models.ConsultationStatus.is_final_status.is_(None)
+                    models.ConsultationStatus.is_final == False,
+                    models.ConsultationStatus.is_final.is_(None)
                 )
             )
             .order_by(models.Lead.updated_at.asc())
@@ -846,8 +846,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Lead.assigned_officer_id == officer_id,
                 models.Lead.deleted_at.is_(None),
                 or_(
-                    models.ConsultationStatus.is_final_status == False,
-                    models.ConsultationStatus.is_final_status.is_(None)
+                    models.ConsultationStatus.is_final == False,
+                    models.ConsultationStatus.is_final.is_(None)
                 )
             )
             .order_by(
@@ -1140,15 +1140,15 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.count(
                     case((
                         or_(
-                            models.ConsultationStatus.is_final_status == False,
-                            models.ConsultationStatus.is_final_status.is_(None)
+                            models.ConsultationStatus.is_final == False,
+                            models.ConsultationStatus.is_final.is_(None)
                         ), 1
                     ))
                 ).label("active"),
                 func.count(
                     case((
                         and_(
-                            models.ConsultationStatus.is_final_status == True,
+                            models.ConsultationStatus.is_final == True,
                             models.ConsultationStatus.outcome_type == "positive"
                         ), 1
                     ))

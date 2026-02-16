@@ -226,25 +226,6 @@ class ConsultationStatus(Base):
         comment="DEPRECATED: Maps to lead.status for backward compatibility"
     )
     
-    # DEPRECATED: Keeping old column name for migration
-    is_final_status = Column(
-        Boolean,
-        nullable=True,  # Made nullable since we're migrating to is_final
-        comment="DEPRECATED: Use is_final instead"
-    )
-    
-    selectable_by_user = Column(
-        String(20),
-        nullable=True,  # Made nullable since we're migrating to selectable_mode
-        comment="DEPRECATED: Use selectable_mode instead"
-    )
-    
-    counts_for_kpi = Column(
-        Boolean,
-        nullable=True,  # Made nullable since we're migrating to counts_for_funnel
-        comment="DEPRECATED: Use counts_for_funnel instead"
-    )
-
     # Relationships
     stage = relationship("PipelineStage", back_populates="statuses")
     leads = relationship("Lead", back_populates="consultation_status")
