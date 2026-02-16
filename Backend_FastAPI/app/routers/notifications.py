@@ -87,6 +87,35 @@ async def mark_all_notifications_as_read(
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.delete("/bulk", status_code=status.HTTP_200_OK)
+async def bulk_delete_notifications(
+    request: Request,
+    body: schemas.BulkDeleteRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Delete multiple notifications at once.
+
+    ✅ TECHNICAL DEBT FIX: Replaces frontend loop-based single deletes.
+    Performance: O(1) API call vs O(n) calls.
+
+    NOTE: This route MUST be declared before /{notification_id} to avoid
+    FastAPI matching "bulk" as a path parameter.
+    """
+    deleted_count, callback = await notification_service.bulk_delete_notifications(
+        db=db,
+        user_id=current_user.id,
+        notification_ids=body.notification_ids,
+    )
+
+    await db.commit()
+    await callback()
+
+    return {"deleted": deleted_count}
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification(
     request: Request,
@@ -110,32 +139,6 @@ async def delete_notification(
     await db.commit()
 
     return None
-
-
-@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
-@router.delete("/bulk", status_code=status.HTTP_200_OK)
-async def bulk_delete_notifications(
-    request: Request,
-    body: schemas.BulkDeleteRequest,
-    db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
-):
-    """
-    Delete multiple notifications at once.
-
-    ✅ TECHNICAL DEBT FIX: Replaces frontend loop-based single deletes.
-    Performance: O(1) API call vs O(n) calls.
-    """
-    deleted_count, callback = await notification_service.bulk_delete_notifications(
-        db=db,
-        user_id=current_user.id,
-        notification_ids=body.notification_ids,
-    )
-
-    await db.commit()
-    await callback()
-
-    return {"deleted": deleted_count}
 
 
 # Helper function to send real-time notification via WebSocket
