@@ -276,3 +276,33 @@ class CommissionRecordRepository(BaseRepository[CommissionRecord]):
             )
         )
         return result.rowcount
+
+    async def cancel_by_trigger_status(
+        self,
+        lead_id: int,
+        trigger_status_id: str,
+        reason: str,
+        cancelled_by_id: Optional[int] = None,
+    ) -> int:
+        """Cancel pending commissions for a lead with a specific trigger status.
+
+        Used for status regression detection: when a lead moves away from
+        a trigger status, cancel any pending commissions triggered by that status.
+        Only cancels 'pending' records (not approved/paid).
+        """
+        now = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            update(CommissionRecord)
+            .where(
+                CommissionRecord.lead_id == lead_id,
+                CommissionRecord.trigger_status_id == trigger_status_id,
+                CommissionRecord.status == "pending",
+            )
+            .values(
+                status="cancelled",
+                cancelled_at=now,
+                cancelled_by_id=cancelled_by_id,
+                cancellation_reason=reason,
+            )
+        )
+        return result.rowcount

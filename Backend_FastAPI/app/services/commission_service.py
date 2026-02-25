@@ -417,3 +417,62 @@ async def update_policy(
 
     log.info("Commission policy updated", policy_id=policy.id)
     return policy, None
+
+
+# ============================================================================
+# CENTRALIZED STATUS-CHANGE HANDLER
+# ============================================================================
+
+
+async def safe_check_commission_on_status_change(
+    db: AsyncSession,
+    lead_id: int,
+    old_status: str,
+    new_status: str,
+    actor_id: int,
+):
+    """
+    Centralized commission check called from ALL status-change paths after commit.
+
+    Handles both:
+    1. Forward: Create commissions when lead reaches a trigger status
+    2. Regression: Cancel pending commissions when lead leaves a trigger status
+
+    Non-critical: all exceptions are caught and logged so they never
+    break the main status-change flow.
+    """
+    if old_status == new_status:
+        return
+    try:
+        # 1. Forward: try to create commissions for new_status
+        records, callback = await check_and_create_commission(
+            db, lead_id, new_status, actor_id
+        )
+        if records:
+            await db.commit()
+            if callback:
+                await callback()
+
+        # 2. Regression: cancel pending commissions triggered by old_status
+        record_repo = CommissionRecordRepository(db)
+        cancelled = await record_repo.cancel_by_trigger_status(
+            lead_id=lead_id,
+            trigger_status_id=old_status,
+            reason=f"Status changed: {old_status} → {new_status}",
+            cancelled_by_id=actor_id,
+        )
+        if cancelled > 0:
+            await db.commit()
+            log.info(
+                "Commissions cancelled due to status regression",
+                lead_id=lead_id,
+                old_status=old_status,
+                new_status=new_status,
+                cancelled_count=cancelled,
+            )
+    except Exception as e:
+        log.warning(
+            "Commission check failed (non-critical)",
+            lead_id=lead_id,
+            error=str(e),
+        )

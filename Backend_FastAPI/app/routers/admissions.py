@@ -42,6 +42,7 @@ from ..utils.exceptions import (
     ConflictError,
 )
 from ..core.constants import UserRole
+from ..services.commission_service import safe_check_commission_on_status_change
 
 log = structlog.get_logger(__name__)
 
@@ -828,6 +829,11 @@ async def enroll_student(
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts11",
             )
 
+            # Commission check (Path 4 - enrollment)
+            await safe_check_commission_on_status_change(
+                db, profile.lead_id, "confirmed", "sts11", current_user.id,
+            )
+
         return result
 
     except ResourceNotFoundError as e:
@@ -1171,6 +1177,11 @@ async def approve_admission(
                 dedupe_key=f"lead_status_changed:{result.lead_id}:sts09",
             )
 
+            # Commission check (Path 4 - approve)
+            await safe_check_commission_on_status_change(
+                db, result.lead_id, "submitted", "sts09", current_user.id,
+            )
+
         # 5. RETURN Pydantic Model
         return result
 
@@ -1248,6 +1259,11 @@ async def reject_admission(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"lead_status_changed:{result.lead_id}:sts16",
+            )
+
+            # Commission check (Path 4 - reject)
+            await safe_check_commission_on_status_change(
+                db, result.lead_id, "submitted", "sts16", current_user.id,
             )
 
         # 5. RETURN Pydantic Model

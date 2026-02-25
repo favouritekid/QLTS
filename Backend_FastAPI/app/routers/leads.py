@@ -29,26 +29,15 @@ async def _check_commission_on_status_change(
     actor_id: int,
 ):
     """
-    Centralized commission check called from ALL status-change paths after commit.
-    Non-critical: exceptions are caught and logged.
+    Thin wrapper around commission_service.safe_check_commission_on_status_change.
+    Adds referrer_id early-exit check to avoid unnecessary service calls.
     """
     if not lead.referrer_id or old_status == new_status:
         return
-    try:
-        from app.services import commission_service
-        records, callback = await commission_service.check_and_create_commission(
-            db, lead.id, new_status, actor_id
-        )
-        if records:
-            await db.commit()
-            if callback:
-                await callback()
-    except Exception as e:
-        log.warning(
-            "Commission check failed (non-critical)",
-            lead_id=lead.id,
-            error=str(e),
-        )
+    from app.services.commission_service import safe_check_commission_on_status_change
+    await safe_check_commission_on_status_change(
+        db, lead.id, old_status, new_status, actor_id
+    )
 
 
 router = APIRouter(tags=["Leads"])
