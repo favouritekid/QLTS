@@ -574,7 +574,7 @@ class TestCheckPhoneAvailable:
     async def test_phone_not_exists(self, db: AsyncSession, active_collaborator):
         """Phone not in DB -> available=True."""
         result = await collaborator_service.check_phone_available(
-            db, "0944000001", active_collaborator.id
+            db, "0944000001"
         )
         assert result["available"] is True
         assert result["message"] is None
@@ -595,7 +595,7 @@ class TestCheckPhoneAvailable:
         await db.flush()
 
         result = await collaborator_service.check_phone_available(
-            db, "0944000002", active_collaborator.id
+            db, "0944000002"
         )
         assert result["available"] is False
         assert "CTV khác" in result["message"]
@@ -616,7 +616,7 @@ class TestCheckPhoneAvailable:
         await db.flush()
 
         result = await collaborator_service.check_phone_available(
-            db, "0944000003", active_collaborator.id
+            db, "0944000003"
         )
         assert result["available"] is False
         assert "đang được tư vấn" in result["message"]
@@ -636,7 +636,7 @@ class TestCheckPhoneAvailable:
         await db.flush()
 
         result = await collaborator_service.check_phone_available(
-            db, "0944000004", active_collaborator.id
+            db, "0944000004"
         )
         assert result["available"] is True
         assert "đã tồn tại" in result["message"]
@@ -646,7 +646,7 @@ class TestCheckPhoneAvailable:
     ):
         """Soft-deleted lead -> available=True (not found)."""
         result = await collaborator_service.check_phone_available(
-            db, deleted_lead_with_phone.phone, active_collaborator.id
+            db, deleted_lead_with_phone.phone
         )
         assert result["available"] is True
         assert result["message"] is None

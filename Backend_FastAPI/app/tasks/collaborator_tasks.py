@@ -189,33 +189,48 @@ def send_ctv_weekly_summary_task(self):
                 )
             )
             collaborators = result.scalars().all()
+            collab_ids = [c.id for c in collaborators]
+
+            if not collab_ids:
+                return {"status": "success", "sent": 0}
+
+            # Batch query 1: leads per collaborator (1 query instead of N)
+            leads_result = await db.execute(
+                select(
+                    models.Lead.referrer_id,
+                    func.count(models.Lead.id).label("cnt"),
+                ).where(
+                    models.Lead.referrer_id.in_(collab_ids),
+                    models.Lead.created_at >= week_ago,
+                    models.Lead.deleted_at.is_(None),
+                ).group_by(models.Lead.referrer_id)
+            )
+            leads_by_collab = {row.referrer_id: row.cnt for row in leads_result.all()}
+
+            # Batch query 2: commissions per collaborator (1 query instead of N)
+            commission_result = await db.execute(
+                select(
+                    CommissionRecord.collaborator_id,
+                    func.count(CommissionRecord.id).label("count"),
+                    func.coalesce(func.sum(CommissionRecord.amount), 0).label("total"),
+                ).where(
+                    CommissionRecord.collaborator_id.in_(collab_ids),
+                    CommissionRecord.triggered_at >= week_ago,
+                ).group_by(CommissionRecord.collaborator_id)
+            )
+            commissions_by_collab = {
+                row.collaborator_id: {"count": row.count, "total": row.total}
+                for row in commission_result.all()
+            }
 
             for collab in collaborators:
-                # Aggregate stats for this week using SQLAlchemy expressions (EC-7)
-                leads_result = await db.execute(
-                    select(func.count(models.Lead.id)).where(
-                        models.Lead.referrer_id == collab.id,
-                        models.Lead.created_at >= week_ago,
-                        models.Lead.deleted_at.is_(None),
-                    )
-                )
-                new_leads = leads_result.scalar_one_or_none() or 0
-
-                commission_result = await db.execute(
-                    select(
-                        func.count(CommissionRecord.id).label("count"),
-                        func.coalesce(func.sum(CommissionRecord.amount), 0).label("total"),
-                    ).where(
-                        CommissionRecord.collaborator_id == collab.id,
-                        CommissionRecord.triggered_at >= week_ago,
-                    )
-                )
-                commission_row = commission_result.one()
+                lead_stats = leads_by_collab.get(collab.id, 0)
+                comm_stats = commissions_by_collab.get(collab.id, {"count": 0, "total": 0})
 
                 stats = {
-                    "new_leads_this_week": new_leads,
-                    "commissions_this_week": commission_row.count,
-                    "commission_amount_this_week": str(commission_row.total),
+                    "new_leads_this_week": lead_stats,
+                    "commissions_this_week": comm_stats["count"],
+                    "commission_amount_this_week": str(comm_stats["total"]),
                 }
 
                 await safe_dispatch(

@@ -31,6 +31,7 @@ from app.schemas.collaborator import (
     CollaboratorsPage,
     CollaboratorStats,
     CollaboratorUpdate,
+    CTVRegistrationResponse,
     CTVRegistrationStatus,
     CTVSelfRegistration,
     LeadClaimCreate,
@@ -406,9 +407,7 @@ async def check_phone(
     collaborator: models.Collaborator = Depends(get_own_collaborator),
 ):
     """Check if phone number is available for claim."""
-    result = await collaborator_service.check_phone_available(
-        db, phone, collaborator.id
-    )
+    result = await collaborator_service.check_phone_available(db, phone)
     return result
 
 
@@ -490,7 +489,7 @@ def _build_claim_response(claim: models.LeadClaim) -> LeadClaimResponse:
 public_router = APIRouter(prefix="/ctv-register", tags=["CTV Registration (Public)"])
 
 
-@public_router.post("", response_model=CollaboratorResponse, status_code=201)
+@public_router.post("", response_model=CTVRegistrationResponse, status_code=201)
 @limiter.limit("5/hour")
 async def register_ctv(
     request: Request,
@@ -501,14 +500,16 @@ async def register_ctv(
     Public CTV self-registration.
     Rate limited: 5 per hour per IP.
     Creates a pending collaborator awaiting admin approval.
+    Returns only safe fields (code, status, message) — no PII.
     """
     collab, _ = await collaborator_service.register_ctv(db, data)
     await db.commit()
 
-    # Reload with relationships
-    repo = CollaboratorRepository(db)
-    collab = await repo.get_by_id(collab.id)
-    return collab
+    return CTVRegistrationResponse(
+        code=collab.code,
+        status=collab.status,
+        message="Đăng ký thành công. Tài khoản đang chờ admin duyệt.",
+    )
 
 
 @public_router.get("/status", response_model=CTVRegistrationStatus)

@@ -277,6 +277,27 @@ class CommissionRecordRepository(BaseRepository[CommissionRecord]):
         )
         return result.rowcount
 
+    async def cancel_pending_for_collaborator(
+        self,
+        collaborator_id: int,
+        reason: str,
+    ) -> int:
+        """Cancel all pending/approved commission records for a collaborator."""
+        now = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            update(CommissionRecord)
+            .where(
+                CommissionRecord.collaborator_id == collaborator_id,
+                CommissionRecord.status.in_(["pending", "approved"]),
+            )
+            .values(
+                status="cancelled",
+                cancelled_at=now,
+                cancellation_reason=reason,
+            )
+        )
+        return result.rowcount
+
     async def cancel_by_trigger_status(
         self,
         lead_id: int,

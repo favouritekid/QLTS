@@ -1975,7 +1975,7 @@ async def get_own_collaborator(
     collab = await repo.get_by_user_id(current_user.id)
     if not collab:
         raise ResourceNotFoundError("Collaborator profile not found")
-    if collab.status != "active":
+    if collab.status not in ("active", "suspended"):
         raise BusinessRuleViolation("Collaborator account is not active")
     return collab
 

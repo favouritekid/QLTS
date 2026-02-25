@@ -43,10 +43,10 @@ export const ctvCommissionKeys = {
 // ADMIN: POLICY QUERIES
 // ============================================================================
 
-export function useCommissionPolicies(params?: Record<string, unknown>) {
+export function useCommissionPolicies(params?: { skip?: number; limit?: number; is_active?: boolean; trigger_status_id?: string }) {
   return useQuery<CommissionPoliciesPage>({
     queryKey: commissionPolicyKeys.list(params),
-    queryFn: () => commissionsApi.getCommissionPolicies(params as any),
+    queryFn: () => commissionsApi.getCommissionPolicies(params),
     staleTime: 1000 * 10,
   })
 }
@@ -96,10 +96,10 @@ export function useUpdateCommissionPolicy() {
 // ADMIN: RECORD QUERIES
 // ============================================================================
 
-export function useCommissionRecords(params?: Record<string, unknown>) {
+export function useCommissionRecords(params?: { skip?: number; limit?: number; collaborator_id?: number; status?: string }) {
   return useQuery<CommissionRecordsPage>({
     queryKey: commissionRecordKeys.list(params),
-    queryFn: () => commissionsApi.getCommissionRecords(params as any),
+    queryFn: () => commissionsApi.getCommissionRecords(params),
     staleTime: 1000 * 5,
   })
 }
@@ -162,10 +162,10 @@ export function usePayCommission() {
 // CTV: OWN COMMISSIONS
 // ============================================================================
 
-export function useCTVCommissions(params?: Record<string, unknown>) {
+export function useCTVCommissions(params?: { skip?: number; limit?: number; status?: string }) {
   return useQuery<CommissionRecordsPage>({
     queryKey: ctvCommissionKeys.list(params),
-    queryFn: () => commissionsApi.getMyCommissions(params as any),
+    queryFn: () => commissionsApi.getMyCommissions(params),
     staleTime: 1000 * 5,
   })
 }

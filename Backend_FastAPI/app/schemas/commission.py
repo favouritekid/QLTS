@@ -54,6 +54,14 @@ class CommissionPolicyUpdate(BaseModel):
     effective_to: Optional[date] = None
     is_active: Optional[bool] = None
 
+    @model_validator(mode="after")
+    def validate_calculation_fields(self):
+        if self.calculation_type == "fixed" and self.fixed_amount is None:
+            raise ValueError("fixed_amount is required when calculation_type is 'fixed'")
+        if self.calculation_type == "percentage" and self.percentage is None:
+            raise ValueError("percentage is required when calculation_type is 'percentage'")
+        return self
+
 
 class CommissionPolicyResponse(BaseModel):
     id: int
@@ -87,10 +95,18 @@ class CommissionPoliciesPage(BaseModel):
 
 
 class LeadShallow(BaseModel):
-    """Minimal lead info for embedding in commission responses."""
+    """Minimal lead info for embedding in admin commission responses."""
     id: int
     full_name: Optional[str] = None
     phone: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LeadMasked(BaseModel):
+    """Lead info with masked phone — for CTV-facing responses."""
+    id: int
+    full_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -136,6 +152,31 @@ class CommissionRecordResponse(BaseModel):
 class CommissionRecordsPage(BaseModel):
     total_count: int
     records: list[CommissionRecordResponse]
+
+
+class CommissionRecordForCTV(BaseModel):
+    """Commission record view for CTV — masked lead info, no admin fields."""
+    id: int
+    collaborator_id: int
+    lead_id: int
+    policy_id: int
+    amount: Decimal
+    status: str
+    trigger_status_id: str
+    triggered_at: datetime
+    paid_at: Optional[datetime] = None
+    payment_reference: Optional[str] = None
+    created_at: datetime
+    # Nested — lead has no phone (masked)
+    lead: Optional[LeadMasked] = None
+    policy: Optional[CommissionPolicyShallow] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CommissionRecordsForCTVPage(BaseModel):
+    total_count: int
+    records: list[CommissionRecordForCTV]
 
 
 class CommissionReject(BaseModel):

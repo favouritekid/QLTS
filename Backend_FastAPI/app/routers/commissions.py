@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
+from app.core.constants import UserRole
 from app.core.deps import (
     get_commission_policy_for_admin,
     get_commission_record_for_user,
@@ -27,6 +28,8 @@ from app.schemas.commission import (
     CommissionPolicyResponse,
     CommissionPolicyUpdate,
     CommissionRecordResponse,
+    CommissionRecordForCTV,
+    CommissionRecordsForCTVPage,
     CommissionRecordsPage,
     CommissionReject,
     CommissionStats,
@@ -131,7 +134,7 @@ async def list_commissions(
 
     # Manager: filter by own unit
     unit_id = None
-    if current_user.role == "manager":
+    if current_user.role == UserRole.MANAGER:
         unit_id = current_user.unit_id
 
     total, records = await repo.get_filtered(
@@ -215,7 +218,7 @@ ctv_commission_router = APIRouter(
 )
 
 
-@ctv_commission_router.get("", response_model=CommissionRecordsPage)
+@ctv_commission_router.get("", response_model=CommissionRecordsForCTVPage)
 async def list_own_commissions(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
@@ -223,7 +226,7 @@ async def list_own_commissions(
     db: AsyncSession = Depends(database.get_db),
     collaborator: models.Collaborator = Depends(get_own_collaborator),
 ):
-    """List own commission records."""
+    """List own commission records (masked lead info)."""
     repo = CommissionRecordRepository(db)
     total, records = await repo.get_filtered(
         skip=skip,
@@ -231,7 +234,7 @@ async def list_own_commissions(
         collaborator_id=collaborator.id,
         status=status,
     )
-    return CommissionRecordsPage(total_count=total, records=records)
+    return CommissionRecordsForCTVPage(total_count=total, records=records)
 
 
 @ctv_commission_router.get("/stats", response_model=CommissionStats)

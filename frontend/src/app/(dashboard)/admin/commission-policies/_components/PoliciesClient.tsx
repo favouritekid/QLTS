@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Plus, Edit } from "lucide-react"
@@ -256,11 +256,10 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
     },
   })
 
-  // Reset form when dialog opens
   const calcType = form.watch("calculation_type")
 
-  // Pre-fill form when editing
-  useState(() => {
+  // Reset/pre-fill form when dialog opens or policy changes
+  useEffect(() => {
     if (open && policy) {
       form.reset({
         name: policy.name,
@@ -288,7 +287,7 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
         is_active: true,
       })
     }
-  })
+  }, [open, policy, form])
 
   async function onSubmit(data: CommissionPolicyCreateFormData) {
     try {

@@ -333,6 +333,13 @@ class CTVSelfRegistration(BaseModel):
         return normalized
 
 
+class CTVRegistrationResponse(BaseModel):
+    """Safe response for public CTV registration — no PII leak."""
+    code: str
+    status: str
+    message: str
+
+
 class CTVRegistrationStatus(BaseModel):
     """Response for CTV registration status check."""
     status: str

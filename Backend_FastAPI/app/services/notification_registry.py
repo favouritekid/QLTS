@@ -684,6 +684,34 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         dedup_key_template="ctv:commission:${commission_id}:created"
     ),
 
+    SystemEvents.CTV_ATTRIBUTION_EXPIRING: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Quyền giới thiệu sắp hết hạn",
+            "Quyền giới thiệu cho lead #${lead_id} sẽ hết hạn trong ${days_remaining} ngày."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.WARNING,
+        link_template="/ctv/leads",
+        priority=35,
+        dedup_key_template="ctv:attribution:${lead_id}:expiring"
+    ),
+
+    SystemEvents.CTV_WEEKLY_SUMMARY: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Báo cáo tuần CTV",
+            "Tuần này: ${new_leads} lead mới, ${commissions} hoa hồng."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.INFO,
+        link_template="/ctv",
+        priority=90,
+        dedup_key_template="ctv:weekly:${collaborator_id}:${week}"
+    ),
+
     SystemEvents.SUSPICIOUS_LOGIN: NotificationConfig(
         group=NotificationEventGroup.SECURITY,
         resolver=SpecificUsersResolver(),

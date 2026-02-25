@@ -190,7 +190,7 @@ async def calculate_amount(
         (amount, calculation_detail) tuple
     """
     if policy.calculation_type == "fixed":
-        amount = policy.fixed_amount or Decimal("0")
+        amount = policy.fixed_amount if policy.fixed_amount is not None else Decimal("0")
         detail = {
             "type": "fixed",
             "fixed_amount": str(amount),
@@ -340,21 +340,10 @@ async def cancel_commissions_for_collaborator(
     reason: str,
 ) -> int:
     """Cancel all pending commissions for a collaborator (e.g., when suspended)."""
-    from sqlalchemy import update as sa_update
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        sa_update(CommissionRecord)
-        .where(
-            CommissionRecord.collaborator_id == collaborator_id,
-            CommissionRecord.status.in_(["pending", "approved"]),
-        )
-        .values(
-            status="cancelled",
-            cancelled_at=now,
-            cancellation_reason=reason,
-        )
+    record_repo = CommissionRecordRepository(db)
+    count = await record_repo.cancel_pending_for_collaborator(
+        collaborator_id, reason
     )
-    count = result.rowcount
     if count > 0:
         log.info(
             "Commissions cancelled for collaborator",
@@ -440,6 +429,10 @@ async def safe_check_commission_on_status_change(
 
     Non-critical: all exceptions are caught and logged so they never
     break the main status-change flow.
+
+    NOTE: This function calls db.commit() directly (exception to the
+    "Router commits, Service flushes" rule) because it runs as a
+    post-commit side-effect handler, not as part of the main transaction.
     """
     if old_status == new_status:
         return
@@ -471,7 +464,7 @@ async def safe_check_commission_on_status_change(
                 cancelled_count=cancelled,
             )
     except Exception as e:
-        log.warning(
+        log.error(
             "Commission check failed (non-critical)",
             lead_id=lead_id,
             error=str(e),

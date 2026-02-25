@@ -136,7 +136,7 @@ export function CTVDashboardClient() {
               <Skeleton className="h-5 w-48 inline-block" />
             ) : (
               <>
-                Xin ch&agrave;o, <span className="font-medium">{profile?.full_name}</span>
+                Xin chào, <span className="font-medium">{profile?.full_name}</span>
               </>
             )}
           </p>

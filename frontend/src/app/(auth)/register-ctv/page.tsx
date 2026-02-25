@@ -72,8 +72,9 @@ export default function RegisterCTVPage() {
     try {
       await api.post("/api/ctv-register", data)
       router.push("/register-ctv/success")
-    } catch (err: any) {
-      const message = err?.response?.data?.detail || "Lỗi đăng ký. Vui lòng thử lại."
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { detail?: string } } }
+      const message = axiosErr?.response?.data?.detail || "Lỗi đăng ký. Vui lòng thử lại."
       toast.error(message)
     } finally {
       setIsSubmitting(false)

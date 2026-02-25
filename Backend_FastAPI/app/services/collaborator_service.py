@@ -228,7 +228,9 @@ async def approve_collaborator(
     if collaborator.status == "active":
         raise BusinessRuleViolation("CTV đã được duyệt")
     if collaborator.status == "suspended":
-        raise BusinessRuleViolation("CTV đang bị đình chỉ, không thể duyệt")
+        raise BusinessRuleViolation("CTV đang bị đình chỉ, không thể duyệt. Sử dụng chức năng kích hoạt lại")
+    if collaborator.status == "inactive":
+        raise BusinessRuleViolation("CTV không còn hoạt động, không thể duyệt")
 
     collaborator.status = "active"
     collaborator.approved_at = datetime.now(timezone.utc)
@@ -517,11 +519,6 @@ async def update_lead_validity(
 
 
 # ============================================================================
-# PHONE CHECK
-# ============================================================================
-
-
-# ============================================================================
 # CTV SELF-REGISTRATION (Phase 2)
 # ============================================================================
 
@@ -592,7 +589,7 @@ async def register_ctv(
         "CTV self-registered",
         collaborator_id=collaborator.id,
         code=collaborator.code,
-        phone=data.phone,
+        phone_masked=data.phone[:4] + "***" + data.phone[-3:] if len(data.phone) >= 7 else "***",
     )
 
     return collaborator, None
@@ -636,7 +633,6 @@ async def get_ctv_registration_status(
 async def check_phone_available(
     db: AsyncSession,
     phone: str,
-    collaborator_id: int,
 ) -> dict:
     """
     Check if a phone number is available for CTV to claim.

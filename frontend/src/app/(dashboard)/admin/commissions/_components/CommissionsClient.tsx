@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useCallback } from "react"
-import { CheckCircle, XCircle, DollarSign, Clock, Ban } from "lucide-react"
+import { useState } from "react"
+import { CheckCircle, XCircle, DollarSign } from "lucide-react"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -94,28 +94,28 @@ export function CommissionsClient() {
   const rejectMutation = useRejectCommission()
   const payMutation = usePayCommission()
 
-  const handleApprove = useCallback(async () => {
+  async function handleApprove() {
     if (approveTarget) {
       await approveMutation.mutateAsync(approveTarget.id)
       setApproveTarget(null)
     }
-  }, [approveTarget, approveMutation])
+  }
 
-  const handleReject = useCallback(async () => {
+  async function handleReject() {
     if (rejectTarget && rejectReason.trim()) {
       await rejectMutation.mutateAsync({ id: rejectTarget.id, data: { rejection_reason: rejectReason } })
       setRejectTarget(null)
       setRejectReason("")
     }
-  }, [rejectTarget, rejectReason, rejectMutation])
+  }
 
-  const handlePay = useCallback(async () => {
+  async function handlePay() {
     if (payTarget) {
       await payMutation.mutateAsync({ id: payTarget.id, data: { payment_reference: payRef || null } })
       setPayTarget(null)
       setPayRef("")
     }
-  }, [payTarget, payRef, payMutation])
+  }
 
   const totalPages = data ? Math.ceil(data.total_count / PAGE_SIZE) : 0
 

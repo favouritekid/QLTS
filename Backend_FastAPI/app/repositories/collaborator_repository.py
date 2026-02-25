@@ -95,7 +95,7 @@ class CollaboratorRepository(BaseRepository[models.Collaborator]):
             models.Collaborator.phone == phone,
             models.Collaborator.deleted_at.is_(None),
         )
-        if exclude_id:
+        if exclude_id is not None:
             query = query.where(models.Collaborator.id != exclude_id)
         result = await self.db.execute(query)
         count = result.scalar_one_or_none() or 0
