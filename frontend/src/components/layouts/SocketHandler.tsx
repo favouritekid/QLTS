@@ -966,6 +966,73 @@ export function SocketHandler() {
       }
     };
 
+    // ✅ CTV EVENTS: Handlers for collaborator system real-time sync
+    const handleCtvClaimSubmitted = (data: {
+      collaborator_id: number;
+      claim_id: number;
+      lead_id: number;
+      unit_id: number;
+    }) => {
+      console.log("[SocketHandler] ctv_claim_submitted → invalidating claims");
+      queryClient.invalidateQueries({ queryKey: ["claims"] });
+      queryClient.invalidateQueries({ queryKey: ["collaborator-stats"] });
+    };
+
+    const handleCtvClaimApproved = (data: {
+      collaborator_id: number;
+      claim_id: number;
+      lead_id: number;
+    }) => {
+      console.log("[SocketHandler] ctv_claim_approved → invalidating claims & leads");
+      queryClient.invalidateQueries({ queryKey: ["claims"] });
+      queryClient.invalidateQueries({ queryKey: ["ctv-leads"] });
+      queryClient.invalidateQueries({ queryKey: ["collaborator-stats"] });
+    };
+
+    const handleCtvClaimRejected = (data: {
+      collaborator_id: number;
+      claim_id: number;
+      lead_id: number;
+    }) => {
+      console.log("[SocketHandler] ctv_claim_rejected → invalidating claims");
+      queryClient.invalidateQueries({ queryKey: ["claims"] });
+      queryClient.invalidateQueries({ queryKey: ["collaborator-stats"] });
+    };
+
+    const handleCtvApproved = (data: { collaborator_id: number }) => {
+      console.log("[SocketHandler] ctv_approved → invalidating collaborator profile");
+      queryClient.invalidateQueries({ queryKey: ["collaborators"] });
+      queryClient.invalidateQueries({ queryKey: ["ctv-profile"] });
+    };
+
+    const handleCtvSuspended = (data: { collaborator_id: number }) => {
+      console.log("[SocketHandler] ctv_suspended → invalidating collaborator profile");
+      queryClient.invalidateQueries({ queryKey: ["collaborators"] });
+      queryClient.invalidateQueries({ queryKey: ["ctv-profile"] });
+    };
+
+    const handleCtvCommissionCreated = (data: {
+      collaborator_id: number;
+      commission_id: number;
+      amount: string;
+      lead_id: number;
+    }) => {
+      console.log("[SocketHandler] ctv_commission_created → invalidating commissions");
+      queryClient.invalidateQueries({ queryKey: ["commissions"] });
+      queryClient.invalidateQueries({ queryKey: ["commission-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["collaborator-stats"] });
+    };
+
+    const handleCtvLeadConverted = (data: {
+      collaborator_id: number;
+      lead_id: number;
+      new_status: string;
+    }) => {
+      console.log("[SocketHandler] ctv_lead_converted → invalidating ctv leads");
+      queryClient.invalidateQueries({ queryKey: ["ctv-leads"] });
+      queryClient.invalidateQueries({ queryKey: ["collaborator-stats"] });
+    };
+
     // R1+R2: handleLoginNotification REMOVED
     // Login notification is now included in login API response and handled by useAuth.ts
     // See: useAuth.ts onSuccess handler
@@ -997,6 +1064,13 @@ export function SocketHandler() {
     socket.on("application_deleted", handleApplicationDeleted);
     socket.on("user_deactivated", handleUserDeactivated);
     socket.on("session_updated", handleSessionUpdated);
+    socket.on("ctv_claim_submitted", handleCtvClaimSubmitted);
+    socket.on("ctv_claim_approved", handleCtvClaimApproved);
+    socket.on("ctv_claim_rejected", handleCtvClaimRejected);
+    socket.on("ctv_approved", handleCtvApproved);
+    socket.on("ctv_suspended", handleCtvSuspended);
+    socket.on("ctv_commission_created", handleCtvCommissionCreated);
+    socket.on("ctv_lead_converted", handleCtvLeadConverted);
 
 
     // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
@@ -1036,6 +1110,13 @@ export function SocketHandler() {
       socket.off("application_deleted", handleApplicationDeleted);
       socket.off("user_deactivated", handleUserDeactivated);
       socket.off("session_updated", handleSessionUpdated);
+      socket.off("ctv_claim_submitted", handleCtvClaimSubmitted);
+      socket.off("ctv_claim_approved", handleCtvClaimApproved);
+      socket.off("ctv_claim_rejected", handleCtvClaimRejected);
+      socket.off("ctv_approved", handleCtvApproved);
+      socket.off("ctv_suspended", handleCtvSuspended);
+      socket.off("ctv_commission_created", handleCtvCommissionCreated);
+      socket.off("ctv_lead_converted", handleCtvLeadConverted);
 
       socket.offAny(handleAnyEvent);
     };

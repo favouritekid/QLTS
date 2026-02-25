@@ -20,6 +20,37 @@ from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
 
+
+async def _check_commission_on_status_change(
+    db: AsyncSession,
+    lead: models.Lead,
+    old_status: str,
+    new_status: str,
+    actor_id: int,
+):
+    """
+    Centralized commission check called from ALL status-change paths after commit.
+    Non-critical: exceptions are caught and logged.
+    """
+    if not lead.referrer_id or old_status == new_status:
+        return
+    try:
+        from app.services import commission_service
+        records, callback = await commission_service.check_and_create_commission(
+            db, lead.id, new_status, actor_id
+        )
+        if records:
+            await db.commit()
+            if callback:
+                await callback()
+    except Exception as e:
+        log.warning(
+            "Commission check failed (non-critical)",
+            lead_id=lead.id,
+            error=str(e),
+        )
+
+
 router = APIRouter(tags=["Leads"])
 
 LeadAccessDep = Depends(get_lead_for_user)
@@ -521,6 +552,14 @@ async def update_existing_lead(
             dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
         )
 
+        # Commission check (Path 1)
+        await _check_commission_on_status_change(
+            db, result,
+            old_status=lead.consultation_status_id or "none",
+            new_status=result.consultation_status_id or "none",
+            actor_id=current_user.id,
+        )
+
     # ✅ REAL-TIME SYNC: Always dispatch LEAD_UPDATED for UI refresh
     await safe_dispatch(
         db=db,
@@ -571,6 +610,17 @@ async def delete_lead(
     - 403 Forbidden: If user doesn't have admin permission
     """
     deleted_lead = await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
+
+    # Cancel pending commissions before commit (EC-5)
+    if deleted_lead.referrer_id:
+        try:
+            from app.services import commission_service
+            await commission_service.cancel_commissions_for_lead(
+                db, lead_id, reason="Lead deleted", cancelled_by_id=current_user.id
+            )
+        except Exception as e:
+            log.warning("Failed to cancel commissions on lead delete", lead_id=lead_id, error=str(e))
+
     await db.commit()
 
     # ✅ NOTIFICATION 2.0: Dispatch notification for lead deletion
@@ -852,6 +902,14 @@ async def update_a_consultation(
                 "actor_name": current_user.full_name or current_user.username,
             },
             dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
+        )
+
+        # Commission check (Path 3 - consultation update)
+        await _check_commission_on_status_change(
+            db, lead,
+            old_status=old_status_id or "none",
+            new_status=result.consultation_status_id or "none",
+            actor_id=current_user.id,
         )
 
     return result
@@ -1382,8 +1440,30 @@ async def update_lead_consultation_status(
         user_id=current_user.id
     )
     
-    # TODO: Dispatch status change notification if needed
-    # await dispatch(db, SystemEvents.LEAD_STATUS_CHANGED, {...})
+    # Dispatch status change notification
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.LEAD_STATUS_CHANGED,
+        payload={
+            "lead_id": lead.id,
+            "lead_name": lead.full_name or lead.email or f"Lead #{lead.id}",
+            "officer_id": lead.assigned_officer_id,
+            "officer_name": lead.assigned_officer.full_name if lead.assigned_officer else "Unknown",
+            "old_status": old_status_id or "none",
+            "new_status": validated_status.id,
+            "actor_id": current_user.id,
+            "actor_name": current_user.full_name or current_user.username,
+        },
+        dedupe_key=f"lead_status_changed:{lead.id}:{validated_status.id}",
+    )
+
+    # Commission check (Path 2 - FSM)
+    await _check_commission_on_status_change(
+        db, lead,
+        old_status=old_status_id or "none",
+        new_status=validated_status.id,
+        actor_id=current_user.id,
+    )
 
     return lead
 

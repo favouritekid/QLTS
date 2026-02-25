@@ -809,6 +809,25 @@ async def enroll_student(
             dedupe_key=f"student_enrolled:{result['student_id']}"
         )
 
+        # Dispatch LEAD_STATUS_CHANGED for commission trigger (Path 4)
+        # Query lead_id from the profile
+        profile = await db.get(models.AdmissionProfile, profile_id)
+        if profile and profile.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "officer_id": current_user.id,
+                    "old_status": "confirmed",
+                    "new_status": "sts11",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts11",
+            )
+
         return result
 
     except ResourceNotFoundError as e:
@@ -1135,7 +1154,24 @@ async def approve_admission(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. RETURN Pydantic Model
+        # 4. Dispatch LEAD_STATUS_CHANGED for commission trigger (Path 4 - approve)
+        if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": result.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "officer_id": current_user.id,
+                    "old_status": "submitted",
+                    "new_status": "sts09",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{result.lead_id}:sts09",
+            )
+
+        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
@@ -1197,7 +1233,24 @@ async def reject_admission(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. RETURN Pydantic Model
+        # 4. Dispatch LEAD_STATUS_CHANGED for commission trigger (Path 4 - reject)
+        if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": result.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "officer_id": current_user.id,
+                    "old_status": "submitted",
+                    "new_status": "sts16",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{result.lead_id}:sts16",
+            )
+
+        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:

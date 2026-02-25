@@ -21,6 +21,7 @@ from app.repositories.lead_repository import LeadRepository
 from app.schemas.collaborator import (
     CollaboratorCreate,
     CollaboratorUpdate,
+    CTVSelfRegistration,
     LeadClaimCreate,
     LeadClaimData,
     LeadClaimReview,
@@ -174,9 +175,15 @@ async def update_collaborator(
     old_officer_id = collaborator.managed_by_officer_id
     post_callback = None
 
-    # Apply updates
+    # Apply updates with field whitelist (prevent mass-assignment)
+    ALLOWED_UPDATE_FIELDS = {
+        "full_name", "phone", "email", "managed_by_officer_id",
+        "id_card_number", "bank_account", "bank_name", "address", "notes",
+    }
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
+        if field not in ALLOWED_UPDATE_FIELDS:
+            continue
         setattr(collaborator, field, value)
 
     collaborator.updated_at = datetime.now(timezone.utc)
@@ -253,6 +260,27 @@ async def suspend_collaborator(
     return collaborator, None
 
 
+async def reactivate_collaborator(
+    db: AsyncSession,
+    collaborator: models.Collaborator,
+    reactivated_by: models.User,
+) -> Tuple[models.Collaborator, None]:
+    """Reactivate a suspended collaborator."""
+    if collaborator.status != "suspended":
+        raise BusinessRuleViolation("Chỉ CTV đang bị đình chỉ mới có thể kích hoạt lại")
+
+    collaborator.status = "active"
+    collaborator.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    log.info(
+        "Collaborator reactivated",
+        collaborator_id=collaborator.id,
+        reactivated_by=reactivated_by.id,
+    )
+    return collaborator, None
+
+
 async def get_collaborator_stats(
     db: AsyncSession,
     collaborator_id: int,
@@ -267,6 +295,14 @@ async def get_collaborator_stats(
         limit=0, collaborator_id=collaborator_id, status="pending"
     )
     stats["pending_claims"] = pending_count_result[0]
+
+    # Commission summary
+    from app.repositories.commission_repository import CommissionRecordRepository
+    commission_repo = CommissionRecordRepository(db)
+    commission_stats = await commission_repo.get_stats_by_collaborator(collaborator_id)
+    stats["total_commission_earned"] = int(commission_stats["total_earned"])
+    stats["total_commission_pending"] = int(commission_stats["total_pending"])
+    stats["total_commission_paid"] = int(commission_stats["total_paid"])
 
     return stats
 
@@ -299,9 +335,11 @@ async def submit_lead_claim(
     if collaborator.status != "active":
         raise BusinessRuleViolation("Tài khoản CTV chưa được kích hoạt")
 
-    # Block self-claim: CTV phone cannot match lead phone (M2)
+    # Block self-claim: CTV phone/email cannot match lead phone/email (M2 + B-4)
     if collaborator.phone == claim_data.phone:
         raise BusinessRuleViolation("Không thể giới thiệu lead có cùng số điện thoại với CTV")
+    if claim_data.email and collaborator.email and claim_data.email.lower() == collaborator.email.lower():
+        raise BusinessRuleViolation("Không thể giới thiệu lead có cùng email với CTV")
 
     # Determine officer for routing
     officer = None
@@ -476,6 +514,118 @@ async def update_lead_validity(
         validity_status=data.validity_status,
     )
     return lead, None
+
+
+# ============================================================================
+# PHONE CHECK
+# ============================================================================
+
+
+# ============================================================================
+# CTV SELF-REGISTRATION (Phase 2)
+# ============================================================================
+
+
+async def register_ctv(
+    db: AsyncSession,
+    data: CTVSelfRegistration,
+) -> Tuple[models.Collaborator, None]:
+    """
+    Public CTV self-registration.
+
+    Creates a new collaborator with status='pending'.
+    EC-8: Phone + email uniqueness check (soft-delete aware).
+    """
+    repo = CollaboratorRepository(db)
+
+    # Phone uniqueness (soft-delete aware — repo already filters deleted_at IS NULL)
+    is_phone_unique = await repo.check_phone_unique(data.phone)
+    if not is_phone_unique:
+        raise DuplicateResourceError(
+            "Số điện thoại đã được đăng ký. Vui lòng kiểm tra lại hoặc liên hệ hỗ trợ."
+        )
+
+    # Email uniqueness if provided
+    if data.email:
+        existing_by_email = await repo.get_by_email(data.email)
+        if existing_by_email:
+            raise DuplicateResourceError(
+                "Email đã được đăng ký. Vui lòng sử dụng email khác."
+            )
+
+    # Validate unit_id exists
+    from app.models.organization import OrganizationUnit
+    unit = await db.get(OrganizationUnit, data.unit_id)
+    if not unit:
+        raise ResourceNotFoundError("Đơn vị không tồn tại")
+
+    # Generate code with retry
+    year = datetime.now(timezone.utc).year
+    max_retries = 3
+    collaborator = None
+
+    for attempt in range(max_retries):
+        try:
+            async with db.begin_nested():
+                code = await repo.generate_next_code(year)
+
+                collaborator = models.Collaborator(
+                    code=code,
+                    full_name=data.full_name,
+                    phone=data.phone,
+                    email=data.email,
+                    unit_id=data.unit_id,
+                    id_card_number=data.id_card_number,
+                    address=data.address,
+                    notes=data.notes,
+                    status="pending",
+                )
+                db.add(collaborator)
+                await db.flush()
+            break
+        except IntegrityError:
+            if attempt == max_retries - 1:
+                raise DuplicateResourceError("Không thể tạo mã CTV, vui lòng thử lại")
+            continue
+
+    log.info(
+        "CTV self-registered",
+        collaborator_id=collaborator.id,
+        code=collaborator.code,
+        phone=data.phone,
+    )
+
+    return collaborator, None
+
+
+async def get_ctv_registration_status(
+    db: AsyncSession,
+    phone: str,
+) -> dict:
+    """
+    Check CTV registration status by phone.
+    P6: Only returns status + message (no registered_at).
+    """
+    repo = CollaboratorRepository(db)
+    collab = await repo.get_by_phone(phone)
+
+    if not collab:
+        return {
+            "status": "not_found",
+            "message": "Không tìm thấy đăng ký với số điện thoại này.",
+        }
+
+    status_messages = {
+        "pending": "Đăng ký đang chờ xét duyệt.",
+        "active": "Tài khoản CTV đã được kích hoạt.",
+        "suspended": "Tài khoản CTV đã bị đình chỉ. Vui lòng liên hệ hỗ trợ.",
+        "inactive": "Tài khoản CTV không còn hoạt động.",
+    }
+
+    return {
+        "status": collab.status,
+        "message": status_messages.get(collab.status, "Trạng thái không xác định."),
+    }
 
 
 # ============================================================================

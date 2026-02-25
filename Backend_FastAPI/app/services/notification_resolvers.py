@@ -596,10 +596,59 @@ class ActorExcludedResolver(BaseResolver):
             return []
 
 
+class CollaboratorUserResolver(BaseResolver):
+    """
+    Resolves the user linked to a collaborator.
+
+    Expected payload keys:
+        - collaborator_id (int): Required - ID of the collaborator
+        - user_id (int): Optional - Direct user_id if available (avoids DB query)
+
+    Returns:
+        [user_id] if collaborator has a linked user, [] otherwise.
+
+    Fail-safe: Returns empty list on any error.
+    """
+
+    async def resolve_users(
+        self,
+        db: AsyncSession,
+        payload: dict
+    ) -> List[int]:
+        try:
+            # Fast path: user_id already in payload
+            user_id = payload.get("user_id")
+            if user_id:
+                return [user_id]
+
+            # Slow path: query collaborator
+            collaborator_id = payload.get("collaborator_id")
+            if not collaborator_id:
+                self._log_warning("Missing collaborator_id in payload")
+                return []
+
+            from app.models.collaborator import Collaborator
+            result = await db.execute(
+                select(Collaborator.user_id).where(
+                    Collaborator.id == collaborator_id,
+                    Collaborator.user_id.isnot(None),
+                    Collaborator.deleted_at.is_(None),
+                )
+            )
+            uid = result.scalar_one_or_none()
+            if uid:
+                return [uid]
+            return []
+        except Exception as e:
+            self._log_warning(f"Failed to resolve collaborator user: {e}")
+            return []
+
+
 # Singleton instances for common resolvers (can be reused)
 lead_owner_resolver = LeadOwnerResolver()
 unit_staff_resolver = UnitStaffResolver()
 unit_managers_resolver = UnitManagersResolver()
+collaborator_user_resolver = CollaboratorUserResolver()
 dorm_residents_resolver = DormResidentsResolver()
 dorm_staff_resolver = DormStaffResolver()
 all_users_resolver = AllUsersResolver()
@@ -627,6 +676,9 @@ RESOLVER_REGISTRY = {
     # Dorm resolvers
     "dorm_residents": dorm_residents_resolver,
     "dorm_staff": dorm_staff_resolver,
+
+    # Collaborator resolvers
+    "collaborator_user": collaborator_user_resolver,
 
     # Global resolvers
     "all_users": all_users_resolver,

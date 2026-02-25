@@ -43,6 +43,7 @@ from .routers import (
     applications,
     auth,
     collaborators,  # ✅ CTV SYSTEM: Collaborator management + CTV self-service
+    commissions,  # ✅ CTV PHASE 2: Commission management
     config_data, # ✅ NEW: Dynamic Config Data (Categories, Import)
     document_groups,  # ✅ PHASE A.3: DocumentGroup CRUD
     fees,  # ✅ FINANCE MODULE: Fee Calculation & Management
@@ -705,6 +706,10 @@ fastapi_app.include_router(notification_templates.router, prefix="/api")  # ✅ 
 fastapi_app.include_router(leads.router, prefix="/api/leads")
 fastapi_app.include_router(collaborators.admin_router, prefix="/api")  # ✅ CTV: Admin/Manager CTV management
 fastapi_app.include_router(collaborators.ctv_router, prefix="/api")  # ✅ CTV: Self-service endpoints
+fastapi_app.include_router(collaborators.public_router, prefix="/api")  # ✅ CTV P2: Public self-registration (no auth)
+fastapi_app.include_router(commissions.policy_router, prefix="/api")  # ✅ CTV P2: Commission policies (Admin)
+fastapi_app.include_router(commissions.record_router, prefix="/api")  # ✅ CTV P2: Commission records (Admin)
+fastapi_app.include_router(commissions.ctv_commission_router, prefix="/api")  # ✅ CTV P2: CTV commission view
 fastapi_app.include_router(applications.router, prefix="/api")
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ NEW: Admission Profile workflow
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring

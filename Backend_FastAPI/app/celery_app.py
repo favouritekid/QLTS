@@ -135,6 +135,20 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=0),  # Runs at 03:00 daily
         "options": {"queue": "default"},
     },
+
+    # --- CTV Attribution Expiry (Phase 2) ---
+    "check-ctv-attribution-expiry-daily": {
+        "task": "check_ctv_attribution_expiry_task",
+        "schedule": crontab(hour=4, minute=0),  # Runs at 04:00 daily
+        "options": {"queue": "default"},
+    },
+
+    # --- CTV Weekly Summary (Phase 2) ---
+    "send-ctv-weekly-summary": {
+        "task": "send_ctv_weekly_summary_task",
+        "schedule": crontab(hour=9, minute=0, day_of_week=1),  # Monday 09:00
+        "options": {"queue": "default"},
+    },
 }
 
 # =============================================================================

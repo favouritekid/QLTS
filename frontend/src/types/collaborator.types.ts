@@ -52,7 +52,6 @@ export interface CollaboratorUpdate {
   full_name?: string
   phone?: string
   email?: string | null
-  status?: CollaboratorStatus
   managed_by_officer_id?: number | null
   id_card_number?: string | null
   bank_account?: string | null

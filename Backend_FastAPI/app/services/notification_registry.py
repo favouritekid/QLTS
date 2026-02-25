@@ -37,6 +37,7 @@ from app.services.notification_resolvers import (
     SpecificUsersResolver,
     DormResidentsResolver,
     DormStaffResolver,
+    CollaboratorUserResolver,
     CompositeResolver,
     ActorExcludedResolver,
 )
@@ -568,6 +569,120 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
     # =========================================================================
     # 🔐 SECURITY EVENTS
     # =========================================================================
+
+    # =========================================================================
+    # 🤝 CTV (COLLABORATOR) EVENTS
+    # =========================================================================
+
+    SystemEvents.CTV_CLAIM_SUBMITTED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=UnitManagersResolver(),
+        template=(
+            "CTV gửi claim mới",
+            "${collaborator_name} đã gửi claim cho lead ${lead_name}."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.INFO,
+        link_template="/admin/collaborators/claims/${claim_id}",
+        priority=60,
+        dedup_key_template="ctv:claim:${claim_id}:submitted"
+    ),
+
+    SystemEvents.CTV_CLAIM_APPROVED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Claim được duyệt",
+            "Claim #${claim_id} của bạn đã được duyệt. Lead đã được ghi nhận."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.SUCCESS,
+        link_template="/ctv/claims",
+        priority=50,
+        dedup_key_template="ctv:claim:${claim_id}:approved"
+    ),
+
+    SystemEvents.CTV_CLAIM_REJECTED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Claim bị từ chối",
+            "Claim #${claim_id} đã bị từ chối. Lý do: ${rejection_reason}"
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.WARNING,
+        link_template="/ctv/claims",
+        priority=50,
+        dedup_key_template="ctv:claim:${claim_id}:rejected"
+    ),
+
+    SystemEvents.CTV_APPROVED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Tài khoản CTV đã được duyệt",
+            "Tài khoản CTV của bạn đã được duyệt. Bạn có thể bắt đầu giới thiệu lead."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.SUCCESS,
+        priority=30,
+        dedup_key_template="ctv:${collaborator_id}:approved"
+    ),
+
+    SystemEvents.CTV_SUSPENDED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Tài khoản CTV bị đình chỉ",
+            "Tài khoản CTV của bạn đã bị đình chỉ. Liên hệ quản lý để biết thêm chi tiết."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.ERROR,
+        priority=20,
+        dedup_key_template="ctv:${collaborator_id}:suspended"
+    ),
+
+    SystemEvents.CTV_LEAD_CONVERTED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Lead tiến triển",
+            "Lead #${lead_id} đã chuyển sang trạng thái ${new_status}."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.SUCCESS,
+        link_template="/ctv/leads",
+        priority=80,
+        dedup_key_template="ctv:lead:${lead_id}:converted:${new_status}"
+    ),
+
+    SystemEvents.CTV_ATTRIBUTION_EXPIRED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Quyền giới thiệu hết hạn",
+            "Quyền giới thiệu cho lead #${lead_id} đã hết hạn sau 90 ngày."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.WARNING,
+        link_template="/ctv/leads",
+        priority=40,
+        dedup_key_template="ctv:attribution:${lead_id}:expired"
+    ),
+
+    SystemEvents.CTV_COMMISSION_CREATED: NotificationConfig(
+        group=NotificationEventGroup.CTV,
+        resolver=CollaboratorUserResolver(),
+        template=(
+            "Hoa hồng mới",
+            "Bạn nhận được hoa hồng ${amount} VND cho lead #${lead_id}."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.SUCCESS,
+        link_template="/ctv/commissions",
+        priority=30,
+        dedup_key_template="ctv:commission:${commission_id}:created"
+    ),
 
     SystemEvents.SUSPICIOUS_LOGIN: NotificationConfig(
         group=NotificationEventGroup.SECURITY,

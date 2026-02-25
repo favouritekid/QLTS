@@ -1,7 +1,7 @@
 // src/app/(dashboard)/admin/collaborators/_components/CollaboratorsClient.tsx
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   Plus,
   Search,
@@ -136,6 +136,7 @@ export function CollaboratorsClient({ initialData }: CollaboratorsClientProps) {
   // Collaborators tab state
   // ---------------------------------------------------------------------------
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [unitFilter, setUnitFilter] = useState<string>("all");
@@ -162,6 +163,21 @@ export function CollaboratorsClient({ initialData }: CollaboratorsClientProps) {
   // ---------------------------------------------------------------------------
   const [approveTarget, setApproveTarget] = useState<Collaborator | null>(null);
   const [suspendTarget, setSuspendTarget] = useState<Collaborator | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // F-2: Debounce search input (300ms)
+  // ---------------------------------------------------------------------------
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+    }, 300);
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchInput]);
 
   // ---------------------------------------------------------------------------
   // Data queries
@@ -584,11 +600,8 @@ export function CollaboratorsClient({ initialData }: CollaboratorsClientProps) {
                   <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
                   <Input
                     placeholder="Tìm theo tên, mã hoặc SĐT…"
-                    value={search}
-                    onChange={(e) => {
-                      setSearch(e.target.value);
-                      setPage(1);
-                    }}
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
                     className="pl-9"
                   />
                 </div>

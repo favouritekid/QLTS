@@ -307,8 +307,19 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/collaborators/claims", "action": "GET"},
         {"subject": "{role}", "object": "/api/collaborators/claims/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/collaborators/claims/{id}/review", "action": "POST"},
+        {"subject": "{role}", "object": "/api/collaborators/{id}/reactivate", "action": "POST"},
         # Lead validity management (Phase 1: CTV System)
         {"subject": "{role}", "object": "/api/leads/{id}/validity", "action": "POST"},
+        # Commission Management (Phase 2: CTV Commission System)
+        {"subject": "{role}", "object": "/api/admin/commission-policies", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admin/commission-policies", "action": "POST"},
+        {"subject": "{role}", "object": "/api/admin/commission-policies/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admin/commission-policies/{id}", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/admin/commissions", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admin/commissions/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admin/commissions/{id}/approve", "action": "POST"},
+        {"subject": "{role}", "object": "/api/admin/commissions/{id}/reject", "action": "POST"},
+        {"subject": "{role}", "object": "/api/admin/commissions/{id}/pay", "action": "POST"},
     ]
 }
 
@@ -329,6 +340,9 @@ COLLABORATOR_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/ctv/leads/check-phone", "action": "GET"},
         {"subject": "{role}", "object": "/api/ctv/claims", "action": "GET"},
         {"subject": "{role}", "object": "/api/ctv/stats", "action": "GET"},
+        # CTV Commission (Phase 2)
+        {"subject": "{role}", "object": "/api/ctv/commissions", "action": "GET"},
+        {"subject": "{role}", "object": "/api/ctv/commissions/stats", "action": "GET"},
         # Minimal auth-related (NO session management, NO security endpoints)
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},

@@ -8,12 +8,15 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import models
 from app.repositories.base import BaseRepository
+
+
+ALLOWED_SORT_COLUMNS = {"created_at", "updated_at", "full_name", "code", "status", "phone"}
 
 
 class CollaboratorRepository(BaseRepository[models.Collaborator]):
@@ -69,6 +72,16 @@ class CollaboratorRepository(BaseRepository[models.Collaborator]):
         result = await self.db.execute(
             select(models.Collaborator).where(
                 models.Collaborator.phone == phone,
+                models.Collaborator.deleted_at.is_(None),
+            )
+        )
+        return result.scalars().first()
+
+    async def get_by_email(self, email: str) -> Optional[models.Collaborator]:
+        """Get collaborator by email (soft-delete aware)."""
+        result = await self.db.execute(
+            select(models.Collaborator).where(
+                models.Collaborator.email == email,
                 models.Collaborator.deleted_at.is_(None),
             )
         )
@@ -137,6 +150,8 @@ class CollaboratorRepository(BaseRepository[models.Collaborator]):
         if total_count == 0:
             return 0, []
 
+        if sort_by not in ALLOWED_SORT_COLUMNS:
+            sort_by = "created_at"
         sort_column = getattr(models.Collaborator, sort_by, models.Collaborator.created_at)
         if order.lower() == "desc":
             base_query = base_query.order_by(sort_column.desc(), models.Collaborator.id.desc())
@@ -159,29 +174,11 @@ class CollaboratorRepository(BaseRepository[models.Collaborator]):
 
     async def generate_next_code(self, year: int) -> str:
         """
-        Generate next collaborator code: CTV-YYYY-XXXX (sequence-based).
+        Generate next collaborator code: CTV-YYYY-XXXX using PostgreSQL sequence.
 
-        Uses SELECT MAX to find highest code. Collision prevention is handled
-        by the service layer retry loop + unique constraint on code.
+        Uses nextval() for race-condition-free code generation.
         """
         prefix = f"CTV-{year}-"
-
-        # Find max code for this year
-        # Note: FOR UPDATE cannot be used with aggregate functions in PostgreSQL
-        result = await self.db.execute(
-            select(func.max(models.Collaborator.code))
-            .where(models.Collaborator.code.like(f"{prefix}%"))
-        )
-        max_code = result.scalar_one_or_none()
-
-        if max_code:
-            # Extract the numeric part
-            try:
-                seq = int(max_code.replace(prefix, ""))
-            except ValueError:
-                seq = 0
-            next_seq = seq + 1
-        else:
-            next_seq = 1
-
+        result = await self.db.execute(text("SELECT nextval('collaborator_code_seq')"))
+        next_seq = result.scalar_one()
         return f"{prefix}{next_seq:04d}"

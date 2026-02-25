@@ -2002,6 +2002,9 @@ async def get_collaborator_for_user(
     if current_user.role == UserRole.MANAGER:
         if collab.unit_id == current_user.unit_id:
             return collab
+    if current_user.role == UserRole.OFFICER:
+        if collab.managed_by_officer_id == current_user.id:
+            return collab
     raise ResourceNotFoundError("Collaborator not found")
 
 
@@ -2023,3 +2026,48 @@ async def get_lead_claim_for_review(
         if claim.collaborator and claim.collaborator.unit_id == current_user.unit_id:
             return claim
     raise ResourceNotFoundError("Claim not found")
+
+
+# =============================================================================
+# COMMISSION SYSTEM DEPENDENCIES (Phase 2)
+# =============================================================================
+
+
+async def get_commission_policy_for_admin(
+    policy_id: int = Path(...),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> "models.CommissionPolicy":
+    """Admin-only access to commission policies."""
+    if current_user.role != UserRole.ADMIN:
+        raise ResourceNotFoundError("Policy not found")
+
+    from ..repositories.commission_repository import CommissionPolicyRepository
+    repo = CommissionPolicyRepository(db)
+    policy = await repo.get_by_id(policy_id)
+    if not policy:
+        raise ResourceNotFoundError("Policy not found")
+    return policy
+
+
+async def get_commission_record_for_user(
+    record_id: int = Path(...),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> "models.CommissionRecord":
+    """
+    IDOR protection for commission records:
+    - Admin: all records
+    - Manager: records in their unit
+    """
+    from ..repositories.commission_repository import CommissionRecordRepository
+    repo = CommissionRecordRepository(db)
+    record = await repo.get_by_id(record_id)
+    if not record:
+        raise ResourceNotFoundError("Commission record not found")
+    if current_user.role == UserRole.ADMIN:
+        return record
+    if current_user.role == UserRole.MANAGER:
+        if record.collaborator and record.collaborator.unit_id == current_user.unit_id:
+            return record
+    raise ResourceNotFoundError("Commission record not found")

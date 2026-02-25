@@ -255,6 +255,18 @@ export const navigationConfig: NavigationConfig = {
           icon: Handshake,
           roles: ["admin", "manager"],
         },
+        {
+          label: "Hoa hồng",
+          href: "/admin/commissions",
+          icon: DollarSign,
+          roles: ["admin", "manager"],
+        },
+        {
+          label: "Chính sách HH",
+          href: "/admin/commission-policies",
+          icon: Percent,
+          roles: ["admin"],
+        },
       ],
     },
 

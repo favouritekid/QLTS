@@ -22,6 +22,9 @@ from .config import (
 # Collaborator (CTV) models
 from .collaborator import Collaborator, LeadClaim
 
+# Commission models
+from .commission import CommissionPolicy, CommissionRecord
+
 # Lead management models
 from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
@@ -129,6 +132,9 @@ __all__ = [
     # Collaborator (CTV)
     "Collaborator",
     "LeadClaim",
+    # Commission
+    "CommissionPolicy",
+    "CommissionRecord",
     # Lead
     "Application",
     "AssignmentLog",

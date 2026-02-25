@@ -1281,40 +1281,39 @@ class LeadRepository(BaseRepository[models.Lead]):
     ) -> dict:
         """
         Count leads by validity_status for a collaborator (for CTV stats).
+        Uses a single GROUP BY query instead of 4 separate COUNT queries.
 
         Returns:
             Dict with total, valid, qualified, converted counts
         """
-        base_filters = [
-            models.Lead.referrer_id == referrer_id,
-            models.Lead.deleted_at.is_(None),
-        ]
-
-        # Total
-        total_q = select(func.count(models.Lead.id)).where(*base_filters)
-        total_result = await self.db.execute(total_q)
-        total = total_result.scalar_one_or_none() or 0
-
-        # Valid
-        valid_q = select(func.count(models.Lead.id)).where(
-            *base_filters, models.Lead.validity_status == "valid"
+        # Single optimized query with GROUP BY
+        result = await self.db.execute(
+            select(
+                models.Lead.validity_status,
+                models.Lead.status,
+                func.count(models.Lead.id).label("cnt"),
+            )
+            .where(
+                models.Lead.referrer_id == referrer_id,
+                models.Lead.deleted_at.is_(None),
+            )
+            .group_by(models.Lead.validity_status, models.Lead.status)
         )
-        valid_result = await self.db.execute(valid_q)
-        valid = valid_result.scalar_one_or_none() or 0
+        rows = result.all()
 
-        # Qualified
-        qualified_q = select(func.count(models.Lead.id)).where(
-            *base_filters, models.Lead.validity_status == "qualified"
-        )
-        qualified_result = await self.db.execute(qualified_q)
-        qualified = qualified_result.scalar_one_or_none() or 0
+        total = 0
+        valid = 0
+        qualified = 0
+        converted = 0
 
-        # Converted
-        converted_q = select(func.count(models.Lead.id)).where(
-            *base_filters, models.Lead.status == "converted"
-        )
-        converted_result = await self.db.execute(converted_q)
-        converted = converted_result.scalar_one_or_none() or 0
+        for row in rows:
+            total += row.cnt
+            if row.validity_status == "valid":
+                valid += row.cnt
+            elif row.validity_status == "qualified":
+                qualified += row.cnt
+            if row.status == "converted":
+                converted += row.cnt
 
         return {
             "total_leads": total,

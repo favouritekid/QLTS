@@ -107,8 +107,12 @@ export function SubmitLeadDialog({ open, onOpenChange }: SubmitLeadDialogProps) 
 
   // Handle form submit
   async function onSubmit(data: LeadClaimFormData) {
-    await submitLead.mutateAsync({ lead_data: data })
-    onOpenChange(false)
+    try {
+      await submitLead.mutateAsync({ lead_data: data })
+      onOpenChange(false)
+    } catch {
+      // Error is handled by mutation hook (toast.error)
+    }
   }
 
   return (

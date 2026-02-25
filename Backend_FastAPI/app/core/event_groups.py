@@ -60,6 +60,9 @@ class NotificationEventGroup(str, Enum):
     SECURITY = "security"
     """Security events: suspicious logins, password changes, device changes"""
 
+    CTV = "ctv"
+    """CTV (Collaborator) events: claims, commissions, attribution"""
+
 
 # Mapping from SystemEvents to NotificationEventGroup
 # This determines which preference group controls each event
@@ -121,6 +124,18 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
 
     # Security events
     SystemEvents.SUSPICIOUS_LOGIN: NotificationEventGroup.SECURITY,
+
+    # CTV events
+    SystemEvents.CTV_CLAIM_SUBMITTED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_CLAIM_APPROVED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_CLAIM_REJECTED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_APPROVED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_SUSPENDED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_LEAD_CONVERTED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_ATTRIBUTION_EXPIRING: NotificationEventGroup.CTV,
+    SystemEvents.CTV_ATTRIBUTION_EXPIRED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_COMMISSION_CREATED: NotificationEventGroup.CTV,
+    SystemEvents.CTV_WEEKLY_SUMMARY: NotificationEventGroup.CTV,
 }
 
 
@@ -223,6 +238,12 @@ EVENT_GROUP_LABELS: Dict[NotificationEventGroup, Dict[str, str]] = {
         "description_en": "Notifications about suspicious logins and security events",
         "description_vi": "Thông báo về đăng nhập đáng ngờ và sự kiện bảo mật"
     },
+    NotificationEventGroup.CTV: {
+        "en": "Collaborator (CTV)",
+        "vi": "Cộng tác viên (CTV)",
+        "description_en": "Notifications about CTV claims, commissions, and attribution",
+        "description_vi": "Thông báo về claim, hoa hồng, và quyền giới thiệu CTV"
+    },
 }
 
 
@@ -288,6 +309,11 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.SECURITY: {
+        NotificationChannel.BROWSER: True,
+        NotificationChannel.EMAIL: True,
+        NotificationChannel.SMS: False,
+    },
+    NotificationEventGroup.CTV: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
         NotificationChannel.SMS: False,

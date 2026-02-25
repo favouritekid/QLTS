@@ -13,6 +13,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     JSON,
     Column,
     DateTime,
@@ -76,6 +77,22 @@ class Collaborator(Base):
         nullable=True,
         index=True,
         comment="NULL=independent CTV (auto-assign), officer_id=leads assigned directly to officer",
+    )
+
+    # Abuse tracking (Phase 2: Attribution expiry)
+    expired_attribution_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Count of expired attributions for abuse detection",
+    )
+    is_flagged = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="Flagged for review after 5+ expired attributions",
     )
 
     # Timestamps & Soft delete

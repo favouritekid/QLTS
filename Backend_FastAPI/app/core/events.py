@@ -655,6 +655,168 @@ class SystemEvents(str, Enum):
     """
 
     # =========================================================================
+    # CTV (COLLABORATOR) EVENTS
+    # =========================================================================
+
+    CTV_CLAIM_SUBMITTED = "ctv_claim_submitted"
+    """
+    Triggered when a CTV submits a new lead claim.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "claim_id": int,
+            "lead_id": int,
+            "unit_id": int,
+            "collaborator_name": str,
+            "lead_name": str,
+            "actor_id": int
+        }
+
+    Recipients: Unit managers (for review)
+    """
+
+    CTV_CLAIM_APPROVED = "ctv_claim_approved"
+    """
+    Triggered when a lead claim is approved.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "claim_id": int,
+            "lead_id": int,
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_CLAIM_REJECTED = "ctv_claim_rejected"
+    """
+    Triggered when a lead claim is rejected.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "claim_id": int,
+            "lead_id": int,
+            "rejection_reason": Optional[str],
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_APPROVED = "ctv_approved"
+    """
+    Triggered when a collaborator account is approved.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_SUSPENDED = "ctv_suspended"
+    """
+    Triggered when a collaborator account is suspended.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_LEAD_CONVERTED = "ctv_lead_converted"
+    """
+    Triggered when a CTV-referred lead progresses to a new status.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "lead_id": int,
+            "new_status": str,
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_ATTRIBUTION_EXPIRING = "ctv_attribution_expiring"
+    """
+    Triggered when a CTV's lead attribution is about to expire (7 days warning).
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "lead_id": int,
+            "days_remaining": int,
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_ATTRIBUTION_EXPIRED = "ctv_attribution_expired"
+    """
+    Triggered when a CTV's lead attribution has expired.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "lead_id": int,
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_COMMISSION_CREATED = "ctv_commission_created"
+    """
+    Triggered when a commission record is created for a CTV.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "commission_id": int,
+            "amount": str,
+            "lead_id": int,
+            "user_id": int,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    CTV_WEEKLY_SUMMARY = "ctv_weekly_summary"
+    """
+    Triggered weekly with summary stats for each CTV.
+
+    Payload Schema:
+        {
+            "collaborator_id": int,
+            "user_id": int,
+            "stats": dict,
+            "actor_id": int
+        }
+
+    Recipients: The collaborator (via user_id)
+    """
+
+    # =========================================================================
     # SECURITY EVENTS
     # =========================================================================
 

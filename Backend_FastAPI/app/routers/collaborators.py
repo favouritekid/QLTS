@@ -8,7 +8,7 @@ Two separate routers:
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
@@ -25,11 +25,14 @@ from app.repositories.lead_claim_repository import LeadClaimRepository
 from app.repositories.lead_repository import LeadRepository
 from app.schemas.collaborator import (
     CollaboratorCreate,
+    CollaboratorListItem,
     CollaboratorResponse,
     CollaboratorShallow,
     CollaboratorsPage,
     CollaboratorStats,
     CollaboratorUpdate,
+    CTVRegistrationStatus,
+    CTVSelfRegistration,
     LeadClaimCreate,
     LeadClaimResponse,
     LeadClaimReview,
@@ -38,7 +41,11 @@ from app.schemas.collaborator import (
     LeadForCTVPage,
     PhoneCheckResponse,
 )
+from app.core.events import SystemEvents
+from app.core.rate_limits import limiter, RateLimits
 from app.services import collaborator_service
+from app.services.notification_dispatcher import safe_dispatch
+from app.utils.exceptions import ResourceNotFoundError
 
 # ============================================================================
 # ADMIN/MANAGER ROUTER
@@ -118,6 +125,10 @@ async def list_claims(
     current_user: models.User = Depends(check_permission),
 ):
     """List all lead claims."""
+    # Defensive: Officers should not access claims list (Casbin already blocks, but defense-in-depth)
+    if current_user.role == UserRole.OFFICER:
+        raise ResourceNotFoundError("Not found")
+
     repo = LeadClaimRepository(db)
 
     # Manager: filter by own unit
@@ -164,6 +175,36 @@ async def review_claim(
     await db.commit()
     if callback:
         await callback()
+
+    # Dispatch notification to CTV
+    ctv_user_id = claim.collaborator.user_id if claim.collaborator else None
+    if review_data.status == "approved":
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.CTV_CLAIM_APPROVED,
+            payload={
+                "collaborator_id": claim.collaborator_id,
+                "claim_id": claim.id,
+                "lead_id": claim.lead_id,
+                "user_id": ctv_user_id,
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"ctv_claim_approved:{claim.id}",
+        )
+    else:
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.CTV_CLAIM_REJECTED,
+            payload={
+                "collaborator_id": claim.collaborator_id,
+                "claim_id": claim.id,
+                "lead_id": claim.lead_id,
+                "rejection_reason": review_data.rejection_reason or "Không rõ lý do",
+                "user_id": ctv_user_id,
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"ctv_claim_rejected:{claim.id}",
+        )
 
     # Reload for response
     claim_repo = LeadClaimRepository(db)
@@ -212,9 +253,38 @@ async def approve_collaborator_endpoint(
     )
     await db.commit()
 
+    if collaborator.user_id:
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.CTV_APPROVED,
+            payload={
+                "collaborator_id": collaborator.id,
+                "user_id": collaborator.user_id,
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"ctv_approved:{collaborator.id}",
+        )
+
     repo = CollaboratorRepository(db)
     approved = await repo.get_by_id(approved.id)
     return approved
+
+
+@admin_router.post("/{collaborator_id}/reactivate", response_model=CollaboratorResponse)
+async def reactivate_collaborator_endpoint(
+    collaborator: models.Collaborator = Depends(get_collaborator_for_user),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+):
+    """Reactivate a suspended collaborator."""
+    reactivated, _ = await collaborator_service.reactivate_collaborator(
+        db, collaborator, current_user
+    )
+    await db.commit()
+
+    repo = CollaboratorRepository(db)
+    reactivated = await repo.get_by_id(reactivated.id)
+    return reactivated
 
 
 @admin_router.post("/{collaborator_id}/suspend", response_model=CollaboratorResponse)
@@ -226,6 +296,18 @@ async def suspend_collaborator_endpoint(
     """Suspend an active collaborator."""
     suspended, _ = await collaborator_service.suspend_collaborator(db, collaborator)
     await db.commit()
+
+    if collaborator.user_id:
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.CTV_SUSPENDED,
+            payload={
+                "collaborator_id": collaborator.id,
+                "user_id": collaborator.user_id,
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"ctv_suspended:{collaborator.id}",
+        )
 
     repo = CollaboratorRepository(db)
     suspended = await repo.get_by_id(suspended.id)
@@ -278,7 +360,9 @@ async def list_own_leads(
 
 
 @ctv_router.post("/leads/submit", response_model=LeadClaimResponse, status_code=201)
+@limiter.limit("10/minute")
 async def submit_lead(
+    request: Request,
     claim_data: LeadClaimCreate,
     db: AsyncSession = Depends(database.get_db),
     collaborator: models.Collaborator = Depends(get_own_collaborator),
@@ -291,6 +375,22 @@ async def submit_lead(
     if callback:
         await callback()
 
+    # Dispatch notification
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.CTV_CLAIM_SUBMITTED,
+        payload={
+            "collaborator_id": collaborator.id,
+            "claim_id": claim.id,
+            "lead_id": lead.id,
+            "unit_id": collaborator.unit_id,
+            "collaborator_name": collaborator.full_name,
+            "lead_name": lead.full_name or f"Lead #{lead.id}",
+            "actor_id": collaborator.user_id or 0,
+        },
+        dedupe_key=f"ctv_claim_submitted:{claim.id}",
+    )
+
     # Reload for response
     claim_repo = LeadClaimRepository(db)
     reloaded = await claim_repo.get_by_id(claim.id)
@@ -298,7 +398,9 @@ async def submit_lead(
 
 
 @ctv_router.get("/leads/check-phone", response_model=PhoneCheckResponse)
+@limiter.limit("30/minute")
 async def check_phone(
+    request: Request,
     phone: str = Query(..., min_length=1),
     db: AsyncSession = Depends(database.get_db),
     collaborator: models.Collaborator = Depends(get_own_collaborator),
@@ -379,3 +481,47 @@ def _build_claim_response(claim: models.LeadClaim) -> LeadClaimResponse:
         lead=lead_for_ctv,
         collaborator=collaborator_shallow,
     )
+
+
+# ============================================================================
+# PUBLIC ROUTER — CTV Self-Registration (no auth required)
+# ============================================================================
+
+public_router = APIRouter(prefix="/ctv-register", tags=["CTV Registration (Public)"])
+
+
+@public_router.post("", response_model=CollaboratorResponse, status_code=201)
+@limiter.limit("5/hour")
+async def register_ctv(
+    request: Request,
+    data: CTVSelfRegistration,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Public CTV self-registration.
+    Rate limited: 5 per hour per IP.
+    Creates a pending collaborator awaiting admin approval.
+    """
+    collab, _ = await collaborator_service.register_ctv(db, data)
+    await db.commit()
+
+    # Reload with relationships
+    repo = CollaboratorRepository(db)
+    collab = await repo.get_by_id(collab.id)
+    return collab
+
+
+@public_router.get("/status", response_model=CTVRegistrationStatus)
+@limiter.limit("10/minute")
+async def check_registration_status(
+    request: Request,
+    phone: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Check CTV registration status by phone number.
+    Rate limited: 10 per minute per IP.
+    Only returns status + message (no sensitive data).
+    """
+    result = await collaborator_service.get_ctv_registration_status(db, phone)
+    return result

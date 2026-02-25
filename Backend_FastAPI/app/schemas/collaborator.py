@@ -87,7 +87,6 @@ class CollaboratorUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=255, strip_whitespace=True)
     phone: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
     email: Optional[EmailStr] = None
-    status: Optional[str] = None
     managed_by_officer_id: Optional[int] = None
     id_card_number: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
     bank_account: Optional[str] = Field(None, max_length=50, strip_whitespace=True)
@@ -148,9 +147,29 @@ class CollaboratorResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CollaboratorListItem(BaseModel):
+    """Collaborator summary for list view — excludes sensitive financial data."""
+    id: int
+    code: str
+    full_name: str
+    phone: str
+    email: Optional[str] = None
+    status: str
+    unit_id: int
+    managed_by_officer_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    approved_at: Optional[datetime] = None
+    # Nested relationships
+    unit: Optional[OrganizationUnitShallow] = None
+    managed_by_officer: Optional[UserShallow] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CollaboratorsPage(BaseModel):
     total_count: int
-    collaborators: list[CollaboratorResponse]
+    collaborators: list[CollaboratorListItem]
 
 
 # ============================================================================
@@ -271,3 +290,50 @@ class CollaboratorStats(BaseModel):
 class PhoneCheckResponse(BaseModel):
     available: bool
     message: Optional[str] = None
+
+
+# ============================================================================
+# CTV SELF-REGISTRATION (Phase 2)
+# ============================================================================
+
+
+class CTVSelfRegistration(BaseModel):
+    """Public CTV self-registration form."""
+    full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
+    phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
+    email: Optional[EmailStr] = None
+    id_card_number: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
+    address: Optional[str] = Field(None, max_length=500, strip_whitespace=True)
+    notes: Optional[str] = Field(None, max_length=1000)
+    unit_id: int
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        if v == "" or (isinstance(v, str) and v.strip() == ""):
+            return None
+        return v
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_phone(cls, v):
+        from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
+        if v is None:
+            return v
+        if isinstance(v, str) and v.strip() == "":
+            return v
+        normalized = normalize_vietnam_phone(v)
+        if normalized is None:
+            return v
+        if not validate_vietnam_phone(normalized, normalize=False):
+            raise ValueError(
+                "Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                "(VD: 0901234567, +84901234567)"
+            )
+        return normalized
+
+
+class CTVRegistrationStatus(BaseModel):
+    """Response for CTV registration status check."""
+    status: str
+    message: str
