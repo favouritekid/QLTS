@@ -24,6 +24,7 @@ from app.repositories.collaborator_repository import CollaboratorRepository
 from app.repositories.lead_claim_repository import LeadClaimRepository
 from app.repositories.lead_repository import LeadRepository
 from app.schemas.collaborator import (
+    CollaboratorApproveResponse,
     CollaboratorCreate,
     CollaboratorListItem,
     CollaboratorResponse,
@@ -242,33 +243,46 @@ async def update_collaborator_endpoint(
     return updated
 
 
-@admin_router.post("/{collaborator_id}/approve", response_model=CollaboratorResponse)
+@admin_router.post("/{collaborator_id}/approve", response_model=CollaboratorApproveResponse)
 async def approve_collaborator_endpoint(
+    request: Request,
     collaborator: models.Collaborator = Depends(get_collaborator_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin_or_manager),
 ):
-    """Approve a pending collaborator."""
-    approved, _ = await collaborator_service.approve_collaborator(
-        db, collaborator, current_user
+    """Approve a pending collaborator. Auto-creates User account if needed."""
+    enforcer = getattr(request.app.state, "enforcer", None)
+    approved, temp_password = await collaborator_service.approve_collaborator(
+        db, collaborator, current_user, enforcer=enforcer
     )
     await db.commit()
 
-    if collaborator.user_id:
+    # Dispatch notification (user_id is always set after approve now)
+    if approved.user_id:
         await safe_dispatch(
             db=db,
             event=SystemEvents.CTV_APPROVED,
             payload={
-                "collaborator_id": collaborator.id,
-                "user_id": collaborator.user_id,
+                "collaborator_id": approved.id,
+                "user_id": approved.user_id,
                 "actor_id": current_user.id,
             },
-            dedupe_key=f"ctv_approved:{collaborator.id}",
+            dedupe_key=f"ctv_approved:{approved.id}",
         )
 
+    # Reload with relationships
     repo = CollaboratorRepository(db)
     approved = await repo.get_by_id(approved.id)
-    return approved
+
+    account_created = temp_password is not None
+    return CollaboratorApproveResponse(
+        collaborator=approved,
+        account_created=account_created,
+        username=approved.phone if account_created else None,
+        temp_password=temp_password,
+        message="Đã duyệt CTV. Tài khoản đăng nhập đã được tạo tự động." if account_created
+        else "Đã duyệt CTV.",
+    )
 
 
 @admin_router.post("/{collaborator_id}/reactivate", response_model=CollaboratorResponse)

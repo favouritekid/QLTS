@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import * as collaboratorsApi from "@/lib/api/collaborators"
 import type {
   Collaborator,
+  CollaboratorApproveResponse,
   CollaboratorCreate,
   CollaboratorUpdate,
   CollaboratorsPage,
@@ -105,10 +106,10 @@ export function useUpdateCollaborator() {
 
 export function useApproveCollaborator() {
   const queryClient = useQueryClient()
-  return useMutation<Collaborator, AxiosError<{ detail: string }>, number>({
+  return useMutation<CollaboratorApproveResponse, AxiosError<{ detail: string }>, number>({
     mutationFn: collaboratorsApi.approveCollaborator,
-    onSuccess: () => {
-      toast.success("Đã duyệt CTV")
+    onSuccess: (data) => {
+      toast.success(data.message || "Đã duyệt CTV")
       queryClient.invalidateQueries({ queryKey: collaboratorKeys.lists() })
     },
     onError: (error) => {

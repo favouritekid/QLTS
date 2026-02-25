@@ -147,6 +147,15 @@ class CollaboratorResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CollaboratorApproveResponse(BaseModel):
+    """Response for approve endpoint — includes temp credentials if account was created."""
+    collaborator: CollaboratorResponse
+    account_created: bool = False
+    username: Optional[str] = None
+    temp_password: Optional[str] = None  # Shown to admin once, not stored
+    message: str
+
+
 class CollaboratorListItem(BaseModel):
     """Collaborator summary for list view — excludes sensitive financial data."""
     id: int

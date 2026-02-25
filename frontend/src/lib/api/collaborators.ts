@@ -1,6 +1,7 @@
 import { api } from "./client"
 import type {
   Collaborator,
+  CollaboratorApproveResponse,
   CollaboratorCreate,
   CollaboratorUpdate,
   CollaboratorsPage,
@@ -46,8 +47,8 @@ export async function updateCollaborator(id: number, data: CollaboratorUpdate): 
   return response.data
 }
 
-export async function approveCollaborator(id: number): Promise<Collaborator> {
-  const response = await api.post<Collaborator>(`/api/collaborators/${id}/approve`)
+export async function approveCollaborator(id: number): Promise<CollaboratorApproveResponse> {
+  const response = await api.post<CollaboratorApproveResponse>(`/api/collaborators/${id}/approve`)
   return response.data
 }
 

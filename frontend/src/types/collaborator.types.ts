@@ -110,6 +110,14 @@ export interface LeadClaimsPage {
   claims: LeadClaim[]
 }
 
+export interface CollaboratorApproveResponse {
+  collaborator: Collaborator
+  account_created: boolean
+  username: string | null
+  temp_password: string | null
+  message: string
+}
+
 export interface CollaboratorStats {
   total_leads: number
   valid_leads: number

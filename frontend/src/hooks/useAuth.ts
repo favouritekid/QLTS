@@ -117,7 +117,11 @@ export function useAuth(options?: UseAuthOptions) {
       }
 
       const redirect = new URLSearchParams(window.location.search).get("redirect");
-      const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
+      const defaultPath = user.role === "officer"
+        ? "/dashboard/officer"
+        : user.role === "collaborator"
+          ? "/ctv"
+          : "/dashboard";
       router.push(isValidRedirect(redirect) ? redirect : defaultPath);
     },
     // No toast here - LoginForm shows inline error via loginError
@@ -154,7 +158,11 @@ export function useAuth(options?: UseAuthOptions) {
       }
 
       const redirect = new URLSearchParams(window.location.search).get("redirect");
-      const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
+      const defaultPath = user.role === "officer"
+        ? "/dashboard/officer"
+        : user.role === "collaborator"
+          ? "/ctv"
+          : "/dashboard";
       router.push(isValidRedirect(redirect) ? redirect : defaultPath);
     },
     // No toast here - LoginForm shows inline error via verifyMfaError

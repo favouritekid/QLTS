@@ -6,9 +6,12 @@ Pure Python service — NO FastAPI imports.
 Returns (result, post_commit_callback) tuples.
 Raises domain exceptions, never HTTPException.
 """
+import secrets
+import string
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
+import casbin
 import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +30,7 @@ from app.schemas.collaborator import (
     LeadClaimReview,
     LeadValidityUpdate,
 )
+from app.security import get_password_hash
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DuplicateResourceError,
@@ -41,6 +45,20 @@ CLAIMABLE_STATUSES = {"new"}
 
 # Prep for Phase 2 zombie lock window
 CONFIG_ATTRIBUTION_EXPIRE_DAYS = 90
+
+
+def _generate_temp_password(length: int = 14) -> str:
+    """Generate temporary password meeting OWASP requirements (12+ chars, mixed)."""
+    password = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        secrets.choice("@$!%*?&"),
+    ]
+    alphabet = string.ascii_letters + string.digits + "@$!%*?&"
+    password += [secrets.choice(alphabet) for _ in range(length - 4)]
+    secrets.SystemRandom().shuffle(password)
+    return "".join(password)
 
 
 def mask_phone(phone: str) -> str:
@@ -223,8 +241,17 @@ async def approve_collaborator(
     db: AsyncSession,
     collaborator: models.Collaborator,
     approved_by: models.User,
-) -> Tuple[models.Collaborator, None]:
-    """Approve a pending collaborator."""
+    enforcer: Optional[casbin.AsyncEnforcer] = None,
+) -> Tuple[models.Collaborator, Optional[str]]:
+    """
+    Approve a pending collaborator.
+
+    If collaborator has no user_id (self-registered), auto-creates a User account
+    with a temporary password that the admin can share with the CTV.
+
+    Returns:
+        (collaborator, temp_password) — temp_password is None if user already exists.
+    """
     if collaborator.status == "active":
         raise BusinessRuleViolation("CTV đã được duyệt")
     if collaborator.status == "suspended":
@@ -236,14 +263,68 @@ async def approve_collaborator(
     collaborator.approved_at = datetime.now(timezone.utc)
     collaborator.approved_by_id = approved_by.id
     collaborator.updated_at = datetime.now(timezone.utc)
+
+    temp_password = None
+
+    # Auto-create User account if CTV has no linked user (self-registered)
+    if not collaborator.user_id:
+        from app.services.user_service import get_user_by_username, _create_or_update_user_assignment
+
+        # Check username (phone) uniqueness before creating
+        existing_user = await get_user_by_username(db, collaborator.phone)
+        if existing_user:
+            raise DuplicateResourceError(
+                f"Số điện thoại {collaborator.phone} đã được sử dụng làm tên đăng nhập của tài khoản khác"
+            )
+
+        temp_password = _generate_temp_password()
+        hashed_password = get_password_hash(temp_password)
+
+        # Email fallback for CTV without email
+        email = collaborator.email or f"ctv_{collaborator.code}@placeholder.local"
+
+        new_user = models.User(
+            username=collaborator.phone,
+            email=email,
+            full_name=collaborator.full_name,
+            password_hash=hashed_password,
+            role=UserRole.COLLABORATOR,
+            status="active",
+            unit_id=collaborator.unit_id,
+            password_reset_required=True,
+        )
+        db.add(new_user)
+        await db.flush()
+
+        # Link user to collaborator
+        collaborator.user_id = new_user.id
+
+        # Create UserUnitAssignment + sync Casbin roles
+        await _create_or_update_user_assignment(
+            db=db,
+            user=new_user,
+            new_role=UserRole.COLLABORATOR,
+            new_unit_id=collaborator.unit_id,
+            assigned_by_user_id=approved_by.id,
+            enforcer=enforcer,
+        )
+
+        log.info(
+            "Auto-created User account for CTV",
+            collaborator_id=collaborator.id,
+            user_id=new_user.id,
+            username=collaborator.phone,
+        )
+
     await db.flush()
 
     log.info(
         "Collaborator approved",
         collaborator_id=collaborator.id,
         approved_by=approved_by.id,
+        account_created=temp_password is not None,
     )
-    return collaborator, None
+    return collaborator, temp_password
 
 
 async def suspend_collaborator(

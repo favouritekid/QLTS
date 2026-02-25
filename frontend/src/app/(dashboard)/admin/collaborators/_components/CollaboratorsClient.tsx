@@ -163,6 +163,11 @@ export function CollaboratorsClient({ initialData }: CollaboratorsClientProps) {
   // ---------------------------------------------------------------------------
   const [approveTarget, setApproveTarget] = useState<Collaborator | null>(null);
   const [suspendTarget, setSuspendTarget] = useState<Collaborator | null>(null);
+  const [approveResult, setApproveResult] = useState<{
+    username: string;
+    temp_password: string;
+    full_name: string;
+  } | null>(null);
 
   // ---------------------------------------------------------------------------
   // F-2: Debounce search input (300ms)
@@ -259,7 +264,14 @@ export function CollaboratorsClient({ initialData }: CollaboratorsClientProps) {
 
   const handleApprove = async () => {
     if (approveTarget) {
-      await approveMutation.mutateAsync(approveTarget.id);
+      const result = await approveMutation.mutateAsync(approveTarget.id);
+      if (result.account_created && result.temp_password) {
+        setApproveResult({
+          username: result.username!,
+          temp_password: result.temp_password,
+          full_name: approveTarget.full_name,
+        });
+      }
       setApproveTarget(null);
     }
   };
@@ -955,6 +967,35 @@ export function CollaboratorsClient({ initialData }: CollaboratorsClientProps) {
             >
               {approveMutation.isPending ? "Đang duyệt…" : "Duyệt"}
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* CTV Credentials Dialog — shown once after account auto-creation */}
+      <AlertDialog open={!!approveResult} onOpenChange={() => setApproveResult(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Thông tin đăng nhập CTV</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tài khoản đã tạo cho <strong>{approveResult?.full_name}</strong>.
+              Mật khẩu tạm chỉ hiện một lần.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-3 p-4 bg-muted rounded-lg font-mono text-sm">
+            <div>
+              <span className="text-muted-foreground">Username: </span>
+              <strong>{approveResult?.username}</strong>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Password: </span>
+              <strong>{approveResult?.temp_password}</strong>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            CTV sẽ bắt buộc đổi mật khẩu khi đăng nhập lần đầu.
+          </p>
+          <AlertDialogFooter>
+            <AlertDialogAction>Đã ghi nhận</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
