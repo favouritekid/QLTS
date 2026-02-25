@@ -590,6 +590,31 @@ ALTER TABLE lead ADD COLUMN created_via VARCHAR(20) DEFAULT 'manual';
 | NEW-F3 | Low | Claims tab empty state thiếu CTA button | `CTVDashboardClient.tsx:225-227` | Leads tab có "Hãy gửi lead mới!" nhưng claims tab chỉ nói "Chưa có yêu cầu claim nào" — không có action button |
 | NEW-F4 | Medium | Frontend `CollaboratorUpdate` type include `status` | `collaborator.types.ts:55` | Khi backend fix B-2/P-1 (xóa `status` khỏi schema), frontend type cũng cần sync |
 | NEW-F5 | Medium | `SubmitLeadDialog.onSubmit` không try-catch `mutateAsync` | `SubmitLeadDialog.tsx:109-111` | Nếu `mutateAsync` throw (network error), unhandled rejection xảy ra. Dialog state có thể stale |
+| **NEW-B6** | **Critical** | **`enroll_student` return type phá vỡ architecture pattern — Blocker cho Commission Plan Task 3.5** | `admission_service.py:2761`, `admissions.py:787-812` | Xem phân tích chi tiết bên dưới |
+
+#### [NEW-B6] `enroll_student` return Dict thay vì Tuple — Blocker cho Commission Trigger
+**Severity: CRITICAL** | `admission_service.py:2761` & `admissions.py:787-812`
+
+`enroll_student()` là **hàm state-changing duy nhất** trong `admission_service.py` trả `Dict[str, Any]` trực tiếp thay vì `Tuple[result, callback]`:
+
+| Function | Return Type | Theo pattern? |
+|----------|------------|---------------|
+| `approve_profile` | `tuple[result, callback]` | ✅ |
+| `reject_profile` | `tuple[result, callback]` | ✅ |
+| `confirm_profile` | `tuple[result, callback]` | ✅ |
+| `override_status` | `tuple[result, callback]` | ✅ |
+| **`enroll_student`** | **`Dict[str, Any]`** | ❌ |
+
+Router (`admissions.py:787-812`) tiêu thụ result bằng dict access:
+```python
+result = await admission_service.enroll_student(db, profile_id, current_user)
+await db.commit()
+await safe_dispatch(..., payload={"student_id": result["student_id"], ...})
+```
+
+**Impact**: Commission Plan Task 3.5 đề xuất đổi return thành `return result, post_commit_callback`. Nếu apply mà không sửa router → `result["student_id"]` trở thành `tuple["student_id"]` → **TypeError crash** trên production.
+
+**Giải pháp**: Refactor `enroll_student()` sang pattern `(result, callback)` trước, cập nhật router unpack tuple, rồi mới thêm commission trigger vào callback. Hoặc dùng `safe_dispatch` (đã có trong router) để trigger commission task mà không cần đổi return type.
 
 ### Điều chỉnh severity từ xác minh
 
@@ -602,11 +627,12 @@ ALTER TABLE lead ADD COLUMN created_via VARCHAR(20) DEFAULT 'manual';
 
 ## 11. TỔNG HỢP VẤN ĐỀ THEO MỨC ĐỘ
 
-### CRITICAL (1 vấn đề)
+### CRITICAL (2 vấn đề)
 
 | ID | Vấn đề | Module | Trạng thái |
 |----|--------|--------|------------|
 | C-1 | Thiếu commission system (Phase 2 chưa triển khai) | Business | Có kế hoạch: `CTV_COMMISSION_PLAN.md` |
+| NEW-B6 | `enroll_student` return Dict thay vì Tuple — Blocker cho Commission Task 3.5 | Architecture | **Phải fix trước Phase 3** |
 
 > **S-1 đã hạ xuống LOW** (xác minh 2026-02-25): Officer không có Casbin access tới claims endpoint. Xem mục 5 để biết chi tiết.
 
@@ -687,6 +713,7 @@ ALTER TABLE lead ADD COLUMN created_via VARCHAR(20) DEFAULT 'manual';
 - [ ] **[NEW-B3] Thêm field whitelist** trong `update_collaborator` setattr loop
 - [ ] **[NEW-F4] Sync frontend `CollaboratorUpdate` type** — xóa `status` khi fix B-2
 - [ ] **[NEW-F5] Wrap `onSubmit` trong try-catch** — `SubmitLeadDialog.tsx`
+- [ ] **[NEW-B6] Refactor `enroll_student` return type** — đổi từ `Dict` sang `Tuple[result, callback]` + cập nhật router unpack *(BLOCKER cho Commission Phase 3)*
 
 ### Phase 3: Nice-to-Have (Post-Launch) — Backlog
 
@@ -730,7 +757,7 @@ ALTER TABLE lead ADD COLUMN created_via VARCHAR(20) DEFAULT 'manual';
 |-------|--------|
 | Phase 1 | B-2/P-1, S-1 *(phòng ngừa)*, S-3, B-1, S-2, D-1, B-3, NEW-B1, NEW-B3 |
 | Phase 2 | E-1/D-4, C-1 (partial), C-3, NEW-B4 |
-| Phase 3 | C-1 (complete), GAP-1 đến GAP-4, GAP-7 |
+| Phase 3 | C-1 (complete), **NEW-B6** *(blocker)*, GAP-1 đến GAP-4, GAP-7 |
 | Phase 4 | F-1, F-2, F-3/NEW-F1, F-6, NEW-F4, NEW-F5, B-4, GAP-8 |
 | Backlog | C-2, S-4, S-5, P-2, P-3, D-2, P-4, NEW-B2, GAP-5, GAP-6, GAP-9 |
 

@@ -1776,13 +1776,87 @@ COMMISSION_CTV_POLICIES = [
 
 ---
 
-### Task 3.5: Kết nối Enrollment Trigger
+### Task 3.5a: Refactor `enroll_student` return type (NEW-B6 — BLOCKER)
 
+> **Audit**: NEW-B6 (Critical — xác minh 2026-02-25) — `enroll_student()` là hàm state-changing duy nhất trong `admission_service.py` trả `Dict[str, Any]` trực tiếp thay vì `Tuple[result, callback]`. **PHẢI fix trước Task 3.5b**, nếu không router sẽ crash với `TypeError`.
+
+**Hiện trạng** (`admission_service.py:2761`):
+```python
+async def enroll_student(...) -> Dict[str, Any]:
+    ...
+    return {
+        "student_id": profile.student.id,
+        "student_code": profile.student.student_code,
+        "enrollment_date": profile.student.enrollment_date,
+    }
+```
+
+**Router hiện tại** (`admissions.py:787-812`):
+```python
+result = await admission_service.enroll_student(db, profile_id, current_user)
+await db.commit()
+await safe_dispatch(..., payload={"student_id": result["student_id"], ...})
+return result
+```
+
+**Có 2 giải pháp** (chọn 1):
+
+#### Option A: Refactor sang pattern `(result, callback)` — Khuyến nghị
+
+**Step 1 — Service** (`admission_service.py`):
+```python
+# THAY return type và return statement:
+async def enroll_student(...) -> Tuple[Dict[str, Any], Optional[callable]]:
+    ...
+    return result, None  # callback = None cho bây giờ, Task 3.5b sẽ thêm commission trigger
+```
+
+**Step 2 — Router** (`admissions.py`):
+```python
+# TÌM (khoảng dòng 787-812):
+result = await admission_service.enroll_student(db, profile_id, current_user)
+await db.commit()
+await safe_dispatch(...)
+return result
+
+# THAY BẰNG:
+result, callback = await admission_service.enroll_student(db, profile_id, current_user)
+await db.commit()
+if callback:
+    await callback()
+await safe_dispatch(...)
+return result
+```
+
+**Ưu điểm**: Consistent với `approve_profile`, `reject_profile`, `confirm_profile`, etc.
+
+#### Option B: Giữ nguyên return type, dùng `safe_dispatch` cho commission trigger
+
+Không refactor service. Thêm commission trigger trực tiếp trong router bằng `safe_dispatch` pattern hiện có:
+```python
+# Sau safe_dispatch notification hiện tại, thêm:
+if result.get("has_referrer"):
+    calculate_commission_on_enrollment.delay(lead_id=..., ...)
+```
+
+**Ưu điểm**: Không breaking change. **Nhược điểm**: Commission logic leak vào router layer.
+
+**Test**:
+- Regression: Toàn bộ enrollment tests phải pass sau refactor
+- `enroll_student()` return tuple, router unpack đúng
+- `safe_dispatch` vẫn nhận `result["student_id"]` đúng
+
+---
+
+### Task 3.5b: Kết nối Enrollment Trigger (Commission)
+
+> **Prerequisite**: Task 3.5a phải hoàn thành trước (nếu chọn Option A).
+>
 > **Mục tiêu**: Khi `enroll_student()` hoàn thành → trigger commission calculation cho leads có referrer
 
 **File**: `app/services/admission_service.py`, function `enroll_student()`
 
-**Hành động**: Thêm post-commit callback để trigger Celery task.
+**Hành động**: Thêm commission trigger vào post-commit callback (nếu đã refactor ở Task 3.5a Option A).
 
 ```python
 # TÌM cuối function enroll_student(), trước return statement.
@@ -1806,31 +1880,22 @@ if profile.lead and profile.lead.referrer_id:
     if tuition_fee and tuition_fee.final_amount:
         tuition_amount = tuition_fee.final_amount
         lead_id = profile.lead_id
-        profile_id = profile.id
+        profile_id_val = profile.id
         now_iso = datetime.now(timezone.utc).isoformat()
 
         def _trigger_commission():
             from app.tasks.commission_tasks import calculate_commission_on_enrollment
             calculate_commission_on_enrollment.delay(
                 lead_id=lead_id,
-                admission_profile_id=profile_id,
+                admission_profile_id=profile_id_val,
                 tuition_amount=str(tuition_amount),
                 triggered_at=now_iso,
             )
 
-        # Wrap with existing callback if any
-        original_callback = post_commit_callback
-        async def combined_callback():
-            if original_callback:
-                await original_callback()
-            _trigger_commission()
-        post_commit_callback = combined_callback
+        post_commit_callback = _trigger_commission
 
-# THAY return statement để bao gồm callback:
 return result, post_commit_callback
 ```
-
-**QUAN TRỌNG**: Đọc kỹ `enroll_student()` hiện tại trước khi sửa. Nếu nó đã return `(result, callback)`, thêm commission trigger vào callback chain. Nếu nó return trực tiếp result, cần refactor return.
 
 **Xem xét fallback**: Nếu Fee/tuition chưa tồn tại tại thời điểm enrollment (edge case), log warning và skip commission. Không raise error — enrollment phải hoàn thành bất kể commission logic.
 
@@ -1877,7 +1942,8 @@ class CollaboratorStats(BaseModel):
 - [ ] Task 3.2: Commission router (admin + CTV)
 - [ ] Task 3.3: Đăng ký router trong main.py
 - [ ] Task 3.4: Casbin policies
-- [ ] Task 3.5: Enrollment trigger (enroll_student → Celery task)
+- [ ] Task 3.5a: **Refactor `enroll_student` return type** (NEW-B6 — BLOCKER, phải làm trước 3.5b)
+- [ ] Task 3.5b: Enrollment trigger (enroll_student → commission Celery task)
 - [ ] Task 3.6: Commission stats trong CTV dashboard
 - [ ] API integration tests (CRUD policies, approve/reject/pay commission)
 - [ ] IDOR tests (CTV chỉ xem commission của mình, Admin xem tất cả)
@@ -2316,7 +2382,8 @@ async function onSubmit(data: LeadClaimFormData) {
 | `app/core/deps.py` | 1+3 | Thêm explicit Officer check (Task 1.9) + commission IDOR deps |
 | `app/main.py` | 3 | Đăng ký commission routers |
 | `app/casbin_config/policy_templates.py` | 3 | Thêm commission Casbin policies |
-| `app/services/admission_service.py` | 3 | Thêm commission trigger trong enroll_student |
+| `app/services/admission_service.py` | 3 | Refactor `enroll_student` return type (NEW-B6) + commission trigger |
+| `app/routers/admissions.py` | 3 | Unpack `enroll_student` tuple return (NEW-B6) |
 
 ### Files mới (Frontend)
 
