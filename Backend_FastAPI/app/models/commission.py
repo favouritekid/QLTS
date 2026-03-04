@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -45,7 +46,7 @@ class CommissionPolicy(Base):
 
     __tablename__ = "commission_policy"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
 
@@ -93,7 +94,7 @@ class CommissionPolicy(Base):
     # Validity period
     effective_from = Column(Date, nullable=False)
     effective_to = Column(Date, nullable=True, comment="NULL = no end date")
-    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
 
     # Audit
     created_by_id = Column(
@@ -105,12 +106,14 @@ class CommissionPolicy(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
     )
     updated_at = Column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
     )
 
     # Relationships
@@ -135,7 +138,7 @@ class CommissionRecord(Base):
 
     __tablename__ = "commission_record"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
 
     collaborator_id = Column(
         Integer,
@@ -169,6 +172,7 @@ class CommissionRecord(Base):
         String(20),
         nullable=False,
         default="pending",
+        server_default="pending",
         index=True,
     )
 
@@ -182,6 +186,7 @@ class CommissionRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
     )
 
     # Approval
@@ -208,6 +213,7 @@ class CommissionRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
     )
 
     # Relationships

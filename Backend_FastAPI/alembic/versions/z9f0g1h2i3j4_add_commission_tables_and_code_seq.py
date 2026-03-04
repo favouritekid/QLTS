@@ -1,7 +1,7 @@
 """add commission tables and collaborator code sequence
 
 Revision ID: z9f0g1h2i3j4
-Revises: z8e9f0g1h2i3
+Revises: cleanup20260216001
 Create Date: 2026-02-25
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'z9f0g1h2i3j4'
-down_revision: Union[str, None] = 'z8e9f0g1h2i3'
+down_revision: Union[str, None] = 'cleanup20260216001'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

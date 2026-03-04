@@ -209,6 +209,7 @@ class Lead(Base):
         String(20),
         nullable=False,
         default="raw",
+        server_default="raw",
         index=True,
         comment="Lead quality status: raw, duplicate, invalid, valid, qualified",
     )
@@ -216,6 +217,7 @@ class Lead(Base):
         String(20),
         nullable=False,
         default="manual",
+        server_default="manual",
         comment="How lead was created: manual, claim, import",
     )
 
