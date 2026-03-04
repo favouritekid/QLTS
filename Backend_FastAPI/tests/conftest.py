@@ -382,6 +382,13 @@ async def _init_schema_once():
         async with setup_engine.begin() as conn:
             await conn.run_sync(AppBase.metadata.create_all)
 
+            # Create sequences not tracked by SQLAlchemy metadata
+            # (created via raw SQL in Alembic migrations)
+            await conn.execute(text(
+                "CREATE SEQUENCE IF NOT EXISTS collaborator_code_seq "
+                "START WITH 1 INCREMENT BY 1"
+            ))
+
             if CasbinBase:
                 await conn.run_sync(CasbinBase.metadata.create_all)
                 await conn.execute(text("""
@@ -431,6 +438,11 @@ async def _truncate_all_tables():
             await conn.execute(
                 text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
             )
+            # Reset standalone sequences not owned by any table column
+            # (RESTART IDENTITY only resets column-owned sequences)
+            await conn.execute(text(
+                "SELECT setval('collaborator_code_seq', 1, false)"
+            ))
 
 
 @pytest_asyncio.fixture(scope="function", autouse=False)

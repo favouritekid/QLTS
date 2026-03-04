@@ -499,6 +499,69 @@ async def referred_leads(
     return leads
 
 
+# =============================================================================
+# COMMISSION FIXTURES
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def commission_policy(
+    db: AsyncSession,
+    seeded_dependencies: dict,
+    admin_user: models.User,
+) -> "models.CommissionPolicy":
+    """Active fixed commission policy linked to the CONTACTED_TEST status."""
+    from app.models.commission import CommissionPolicy
+    from datetime import date
+    from decimal import Decimal
+
+    policy = CommissionPolicy(
+        name="Test Fixed Policy",
+        description="500k per contacted lead",
+        trigger_status_id=seeded_dependencies["contacted_status_id"],
+        calculation_type="fixed",
+        fixed_amount=Decimal("500000"),
+        effective_from=date(2025, 1, 1),
+        is_active=True,
+        created_by_id=admin_user.id,
+    )
+    db.add(policy)
+    await db.flush()
+    await db.refresh(policy)
+    return policy
+
+
+@pytest_asyncio.fixture
+async def commission_record(
+    db: AsyncSession,
+    active_collaborator: "models.Collaborator",
+    seeded_lead: models.Lead,
+    commission_policy: "models.CommissionPolicy",
+) -> "models.CommissionRecord":
+    """Pending commission record for testing approve/reject/pay flows."""
+    from app.models.commission import CommissionRecord
+    from decimal import Decimal
+
+    record = CommissionRecord(
+        collaborator_id=active_collaborator.id,
+        lead_id=seeded_lead.id,
+        policy_id=commission_policy.id,
+        amount=commission_policy.fixed_amount,
+        calculation_detail={
+            "type": "fixed",
+            "fixed_amount": str(commission_policy.fixed_amount),
+            "policy_name": commission_policy.name,
+            "policy_id": commission_policy.id,
+        },
+        status="pending",
+        trigger_status_id=commission_policy.trigger_status_id,
+        triggered_at=datetime.now(timezone.utc),
+    )
+    db.add(record)
+    await db.flush()
+    await db.refresh(record)
+    return record
+
+
 @pytest_asyncio.fixture
 async def deleted_lead_with_phone(
     db: AsyncSession,
