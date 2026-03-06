@@ -304,13 +304,13 @@ export function OrganizationTreeView({
       }
 
       // Collect tuition fees from direct programs
-      node.major_programs.forEach((program) => {
+      (node.major_programs ?? []).forEach((program) => {
         if (program.avg_tuition_fee) {
           allTuitionFees.push(Number(program.avg_tuition_fee));
         }
       });
 
-      node.children.forEach(countNode);
+      (node.children ?? []).forEach(countNode);
     };
 
     treeData.forEach(countNode);

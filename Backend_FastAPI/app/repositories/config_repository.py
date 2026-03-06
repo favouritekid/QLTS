@@ -415,6 +415,21 @@ class DistributionRuleRepository(BaseRepository[models.OfferingDistributionConfi
         
         # Re-fetch with relations
         return await self.get_by_id_with_relations(rule_id)
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        **filters
+    ) -> Tuple[int, List[models.OfferingDistributionConfig]]:
+        """Get filtered distribution rules."""
+        query = select(self.model)
+        count = await self.count()
+
+        query = query.order_by(self.model.priority.asc(), self.model.id)
+        result = await self.db.execute(query.offset(skip).limit(limit))
+        return count, list(result.scalars().all())
+
     async def delete_document_type(
         self,
         type_id: int,
