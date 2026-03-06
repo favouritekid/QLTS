@@ -552,6 +552,19 @@ export const admissionProfileResponseSchema = z.object({
   rejected_by_id: z.number().nullable().optional(),
   rejection_reason: z.string().nullable().optional(),
 
+  // Resubmit audit fields
+  resubmitted_at: z.string().datetime({ offset: true }).nullable().optional(),
+  resubmitted_by_id: z.number().nullable().optional(),
+  resubmit_notes: z.string().nullable().optional(),
+
+  // Override audit fields
+  overridden_at: z.string().datetime({ offset: true }).nullable().optional(),
+  overridden_by_id: z.number().nullable().optional(),
+  override_reason: z.string().nullable().optional(),
+
+  // Confirmation tracking
+  confirmed_by_id: z.number().nullable().optional(),
+
   // Claim/assignment fields
   assigned_reviewer_id: z.number().nullable().optional(),
   assigned_reviewer_name: z.string().nullable().optional(),

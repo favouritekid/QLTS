@@ -33,8 +33,9 @@ import {
   useAdmissionViewModel,
   useUpdateAdmission,
   useSubmitAdmission,
-  useApproveAdmission,  // ✅ NEW
-  useRejectAdmission,   // ✅ NEW
+  useResubmitAdmission,
+  useApproveAdmission,
+  useRejectAdmission,
   useEnrollStudent,
   useDeleteAdmission,
   useClaimAdmission,
@@ -53,6 +54,7 @@ import { usePermissions } from "@/hooks/usePermissions"
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
 import { AdmissionActions } from "./AdmissionActions"
+import { StatusBanner } from "@/components/ui/StatusBanner"
 
 // Tabs
 import { PersonalInfoTab } from "./tabs/PersonalInfoTab"
@@ -83,8 +85,9 @@ export function AdmissionDetailClient({
   // Mutations
   const updateMutation = useUpdateAdmission(profileId)
   const submitMutation = useSubmitAdmission(profileId)
-  const approveMutation = useApproveAdmission(profileId)  // ✅ NEW
-  const rejectMutation = useRejectAdmission(profileId)    // ✅ NEW
+  const resubmitMutation = useResubmitAdmission(profileId)
+  const approveMutation = useApproveAdmission(profileId)
+  const rejectMutation = useRejectAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
   const deleteMutation = useDeleteAdmission(profileId)
   const claimMutation = useClaimAdmission(profileId)
@@ -296,6 +299,10 @@ export function AdmissionDetailClient({
     await submitMutation.mutateAsync()
   }
 
+  const handleResubmit = () => {
+    resubmitMutation.mutate()
+  }
+
   const handleEnroll = () => {
     enrollMutation.mutate()
   }
@@ -383,6 +390,9 @@ export function AdmissionDetailClient({
         validationSummary={validationSummary}
         groupedValidationErrors={groupedValidationErrors}
       >
+        {/* Status Banner for rejected/resubmitted profiles */}
+        <StatusBanner status={profile.status} />
+
         {/* TAB CONTENT */}
         <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
@@ -416,6 +426,8 @@ export function AdmissionDetailClient({
           isEnrolling={enrollMutation.isPending}
           onSave={handleSave}
           onSubmit={handleSubmit}
+          onResubmit={handleResubmit}
+          isResubmitting={resubmitMutation.isPending}
           onEnroll={handleEnroll}
           onApprove={handleApprove}
           onReject={handleReject}

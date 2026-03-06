@@ -16,7 +16,7 @@ Architecture:
 
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
@@ -228,6 +228,50 @@ class AdmissionProfile(Base):
         comment="Rejection reason (required when rejecting)"
     )
 
+    # ✅ Resubmit audit fields (REJECTED → RESUBMITTED tracking)
+    resubmitted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Timestamp when profile was resubmitted by Officer"
+    )
+    resubmitted_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="User ID who resubmitted the profile (Officer)"
+    )
+    resubmit_notes: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Notes about what was fixed before resubmit"
+    )
+
+    # ✅ Override audit fields (Admin override tracking)
+    overridden_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Timestamp when profile was overridden by Admin"
+    )
+    overridden_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Admin ID who overrode the profile"
+    )
+    override_reason: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Reason for admin override"
+    )
+
+    # ✅ Confirmation tracking - who confirmed
+    confirmed_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="User ID who confirmed enrollment (applicant or admin)"
+    )
+
     # ✅ FIX #8: Assignment Workflow (Reviewer Assignment)
     # Allows tracking "Who is reviewing this profile?"
     # Prevents multiple managers from reviewing the same profile simultaneously
@@ -283,6 +327,27 @@ class AdmissionProfile(Base):
     rejected_by: Mapped["User"] = relationship(
         "User",
         foreign_keys=[rejected_by_id],
+        lazy="select",
+        uselist=False
+    )
+    # ✅ Resubmit audit relationship
+    resubmitted_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[resubmitted_by_id],
+        lazy="select",
+        uselist=False
+    )
+    # ✅ Override audit relationship
+    overridden_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[overridden_by_id],
+        lazy="select",
+        uselist=False
+    )
+    # ✅ Confirmed by relationship
+    confirmed_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[confirmed_by_id],
         lazy="select",
         uselist=False
     )

@@ -51,7 +51,14 @@ async def create_admission_profile(
                 status=status,
                 citizen_id=citizen_id,
                 version=1,
-                applied_rules={"min_gpa": 6.0, "mandatory_docs": []},
+                applied_rules={
+                    "min_gpa": 6.0,
+                    "mandatory_docs": [],
+                    "required_subject_count": 2,
+                    "allowed_subject_codes": ["math", "phys"],
+                    "scoring_method": "sum",
+                    "subject_selection_mode": "fixed",
+                },
                 academic_year=2025,  # FIXED: Required field
             )
             session.add(profile)
@@ -94,21 +101,21 @@ async def test_update_admission_scores(
     # 1. Setup Data
     unit_id = seed_lead_dependencies["unit_id"]
     
-    # Ensure Subjects exist
+    # Ensure Subjects exist (lowercase codes - service normalizes to lowercase)
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            # Check/Create MATH
-            math = await session.execute(select(Subject).where(Subject.code == "MATH"))
+            # Check/Create math
+            math = await session.execute(select(Subject).where(Subject.code == "math"))
             if not math.scalar_one_or_none():
-                session.add(Subject(code="MATH", name_vi="Toan"))
-            
-            # Check/Create PHYS
-            phys = await session.execute(select(Subject).where(Subject.code == "PHYS"))
-            if not phys.scalar_one_or_none():
-                session.add(Subject(code="PHYS", name_vi="Ly"))
+                session.add(Subject(code="math", name_vi="Toan"))
 
-    # Create Profile (Draft) linked to officer's unit
-    lead_id = await create_test_lead(unit_id)
+            # Check/Create phys
+            phys = await session.execute(select(Subject).where(Subject.code == "phys"))
+            if not phys.scalar_one_or_none():
+                session.add(Subject(code="phys", name_vi="Ly"))
+
+    # Create Profile (Draft) linked to officer's unit AND assigned to officer
+    lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
     profile = await create_admission_profile(lead_id, status="draft")
 
     # Get Auth Headers
@@ -146,8 +153,8 @@ async def test_update_admission_scores(
         
         assert len(scores) == 2
         score_map = {s.subject.code: float(s.score) for s in scores}
-        assert score_map["MATH"] == 8.5
-        assert score_map["PHYS"] == 7.0
+        assert score_map["math"] == 8.5
+        assert score_map["phys"] == 7.0
 
     # 5. Logic Check: Verify Sync (Orphan Removal)
     # Send update with ONLY MATH (PHYS removed)
@@ -174,7 +181,7 @@ async def test_update_admission_scores(
         scores = await repo.get_profile_scores(profile.id)
         
         assert len(scores) == 1
-        assert scores[0].subject.code == "MATH"
+        assert scores[0].subject.code == "math"
         assert float(scores[0].score) == 9.0
 
     # 6. Logic Check: Validation (Score range)

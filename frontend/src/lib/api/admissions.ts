@@ -132,6 +132,23 @@ export async function rejectAdmission(
 }
 
 /**
+ * Resubmit rejected admission profile (Officer action)
+ * POST /api/admissions/{id}/resubmit
+ *
+ * Transitions status from rejected → resubmitted
+ */
+export async function resubmitAdmission(
+  id: number,
+  data?: { notes?: string }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/resubmit`,
+    data ?? {}
+  )
+  return response.data
+}
+
+/**
  * Upload admission document
  */
 export interface DocumentUploadResponse {
@@ -393,6 +410,7 @@ export const admissionsApi = {
   createAdmission,
   updateAdmission,
   submitAdmission,
+  resubmitAdmission,
   approveAdmission,
   rejectAdmission,
   enrollStudent,

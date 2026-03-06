@@ -554,15 +554,15 @@ class TestPhase2AdmissionProfile:
             if doc["code"] == "PHOTO":
                 doc["file_path"] = "/uploads/admission/1/photo_v2.jpg"
                 doc["uploaded_at"] = datetime.now(timezone.utc).isoformat()
-        
-        # Resubmit
-        profile.status = "submitted"
-        profile.submitted_at = datetime.now(timezone.utc)
-        profile.rejection_reason = None  # Clear previous rejection
+
+        # Resubmit (proper state machine: rejected → resubmitted)
+        profile.status = "resubmitted"
+        profile.resubmitted_at = datetime.now(timezone.utc)
+        profile.resubmit_notes = "Re-uploaded clearer photo"
         await db.commit()
-        
+
         # Assertions
-        assert profile.status == "submitted"
+        assert profile.status == "resubmitted"
     
     @pytest.mark.asyncio
     async def test_step10_manager_approves_profile(

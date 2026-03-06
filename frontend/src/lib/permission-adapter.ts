@@ -76,7 +76,8 @@ function inferPermissionsFromStatus(status?: string): PermissionFlags {
       return {
         edit: true,
         save: true,
-        submit: true, // Can resubmit
+        submit: false,
+        resubmit: true, // Officer can resubmit rejected profiles
         delete: true,
         approve: false,
         reject: false,

@@ -38,6 +38,9 @@ interface AdmissionActionsProps {
   onSubmit: () => void
   onEnroll: () => void
   onCheckCondition?: () => void
+  // Resubmit action (officer - rejected profiles)
+  onResubmit?: () => void
+  isResubmitting?: boolean
   // Optional: For Manager actions
   onApprove?: () => void
   onReject?: () => void
@@ -64,6 +67,8 @@ export function AdmissionActions({
   onSubmit,
   onEnroll,
   onCheckCondition,
+  onResubmit,
+  isResubmitting = false,
   onApprove,
   onReject,
   isApproving = false,
@@ -172,6 +177,32 @@ export function AdmissionActions({
                 Nộp hồ sơ
               </Button>
             </>
+          )}
+
+          {/* Resubmit - Officer action for rejected profiles */}
+          {can('resubmit') && onResubmit && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={isResubmitting}>
+                  {isResubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+                  Nộp lại hồ sơ
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Nộp lại hồ sơ?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Hồ sơ đã bị từ chối trước đó. Sau khi nộp lại, hồ sơ sẽ được chuyển sang trạng thái chờ duyệt.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Hủy</AlertDialogCancel>
+                  <AlertDialogAction onClick={onResubmit}>
+                    Nộp lại
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
 
           {/* Manager Actions - Permission-based (ADR-FE-002) */}

@@ -207,8 +207,8 @@ def _validate_scores(
     req_count_val = applied_rules.get("required_subject_count")
     required_count = int(req_count_val) if req_count_val is not None else 3
     
-    # Get current score count
-    scores_map = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
+    # Get current score count from relational data
+    scores_map = {s.subject.code: float(s.score) for s in profile.subject_scores} if profile.subject_scores else {}
     current_count = len(scores_map)
     
     method_type = applied_rules.get("method_type", "subject_based")
@@ -408,10 +408,8 @@ def _compute_frontend_fields(
     # =========================================================================
     applied_rules = profile.applied_rules or {}
     
-    # Set snapshot_score if available
-    if profile.admission_scores and "snapshot_score" in profile.admission_scores:
-        profile.snapshot_score = profile.admission_scores["snapshot_score"]
-    else:
+    # Set snapshot_score if available (computed by _calculate_and_update_totals)
+    if not hasattr(profile, 'snapshot_score') or profile.snapshot_score is None:
         profile.snapshot_score = None
     
     # --- Execute Validation Helpers ---
@@ -495,7 +493,7 @@ def _compute_frontend_fields(
     min_subject_score = float(applied_rules.get("min_subject_score") or 0)
     min_score = float(applied_rules.get("min_score") or 0)
     total_score = profile.total_score
-    subject_scores = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
+    subject_scores = {s.subject.code: float(s.score) for s in profile.subject_scores} if profile.subject_scores else {}
 
     # Compute subject pass/fail statuses
     subject_statuses = {}
@@ -1693,18 +1691,6 @@ async def update_profile(
             "Only draft or rejected profiles can be updated."
         )
     
-    # If profile is rejected, reset to draft on update
-    if profile.status == "rejected":
-        # ✅ CRITICAL FIX #1.3: Validate transition REJECTED -> DRAFT
-        from .admission_state_machine import validate_transition
-        try:
-            validate_transition("rejected", "draft")
-        except ValueError as e:
-            # Should not happen if state machine is correct
-            log.error("Invalid transition rejected->draft", error=str(e))
-            raise BadRequest(str(e))
-        profile.status = "draft"
-
     # Optimistic Locking: Check version matches
     if data.get("version") is not None and data["version"] != profile.version:
         log.warning(
@@ -1925,7 +1911,8 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
         
         # Build map of partial scores for display, but totals are 0
         scores_map = {s.subject.code: float(s.score) for s in target_scores} if target_scores else {}
-        
+
+        # Transient field for response serialization (not a DB column)
         profile.admission_scores = {
             "subject_scores": scores_map,
             "total_score": 0.0,
@@ -1933,7 +1920,7 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
             "gpa": 0.0,
             "snapshot_score": None
         }
-        flag_modified(profile, "admission_scores")
+        profile.snapshot_score = None
         return
 
     # Map scores to dict for service
@@ -1989,20 +1976,21 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     else:
         profile.average_score = 0.0
 
-    # Update admission_scores schema field with detailed snapshot
+    # Transient fields for response serialization (not DB columns)
+    snapshot_score = {
+        "selected_subjects": score_result.selected_subjects,
+        "selected_scores": {k: float(v) for k, v in score_result.subject_scores.items()},
+        "status": score_result.status.value,
+        "failure_reasons": score_result.failure_reasons
+    }
     profile.admission_scores = {
         "subject_scores": {k: float(v) for k, v in target_scores_map.items()},
         "total_score": profile.total_score,
         "average_score": profile.average_score,
         "gpa": profile.average_score,
-        "snapshot_score": {
-            "selected_subjects": score_result.selected_subjects,
-            "selected_scores": {k: float(v) for k, v in score_result.subject_scores.items()},
-            "status": score_result.status.value,
-            "failure_reasons": score_result.failure_reasons
-        }
+        "snapshot_score": snapshot_score
     }
-    flag_modified(profile, "admission_scores")
+    profile.snapshot_score = snapshot_score
 
 
 async def submit_and_evaluate(
@@ -2549,6 +2537,12 @@ async def mark_paper_submitted(
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
 
+    # Status guard: only allow document operations in editable states
+    if profile.status not in ["draft", "submitted", "rejected", "resubmitted"]:
+        raise BadRequest(
+            f"Cannot modify documents when profile status is '{profile.status}'"
+        )
+
     # Get document to capture old status
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "missing"
@@ -2625,7 +2619,11 @@ async def reject_document(
     
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
-    
+
+    # Status guard: cannot reject documents for enrolled profiles
+    if profile.status == "enrolled":
+        raise BadRequest("Cannot reject documents for enrolled profile")
+
     # Get document to capture old status
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "unknown"

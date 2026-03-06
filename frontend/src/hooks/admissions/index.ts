@@ -32,6 +32,7 @@ export {
   useCreateAdmission,
   useUpdateAdmission,
   useSubmitAdmission,
+  useResubmitAdmission,
   useApproveAdmission,
   useRejectAdmission,
   useEnrollStudent,

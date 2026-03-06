@@ -229,6 +229,37 @@ export function useSubmitAdmission(id: number) {
 }
 
 /**
+ * Resubmit Admission Hook
+ * Officer action - transitions from rejected → resubmitted
+ */
+export function useResubmitAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data?: { notes?: string }) =>
+      admissionsApi.resubmitAdmission(id, data),
+    onSuccess: (data) => {
+      if (data.status === 'resubmitted') {
+        toast.info("Hồ sơ đã được nộp lại, đang chờ duyệt")
+      } else {
+        toast.info("Yêu cầu nộp lại đã được xử lý", {
+          description: `Trạng thái hiện tại: ${data.status}`
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "nộp lại hồ sơ"
+      })
+    },
+  })
+}
+
+/**
  * Approve Admission Hook
  * Manager/Admin action - transitions from submitted/resubmitted → approved
  * 

@@ -553,6 +553,19 @@ class AdmissionProfileResponse(BaseModel):
     rejected_by_id: Optional[int] = None
     rejection_reason: Optional[str] = None
 
+    # ✅ Resubmit audit fields
+    resubmitted_at: Optional[datetime] = None
+    resubmitted_by_id: Optional[int] = None
+    resubmit_notes: Optional[str] = None
+
+    # ✅ Override audit fields
+    overridden_at: Optional[datetime] = None
+    overridden_by_id: Optional[int] = None
+    override_reason: Optional[str] = None
+
+    # ✅ Confirmation tracking
+    confirmed_by_id: Optional[int] = None
+
     # Claim/assignment fields
     assigned_reviewer_id: Optional[int] = None
     assigned_reviewer_name: Optional[str] = None

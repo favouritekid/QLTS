@@ -59,7 +59,7 @@ class ProfileSubjectScore(Base):
 
     # Relationships
     profile = relationship("AdmissionProfile", back_populates="subject_scores")
-    subject = relationship("Subject", back_populates="profile_scores")
+    subject = relationship("Subject", back_populates="profile_scores", lazy="selectin")
 
     __table_args__ = (
         UniqueConstraint(
