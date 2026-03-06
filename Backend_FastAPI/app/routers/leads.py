@@ -1346,59 +1346,47 @@ async def officer_import_leads(
 @router.patch("/{lead_id}/status", response_model=schemas.Lead)
 async def update_lead_consultation_status(
     request: Request,
-    lead_id: int,
     status_update: schemas.LeadStatusUpdate,
-    db: AsyncSession = Depends(database.get_db),
+    lead: models.Lead = LeadAccessDep,
     current_user: models.User = CasbinAuth,
-    # ✅ SMART DEPENDENCY: Validates FSM transition BEFORE service
-    # This dependency enforces RULE #12: Backend must validate transitions
-    # Returns validated ConsultationStatus or raises BusinessRuleViolation (400)
+    db: AsyncSession = Depends(database.get_db),
 ):
     """
     Update lead consultation status with FSM validation (Spec v3.0 compliant).
-    
+
     This endpoint enforces:
     - Rule #11: NULL status → only NOT_CONTACTED
     - Rule #12: Backend FSM validation (not just UI)
     - Phase guards (user/role cannot cross phases)
     - Trigger type enforcement (cannot set system-only statuses)
-    
+
     **Architecture Compliance:**
     - Smart Dependency: validate_status_transition() does ALL validation
+    - LeadAccessDep: IDOR check (Admin/Manager/assigned Officer)
     - Dumb Router: Just coordinates service + commit
-    - Service: Pure Python, raises domain exceptions
-    
+
     **Request Body:**
     ```json
     {
         "consultation_status_id": "sts02"
     }
     ```
-    
+
     **Error Responses:**
     - 400: Invalid FSM transition (BusinessRuleViolation)
     - 404: Lead or status not found (ResourceNotFoundError)
     """
     from ..core.deps import validate_status_transition
     from ..services.status_helper import StatusHelper
-    
+
     # ✅ SMART DEPENDENCY: Validate transition using FSM engine
     validated_status = await validate_status_transition(
         to_status_id=status_update.consultation_status_id,
-        lead_id=lead_id,
+        lead_id=lead.id,
         db=db,
         current_user=current_user
     )
-    
-    # Get lead (already validated by dependency, but need for update)
-    from ..repositories.lead_repository import LeadRepository
-    repo = LeadRepository(db)
-    lead = await repo.get_lead_by_id_and_unit(lead_id, current_user.unit_id)
-    
-    if not lead:
-        from ..utils.exceptions import ResourceNotFoundError
-        raise ResourceNotFoundError(f"Lead {lead_id} not found")
-    
+
     # Store old status for history/notification
     old_status_id = lead.consultation_status_id
     
@@ -1423,7 +1411,7 @@ async def update_lead_consultation_status(
     
     log.info(
         "Lead status updated via FSM endpoint",
-        lead_id=lead_id,
+        lead_id=lead.id,
         old_status=old_status_id,
         new_status=validated_status.id,
         user_id=current_user.id

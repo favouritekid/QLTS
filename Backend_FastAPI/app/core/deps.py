@@ -1898,10 +1898,10 @@ async def validate_status_transition(
     from ..services.fsm_engine import is_transition_allowed
     from ..utils.exceptions import BusinessRuleViolation
     
-    # 1. Get lead with admission_profile for phase derivation (IDOR check)
+    # 1. Get lead with relationships for phase derivation
     repo = LeadRepository(db)
-    lead = await repo.get_lead_by_id_and_unit(lead_id, current_user.unit_id)
-    
+    lead = await repo.get_by_id_full(lead_id)
+
     if not lead:
         raise ResourceNotFoundError(f"Lead {lead_id} not found")
     
