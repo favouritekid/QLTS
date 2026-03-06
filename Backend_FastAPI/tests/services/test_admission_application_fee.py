@@ -34,50 +34,14 @@ pytestmark = pytest.mark.asyncio
 @pytest_asyncio.fixture(scope="function")
 async def seed_admission_statuses(seed_lead_dependencies: dict):
     """
-    Seed consultation statuses required for admission workflow.
+    Return consultation status IDs required for admission workflow.
 
-    Required statuses:
+    These statuses are already seeded by seed_lead_dependencies (conftest.py):
     - sts06: Đồng ý tư vấn (Consultation phase - starting point)
     - sts07: Đã tiếp nhận (Admission phase - after create profile)
     - sts09: Đủ điều kiện (Fee phase - after approve)
     - sts13: Đã hoàn lệ phí (Fee phase - after fee payment)
     """
-    stage_a_id = seed_lead_dependencies["stage_id"]
-
-    # Create admission-related stages and statuses
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            # Create stages for different phases
-            stage_admission = models.PipelineStage(
-                id="STAGE_ADMISSION", name="Admission Stage", order=20
-            )
-            stage_fee = models.PipelineStage(
-                id="STAGE_FEE", name="Fee Stage", order=30
-            )
-            session.add_all([stage_admission, stage_fee])
-            await session.flush()
-
-            # Create consultation statuses
-            statuses = [
-                models.ConsultationStatus(
-                    id="sts06", name="Đồng ý tư vấn",
-                    color_code="#00FF00", stage_id=stage_a_id
-                ),
-                models.ConsultationStatus(
-                    id="sts07", name="Đã tiếp nhận",
-                    color_code="#0000FF", stage_id="STAGE_ADMISSION"
-                ),
-                models.ConsultationStatus(
-                    id="sts09", name="Đủ điều kiện",
-                    color_code="#00FF00", stage_id="STAGE_FEE"
-                ),
-                models.ConsultationStatus(
-                    id="sts13", name="Đã hoàn lệ phí",
-                    color_code="#FFD700", stage_id="STAGE_FEE"
-                ),
-            ]
-            session.add_all(statuses)
-
     return {
         **seed_lead_dependencies,
         "sts06_id": "sts06",

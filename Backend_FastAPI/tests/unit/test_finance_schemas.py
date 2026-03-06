@@ -46,30 +46,30 @@ class TestFeeCreateSchema:
         fee = FeeCreate(
             admission_profile_id=1,
             fee_type=FeeTypeEnum.tuition,
-            academic_year="2024-2025",
+            academic_year=2024,
             base_amount=Decimal("10000000"),
         )
         assert fee.admission_profile_id == 1
         assert fee.fee_type == FeeTypeEnum.tuition
         assert fee.base_amount == Decimal("10000000")
 
-    def test_academic_year_format_valid(self):
-        """Test valid academic year format."""
+    def test_academic_year_valid_int(self):
+        """Test valid academic year as integer."""
         fee = FeeCreate(
             admission_profile_id=1,
             fee_type=FeeTypeEnum.tuition,
-            academic_year="2024-2025",
+            academic_year=2024,
             base_amount=Decimal("1000"),
         )
-        assert fee.academic_year == "2024-2025"
+        assert fee.academic_year == 2024
 
-    def test_academic_year_format_invalid(self):
-        """Test invalid academic year format raises error."""
+    def test_academic_year_out_of_range_rejected(self):
+        """Test academic year out of range raises error."""
         with pytest.raises(ValidationError) as exc_info:
             FeeCreate(
                 admission_profile_id=1,
                 fee_type=FeeTypeEnum.tuition,
-                academic_year="2024",  # Invalid format
+                academic_year=2019,  # Below minimum 2020
                 base_amount=Decimal("1000"),
             )
         assert "academic_year" in str(exc_info.value)
@@ -80,7 +80,7 @@ class TestFeeCreateSchema:
             FeeCreate(
                 admission_profile_id=1,
                 fee_type=FeeTypeEnum.tuition,
-                academic_year="2024-2025",
+                academic_year=2024,
                 base_amount=Decimal("-1000"),
             )
         assert "base_amount" in str(exc_info.value)
@@ -91,7 +91,7 @@ class TestFeeCreateSchema:
             FeeCreate(
                 admission_profile_id=1,
                 fee_type=FeeTypeEnum.tuition,
-                academic_year="2024-2025",
+                academic_year=2024,
                 base_amount=MAX_AMOUNT + 1,
             )
         assert "base_amount" in str(exc_info.value)
@@ -101,7 +101,7 @@ class TestFeeCreateSchema:
         fee = FeeCreate(
             admission_profile_id=1,
             fee_type=FeeTypeEnum.tuition,
-            academic_year="2024-2025",
+            academic_year=2024,
             base_amount=Decimal("1000"),
             notes="<script>alert('xss')</script>",
         )

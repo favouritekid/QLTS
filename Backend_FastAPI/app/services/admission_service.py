@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from app.utils.redis_lock import acquire_redis_lock
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm.attributes import flag_modified
 
 from .. import models
 from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
@@ -1805,9 +1806,11 @@ async def update_profile(
 
     if "family_info" in data and data["family_info"] is not None:
         profile.family_info = data["family_info"]
+        flag_modified(profile, "family_info")
 
     if "academic_history" in data and data["academic_history"] is not None:
         profile.academic_history = data["academic_history"]
+        flag_modified(profile, "academic_history")
 
     # ✅ Phase 6: Update Admission Scores
     if "admission_scores" in data and data["admission_scores"] is not None:
@@ -1930,6 +1933,7 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
             "gpa": 0.0,
             "snapshot_score": None
         }
+        flag_modified(profile, "admission_scores")
         return
 
     # Map scores to dict for service
@@ -1998,6 +2002,7 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
             "failure_reasons": score_result.failure_reasons
         }
     }
+    flag_modified(profile, "admission_scores")
 
 
 async def submit_and_evaluate(
@@ -3426,6 +3431,13 @@ async def record_application_fee_payment(
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
+    # Check profile status — only allow fee payment for draft/submitted profiles
+    if profile.status not in ("draft", "submitted"):
+        raise BadRequest(
+            f"Cannot record fee payment for profile in '{profile.status}' status. "
+            "Only draft or submitted profiles accept fee payments."
+        )
+
     # Check fee requirement
     applied_rules = profile.applied_rules or {}
     requires_fee = applied_rules.get("requires_application_fee", False)
@@ -3450,7 +3462,8 @@ async def record_application_fee_payment(
     applied_rules["fee_status"] = "paid"
     applied_rules["fee_paid_at"] = datetime.now(timezone.utc).isoformat()
     applied_rules["fee_payment_data"] = payment_data
-    profile.applied_rules = applied_rules  # Trigger JSONB update
+    profile.applied_rules = {**applied_rules}  # New dict to trigger JSONB change detection
+    flag_modified(profile, "applied_rules")
     profile.updated_at = datetime.now(timezone.utc)
 
     # ✅ SYNC: Update lead to sts13 (Đã hoàn lệ phí xét tuyển)
@@ -3495,7 +3508,7 @@ async def check_application_fee_status(
     from app.repositories import AdmissionRepository
     repo = AdmissionRepository(db)
 
-    profile = await repo.get_profile_by_id(profile_id)
+    profile = await repo.get_by_id(profile_id)
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 

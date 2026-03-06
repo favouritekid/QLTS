@@ -649,10 +649,23 @@ class PaymentIntentService:
         intent_id: int,
         unit_id: Optional[int] = None,
     ) -> PaymentIntent:
-        """Get payment intent by ID with all relations."""
+        """Get payment intent by ID with all relations.
+
+        Note: If the intent has expired but status is still 'created' or 'pending',
+        the status is updated to 'expired' automatically.
+        """
         intent = await self.intent_repo.get_by_id_with_relations(intent_id, unit_id)
         if not intent:
             raise ResourceNotFoundError("Payment intent not found")
+
+        # Auto-expire stale intents on read
+        if intent.is_expired and intent.status in (
+            PaymentIntentStatusEnum.created.value,
+            PaymentIntentStatusEnum.pending.value,
+        ):
+            intent.status = PaymentIntentStatusEnum.expired.value
+            await self.db.flush()
+
         return intent
 
     async def get_intent_by_gateway_ref(

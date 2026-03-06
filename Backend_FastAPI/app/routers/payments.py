@@ -31,7 +31,7 @@ import structlog
 from app import database, models, schemas
 from app.core import deps
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth, RequireManager
+from app.core.deps import CasbinAuth
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.payment_service import PaymentService
@@ -41,17 +41,11 @@ from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
-    ConflictError,
 )
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["Finance - Payments"])
-
-
-def get_client_ip(request: Request) -> str:
-    """Helper for rate limiting key generation."""
-    return request.client.host if request.client else "unknown"
 
 
 # ==============================================================================
@@ -191,7 +185,7 @@ async def record_payment(
     unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
-        payment, _ = await payment_service.record_manual_payment(
+        payment, callback = await payment_service.record_manual_payment(
             invoice_id=data.invoice_id,
             method_id=data.method_id,
             amount=data.amount,
@@ -205,6 +199,8 @@ async def record_payment(
         )
 
         await db.commit()
+        if callback:
+            await callback()
 
         log.info(
             "manual_payment_recorded",
@@ -241,7 +237,7 @@ async def verify_payment(
     request: Request,
     payment_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = RequireManager,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Verify a pending manual payment.
@@ -253,19 +249,21 @@ async def verify_payment(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Role enforced via RequireManager dependency
+    - Requires 'payments:verify' permission (Casbin RBAC)
     """
     payment_service = PaymentService(db)
     unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
-        payment, _ = await payment_service.verify_payment(
+        payment, callback = await payment_service.verify_payment(
             payment_id=payment_id,
             verifier_id=current_user.id,
             unit_id=unit_id,
         )
 
         await db.commit()
+        if callback:
+            await callback()
 
         log.info(
             "payment_verified",
@@ -301,7 +299,7 @@ async def reject_payment(
     payment_id: int,
     reason: str = Query(..., min_length=1, max_length=500, description="Rejection reason"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = RequireManager,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Reject a pending manual payment.
@@ -313,13 +311,13 @@ async def reject_payment(
 
     **Security:**
     - IDOR protection: Only accessible for user's unit
-    - Role enforced via RequireManager dependency
+    - Requires 'payments:reject' permission (Casbin RBAC)
     """
     payment_service = PaymentService(db)
     unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
     try:
-        payment, _ = await payment_service.reject_payment(
+        payment, callback = await payment_service.reject_payment(
             payment_id=payment_id,
             rejector_id=current_user.id,
             reason=reason,
@@ -327,6 +325,8 @@ async def reject_payment(
         )
 
         await db.commit()
+        if callback:
+            await callback()
 
         log.info(
             "payment_rejected",
@@ -352,42 +352,52 @@ async def reject_payment(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+# ==============================================================================
+# PAYMENT METHODS (must be before /{payment_id} to avoid route conflict)
+# ==============================================================================
+
 @limiter.limit(RateLimits.DATA_READ)
 @router.get(
-    "/{payment_id}",
-    response_model=finance_schemas.PaymentResponse,
-    summary="Get payment details",
+    "/methods",
+    response_model=List[finance_schemas.PaymentMethodResponse],
+    summary="Get available payment methods",
 )
-async def get_payment(
+async def get_payment_methods(
     request: Request,
-    payment_id: int,
+    is_online: Optional[bool] = Query(None, description="Filter by online/offline"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
-    Get payment details.
+    Get list of available payment methods.
 
     **Security:**
-    - IDOR protection: Only accessible for user's unit
-    - Requires 'payments:read' permission
+    - Requires authentication
+    - No IDOR check (payment methods are global)
     """
     payment_repo = PaymentRepository(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
-    # Use get_by_id_with_relations to load user relationships for P2 denormalized names
-    payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
-    if not payment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Payment not found"
+    methods = await payment_repo.get_active_payment_methods(is_online=is_online)
+
+    return [
+        finance_schemas.PaymentMethodResponse(
+            id=m.id,
+            code=m.code,
+            name=m.name,
+            is_online=m.is_online,
+            requires_verification=m.requires_verification,
+            gateway_code=m.gateway_code,
+            display_order=m.display_order,
+            is_active=m.is_active,
+            created_at=m.created_at,
         )
+        for m in methods
+    ]
 
-    return _build_payment_response(
-            payment,
-            current_user_id=current_user.id,
-            current_user_role=current_user.role,
-        )
 
+# ==============================================================================
+# PAYMENTS BY INVOICE (must be before /{payment_id} to avoid route conflict)
+# ==============================================================================
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get(
@@ -424,6 +434,47 @@ async def get_payments_by_invoice(
         )
         for p in payments
     ]
+
+
+# ==============================================================================
+# PAYMENT DETAIL
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/{payment_id}",
+    response_model=finance_schemas.PaymentResponse,
+    summary="Get payment details",
+)
+async def get_payment(
+    request: Request,
+    payment_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Get payment details.
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires 'payments:read' permission
+    """
+    payment_repo = PaymentRepository(db)
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+
+    # Use get_by_id_with_relations to load user relationships for P2 denormalized names
+    payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
+    if not payment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment not found"
+        )
+
+    return _build_payment_response(
+            payment,
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
 
 
 # ==============================================================================
@@ -517,13 +568,13 @@ async def get_payment_intent(
 
     try:
         intent = await intent_service.get_intent(intent_id, unit_id)
+        await db.commit()  # Persist auto-expire status change if any
         return _build_intent_response(intent)
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
-@limiter.limit(RateLimits.DATA_WRITE)
 @router.post(
     "/callback/{gateway_code}",
     summary="Gateway callback (IPN)",
@@ -591,49 +642,6 @@ async def payment_callback(
         )
         await db.rollback()
         return {"status": "error", "message": "Processing failed, will retry"}
-
-
-# ==============================================================================
-# PAYMENT METHODS
-# ==============================================================================
-
-@limiter.limit(RateLimits.DATA_READ)
-@router.get(
-    "/methods",
-    response_model=List[finance_schemas.PaymentMethodResponse],
-    summary="Get available payment methods",
-)
-async def get_payment_methods(
-    request: Request,
-    is_online: Optional[bool] = Query(None, description="Filter by online/offline"),
-    db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
-):
-    """
-    Get list of available payment methods.
-
-    **Security:**
-    - Requires authentication
-    - No IDOR check (payment methods are global)
-    """
-    payment_repo = PaymentRepository(db)
-
-    methods = await payment_repo.get_active_payment_methods(is_online=is_online)
-
-    return [
-        finance_schemas.PaymentMethodResponse(
-            id=m.id,
-            code=m.code,
-            name=m.name,
-            is_online=m.is_online,
-            requires_verification=m.requires_verification,
-            gateway_code=m.gateway_code,
-            display_order=m.display_order,
-            is_active=m.is_active,
-            created_at=m.created_at,
-        )
-        for m in methods
-    ]
 
 
 # ==============================================================================

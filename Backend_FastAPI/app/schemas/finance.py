@@ -170,7 +170,7 @@ class InstallmentPlanResponse(InstallmentPlanBase):
     """Response schema for installment plan."""
     id: int
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
 
 # ==============================================================================
@@ -206,22 +206,24 @@ class PaymentMethodResponse(PaymentMethodBase):
 # ==============================================================================
 
 class FeeAppliedDiscountResponse(BaseModel):
-    """Response schema for applied discount snapshot."""
+    """Response schema for applied discount snapshot.
+
+    Note: policy_name, discount_type, discount_value are extracted from
+    the model's calculation_snapshot JSONB field by the router, not from
+    direct ORM attributes. Do NOT use model_validate() with ORM objects.
+    """
     id: int
     policy_id: int
-    policy_name: str
-    discount_type: str
-    discount_value: Decimal
-    discount_amount: Decimal
-    application_order: int
-
-    model_config = ConfigDict(from_attributes=True)
+    policy_name: str  # From calculation_snapshot
+    discount_type: str  # From calculation_snapshot
+    discount_value: Decimal  # From calculation_snapshot
+    discount_amount: Decimal  # Direct model field
+    application_order: int  # Direct model field
 
 
 class FeeBase(BaseModel):
     """Base schema for fees."""
     fee_type: FeeTypeEnum = FeeTypeEnum.tuition
-    academic_year: str = Field(..., pattern=r"^\d{4}-\d{4}$")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -229,6 +231,7 @@ class FeeBase(BaseModel):
 class FeeCreate(FeeBase):
     """Schema for creating a new fee."""
     admission_profile_id: int
+    academic_year: int = Field(..., ge=2020, le=2100)
     installment_plan_id: Optional[int] = None
     base_amount: Decimal = Field(..., ge=0, le=MAX_AMOUNT)
     notes: Optional[str] = Field(None, max_length=500)
@@ -255,6 +258,7 @@ class FeeResponse(FeeBase):
     id: int
     admission_profile_id: int
     installment_plan_id: Optional[int]
+    academic_year: str  # Formatted as "YYYY-YYYY" by router
 
     # Amounts
     base_amount: Decimal
@@ -294,7 +298,7 @@ class FeeSummaryResponse(BaseModel):
     """Summary response for fee list."""
     id: int
     fee_type: FeeTypeEnum
-    academic_year: str
+    academic_year: int
     final_amount: Decimal
     paid_amount: Decimal
     remaining_amount: Decimal
@@ -687,10 +691,10 @@ class OverpaymentRecordResponse(BaseModel):
 
 class AccountingPeriodBase(BaseModel):
     """Base schema for accounting period."""
-    month: int = Field(..., ge=1, le=12)
-    year: int = Field(..., ge=2020, le=2100)
+    month: int = Field(..., ge=1, le=12, validation_alias="period_month")
+    year: int = Field(..., ge=2020, le=2100, validation_alias="period_year")
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class AccountingPeriodCreate(AccountingPeriodBase):

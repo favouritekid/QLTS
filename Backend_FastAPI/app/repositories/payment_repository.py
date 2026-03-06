@@ -30,6 +30,7 @@ from app.models.finance import (
     OverpaymentRecord,
     Fee,
     Invoice,
+    PaymentMethod,
     PaymentStatusEnum,
     PaymentIntentStatusEnum,
     RefundStatusEnum,
@@ -343,6 +344,31 @@ class PaymentRepository(BaseRepository[Payment]):
         created_by_id = result.scalar()
 
         return created_by_id == verifier_id
+
+    async def get_active_payment_methods(
+        self,
+        is_online: Optional[bool] = None
+    ) -> List[PaymentMethod]:
+        """
+        Get active payment methods, optionally filtered by online/offline.
+
+        Args:
+            is_online: Filter by online (True) or offline (False) methods
+
+        Returns:
+            List of active PaymentMethod instances
+        """
+        query = (
+            select(PaymentMethod)
+            .where(PaymentMethod.is_active.is_(True))
+            .order_by(PaymentMethod.display_order)
+        )
+
+        if is_online is not None:
+            query = query.where(PaymentMethod.is_online == is_online)
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
 
     async def get_total_refunds_for_payment(
         self,

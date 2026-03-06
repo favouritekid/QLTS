@@ -150,34 +150,45 @@ async function loginViaAPI(
   password: string,
   opts?: { totpSecret?: string }
 ): Promise<Record<string, string>> {
-  await page.context().clearCookies();
+  // Outer retry loop: handles rate limiting (429) and TOTP collision (restart from scratch)
+  for (let outerAttempt = 0; outerAttempt < 3; outerAttempt++) {
+    await page.context().clearCookies();
 
-  const loginResp = await page.request.post(`${API_URL}/api/auth/login`, {
-    form: { username, password },
-  });
-  if (!loginResp.ok()) {
-    const body = (await loginResp.text()).slice(0, 300);
-    throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
-  }
-
-  let loginBody = await loginResp.json();
-  let authResp = loginResp;
-
-  if (loginBody.mfa_required) {
-    if (!opts?.totpSecret) {
-      throw new Error(`MFA required for ${username} but no TOTP secret provided`);
-    }
-    const mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
-      data: { mfa_token: loginBody.mfa_token, code: generateTOTP(opts.totpSecret) },
+    const loginResp = await page.request.post(`${API_URL}/api/auth/login`, {
+      form: { username, password },
     });
-    if (!mfaResp.ok()) {
-      throw new Error(`MFA failed for ${username}: ${mfaResp.status()}`);
+    if (loginResp.status() === 429) {
+      console.log(`Login rate limited for ${username}, waiting 65s (attempt ${outerAttempt + 1})...`);
+      await new Promise((r) => setTimeout(r, 65_000));
+      continue;
     }
-    authResp = mfaResp;
-  }
+    if (!loginResp.ok()) {
+      const body = (await loginResp.text()).slice(0, 300);
+      throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
+    }
 
-  const csrf = await extractAndAddCookies(page, authResp);
-  return csrf ? { "X-CSRF-Token": csrf } : {};
+    const loginBody = await loginResp.json();
+    let authResp = loginResp;
+
+    if (loginBody.mfa_required) {
+      if (!opts?.totpSecret) {
+        throw new Error(`MFA required for ${username} but no TOTP secret provided`);
+      }
+      let mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
+        data: { mfa_token: loginBody.mfa_token, code: generateTOTP(opts.totpSecret) },
+      });
+      if (!mfaResp.ok()) {
+        console.log(`MFA failed for ${username} (${mfaResp.status()}), waiting 31s and retrying login...`);
+        await new Promise((r) => setTimeout(r, 31_000));
+        continue; // restart from login
+      }
+      authResp = mfaResp;
+    }
+
+    const csrf = await extractAndAddCookies(page, authResp);
+    return csrf ? { "X-CSRF-Token": csrf } : {};
+  }
+  throw new Error(`Login failed for ${username} after 3 attempts`);
 }
 
 async function restoreCookies(

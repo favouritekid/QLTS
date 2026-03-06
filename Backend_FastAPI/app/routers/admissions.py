@@ -1042,7 +1042,7 @@ async def record_fee_payment(
     request: Request,
     profile_id: int,
     transaction_id: str = Query(..., description="Payment transaction ID"),
-    amount: float = Query(..., ge=0, description="Payment amount in VND"),
+    amount: float = Query(..., gt=0, description="Payment amount in VND"),
     current_user: models.User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(database.get_db),
 ):
