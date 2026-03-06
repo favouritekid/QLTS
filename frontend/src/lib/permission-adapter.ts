@@ -106,7 +106,29 @@ function inferPermissionsFromStatus(status?: string): PermissionFlags {
         reject: false,
         enroll: true,
       }
-    
+
+    case 'confirmed':
+      return {
+        edit: false,
+        save: false,
+        submit: false,
+        delete: false,
+        approve: false,
+        reject: false,
+        enroll: true,
+      }
+
+    case 'overridden':
+      return {
+        edit: false,
+        save: false,
+        submit: false,
+        delete: false,
+        approve: false,
+        reject: false,
+        enroll: true,
+      }
+
     case 'enrolled':
       return {
         edit: false,

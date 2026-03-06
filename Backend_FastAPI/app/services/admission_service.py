@@ -3627,6 +3627,15 @@ async def resubmit_profile(
             profile_id=profile.id,
         )
 
+    # ✅ SYNC: Update lead consultation status to match admission status (resubmitted → sts07)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=officer.id,
+        reason=f"Profile resubmitted: {data.get('notes', 'No notes')[:50]}",
+    )
+
     await db.flush()
 
     # Audit trail: log resubmission
@@ -3721,6 +3730,15 @@ async def confirm_enrollment(
             profile_id=profile.id,
         )
 
+    # ✅ SYNC: Update lead consultation status to match admission status (confirmed → sts09)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=applicant.id,
+        reason="Applicant confirmed enrollment intent",
+    )
+
     await db.flush()
 
     log.info(
@@ -3812,6 +3830,15 @@ async def override_profile(
             profile_id=profile.id,
             reason=data["reason"],
         )
+
+    # ✅ SYNC: Update lead consultation status to match admission status (overridden → sts09)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=admin.id,
+        reason=f"Admin override: {data['reason'][:50]}",
+    )
 
     await db.flush()
 

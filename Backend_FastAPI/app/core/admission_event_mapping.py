@@ -271,7 +271,7 @@ ADMISSION_EVENT_PROJECTIONS = {
     # -------------------------------------------------------------------------
     "profile_resubmitted": AdmissionEventProjection(
         event="profile_resubmitted",
-        admission_status="submitted",
+        admission_status="resubmitted",
         consultation_status_id="sts07",
         consultation_name="Đã tiếp nhận hồ sơ",  # Updated name
         pipeline_stage_id="stg03",  # Back to "Đã nộp hồ sơ"
@@ -285,7 +285,7 @@ ADMISSION_EVENT_PROJECTIONS = {
     # -------------------------------------------------------------------------
     "profile_overridden": AdmissionEventProjection(
         event="profile_overridden",
-        admission_status="approved",
+        admission_status="overridden",
         consultation_status_id="sts09",
         consultation_name="Đủ điều kiện nhập học",  # Updated name
         pipeline_stage_id="stg04",

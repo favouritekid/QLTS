@@ -41,7 +41,10 @@ ADMISSION_TO_LEAD_STATUS_MAP = {
     # Admission Status    → Lead ConsultationStatus ID
     "draft":        "sts07",   # Đã tiếp nhận (hồ sơ mới tạo)
     "submitted":    "sts07",   # Đã tiếp nhận (đã nộp, chờ duyệt)
+    "resubmitted":  "sts07",   # Đã tiếp nhận (nộp lại sau reject)
     "approved":     "sts09",   # Đủ điều kiện (đã duyệt)
+    "confirmed":    "sts09",   # Đủ điều kiện (xác nhận ý định nhập học)
+    "overridden":   "sts09",   # Đủ điều kiện (admin override)
     "rejected":     "sts16",   # Không đạt (bị từ chối)
     "enrolled":     "sts11",   # Đã xác nhận nhập học (terminal)
 }
