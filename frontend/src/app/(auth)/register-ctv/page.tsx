@@ -37,10 +37,10 @@ const ctvRegisterSchema = z.object({
   email: z.union([
     z.string().email("Email không hợp lệ"),
     z.literal(""),
-  ]).optional().nullable().transform(v => v === "" ? null : v),
-  id_card_number: z.string().max(20).optional().nullable().transform(v => v === "" ? null : v),
-  address: z.string().max(500).optional().nullable().transform(v => v === "" ? null : v),
-  notes: z.string().max(1000).optional().nullable().transform(v => v === "" ? null : v),
+  ]).nullable().transform(v => v === "" ? null : v),
+  id_card_number: z.string().max(20).nullable().transform(v => v === "" ? null : v),
+  address: z.string().max(500).nullable().transform(v => v === "" ? null : v),
+  notes: z.string().max(1000).nullable().transform(v => v === "" ? null : v),
   unit_id: z.number({ message: "Vui lòng nhập mã đơn vị" }),
 })
 
@@ -54,7 +54,7 @@ export default function RegisterCTVPage() {
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const form = useForm<CTVRegisterFormData>({
+  const form = useForm({
     resolver: zodResolver(ctvRegisterSchema),
     defaultValues: {
       full_name: "",

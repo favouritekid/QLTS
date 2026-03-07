@@ -239,7 +239,7 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
   const createMutation = useCreateCommissionPolicy()
   const updateMutation = useUpdateCommissionPolicy()
 
-  const form = useForm<CommissionPolicyCreateFormData>({
+  const form = useForm({
     resolver: zodResolver(commissionPolicyCreateSchema),
     defaultValues: {
       name: "",

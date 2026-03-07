@@ -9,7 +9,7 @@ export const commissionPolicyCreateSchema = z.object({
   description: z.string().optional().nullable().transform(v => v === "" ? null : v),
   trigger_status_id: z.string().min(1, "Vui lòng chọn trạng thái trigger"),
   calculation_type: z.enum(["fixed", "percentage"], {
-    errorMap: () => ({ message: "Vui lòng chọn loại tính hoa hồng" }),
+    message: "Vui lòng chọn loại tính hoa hồng",
   }),
   fixed_amount: z.number().int("Số tiền phải là số nguyên").min(0, "Số tiền phải >= 0").optional().nullable(),
   percentage: z.number().min(0).max(100, "Phần trăm phải từ 0-100").optional().nullable(),
