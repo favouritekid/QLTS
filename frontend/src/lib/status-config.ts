@@ -77,6 +77,15 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
     bannerMessage: 'Hồ sơ bị từ chối. Vui lòng chỉnh sửa và nộp lại.',
     allowedActions: ['edit', 'resubmit'],
   },
+  revision_requested: {
+    label: 'Yêu cầu bổ sung',
+    badgeVariant: 'outline',
+    badgeColor: 'bg-orange-100 text-orange-700',
+    showBanner: true,
+    bannerType: 'warning',
+    bannerMessage: 'Hồ sơ cần bổ sung thêm tài liệu/thông tin. Vui lòng chỉnh sửa và nộp lại.',
+    allowedActions: ['edit', 'resubmit'],
+  },
   confirmed: {
     label: 'Đã xác nhận',
     badgeVariant: 'default',
@@ -100,6 +109,15 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
     badgeVariant: 'default',
     badgeColor: 'bg-blue-100 text-blue-700',
     showBanner: false,
+    allowedActions: [],
+  },
+  withdrawn: {
+    label: 'Đã rút hồ sơ',
+    badgeVariant: 'secondary',
+    badgeColor: 'bg-muted text-muted-foreground',
+    showBanner: true,
+    bannerType: 'info',
+    bannerMessage: 'Hồ sơ đã được rút lại.',
     allowedActions: [],
   },
 }

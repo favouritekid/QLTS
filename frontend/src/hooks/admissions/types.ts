@@ -32,15 +32,17 @@ export type EligibilityStatus = "eligible" | "ineligible" | "pending"
 /**
  * Admission profile status (workflow state).
  */
-export type AdmissionStatus = 
+export type AdmissionStatus =
   | "draft"
   | "submitted"
   | "resubmitted"
   | "approved"
   | "rejected"
+  | "revision_requested"
   | "confirmed"
   | "enrolled"
   | "overridden"
+  | "withdrawn"
 
 // ============================================================================
 // VIEW MODEL TYPES
@@ -70,17 +72,22 @@ export interface AdmissionViewStatus {
  * Available actions that can be performed on an admission profile.
  * These are returned by the backend in available_actions array.
  */
-export type AdmissionAction = 
+export type AdmissionAction =
   | "edit"
   | "save"
   | "submit"
   | "approve"
   | "reject"
+  | "request_revision"
   | "resubmit"
   | "confirm"
   | "enroll"
   | "delete"
   | "override"
+  | "withdraw"
+  | "claim"
+  | "unclaim"
+  | "drop"
 
 // ============================================================================
 // DOCUMENT TYPES

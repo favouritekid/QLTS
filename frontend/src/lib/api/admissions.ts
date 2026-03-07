@@ -132,10 +132,28 @@ export async function rejectAdmission(
 }
 
 /**
+ * Request revision on admission profile (Manager/Admin action)
+ * POST /api/admissions/{id}/request-revision
+ *
+ * Transitions status from submitted/resubmitted → revision_requested
+ * Requires reason and version for optimistic locking
+ */
+export async function requestRevision(
+  id: number,
+  data: { reason: string; version: number }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/request-revision`,
+    data
+  )
+  return response.data
+}
+
+/**
  * Resubmit rejected admission profile (Officer action)
  * POST /api/admissions/{id}/resubmit
  *
- * Transitions status from rejected → resubmitted
+ * Transitions status from rejected/revision_requested → resubmitted
  */
 export async function resubmitAdmission(
   id: number,
@@ -144,6 +162,24 @@ export async function resubmitAdmission(
   const response = await api.post<AdmissionProfileResponse>(
     `/api/admissions/${id}/resubmit`,
     data ?? {}
+  )
+  return response.data
+}
+
+/**
+ * Mark enrolled student as dropped out (Manager/Admin action)
+ * POST /api/admissions/{id}/drop
+ *
+ * Side-channel: status stays "enrolled", sets is_dropped=true
+ * Requires reason and version for optimistic locking
+ */
+export async function dropStudent(
+  id: number,
+  data: { reason: string; version: number }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/drop`,
+    data
   )
   return response.data
 }
@@ -411,8 +447,10 @@ export const admissionsApi = {
   updateAdmission,
   submitAdmission,
   resubmitAdmission,
+  requestRevision,
   approveAdmission,
   rejectAdmission,
+  dropStudent,
   enrollStudent,
   deleteAdmission,
   uploadAdmissionDocument,

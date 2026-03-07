@@ -41,9 +41,11 @@ export const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   resubmitted: { label: "Đã nộp lại", color: "bg-info-100 text-info-700" },
   approved: { label: "Đã duyệt", color: "bg-success-100 text-success-700" },
   rejected: { label: "Từ chối", color: "bg-error-100 text-error-700" },
+  revision_requested: { label: "Yêu cầu bổ sung", color: "bg-orange-100 text-orange-700" },
   confirmed: { label: "Đã xác nhận", color: "bg-emerald-100 text-emerald-700" },
   overridden: { label: "Đã override", color: "bg-purple-100 text-purple-700" },
   enrolled: { label: "Đã nhập học", color: "bg-blue-100 text-blue-700" },
+  withdrawn: { label: "Đã rút hồ sơ", color: "bg-muted text-muted-foreground" },
 }
 
 export const ELIGIBILITY_CONFIG: Record<string, { label: string; color: string }> = {

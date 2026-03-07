@@ -422,7 +422,7 @@ export const admissionProfileResponseSchema = z.object({
   party_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_official_entry_date: z.string().datetime({ offset: true }).nullable(),
   // Status (extended for async-first workflow)
-  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "confirmed", "overridden", "enrolled"]),
+  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "revision_requested", "confirmed", "overridden", "enrolled", "withdrawn"]),
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year
   applied_rules: appliedRulesSchema, // ✅ NEW: Properly typed with 18 fields
@@ -552,6 +552,11 @@ export const admissionProfileResponseSchema = z.object({
   rejected_by_id: z.number().nullable().optional(),
   rejection_reason: z.string().nullable().optional(),
 
+  // Revision request audit fields
+  revision_requested_at: z.string().datetime({ offset: true }).nullable().optional(),
+  revision_requested_by_id: z.number().nullable().optional(),
+  revision_reason: z.string().nullable().optional(),
+
   // Resubmit audit fields
   resubmitted_at: z.string().datetime({ offset: true }).nullable().optional(),
   resubmitted_by_id: z.number().nullable().optional(),
@@ -564,6 +569,12 @@ export const admissionProfileResponseSchema = z.object({
 
   // Confirmation tracking
   confirmed_by_id: z.number().nullable().optional(),
+
+  // Drop-out tracking (side-channel, status stays "enrolled")
+  is_dropped: z.boolean().nullable().optional(),
+  dropped_at: z.string().datetime({ offset: true }).nullable().optional(),
+  dropped_by_id: z.number().nullable().optional(),
+  dropped_reason: z.string().nullable().optional(),
 
   // Claim/assignment fields
   assigned_reviewer_id: z.number().nullable().optional(),
@@ -756,9 +767,11 @@ const STATUS_COLORS: Record<string, string> = {
   resubmitted: "bg-warning-100 text-warning-800",
   approved: "bg-success-100 text-success-800",
   rejected: "bg-error-100 text-error-800",
+  revision_requested: "bg-orange-100 text-orange-800",
   confirmed: "bg-success-100 text-success-800",
   enrolled: "bg-info-100 text-info-800",
   overridden: "bg-purple-100 text-purple-800",
+  withdrawn: "bg-muted text-muted-foreground",
 }
 
 /**
@@ -779,9 +792,11 @@ const STATUS_LABELS: Record<string, string> = {
   resubmitted: "Nộp lại",
   approved: "Đã duyệt",
   rejected: "Từ chối",
+  revision_requested: "Yêu cầu bổ sung",
   confirmed: "Đã xác nhận",
   enrolled: "Đã nhập học",
   overridden: "Đã override",
+  withdrawn: "Đã rút hồ sơ",
 }
 
 /**
@@ -828,6 +843,42 @@ export const rejectRequestSchema = z.object({
 })
 
 export type RejectRequest = z.infer<typeof rejectRequestSchema>
+
+/**
+ * Revision Request Schema
+ * Mirrors backend: app/schemas/admissions.py -> RevisionRequest
+ *
+ * Used when Manager/Admin requests revision on a submitted admission profile.
+ * Requires reason (minimum 10 characters) and version for optimistic locking.
+ */
+export const revisionRequestSchema = z.object({
+  reason: z
+    .string()
+    .min(10, "Lý do yêu cầu bổ sung phải có ít nhất 10 ký tự")
+    .max(1000, "Lý do yêu cầu bổ sung không được quá 1000 ký tự")
+    .trim(),
+  version: z.number().int().positive("Version must be a positive integer"),
+})
+
+export type RevisionRequest = z.infer<typeof revisionRequestSchema>
+
+/**
+ * Drop Student Request Schema
+ * Mirrors backend: app/schemas/admissions.py -> DropStudentRequest
+ *
+ * Used when Manager/Admin marks an enrolled student as dropped out.
+ * Requires reason (minimum 10 characters) and version for optimistic locking.
+ */
+export const dropStudentRequestSchema = z.object({
+  reason: z
+    .string()
+    .min(10, "Lý do ngừng theo học phải có ít nhất 10 ký tự")
+    .max(1000, "Lý do ngừng theo học không được quá 1000 ký tự")
+    .trim(),
+  version: z.number().int().positive("Version must be a positive integer"),
+})
+
+export type DropStudentRequest = z.infer<typeof dropStudentRequestSchema>
 
 // ==============================================================================
 // BULK ACTION SCHEMAS
@@ -919,6 +970,7 @@ export interface AdmissionStats {
   approved_count: number
   enrolled_count: number
   rejected_count: number
+  dropped_count: number
   conversion_rate: number
   avg_completion: number
 }

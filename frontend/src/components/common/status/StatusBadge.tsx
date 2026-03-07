@@ -114,7 +114,11 @@ export const ADMISSION_STATUS_MAP: Record<string, StatusConfig> = {
   reviewing: { label: "Đang xét", variant: "admission-reviewing" },
   approved: { label: "Đã duyệt", variant: "admission-approved" },
   rejected: { label: "Từ chối", variant: "admission-rejected" },
+  revision_requested: { label: "Yêu cầu bổ sung", variant: "warning" },
+  confirmed: { label: "Đã xác nhận", variant: "success" },
+  overridden: { label: "Đã override", variant: "primary" },
   enrolled: { label: "Đã nhập học", variant: "admission-enrolled" },
+  withdrawn: { label: "Đã rút hồ sơ", variant: "neutral" },
 };
 
 export const SCORE_LEVEL_MAP: Record<string, StatusConfig> = {

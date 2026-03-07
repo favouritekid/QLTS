@@ -27,6 +27,9 @@ import {
   TrendingDown,
   Minus,
   AlertCircle,
+  AlertTriangle,
+  Shield,
+  LogOut,
   type LucideIcon,
 } from "lucide-react";
 
@@ -41,7 +44,11 @@ export type AdmissionStatus =
   | "reviewing"
   | "approved"
   | "rejected"
-  | "enrolled";
+  | "revision_requested"
+  | "confirmed"
+  | "overridden"
+  | "enrolled"
+  | "withdrawn";
 
 export type LeadStatus =
   | "new"
@@ -141,6 +148,33 @@ export const ADMISSION_BADGE_CONFIG: Record<AdmissionStatus, StatusBadgeConfig> 
     description: "Hồ sơ bị từ chối, cần chỉnh sửa",
     order: 6,
   },
+  revision_requested: {
+    label: "Yêu cầu bổ sung",
+    shortLabel: "Bổ sung",
+    icon: AlertTriangle,
+    className: "bg-orange-50 text-orange-700 border-orange-200",
+    variant: "outline",
+    description: "Hồ sơ cần bổ sung thêm tài liệu/thông tin",
+    order: 7,
+  },
+  confirmed: {
+    label: "Đã xác nhận",
+    shortLabel: "Xác nhận",
+    icon: CheckCircle,
+    className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    variant: "default",
+    description: "Hồ sơ đã được xác nhận bởi thí sinh",
+    order: 8,
+  },
+  overridden: {
+    label: "Đã override",
+    shortLabel: "Override",
+    icon: Shield,
+    className: "bg-purple-50 text-purple-700 border-purple-200",
+    variant: "default",
+    description: "Hồ sơ đã được admin override",
+    order: 9,
+  },
   enrolled: {
     label: "Đã nhập học",
     shortLabel: "Nhập học",
@@ -148,7 +182,16 @@ export const ADMISSION_BADGE_CONFIG: Record<AdmissionStatus, StatusBadgeConfig> 
     className: "bg-admission-enrolled-bg text-admission-enrolled-fg border-admission-enrolled-border",
     variant: "default",
     description: "Thí sinh đã hoàn tất nhập học",
-    order: 7,
+    order: 10,
+  },
+  withdrawn: {
+    label: "Đã rút hồ sơ",
+    shortLabel: "Rút",
+    icon: LogOut,
+    className: "bg-muted text-muted-foreground border-border",
+    variant: "secondary",
+    description: "Hồ sơ đã được rút lại",
+    order: 11,
   },
 };
 
