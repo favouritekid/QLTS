@@ -784,6 +784,7 @@ async def seed_lead_dependencies(setup_test_database):
                 models.ConsultationStatus(id="sts13", name="Dang xu ly", color_code="#FFCC00", stage_id="stg03"),
                 models.ConsultationStatus(id="sts14", name="Xac nhan nhap hoc", color_code="#009900", stage_id="stg05"),
                 models.ConsultationStatus(id="sts16", name="Ho so khong dat", color_code="#FF0000", stage_id="stg04"),
+                models.ConsultationStatus(id="sts17", name="Yeu cau bo sung ho so", color_code="#FF8800", stage_id="stg03"),
                 models.ConsultationStatus(id="sts18", name="Da hoan hoc phi", color_code="#008888", stage_id="stg05"),
             ]
             session.add_all(admission_statuses)

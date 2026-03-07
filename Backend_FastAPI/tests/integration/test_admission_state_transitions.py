@@ -1169,3 +1169,465 @@ class TestClaimUnclaimWorkflow:
 
         assert response.status_code == 400, \
             f"Should not unclaim when no reviewer: {response.status_code} - {response.text}"
+
+
+# ==============================================================================
+# REVISION REQUEST TESTS (Phase 5a)
+# ==============================================================================
+
+
+class TestRevisionRequestWorkflow:
+    """
+    Test request-revision endpoint (Phase 5a).
+
+    Workflow: SUBMITTED/RESUBMITTED → REVISION_REQUESTED → RESUBMITTED → ...
+    """
+
+    async def test_manager_can_request_revision_on_submitted(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """SUBMITTED → request-revision → 200, status=revision_requested."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={
+                "reason": "Thiếu ảnh CCCD mặt sau, vui lòng bổ sung",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200, f"Request revision failed: {response.text}"
+        data = response.json()
+        assert data["status"] == "revision_requested"
+        assert data["revision_reason"] == "Thiếu ảnh CCCD mặt sau, vui lòng bổ sung"
+        assert data["revision_requested_by_id"] == manager_user_in_db["id"]
+        assert data["revision_requested_at"] is not None
+
+    async def test_manager_can_request_revision_on_resubmitted(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """RESUBMITTED → request-revision → 200."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="resubmitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={
+                "reason": "Bổ sung thêm bản sao giấy khai sinh có công chứng",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200, f"Request revision on resubmitted failed: {response.text}"
+        assert response.json()["status"] == "revision_requested"
+
+    async def test_request_revision_on_draft_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """DRAFT → request-revision → 400 (invalid transition)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="draft")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={
+                "reason": "Should not work on draft profiles at all",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400, \
+            f"Should not request revision on draft: {response.status_code}"
+
+    async def test_request_revision_on_approved_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """APPROVED → request-revision → 400 (invalid transition)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="approved")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={
+                "reason": "Should not work on already approved profiles",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+
+    async def test_request_revision_short_reason_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Reason < 10 chars → 422 validation error."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={"reason": "short", "version": profile.version},
+            headers=headers,
+        )
+
+        assert response.status_code == 422
+
+    async def test_request_revision_stale_version_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Stale version → 409 Conflict."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        # Manually bump version
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                db_profile = await session.get(models.AdmissionProfile, profile.id)
+                db_profile.version = 5
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={
+                "reason": "This should fail due to stale version number",
+                "version": 1,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+
+    async def test_revision_then_resubmit_flow(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Full flow: SUBMITTED → REVISION_REQUESTED → RESUBMITTED → APPROVED.
+        Verifies revision fields are preserved after resubmit.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+        officer_headers = await get_auth_headers(client, officer_user_in_db)
+
+        # 1. Manager requests revision
+        rev_resp = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={
+                "reason": "Cần bổ sung giấy khám sức khỏe có xác nhận",
+                "version": profile.version,
+            },
+            headers=manager_headers,
+        )
+        assert rev_resp.status_code == 200
+        assert rev_resp.json()["status"] == "revision_requested"
+        rev_version = rev_resp.json()["version"]
+
+        # 2. Officer resubmits
+        resub_resp = await client.post(
+            f"/api/admissions/{profile.id}/resubmit",
+            json={"notes": "Đã bổ sung giấy khám", "version": rev_version},
+            headers=officer_headers,
+        )
+        assert resub_resp.status_code == 200
+        assert resub_resp.json()["status"] == "resubmitted"
+        resub_version = resub_resp.json()["version"]
+
+        # 3. Manager approves
+        approve_resp = await client.post(
+            f"/api/admissions/{profile.id}/approve",
+            json={"notes": "Hồ sơ đầy đủ sau bổ sung", "version": resub_version},
+            headers=manager_headers,
+        )
+        assert approve_resp.status_code == 200
+        assert approve_resp.json()["status"] == "approved"
+
+        # Verify revision fields are preserved (not overwritten by resubmit/approve)
+        final = await reload_profile(profile.id)
+        assert final.revision_reason == "Cần bổ sung giấy khám sức khỏe có xác nhận"
+        assert final.revision_requested_at is not None
+
+    async def test_revision_then_reject_flow(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        REVISION_REQUESTED → REJECTED (manager rejects without waiting for resubmit).
+        Both revision and rejection fields should be preserved independently.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        # 1. Request revision
+        rev_resp = await client.post(
+            f"/api/admissions/{profile.id}/request-revision",
+            json={
+                "reason": "Hồ sơ thiếu nhiều giấy tờ cần thiết, yêu cầu bổ sung",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+        assert rev_resp.status_code == 200
+        rev_version = rev_resp.json()["version"]
+
+        # 2. Reject without waiting (allowed by state machine)
+        reject_resp = await client.post(
+            f"/api/admissions/{profile.id}/reject",
+            json={
+                "reason": "Quyết định từ chối do hồ sơ không đáp ứng yêu cầu",
+                "version": rev_version,
+            },
+            headers=headers,
+        )
+        assert reject_resp.status_code == 200
+        assert reject_resp.json()["status"] == "rejected"
+
+        # Both revision and rejection audit trails preserved
+        final = await reload_profile(profile.id)
+        assert final.revision_reason is not None
+        assert final.rejection_reason is not None
+        assert final.revision_requested_at is not None
+        assert final.rejected_at is not None
+
+
+# ==============================================================================
+# DROP STUDENT TESTS (Phase 5b)
+# ==============================================================================
+
+
+class TestDropStudentWorkflow:
+    """
+    Test drop endpoint (Phase 5b).
+
+    Side-channel: status stays "enrolled", is_dropped=True.
+    """
+
+    async def test_manager_can_drop_enrolled_student(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """ENROLLED + drop → 200, is_dropped=True, status stays enrolled."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="enrolled")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/drop",
+            json={
+                "reason": "Sinh viên tự nguyện nghỉ học do hoàn cảnh gia đình",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200, f"Drop failed: {response.text}"
+        data = response.json()
+        assert data["status"] == "enrolled", "Status should remain 'enrolled'"
+        assert data["is_dropped"] is True
+        assert data["dropped_reason"] == "Sinh viên tự nguyện nghỉ học do hoàn cảnh gia đình"
+        assert data["dropped_by_id"] == manager_user_in_db["id"]
+        assert data["dropped_at"] is not None
+
+    async def test_drop_non_enrolled_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """SUBMITTED → drop → 400 (can only drop enrolled students)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="submitted")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/drop",
+            json={
+                "reason": "Should not work on non-enrolled profiles at all",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+
+    async def test_drop_already_dropped_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Double drop → 400 (already dropped)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+
+        # Create enrolled + already dropped profile
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = models.AdmissionProfile(
+                    lead_id=lead_id,
+                    status="enrolled",
+                    citizen_id="888877776666",
+                    version=1,
+                    is_dropped=True,
+                    applied_rules={"min_gpa": 6.0, "mandatory_docs": []},
+                    academic_year=2025,
+                )
+                session.add(profile)
+                await session.flush()
+                profile_id = profile.id
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/drop",
+            json={
+                "reason": "Should not work on already dropped students whatsoever",
+                "version": 1,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+
+    async def test_drop_short_reason_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Reason < 10 chars → 422."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="enrolled")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/drop",
+            json={"reason": "short", "version": profile.version},
+            headers=headers,
+        )
+
+        assert response.status_code == 422
+
+    async def test_drop_stale_version_fails(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Stale version → 409 Conflict."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="enrolled")
+
+        # Bump version
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                db_profile = await session.get(models.AdmissionProfile, profile.id)
+                db_profile.version = 5
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile.id}/drop",
+            json={
+                "reason": "This should fail due to stale version number here",
+                "version": 1,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+
+    async def test_drop_clears_available_actions(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """After drop, available_actions should be empty."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="enrolled")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        # Drop the student
+        drop_resp = await client.post(
+            f"/api/admissions/{profile.id}/drop",
+            json={
+                "reason": "Sinh viên vi phạm quy chế đào tạo nhiều lần",
+                "version": profile.version,
+            },
+            headers=headers,
+        )
+        assert drop_resp.status_code == 200
+
+        # Fetch profile and check no workflow actions remain (only view is allowed)
+        get_resp = await client.get(
+            f"/api/admissions/{profile.id}",
+            headers=headers,
+        )
+        assert get_resp.status_code == 200
+        actions = get_resp.json()["available_actions"]
+        # No workflow actions (approve, reject, drop, etc.) — only view may remain
+        workflow_actions = [a for a in actions if a != "view"]
+        assert workflow_actions == [], f"Dropped student should have no workflow actions, got: {actions}"
+        assert get_resp.json()["is_dropped"] is True
