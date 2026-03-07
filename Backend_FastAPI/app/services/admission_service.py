@@ -367,14 +367,17 @@ def _compute_frontend_fields(
     # =========================================================================
     # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
     # =========================================================================
+    _is_dropped = getattr(profile, "is_dropped", False)
     permissions = {
-        "edit": status in ["draft", "rejected"] and (is_owner or is_manager or is_admin),
-        "save": status in ["draft", "rejected"] and (is_owner or is_manager or is_admin),
+        "edit": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
+        "save": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "submit": status == "draft" and (is_owner or is_manager or is_admin),
         "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
-        "resubmit": status == "rejected" and (is_owner or is_manager or is_admin),
+        "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "enroll": status in ["confirmed", "overridden"] and (is_owner or is_manager or is_admin),
+        "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),
         "unclaim": (bool(profile.assigned_reviewer_id)
@@ -1678,8 +1681,8 @@ async def update_profile(
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    # State Locking: Only draft or rejected profiles can be updated
-    if profile.status not in ["draft", "rejected"]:
+    # State Locking: Only draft, rejected, or revision_requested profiles can be updated
+    if profile.status not in ["draft", "rejected", "revision_requested"]:
         log.warning(
             "Attempted to update locked profile",
             profile_id=profile_id,
@@ -1688,7 +1691,7 @@ async def update_profile(
         )
         raise BadRequest(
             f"Cannot update profile with status '{profile.status}'. "
-            "Only draft or rejected profiles can be updated."
+            "Only draft, rejected, or revision_requested profiles can be updated."
         )
     
     # Optimistic Locking: Check version matches
@@ -2316,7 +2319,7 @@ async def upload_document(
     profile = await get_profile(db, profile_id, current_user)
 
     # State Locking
-    if profile.status not in ["draft", "rejected"]:
+    if profile.status not in ["draft", "rejected", "revision_requested"]:
         raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
 
     # File validation constants
