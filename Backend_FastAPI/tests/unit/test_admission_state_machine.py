@@ -25,16 +25,18 @@ class TestAdmissionStatusEnum:
     """Test AdmissionStatus enum values."""
 
     def test_all_statuses_defined(self):
-        """Verify all 8 statuses are defined."""
+        """Verify all 10 statuses are defined."""
         expected_statuses = {
             "draft",
             "submitted",
             "approved",
             "rejected",
+            "revision_requested",
             "resubmitted",
             "confirmed",
             "overridden",
             "enrolled",
+            "withdrawn",
         }
         actual_statuses = {status.value for status in AdmissionStatus}
         assert actual_statuses == expected_statuses
@@ -50,29 +52,43 @@ class TestAllowedTransitions:
     """Test ALLOWED_TRANSITIONS state machine map."""
 
     def test_draft_transitions(self):
-        """DRAFT can only transition to SUBMITTED."""
+        """DRAFT can transition to SUBMITTED or WITHDRAWN."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.DRAFT] == {
-            AdmissionStatus.SUBMITTED
+            AdmissionStatus.SUBMITTED,
+            AdmissionStatus.WITHDRAWN,
         }
 
     def test_submitted_transitions(self):
-        """SUBMITTED can transition to APPROVED or REJECTED."""
+        """SUBMITTED can transition to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.SUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
+            AdmissionStatus.REVISION_REQUESTED,
+            AdmissionStatus.WITHDRAWN,
         }
 
     def test_rejected_transitions(self):
-        """REJECTED can only transition to RESUBMITTED."""
+        """REJECTED can transition to RESUBMITTED or WITHDRAWN."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.REJECTED] == {
-            AdmissionStatus.RESUBMITTED
+            AdmissionStatus.RESUBMITTED,
+            AdmissionStatus.WITHDRAWN,
         }
 
     def test_resubmitted_transitions(self):
-        """RESUBMITTED can transition to APPROVED or REJECTED."""
+        """RESUBMITTED can transition to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.RESUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
+            AdmissionStatus.REVISION_REQUESTED,
+            AdmissionStatus.WITHDRAWN,
+        }
+
+    def test_revision_requested_transitions(self):
+        """REVISION_REQUESTED can transition to RESUBMITTED, REJECTED, or WITHDRAWN."""
+        assert ALLOWED_TRANSITIONS[AdmissionStatus.REVISION_REQUESTED] == {
+            AdmissionStatus.RESUBMITTED,
+            AdmissionStatus.REJECTED,
+            AdmissionStatus.WITHDRAWN,
         }
 
     def test_approved_transitions(self):
@@ -98,6 +114,10 @@ class TestAllowedTransitions:
         """ENROLLED is final state - no transitions allowed."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.ENROLLED] == set()
 
+    def test_withdrawn_transitions(self):
+        """WITHDRAWN is final state - no transitions allowed."""
+        assert ALLOWED_TRANSITIONS[AdmissionStatus.WITHDRAWN] == set()
+
     def test_all_statuses_have_transitions_defined(self):
         """Verify every status has a transition rule (even if empty)."""
         for status in AdmissionStatus:
@@ -112,11 +132,20 @@ class TestCanTransition:
         "current,target",
         [
             ("draft", "submitted"),
+            ("draft", "withdrawn"),
             ("submitted", "approved"),
             ("submitted", "rejected"),
+            ("submitted", "revision_requested"),
+            ("submitted", "withdrawn"),
             ("rejected", "resubmitted"),
+            ("rejected", "withdrawn"),
+            ("revision_requested", "resubmitted"),
+            ("revision_requested", "rejected"),
+            ("revision_requested", "withdrawn"),
             ("resubmitted", "approved"),
             ("resubmitted", "rejected"),
+            ("resubmitted", "revision_requested"),
+            ("resubmitted", "withdrawn"),
             ("approved", "confirmed"),
             ("approved", "overridden"),
             ("confirmed", "enrolled"),
@@ -133,15 +162,21 @@ class TestCanTransition:
         [
             ("draft", "approved"),  # Skip submitted
             ("draft", "enrolled"),  # Skip everything
+            ("draft", "revision_requested"),  # Cannot request revision from draft
             ("submitted", "confirmed"),  # Skip approved
             ("submitted", "enrolled"),  # Skip multiple states
             ("rejected", "approved"),  # Must resubmit first
             ("rejected", "confirmed"),  # Invalid path
+            ("revision_requested", "approved"),  # Must resubmit first
             ("approved", "rejected"),  # Cannot go backwards
             ("confirmed", "approved"),  # Cannot go backwards
             ("enrolled", "approved"),  # Final state - no transitions
             ("enrolled", "confirmed"),  # Final state - no transitions
             ("enrolled", "enrolled"),  # Final state - no self-transition
+            ("withdrawn", "draft"),  # Final state - no transitions
+            ("withdrawn", "submitted"),  # Final state - no transitions
+            ("withdrawn", "withdrawn"),  # Final state - no self-transition
+            ("approved", "withdrawn"),  # Cannot withdraw after approval
         ],
     )
     def test_invalid_transitions(self, current, target):
@@ -166,20 +201,24 @@ class TestGetAllowedTransitions:
     """Test get_allowed_transitions() helper function."""
 
     def test_draft_allowed_transitions(self):
-        """DRAFT can only go to SUBMITTED."""
-        assert get_allowed_transitions("draft") == {"submitted"}
+        """DRAFT can go to SUBMITTED or WITHDRAWN."""
+        assert get_allowed_transitions("draft") == {"submitted", "withdrawn"}
 
     def test_submitted_allowed_transitions(self):
-        """SUBMITTED can go to APPROVED or REJECTED."""
-        assert get_allowed_transitions("submitted") == {"approved", "rejected"}
+        """SUBMITTED can go to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
+        assert get_allowed_transitions("submitted") == {"approved", "rejected", "revision_requested", "withdrawn"}
 
     def test_rejected_allowed_transitions(self):
-        """REJECTED can only go to RESUBMITTED."""
-        assert get_allowed_transitions("rejected") == {"resubmitted"}
+        """REJECTED can go to RESUBMITTED or WITHDRAWN."""
+        assert get_allowed_transitions("rejected") == {"resubmitted", "withdrawn"}
+
+    def test_revision_requested_allowed_transitions(self):
+        """REVISION_REQUESTED can go to RESUBMITTED, REJECTED, or WITHDRAWN."""
+        assert get_allowed_transitions("revision_requested") == {"resubmitted", "rejected", "withdrawn"}
 
     def test_resubmitted_allowed_transitions(self):
-        """RESUBMITTED can go to APPROVED or REJECTED."""
-        assert get_allowed_transitions("resubmitted") == {"approved", "rejected"}
+        """RESUBMITTED can go to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
+        assert get_allowed_transitions("resubmitted") == {"approved", "rejected", "revision_requested", "withdrawn"}
 
     def test_approved_allowed_transitions(self):
         """APPROVED can go to CONFIRMED or OVERRIDDEN."""
@@ -197,6 +236,10 @@ class TestGetAllowedTransitions:
         """ENROLLED is final - no transitions."""
         assert get_allowed_transitions("enrolled") == set()
 
+    def test_withdrawn_allowed_transitions(self):
+        """WITHDRAWN is final - no transitions."""
+        assert get_allowed_transitions("withdrawn") == set()
+
     def test_invalid_status(self):
         """Invalid status returns empty set."""
         assert get_allowed_transitions("invalid_status") == set()
@@ -206,8 +249,12 @@ class TestIsFinalState:
     """Test is_final_state() helper function."""
 
     def test_enrolled_is_final(self):
-        """ENROLLED is the only final state."""
+        """ENROLLED is a final state."""
         assert is_final_state("enrolled") is True
+
+    def test_withdrawn_is_final(self):
+        """WITHDRAWN is a final state."""
+        assert is_final_state("withdrawn") is True
 
     @pytest.mark.parametrize(
         "status",
@@ -216,6 +263,7 @@ class TestIsFinalState:
             "submitted",
             "approved",
             "rejected",
+            "revision_requested",
             "resubmitted",
             "confirmed",
             "overridden",
@@ -254,7 +302,8 @@ class TestValidateTransition:
 
         error_message = str(exc_info.value)
         assert "Invalid transition: draft → enrolled" in error_message
-        assert "Allowed transitions from draft: submitted" in error_message
+        assert "submitted" in error_message
+        assert "withdrawn" in error_message
 
     def test_error_message_for_final_state(self):
         """Error message for final state should indicate no transitions."""
@@ -273,6 +322,8 @@ class TestValidateTransition:
         error_message = str(exc_info.value)
         assert "approved" in error_message
         assert "rejected" in error_message
+        assert "revision_requested" in error_message
+        assert "withdrawn" in error_message
 
 
 class TestStateMachineInvariants:
@@ -305,6 +356,12 @@ class TestStateMachineInvariants:
         for target_status in AdmissionStatus:
             if target_status != AdmissionStatus.ENROLLED:
                 assert can_transition("enrolled", target_status.value) is False
+
+    def test_withdrawn_is_truly_final(self):
+        """WITHDRAWN state has no outgoing transitions."""
+        for target_status in AdmissionStatus:
+            if target_status != AdmissionStatus.WITHDRAWN:
+                assert can_transition("withdrawn", target_status.value) is False
 
     def test_multiple_paths_to_enrolled(self):
         """There are 2 paths to ENROLLED: normal and override."""

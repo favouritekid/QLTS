@@ -558,10 +558,21 @@ class AdmissionProfileResponse(BaseModel):
     resubmitted_by_id: Optional[int] = None
     resubmit_notes: Optional[str] = None
 
+    # ✅ Revision request audit fields
+    revision_requested_at: Optional[datetime] = None
+    revision_requested_by_id: Optional[int] = None
+    revision_reason: Optional[str] = None
+
     # ✅ Override audit fields
     overridden_at: Optional[datetime] = None
     overridden_by_id: Optional[int] = None
     override_reason: Optional[str] = None
+
+    # ✅ Drop-out tracking
+    is_dropped: Optional[bool] = None
+    dropped_at: Optional[datetime] = None
+    dropped_by_id: Optional[int] = None
+    dropped_reason: Optional[str] = None
 
     # ✅ Confirmation tracking
     confirmed_by_id: Optional[int] = None
@@ -969,6 +980,35 @@ class RejectRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
+class RevisionRequest(BaseModel):
+    """
+    Schema for revision request action (Manager/Admin).
+
+    Transition: SUBMITTED/RESUBMITTED -> REVISION_REQUESTED
+    Requires Manager or Admin role.
+    Reason is MANDATORY (min 10 chars).
+    """
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=1000,
+        description="Revision reason/instructions (min 10 chars, required)"
+    )
+    version: int = Field(
+        ...,
+        ge=1,
+        description="REQUIRED: Current profile version for optimistic locking"
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS Prevention: Escape HTML entities."""
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
 class ResubmitRequest(BaseModel):
     """
     Schema for resubmit action (Officer).
@@ -1043,6 +1083,34 @@ class FinalizeRequest(BaseModel):
     """
     # No fields required - triggers enrollment
     pass
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class DropStudentRequest(BaseModel):
+    """
+    Schema for marking an enrolled student as dropped out (Manager/Admin).
+
+    Side-channel: status stays "enrolled", sets is_dropped=True.
+    Reason is MANDATORY (min 10 chars).
+    """
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=1000,
+        description="Drop-out reason (min 10 chars, required)"
+    )
+    version: int = Field(
+        ...,
+        ge=1,
+        description="REQUIRED: Current profile version for optimistic locking"
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS Prevention: Escape HTML entities."""
+        return html.escape(v.strip())
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -1139,6 +1207,7 @@ class AdmissionStats(BaseModel):
     approved_count: int = 0
     enrolled_count: int = 0
     rejected_count: int = 0
+    dropped_count: int = 0
     conversion_rate: float = 0.0
     avg_completion: float = 0.0
 
@@ -1160,7 +1229,9 @@ __all__ = [
     "DocumentFormatVerifyRequest",  # ✅ Added
     "ApproveRequest",
     "RejectRequest",
+    "RevisionRequest",
     "ResubmitRequest",
+    "DropStudentRequest",
     "ConfirmRequest",
     "OverrideRequest",
     "FinalizeRequest",

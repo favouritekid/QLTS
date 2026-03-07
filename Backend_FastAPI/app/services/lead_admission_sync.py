@@ -13,11 +13,12 @@ Architecture:
 
 Usage:
     Called from admission_service.py after status transitions:
-    - create_profile() → sts07 (Đã tiếp nhận)
+    - create_profile() → sts06 (Đồng ý tư vấn) via milestone consultation
     - submit_and_evaluate() → sts07 (Đã tiếp nhận)
     - record_application_fee_payment() → sts13 (Đã hoàn lệ phí xét tuyển)
     - approve_profile() → sts09 (Đủ điều kiện)
     - reject_profile() → sts16 (Không đạt)
+    - request_revision() → sts17 (Yêu cầu bổ sung hồ sơ)
     - enroll_student() → sts11 (Đã xác nhận nhập học)
 """
 
@@ -39,14 +40,16 @@ log = structlog.get_logger(__name__)
 
 ADMISSION_TO_LEAD_STATUS_MAP = {
     # Admission Status    → Lead ConsultationStatus ID
-    "draft":        "sts07",   # Đã tiếp nhận (hồ sơ mới tạo)
+    "draft":        "sts06",   # Đồng ý tư vấn (chưa nộp, chỉ khởi tạo)
     "submitted":    "sts07",   # Đã tiếp nhận (đã nộp, chờ duyệt)
     "resubmitted":  "sts07",   # Đã tiếp nhận (nộp lại sau reject)
     "approved":     "sts09",   # Đủ điều kiện (đã duyệt)
     "confirmed":    "sts09",   # Đủ điều kiện (xác nhận ý định nhập học)
     "overridden":   "sts09",   # Đủ điều kiện (admin override)
     "rejected":     "sts16",   # Không đạt (bị từ chối)
+    "revision_requested": "sts17",  # Yêu cầu bổ sung hồ sơ
     "enrolled":     "sts11",   # Đã xác nhận nhập học (terminal)
+    "withdrawn":    "sts08",   # Từ chối tư vấn (rút hồ sơ, terminal)
 }
 
 # Application fee status from event mapping (Single Source of Truth)
@@ -98,6 +101,17 @@ async def sync_lead_from_admission(
 
     # Get target consultation status from mapping
     target_status_id = ADMISSION_TO_LEAD_STATUS_MAP.get(profile.status)
+
+    # Skip draft — milestone consultation is the canonical sync for profile creation.
+    # Avoids double LeadStatusHistory records when create_profile() calls both
+    # sync_lead_from_admission() and _create_admission_milestone_consultation().
+    if profile.status == "draft":
+        log.debug(
+            "sync_lead_from_admission: Skipping draft, milestone consultation handles this",
+            profile_id=profile.id,
+        )
+        return False
+
     if not target_status_id:
         log.warning(
             "sync_lead_from_admission: Unknown admission status",

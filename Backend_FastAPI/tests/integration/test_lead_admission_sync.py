@@ -4,11 +4,12 @@ Integration tests for Lead-Admission Status Synchronization.
 Tests the side effects on Lead model when AdmissionProfile status transitions.
 
 Mapping tested:
-- draft     → sts07 (Đã tiếp nhận)
+- draft     → skipped (milestone consultation handles via sts06)
 - submitted → sts07 (Đã tiếp nhận)
 - approved  → sts09 (Đủ điều kiện)
 - rejected  → sts16 (Không đạt)
 - enrolled  → sts11 (Đã xác nhận nhập học)
+- withdrawn → sts08 (Từ chối tư vấn)
 
 Finance Phase mappings (tuition fee):
 - tuition_fee_calculated → sts14 (Chưa hoàn tất học phí)
@@ -62,6 +63,10 @@ async def sync_statuses(db: AsyncSession) -> dict:
         "sts16": {"name": "Không đạt", "phase": "admission", "order": 216},
         "sts11": {"name": "Đã xác nhận nhập học", "phase": "enrolled", "order": 211},
         "sts06": {"name": "Đủ tiêu chí", "phase": "consultation", "order": 206},
+        "sts08": {"name": "Từ chối tư vấn", "phase": "consultation", "order": 208},
+        # Revision & Drop statuses
+        "sts17": {"name": "Yêu cầu bổ sung hồ sơ", "phase": "admission", "order": 217},
+        "sts12": {"name": "Ngưng theo học", "phase": "enrolled", "order": 212},
         # Finance Phase statuses
         "sts14": {"name": "Chưa hoàn tất học phí", "phase": "finance", "order": 214},
         "sts10": {"name": "Đã hoàn tất học phí", "phase": "finance", "order": 210},
@@ -208,8 +213,11 @@ class TestMappingConfiguration:
     """Test that the mapping configuration is correct."""
 
     def test_mapping_has_all_required_statuses(self):
-        """Verify mapping contains all expected admission statuses."""
-        expected_statuses = {"draft", "submitted", "approved", "rejected", "enrolled"}
+        """Verify mapping contains all expected admission statuses (10 total)."""
+        expected_statuses = {
+            "draft", "submitted", "approved", "rejected", "revision_requested",
+            "resubmitted", "confirmed", "overridden", "enrolled", "withdrawn",
+        }
         assert set(ADMISSION_TO_LEAD_STATUS_MAP.keys()) == expected_statuses
 
     def test_mapping_values_are_valid_status_ids(self):
@@ -218,9 +226,9 @@ class TestMappingConfiguration:
             assert lead_status.startswith("sts"), \
                 f"Invalid status ID for {admission_status}: {lead_status}"
 
-    def test_draft_and_submitted_map_to_same_status(self):
-        """Draft and submitted should both map to sts07 (Đã tiếp nhận)."""
-        assert ADMISSION_TO_LEAD_STATUS_MAP["draft"] == "sts07"
+    def test_draft_maps_to_sts06_submitted_to_sts07(self):
+        """Draft maps to sts06 (Đồng ý tư vấn), submitted to sts07 (Đã tiếp nhận)."""
+        assert ADMISSION_TO_LEAD_STATUS_MAP["draft"] == "sts06"
         assert ADMISSION_TO_LEAD_STATUS_MAP["submitted"] == "sts07"
 
     def test_approved_maps_to_sts09(self):
@@ -242,16 +250,21 @@ class TestMappingConfiguration:
 
 
 class TestSyncDraftStatus:
-    """Test sync when admission profile is in draft status."""
+    """Test sync when admission profile is in draft status.
 
-    async def test_sync_updates_lead_consultation_status_to_sts07(
+    Draft profiles are handled by _create_admission_milestone_consultation()
+    (Golden Rule canonical sync), so sync_lead_from_admission() skips them
+    to avoid double LeadStatusHistory records.
+    """
+
+    async def test_sync_skips_draft_profile(
         self,
         db: AsyncSession,
         sync_lead: models.Lead,
         sync_user: models.User,
         sync_statuses: dict,
     ):
-        """When profile is draft, lead consultation_status_id should be sts07."""
+        """Draft profile should be skipped — milestone consultation handles it."""
         profile = await create_profile(db, sync_lead, "draft")
 
         result = await sync_lead_from_admission(
@@ -261,24 +274,24 @@ class TestSyncDraftStatus:
             reason="Test sync for draft status",
         )
 
-        assert result is True, "Sync should have been performed"
+        assert result is False, "Draft should be skipped by guard"
 
-        # Refresh to get updated values
+        # Lead should remain at initial status (sts06)
         await db.refresh(sync_lead)
-        assert sync_lead.consultation_status_id == "sts07", \
-            f"Expected sts07, got {sync_lead.consultation_status_id}"
+        assert sync_lead.consultation_status_id == "sts06", \
+            f"Expected sts06 (unchanged), got {sync_lead.consultation_status_id}"
 
-    async def test_sync_creates_history_record(
+    async def test_sync_creates_history_for_submitted(
         self,
         db: AsyncSession,
         sync_lead: models.Lead,
         sync_user: models.User,
         sync_statuses: dict,
     ):
-        """Sync should create LeadStatusHistory record with audit info."""
+        """Submitted profile should create LeadStatusHistory record."""
         initial_count = await get_history_count(db, sync_lead.id)
 
-        profile = await create_profile(db, sync_lead, "draft")
+        profile = await create_profile(db, sync_lead, "submitted")
 
         await sync_lead_from_admission(
             db=db,
@@ -396,6 +409,46 @@ class TestSyncRejectedStatus:
 
 
 # ==============================================================================
+# TEST: SYNC FUNCTION - REVISION REQUESTED STATUS
+# ==============================================================================
+
+
+class TestSyncRevisionRequestedStatus:
+    """Test sync when admission profile has revision requested."""
+
+    async def test_sync_updates_lead_to_sts17_on_revision_requested(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """When revision is requested, lead should sync to sts17."""
+        profile = await create_profile(db, sync_lead, "revision_requested")
+
+        result = await sync_lead_from_admission(
+            db=db,
+            profile=profile,
+            changed_by_user_id=sync_user.id,
+            reason="Revision requested: Missing transcript",
+        )
+
+        assert result is True
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts17", \
+            f"Expected sts17, got {sync_lead.consultation_status_id}"
+
+    async def test_revision_requested_maps_to_sts17(self):
+        """revision_requested should map to sts17 (Yêu cầu bổ sung hồ sơ)."""
+        assert ADMISSION_TO_LEAD_STATUS_MAP["revision_requested"] == "sts17"
+
+    async def test_rejected_still_maps_to_sts16(self):
+        """rejected should still map to sts16 (no conflict with sts17)."""
+        assert ADMISSION_TO_LEAD_STATUS_MAP["rejected"] == "sts16"
+
+
+# ==============================================================================
 # TEST: SYNC FUNCTION - ENROLLED STATUS
 # ==============================================================================
 
@@ -443,8 +496,8 @@ class TestSyncIdempotency:
         sync_statuses: dict,
     ):
         """Sync should skip if lead is already at target status."""
-        # First sync to sts07
-        profile = await create_profile(db, sync_lead, "draft")
+        # First sync to sts07 via submitted
+        profile = await create_profile(db, sync_lead, "submitted")
 
         result1 = await sync_lead_from_admission(
             db=db,
@@ -545,14 +598,14 @@ class TestFullWorkflowSync:
         sync_statuses: dict,
     ):
         """Test lead status follows admission workflow transitions."""
-        # Step 1: Draft → sts07
-        profile = await create_profile(db, sync_lead, "draft")
+        # Step 1: Submitted → sts07 (draft is handled by milestone, not sync)
+        profile = await create_profile(db, sync_lead, "submitted")
 
         await sync_lead_from_admission(
             db=db,
             profile=profile,
             changed_by_user_id=sync_user.id,
-            reason="Profile created",
+            reason="Profile submitted",
         )
 
         await db.refresh(sync_lead)
@@ -1132,3 +1185,66 @@ class TestFullFinanceWorkflowSync:
         )
         await db.refresh(sync_lead)
         assert sync_lead.consultation_status_id == "sts11"
+
+
+# ==============================================================================
+# TEST: SYNC FUNCTION - WITHDRAWN STATUS
+# ==============================================================================
+
+
+class TestSyncWithdrawnStatus:
+    """Test sync when admission profile is withdrawn."""
+
+    async def test_sync_updates_lead_to_sts08_on_withdrawal(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """When profile is withdrawn, lead should sync to sts08."""
+        profile = await create_profile(db, sync_lead, "withdrawn")
+
+        result = await sync_lead_from_admission(
+            db=db,
+            profile=profile,
+            changed_by_user_id=sync_user.id,
+            reason="Applicant withdrew application",
+        )
+
+        assert result is True
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts08", \
+            f"Expected sts08, got {sync_lead.consultation_status_id}"
+
+    async def test_withdrawn_maps_to_sts08(self):
+        """Withdrawn should map to sts08 (Từ chối tư vấn)."""
+        assert ADMISSION_TO_LEAD_STATUS_MAP["withdrawn"] == "sts08"
+
+
+# ==============================================================================
+# TEST: STUDENT DROPPED (Side-Channel - sts12)
+# ==============================================================================
+
+
+class TestSyncStudentDropped:
+    """Test that student_dropped event maps to sts12 via milestone consultation.
+
+    Note: Dropped is NOT an admission status — it's a side-channel flag.
+    The lead sync happens via _create_admission_milestone_consultation("student_dropped")
+    which uses the event mapping to get sts12/stg07.
+    """
+
+    async def test_student_dropped_event_maps_to_sts12(self):
+        """student_dropped event should map to sts12 in event mapping."""
+        from app.core.admission_event_mapping import get_projection
+        projection = get_projection("student_dropped")
+        assert projection is not None
+        assert projection.consultation_status_id == "sts12"
+        assert projection.pipeline_stage_id == "stg07"
+        assert projection.admission_status == "enrolled"  # Status stays enrolled
+
+    async def test_sts12_fixture_exists(self, sync_statuses: dict):
+        """sts12 should be created in fixture for integration tests."""
+        assert "sts12" in sync_statuses["status_ids"]

@@ -14,7 +14,8 @@ Architecture Compliance (Section 0.4.1):
 
 State Diagram:
     DRAFT → SUBMITTED → APPROVED → CONFIRMED → ENROLLED
-                     ↘ REJECTED → RESUBMITTED ↗
+      ↘        ↘ ↗      ↘ REJECTED → RESUBMITTED ↗
+  WITHDRAWN  WITHDRAWN        ↘ WITHDRAWN
               APPROVED ↘ OVERRIDDEN ↗ → ENROLLED
 """
 
@@ -31,31 +32,37 @@ class AdmissionStatus(str, Enum):
     2. SUBMITTED: Applicant submits for review
     3. APPROVED: Manager approves application
     4. REJECTED: Manager rejects (can resubmit)
+    4b. REVISION_REQUESTED: Manager requests document revision (can resubmit)
     5. RESUBMITTED: Officer resubmits after fixing issues
     6. CONFIRMED: Applicant confirms enrollment intent
     7. OVERRIDDEN: Admin overrides normal flow (audit required)
     8. ENROLLED: Final state (student record created)
+    9. WITHDRAWN: Applicant/officer withdraws application (final)
     """
     DRAFT = "draft"
     SUBMITTED = "submitted"
     APPROVED = "approved"
     REJECTED = "rejected"
+    REVISION_REQUESTED = "revision_requested"
     RESUBMITTED = "resubmitted"
     CONFIRMED = "confirmed"
     OVERRIDDEN = "overridden"
     ENROLLED = "enrolled"  # FINAL STATE
+    WITHDRAWN = "withdrawn"  # FINAL STATE
 
 
 # Single source of truth for transitions
 ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
-    AdmissionStatus.DRAFT: {AdmissionStatus.SUBMITTED},
-    AdmissionStatus.SUBMITTED: {AdmissionStatus.APPROVED, AdmissionStatus.REJECTED},
-    AdmissionStatus.REJECTED: {AdmissionStatus.RESUBMITTED},
-    AdmissionStatus.RESUBMITTED: {AdmissionStatus.APPROVED, AdmissionStatus.REJECTED},
+    AdmissionStatus.DRAFT: {AdmissionStatus.SUBMITTED, AdmissionStatus.WITHDRAWN},
+    AdmissionStatus.SUBMITTED: {AdmissionStatus.APPROVED, AdmissionStatus.REJECTED, AdmissionStatus.REVISION_REQUESTED, AdmissionStatus.WITHDRAWN},
+    AdmissionStatus.REJECTED: {AdmissionStatus.RESUBMITTED, AdmissionStatus.WITHDRAWN},
+    AdmissionStatus.REVISION_REQUESTED: {AdmissionStatus.RESUBMITTED, AdmissionStatus.REJECTED, AdmissionStatus.WITHDRAWN},
+    AdmissionStatus.RESUBMITTED: {AdmissionStatus.APPROVED, AdmissionStatus.REJECTED, AdmissionStatus.REVISION_REQUESTED, AdmissionStatus.WITHDRAWN},
     AdmissionStatus.APPROVED: {AdmissionStatus.CONFIRMED, AdmissionStatus.OVERRIDDEN},
     AdmissionStatus.OVERRIDDEN: {AdmissionStatus.ENROLLED},
     AdmissionStatus.CONFIRMED: {AdmissionStatus.ENROLLED},
     AdmissionStatus.ENROLLED: set(),  # Final state - no transitions
+    AdmissionStatus.WITHDRAWN: set(),  # Final state - no transitions
 }
 
 
@@ -120,7 +127,7 @@ def is_final_state(status: str) -> bool:
         status: Status string to check
 
     Returns:
-        True if status is final (ENROLLED), False otherwise
+        True if status is final (ENROLLED or WITHDRAWN), False otherwise
 
     Example:
         >>> is_final_state("enrolled")

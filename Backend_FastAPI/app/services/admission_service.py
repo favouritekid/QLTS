@@ -3379,6 +3379,135 @@ async def reject_profile(
     return profile, post_commit
 
 
+async def request_revision(
+    db: AsyncSession,
+    profile_id: int,
+    reviewer: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Request revision of admission profile (Manager/Admin action).
+
+    Transition: SUBMITTED/RESUBMITTED -> REVISION_REQUESTED
+    Uses dedicated columns (revision_requested_at/by/reason) separate from rejection.
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        reviewer: User requesting revision
+        data: RevisionRequest data (reason - required, version - required)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition or missing reason
+        ConflictError: Version mismatch
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    _check_idor_access(profile, reviewer)
+
+    from .admission_state_machine import validate_transition
+
+    try:
+        validate_transition(profile.status, "revision_requested")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for revision request",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    if not data.get("reason"):
+        raise BadRequest("Revision reason is required (min 10 characters)")
+
+    if data["version"] != profile.version:
+        log.warning(
+            "Optimistic locking conflict: Version mismatch in revision request",
+            profile_id=profile.id,
+            expected_version=data["version"],
+            actual_version=profile.version,
+            user_id=reviewer.id,
+        )
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    _old_status_for_audit = profile.status
+    profile.status = "revision_requested"
+    profile.revision_requested_at = datetime.now(timezone.utc)
+    profile.revision_requested_by_id = reviewer.id
+    profile.revision_reason = data["reason"]
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # PIPELINE SYNC: Create system consultation for revision milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_revision_requested",
+            actor=reviewer,
+            profile_id=profile.id,
+            reason=data["reason"],
+        )
+
+    await db.flush()
+
+    # Audit trail
+    from ..services import audit_service
+    await audit_service.log_status_change(
+        db, "AdmissionProfile", profile.id,
+        old_status=_old_status_for_audit, new_status="revision_requested",
+        actor_user_id=reviewer.id,
+        reason=data["reason"],
+        source="api",
+    )
+
+    # SYNC: Update lead consultation status (revision_requested -> sts17)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=reviewer.id,
+        reason=f"Admission profile revision requested: {data['reason'][:50]}",
+    )
+
+    log.info(
+        "Admission profile revision requested",
+        profile_id=profile.id,
+        reviewer_id=reviewer.id,
+        reason_length=len(data["reason"]),
+    )
+
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Profile revision requested notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
 # ==============================================================================
 # APPLICATION FEE MANAGEMENT
 # ==============================================================================
@@ -4177,6 +4306,239 @@ async def delete_profile(
     )
 
     return True
+
+
+# ==============================================================================
+# WITHDRAWAL
+# ==============================================================================
+
+
+async def withdraw_profile(
+    db: AsyncSession,
+    profile_id: int,
+    actor: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Withdraw admission profile.
+
+    Allowed from: DRAFT, SUBMITTED, REJECTED, RESUBMITTED
+    Target: WITHDRAWN (final state)
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        actor: User performing withdrawal
+        data: WithdrawRequest data (reason - required, version - required)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition or missing reason
+        ConflictError: Version mismatch
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    _check_idor_access(profile, actor)
+
+    from .admission_state_machine import validate_transition
+
+    try:
+        validate_transition(profile.status, "withdrawn")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for withdraw",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    if not data.get("reason"):
+        raise BadRequest("Withdrawal reason is required")
+
+    if data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    _old_status_for_audit = profile.status
+    profile.status = "withdrawn"
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # PIPELINE SYNC: Create system consultation for withdrawal milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_withdrawn",
+            actor=actor,
+            profile_id=profile.id,
+            reason=data["reason"],
+        )
+
+    await db.flush()
+
+    # Audit trail
+    from ..services import audit_service
+    await audit_service.log_status_change(
+        db, "AdmissionProfile", profile.id,
+        old_status=_old_status_for_audit, new_status="withdrawn",
+        actor_user_id=actor.id,
+        reason=data["reason"],
+        source="api",
+    )
+
+    # SYNC: Update lead consultation status (withdrawn → sts08)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=actor.id,
+        reason=f"Admission profile withdrawn: {data['reason'][:50]}",
+    )
+
+    log.info(
+        "Admission profile withdrawn",
+        profile_id=profile.id,
+        actor_id=actor.id,
+        old_status=_old_status_for_audit,
+    )
+
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Profile withdrawn notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def mark_student_dropped(
+    db: AsyncSession,
+    profile_id: int,
+    actor: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Mark an enrolled student as dropped out (Manager/Admin action).
+
+    Side-channel: status stays "enrolled", sets is_dropped=True.
+    Milestone consultation handles lead sync to sts12.
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        actor: User marking the drop
+        data: DropStudentRequest data (reason - required, version - required)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Profile not enrolled or already dropped
+        ConflictError: Version mismatch
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    _check_idor_access(profile, actor)
+
+    # Guard: Must be enrolled
+    if profile.status != "enrolled":
+        raise BadRequest(
+            f"Cannot mark as dropped: profile is in '{profile.status}' status. "
+            "Only enrolled students can be marked as dropped."
+        )
+
+    # Guard: Already dropped
+    if profile.is_dropped:
+        raise BadRequest("Student is already marked as dropped out.")
+
+    if not data.get("reason"):
+        raise BadRequest("Drop reason is required (min 10 characters)")
+
+    if data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # Side-channel: DO NOT change profile.status (stays "enrolled")
+    profile.is_dropped = True
+    profile.dropped_at = datetime.now(timezone.utc)
+    profile.dropped_by_id = actor.id
+    profile.dropped_reason = data["reason"]
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # PIPELINE SYNC: Milestone consultation handles lead sync to sts12/stg07
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="student_dropped",
+            actor=actor,
+            profile_id=profile.id,
+        )
+
+    await db.flush()
+
+    # Audit trail
+    from ..services import audit_service
+    await audit_service.log_status_change(
+        db, "AdmissionProfile", profile.id,
+        old_status="enrolled", new_status="enrolled (dropped)",
+        actor_user_id=actor.id,
+        reason=data["reason"],
+        source="api",
+    )
+
+    log.info(
+        "Student marked as dropped",
+        profile_id=profile.id,
+        actor_id=actor.id,
+    )
+
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Student dropped notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
 
 
 # ==============================================================================

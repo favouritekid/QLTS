@@ -308,6 +308,34 @@ ADMISSION_EVENT_PROJECTIONS = {
         skip_if_converted=False,  # Allow transition from converted to dropped
     ),
 
+    # -------------------------------------------------------------------------
+    # Admission Profile REVISION REQUESTED (officer requests document fix)
+    # -------------------------------------------------------------------------
+    "profile_revision_requested": AdmissionEventProjection(
+        event="profile_revision_requested",
+        admission_status="revision_requested",  # Dedicated status for revision requests
+        consultation_status_id="sts17",
+        consultation_name="Yêu cầu bổ sung hồ sơ",
+        pipeline_stage_id="stg03",  # Stay in "Đã nộp hồ sơ"
+        stage_name="Đã nộp hồ sơ",
+        system_note_template="[HỆ THỐNG] Yêu cầu bổ sung/chỉnh sửa hồ sơ - Profile #{profile_id}. Lý do: {reason}",
+        skip_if_converted=True,
+    ),
+
+    # -------------------------------------------------------------------------
+    # Admission Profile WITHDRAWN (applicant/officer withdraws)
+    # -------------------------------------------------------------------------
+    "profile_withdrawn": AdmissionEventProjection(
+        event="profile_withdrawn",
+        admission_status="withdrawn",
+        consultation_status_id="sts08",
+        consultation_name="Từ chối tư vấn",
+        pipeline_stage_id="stg07",  # Move to "Không đi học"
+        stage_name="Không đi học",
+        system_note_template="[HỆ THỐNG] Hồ sơ xét tuyển đã bị rút - Profile #{profile_id}. Lý do: {reason}",
+        skip_if_converted=False,  # Allow withdrawal even if converted
+    ),
+
     "student_refunded": AdmissionEventProjection(
         event="student_refunded",
         admission_status="confirmed",  # Was confirmed but withdrew

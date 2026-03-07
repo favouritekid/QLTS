@@ -16,7 +16,7 @@ Architecture:
 
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
@@ -228,6 +228,20 @@ class AdmissionProfile(Base):
         comment="Rejection reason (required when rejecting)"
     )
 
+    # Revision request tracking (REVISION_REQUESTED state - separate from rejection)
+    revision_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="Timestamp when revision was requested"
+    )
+    revision_requested_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True,
+        comment="User ID who requested revision (Manager/Admin)"
+    )
+    revision_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True,
+        comment="Reason/instructions for revision request"
+    )
+
     # ✅ Resubmit audit fields (REJECTED → RESUBMITTED tracking)
     resubmitted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
@@ -301,6 +315,24 @@ class AdmissionProfile(Base):
         comment="Confirmation method: 'magic_link', 'admin_override', 'officer'"
     )
 
+    # Drop-out tracking (side-channel, status stays "enrolled")
+    is_dropped: Mapped[Optional[bool]] = mapped_column(
+        Boolean, default=False, server_default="false",
+        comment="Whether enrolled student has dropped out"
+    )
+    dropped_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="Timestamp when student dropped out"
+    )
+    dropped_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True,
+        comment="User ID who marked student as dropped"
+    )
+    dropped_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True,
+        comment="Reason for dropping out"
+    )
+
     # Relationships (Eager Loading to Prevent N+1 Queries)
     lead: Mapped["Lead"] = relationship(
         "Lead",
@@ -330,6 +362,13 @@ class AdmissionProfile(Base):
         lazy="select",
         uselist=False
     )
+    # ✅ Revision request audit relationship
+    revision_requested_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[revision_requested_by_id],
+        lazy="select",
+        uselist=False
+    )
     # ✅ Resubmit audit relationship
     resubmitted_by: Mapped[Optional["User"]] = relationship(
         "User",
@@ -348,6 +387,13 @@ class AdmissionProfile(Base):
     confirmed_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[confirmed_by_id],
+        lazy="select",
+        uselist=False
+    )
+    # ✅ Drop-out audit relationship
+    dropped_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[dropped_by_id],
         lazy="select",
         uselist=False
     )

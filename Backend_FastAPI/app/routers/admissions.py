@@ -1277,6 +1277,76 @@ async def reject_admission(
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
+    "/{profile_id}/request-revision",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Request revision of admission profile (Manager/Admin)",
+)
+async def request_revision(
+    request: Request,
+    profile_id: int,
+    data: schemas.RevisionRequest,
+    current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Request revision of admission profile - Manager/Admin action.
+
+    **State Transition:**
+    - From: SUBMITTED or RESUBMITTED
+    - To: REVISION_REQUESTED
+
+    **Validation:**
+    - State transition via validate_transition()
+    - Reason is mandatory (10+ chars)
+    - Optimistic locking via version check
+    """
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can request revision")
+
+    try:
+        result, callback = await admission_service.request_revision(
+            db=db,
+            profile_id=profile_id,
+            reviewer=current_user,
+            data=data.model_dump(),
+        )
+
+        await db.commit()
+        await db.refresh(result)
+
+        await callback()
+
+        # Dispatch LEAD_STATUS_CHANGED for commission trigger
+        if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": result.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "officer_id": current_user.id,
+                    "old_status": "submitted",
+                    "new_status": "sts17",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{result.lead_id}:sts17",
+            )
+
+            await safe_check_commission_on_status_change(
+                db, result.lead_id, "submitted", "sts17", current_user.id,
+            )
+
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
     "/{profile_id}/resubmit",
     response_model=schemas.AdmissionProfileResponse,
     summary="Resubmit admission profile after rejection (Officer)",
@@ -1862,3 +1932,78 @@ async def export_admissions_csv(
             "Content-Disposition": f"attachment; filename=admissions_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         },
     )
+
+
+# ==============================================================================
+# DROP STUDENT ENDPOINT
+# ==============================================================================
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/drop",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Mark enrolled student as dropped out (Manager/Admin)",
+)
+async def drop_student(
+    request: Request,
+    profile_id: int,
+    data: schemas.DropStudentRequest,
+    current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Mark an enrolled student as dropped out - Manager/Admin action.
+
+    Side-channel: profile status stays "enrolled", is_dropped=True.
+    Lead syncs to sts12 (Ngưng theo học) via milestone consultation.
+
+    **Validation:**
+    - Profile must be in "enrolled" status
+    - Must not already be dropped
+    - Reason is mandatory (10+ chars)
+    - Optimistic locking via version check
+    """
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can mark students as dropped")
+
+    try:
+        result, callback = await admission_service.mark_student_dropped(
+            db=db,
+            profile_id=profile_id,
+            actor=current_user,
+            data=data.model_dump(),
+        )
+
+        await db.commit()
+        await db.refresh(result)
+
+        await callback()
+
+        # Dispatch LEAD_STATUS_CHANGED for commission trigger
+        if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": result.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "officer_id": current_user.id,
+                    "old_status": "sts11",
+                    "new_status": "sts12",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{result.lead_id}:sts12",
+            )
+
+            await safe_check_commission_on_status_change(
+                db, result.lead_id, "sts11", "sts12", current_user.id,
+            )
+
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))

@@ -170,10 +170,12 @@ from .admission import (
     DocumentFormatVerifyRequest,
     ApproveRequest,
     RejectRequest,
+    RevisionRequest,
     ResubmitRequest,
     ConfirmRequest,
     OverrideRequest,
     FinalizeRequest,
+    DropStudentRequest,
     # Confirmation token schemas (Magic Link)
     ConfirmTokenVerifyRequest,
     ConfirmTokenResponse,
