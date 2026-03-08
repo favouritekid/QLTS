@@ -43,12 +43,12 @@ import {
   PauseCircle,
   TrendingUp,
   TrendingDown,
-  Minus,
   Clock,
   DollarSign,
   Lightbulb,
   ExternalLink
 } from "lucide-react";
+import type { TrendInfo } from "@/hooks/useDashboardStats";
 
 // ============================================================================
 // INTERFACES
@@ -233,8 +233,8 @@ const isNegativeOutcome = (stage: FunnelStage, config: FunnelConfig): boolean =>
 
 interface FunnelChartProps {
   funnel: FunnelStage[];
-  /** Comparison data from previous period */
-  previousPeriodConversion?: number;
+  /** Net Conversion Rate trend vs previous period */
+  netConversionTrend?: TrendInfo | null;
   /** Optional configuration to override defaults */
   config?: Partial<FunnelConfig>;
   /** Scope filter for navigation context */
@@ -348,7 +348,7 @@ const getConversionStatus = (rate: number | null): {
 
 export function FunnelChart({
   funnel,
-  previousPeriodConversion,
+  netConversionTrend,
   config,
   scope,
   unitId,
@@ -514,11 +514,6 @@ export function FunnelChart({
     };
   }, [coreStages, outcomeStages, sortedFunnel, totalLeads, mergedConfig]);
 
-  // Comparison with previous period
-  const conversionTrend = previousPeriodConversion !== undefined
-    ? overallConversion - previousPeriodConversion
-    : null;
-
   // Navigate to leads filtered by stage, preserving date and scope context
   const handleStageClick = (stageId: string) => {
     const params = new URLSearchParams();
@@ -563,16 +558,18 @@ export function FunnelChart({
                     )}>
                       {netConversionRate.toFixed(1)}%
                     </span>
-                    {conversionTrend !== null && (
+                    {netConversionTrend && netConversionTrend.direction !== "neutral" && (
                       <div className={cn(
                         "flex items-center gap-0.5 text-xs",
-                        conversionTrend > 0 ? "text-success-600" :
-                        conversionTrend < 0 ? "text-error-600" : "text-muted-foreground"
+                        netConversionTrend.direction === "up" ? "text-success-600" : "text-error-600"
                       )}>
-                        {conversionTrend > 0 ? <TrendingUp className="h-3 w-3" /> :
-                         conversionTrend < 0 ? <TrendingDown className="h-3 w-3" /> :
-                         <Minus className="h-3 w-3" />}
-                        <span>{conversionTrend > 0 ? "+" : ""}{conversionTrend.toFixed(1)}%</span>
+                        {netConversionTrend.direction === "up"
+                          ? <TrendingUp className="h-3 w-3" />
+                          : <TrendingDown className="h-3 w-3" />}
+                        <span>
+                          {netConversionTrend.direction === "up" ? "+" : "-"}
+                          {netConversionTrend.value.toFixed(1)}%
+                        </span>
                       </div>
                     )}
                   </div>
@@ -597,9 +594,11 @@ export function FunnelChart({
                         <span className="block pl-2">└ Failed: {failedCount}</span>
                       )}
                     </p>
-                    {conversionTrend !== null && (
+                    {netConversionTrend && (
                       <p className="text-white/70 pt-1 border-t border-white/20">
-                        So với kỳ trước: {conversionTrend > 0 ? "+" : ""}{conversionTrend.toFixed(1)}%
+                        So với kỳ trước: {netConversionTrend.direction === "up" ? "+" : netConversionTrend.direction === "down" ? "-" : ""}
+                        {netConversionTrend.value.toFixed(1)}%
+                        <span className="text-white/50 ml-1">({netConversionTrend.comparison})</span>
                       </p>
                     )}
                     <p className="text-white/40 text-[9px] italic border-t border-white/20 pt-1">

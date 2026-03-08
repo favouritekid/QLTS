@@ -184,6 +184,7 @@ class OfficerDashboardEnhanced(BaseModel):
     priority_actions: List[PriorityAction]
     performance_trends: List[TrendPoint]
     sales_funnel: List[FunnelStage]
+    funnel_net_conversion_trend: Optional[TrendInfo] = None
     actionable_lists: ActionableLists
     # Phase 6: Annual target progress (rolling targets)
     annual_progress: Optional["AnnualProgressInfo"] = None

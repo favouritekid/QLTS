@@ -5,8 +5,9 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { useDashboardDate } from "@/contexts/DashboardDateContext";
+import { useEffect, useMemo } from "react";
+import { subDays, startOfDay, endOfDay } from "date-fns";
+import { useDashboardDate, formatDateForAPI } from "@/contexts/DashboardDateContext";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
 
@@ -156,6 +157,7 @@ export interface EnhancedOfficerStats {
   actionable_lists: ActionableLists;
   // Phase 2: AI-powered funnel suggestions
   funnel_suggestions?: FunnelSuggestion[];
+  funnel_net_conversion_trend?: TrendInfo | null;
   // Phase 6: Annual progress (rolling targets)
   annual_progress?: AnnualProgressInfo | null;
 }
@@ -260,6 +262,7 @@ export interface UseDashboardStatsOptions {
   officerId?: number;
   unitId?: number;
   initialData?: EnhancedOfficerStats;
+  enabled?: boolean;
 }
 
 export function useDashboardStats(options?: UseDashboardStatsOptions) {
@@ -269,6 +272,24 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
   const scope = options?.scope ?? "personal";
   const officerId = options?.officerId;
   const unitId = options?.unitId;
+  const enabled = options?.enabled ?? true;
+
+  // Compute what SSR would have used (same logic as page.tsx getDefaultDateRange)
+  const ssrDefault = useMemo(() => {
+    const today = new Date();
+    const from = subDays(today, 6);
+    return {
+      start: formatDateForAPI(startOfDay(from)),
+      end: formatDateForAPI(endOfDay(today)),
+    };
+  }, []); // Empty deps: only compute once on mount (matches SSR snapshot)
+
+  const isDefaultQuery =
+    scope === "personal" &&
+    !officerId &&
+    !unitId &&
+    startDate === ssrDefault.start &&
+    endDate === ssrDefault.end;
 
   // Build cache key that includes all filters
   const cacheKey = ["officer", "dashboard", startDate, endDate, scope, officerId, unitId];
@@ -285,7 +306,8 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     }),
     refetchInterval: 60000,
     staleTime: 30000,
-    initialData: options?.initialData,
+    initialData: isDefaultQuery ? options?.initialData : undefined,
+    enabled,
   });
 
   // Fetch team stats (with date filter)
@@ -293,6 +315,7 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     queryKey: ["officer", "team-stats", startDate, endDate],
     queryFn: () => fetchTeamStats(startDate, endDate),
     staleTime: 300000,
+    enabled,
   });
 
   // Socket.IO integration for real-time updates
@@ -304,12 +327,12 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     const handleDataUpdate = (...args: unknown[]) => {
       const data = args[0] as { resource: string };
       if (data.resource === "lead" || data.resource === "consultation") {
-        queryClient.invalidateQueries({ queryKey: ["officer", "dashboard"] });
+        queryClient.invalidateQueries({ queryKey: ["officer"] });
       }
     };
 
     const handleLeadChange = () => {
-      queryClient.invalidateQueries({ queryKey: ["officer", "dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["officer"] });
     };
 
     socket.on("data_updated", handleDataUpdate);

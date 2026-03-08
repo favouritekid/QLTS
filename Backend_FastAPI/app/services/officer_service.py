@@ -767,6 +767,43 @@ async def get_enhanced_dashboard_stats(
         aggregated_loss_breakdown=aggregated_loss,
     )
 
+    # === 9b. FUNNEL NET CONVERSION TREND (vs previous period) ===
+    # Current NCR: derive from sales_funnel data (0 extra queries)
+    _ncr_enrolled = sum(
+        s["outcome_breakdown"]["positive"]
+        for s in sales_funnel if s["is_final_stage"]
+    )
+    _ncr_lost = sum(
+        s["outcome_breakdown"]["negative"]
+        for s in sales_funnel if s["is_final_stage"]
+    ) + sum(
+        s.get("early_exit_count", 0)
+        for s in sales_funnel if not s["is_final_stage"]
+    )
+    current_ncr = round(
+        (_ncr_enrolled / (_ncr_enrolled + _ncr_lost)) * 100, 1
+    ) if (_ncr_enrolled + _ncr_lost) > 0 else 0.0
+
+    # Previous NCR: reuse stage topology from current funnel (1 extra query)
+    _final_ids = {s["stage_id"] for s in sales_funnel if s["is_final_stage"]}
+    _non_final_ids = {s["stage_id"] for s in sales_funnel if not s["is_final_stage"]}
+    prev_funnel_counts = await repo.get_funnel_stage_counts_batch(
+        officer_id, start_date=prev_filter_start, end_date=prev_filter_end
+    )
+    _prev_enrolled = sum(prev_funnel_counts.get(sid, {}).get("positive", 0) for sid in _final_ids)
+    _prev_lost = sum(prev_funnel_counts.get(sid, {}).get("negative", 0) for sid in _final_ids) + \
+                 sum(prev_funnel_counts.get(sid, {}).get("early_exit_count", 0) for sid in _non_final_ids)
+    prev_ncr = round(
+        (_prev_enrolled / (_prev_enrolled + _prev_lost)) * 100, 1
+    ) if (_prev_enrolled + _prev_lost) > 0 else 0.0
+
+    ncr_diff = current_ncr - prev_ncr
+    funnel_net_conversion_trend = {
+        "value": abs(round(ncr_diff, 1)),
+        "direction": "up" if ncr_diff > 0 else "down" if ncr_diff < 0 else "neutral",
+        "comparison": f"vs {filter_days} ngày trước"
+    }
+
     # === 10. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
     # Get annual target progress for enrollments KPI
     # Use fiscal year from date filter (filter_end.year)
@@ -799,6 +836,7 @@ async def get_enhanced_dashboard_stats(
         "priority_actions": priority_actions,
         "performance_trends": performance_trends,
         "sales_funnel": sales_funnel,
+        "funnel_net_conversion_trend": funnel_net_conversion_trend,
         "funnel_suggestions": funnel_suggestions,  # Phase 2: AI-powered suggestions
         "actionable_lists": base_stats["actionable_lists"],
         "annual_progress": annual_progress,  # Phase 6: Rolling targets
@@ -1002,7 +1040,10 @@ async def get_aggregated_dashboard_stats(
             "availability_status": "available",
         },
         "priority_actions": [],  # Not applicable for aggregated view
-        "performance_trends": [],  # TODO: Add aggregated trends
+        "performance_trends": [
+            {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted}
+            for tp in (await repo.get_performance_trends_batch_multi(officer_ids, filter_start, filter_end)).values()
+        ],
         "sales_funnel": sales_funnel,
         "funnel_suggestions": funnel_suggestions,  # Phase 2: AI-powered suggestions
         # Must match ActionableLists schema
@@ -1311,7 +1352,7 @@ async def get_team_stats(
     team_data = await repo.get_team_averages(unit_id=None, start_date=calc_start, end_date=calc_end)
     
     # Get current officer's KPI for rank calculation
-    officer_kpi = await repo.get_kpi_stats(officer_id, calc_start, today)
+    officer_kpi = await repo.get_kpi_stats(officer_id, calc_start, calc_end)
     current_officer_count = officer_kpi["consultations_in_range"]
     
     # Calculate approximate rank percentile

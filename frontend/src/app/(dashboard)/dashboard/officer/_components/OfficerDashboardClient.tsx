@@ -1,7 +1,7 @@
 // src/app/(dashboard)/dashboard/officer/_components/OfficerDashboardClient.tsx
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -54,15 +54,20 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   // Get user to determine default scope
   const { user } = useAuth();
 
-  // Default scope based on role: admin/manager see "organization"/"team", officers see "personal"
-  const getDefaultScope = (): DashboardScope => {
-    if (user?.role === "admin") return "organization";
-    if (user?.role === "manager") return "team";
-    return "personal";
-  };
+  // Resolve scope from user role (null if user not yet hydrated)
+  const resolvedScope: DashboardScope | null = user
+    ? (user.role === "admin" ? "organization" : user.role === "manager" ? "team" : "personal")
+    : null;
 
-  // Scope state for manager/admin view switching
-  const [scope, setScope] = useState<DashboardScope>(getDefaultScope);
+  const [scope, setScope] = useState<DashboardScope | null>(null);
+  const [scopeInitialized, setScopeInitialized] = useState(false);
+
+  useEffect(() => {
+    if (resolvedScope && !scopeInitialized) {
+      setScope(resolvedScope);
+      setScopeInitialized(true);
+    }
+  }, [resolvedScope, scopeInitialized]);
 
   // Secondary filter states
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
@@ -72,13 +77,57 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   const [funnelViewMode, setFunnelViewMode] = useState<"chart" | "table">("chart");
 
   // Pass scope and filter options to useDashboardStats hook
-  // initialStats only applies when using default params (personal scope, no officer/unit filter)
   const { stats, teamStats, isLoading, error, refetch } = useDashboardStats({
-    scope,
+    scope: scope ?? "personal",
     officerId: selectedOfficerId ?? undefined,
     unitId: selectedUnitId ?? undefined,
-    initialData: initialStats,
+    initialData: scopeInitialized && scope === "personal" ? initialStats : undefined,
+    enabled: scopeInitialized,
   });
+
+  // === DATA TRANSFORMERS (must be before any early returns — Rules of Hooks) ===
+  const performanceTrends = useMemo(() => (stats?.performance_trends ?? []).map((t) => ({
+    date: t.date,
+    leads_assigned: t.assigned,
+    consultations: t.consultations,
+    converted: t.converted,
+  })), [stats?.performance_trends]);
+
+  const salesFunnel = useMemo(() => (stats?.sales_funnel ?? []).map((s) => ({
+    stage_id: s.stage_id,
+    stage_name: s.stage_name,
+    stage_order: s.stage_order,
+    lead_count: s.lead_count,
+    is_final_stage: s.is_final_stage,
+    conversion_rate: s.conversion_rate,
+    outcome_breakdown: s.outcome_breakdown,
+    early_exit_count: s.early_exit_count,
+    move_forward: s.move_forward,
+    loss_breakdown: s.loss_breakdown,
+    velocity: s.velocity,
+    estimated_lost_revenue: s.estimated_lost_revenue,
+  })), [stats?.sales_funnel]);
+
+  // Guard: show skeleton until scope is determined
+  if (!scopeInitialized) {
+    return (
+      <div className="container mx-auto px-4 py-4 md:p-6 space-y-4 md:space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <Skeleton className="h-10 w-full sm:w-64" />
+          <Skeleton className="h-10 w-full sm:w-80" />
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-32" />
+          ))}
+        </div>
+        <div className="grid gap-6 md:grid-cols-2">
+          <Skeleton className="h-96" />
+          <Skeleton className="h-96" />
+        </div>
+      </div>
+    );
+  }
 
   // === LOADING STATE ===
   if (isLoading) {
@@ -135,33 +184,9 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     (stats.sales_funnel ?? []).length === 0 &&
     (stats.performance_trends ?? []).length === 0;
 
-  // === DATA TRANSFORMERS (memoized to prevent child chart re-renders) ===
-  const performanceTrends = useMemo(() => (stats.performance_trends ?? []).map((t) => ({
-    date: t.date,
-    leads_assigned: t.assigned,
-    consultations: t.consultations,
-    converted: t.converted,
-  })), [stats.performance_trends]);
-
-  const salesFunnel = useMemo(() => (stats.sales_funnel ?? []).map((s) => ({
-    stage_id: s.stage_id,
-    stage_name: s.stage_name,
-    stage_order: s.stage_order,
-    lead_count: s.lead_count,
-    is_final_stage: s.is_final_stage,
-    conversion_rate: s.conversion_rate,
-    outcome_breakdown: s.outcome_breakdown,
-    // SPEC 2026-02-04: Early Exit metrics
-    early_exit_count: s.early_exit_count,
-    move_forward: s.move_forward,
-    // Phase 2: Advanced funnel analytics
-    loss_breakdown: s.loss_breakdown,
-    velocity: s.velocity,
-    estimated_lost_revenue: s.estimated_lost_revenue,
-  })), [stats.sales_funnel]);
-
   // Phase 2: Funnel suggestions
   const funnelSuggestions = stats.funnel_suggestions ?? [];
+  const funnelNetConversionTrend = stats.funnel_net_conversion_trend ?? null;
 
   // Quick action handler
   const handleQuickAction = (action: "new_lead" | "log_call" | "schedule") => {
@@ -188,8 +213,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       <SmartHeader
         isGoalMet={isGoalMet}
         onQuickAction={handleQuickAction}
-        scope={scope}
-        onScopeChange={setScope}
+        scope={scope!}
+        onScopeChange={(s) => setScope(s)}
         selectedOfficerId={selectedOfficerId}
         onOfficerChange={setSelectedOfficerId}
         selectedUnitId={selectedUnitId}
@@ -222,7 +247,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
             <PerformanceChart
               trends={performanceTrends}
               dailyGoal={stats.kpis.consultations_target}
-              teamAverage={teamStats?.team_avg_consultations}
+              teamAverage={scope === "personal" ? teamStats?.team_avg_consultations : undefined}
             />
             {/* Funnel Visualization with View Toggle */}
             <div className="space-y-2">
@@ -238,7 +263,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
                     }`}
                   >
                     <BarChart3 className="h-4 w-4" />
-                    <span className="hidden sm:inline">Chart</span>
+                    <span className="hidden sm:inline">Biểu đồ</span>
                   </button>
                   <button
                     onClick={() => setFunnelViewMode("table")}
@@ -249,7 +274,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
                     }`}
                   >
                     <Table2 className="h-4 w-4" />
-                    <span className="hidden sm:inline">Table</span>
+                    <span className="hidden sm:inline">Bảng</span>
                   </button>
                 </div>
               </div>
@@ -258,6 +283,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
               {funnelViewMode === "chart" ? (
                 <FunnelChart
                   funnel={salesFunnel}
+                  netConversionTrend={funnelNetConversionTrend}
                   scope={scope}
                   unitId={selectedUnitId}
                   officerId={selectedOfficerId}
