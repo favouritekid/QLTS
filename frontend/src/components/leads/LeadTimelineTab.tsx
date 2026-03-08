@@ -306,7 +306,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                   </div>
 
                   {/* Timestamp */}
-                  <span className="text-xs text-muted-foreground flex-shrink-0">
+                  <span className="text-xs text-muted-foreground flex-shrink-0" suppressHydrationWarning>
                     {format(parseISO(event.timestamp || ""), "dd/MM HH:mm")}
                   </span>
                 </div>
@@ -320,7 +320,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                     </>
                   )}
                   {scheduledAt && (
-                    <span className="text-info-600 flex items-center gap-1">
+                    <span className="text-info-600 flex items-center gap-1" suppressHydrationWarning>
                       <Calendar className="w-3 h-3" />
                       Hẹn {format(parseISO(scheduledAt), "dd/MM HH:mm")}
                     </span>
@@ -543,7 +543,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                   <span>•</span>
                                 </>
                               )}
-                              <time>
+                              <time suppressHydrationWarning>
                                 {format(parseISO(event.timestamp || ""), "HH:mm")}
                               </time>
                             </div>
@@ -617,7 +617,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                 className="text-xs font-normal gap-1 border-info-200 bg-info-50 text-info-700"
                               >
                                 <Calendar className="h-3 w-3" />
-                                Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}
+                                <span suppressHydrationWarning>Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}</span>
                               </Badge>
                             )}
 

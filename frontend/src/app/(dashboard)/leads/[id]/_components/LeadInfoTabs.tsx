@@ -410,13 +410,13 @@ export function LeadInfoTabs({
 
                       {/* Timestamp */}
                       <div className="text-right flex-shrink-0">
-                        <div className="text-xs font-medium text-muted-foreground">
+                        <div className="text-xs font-medium text-muted-foreground" suppressHydrationWarning>
                           {new Date(item.timestamp).toLocaleTimeString("vi-VN", {
                             hour: "2-digit",
                             minute: "2-digit",
                           })}
                         </div>
-                        <div className="text-xs text-muted-foreground/70">
+                        <div className="text-xs text-muted-foreground/70" suppressHydrationWarning>
                           {new Date(item.timestamp).toLocaleDateString("vi-VN", {
                             day: "2-digit",
                             month: "2-digit",
@@ -434,7 +434,7 @@ export function LeadInfoTabs({
                     {scheduledAt && (
                       <div className="flex items-center gap-1 text-xs text-info-600 pl-9 mt-1">
                         <Clock className="w-3 h-3" />
-                        <span>Hẹn: {new Date(scheduledAt).toLocaleString("vi-VN", {
+                        <span suppressHydrationWarning>Hẹn: {new Date(scheduledAt).toLocaleString("vi-VN", {
                           day: "2-digit",
                           month: "2-digit",
                           hour: "2-digit",

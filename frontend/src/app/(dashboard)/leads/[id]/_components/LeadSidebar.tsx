@@ -354,7 +354,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
           </div>
         </div>
 
-        <div className="text-[10px] text-muted-foreground flex items-center gap-1 pt-1">
+        <div className="text-[10px] text-muted-foreground flex items-center gap-1 pt-1" suppressHydrationWarning>
           <Calendar className="h-3 w-3" />
           Ngày tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}
         </div>
