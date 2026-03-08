@@ -36,9 +36,9 @@ const getScoreColor = (score: number) => {
 
 const getScoreLabel = (score: number) => {
   if (score >= 70) return "Cao";
-  if (score >= 50) return "Khá";
-  if (score >= 30) return "TB";
-  return "Thấp";
+  if (score >= 50) return "TB";
+  if (score >= 30) return "Thấp";
+  return "Yếu";
 };
 
 // Mini score badge component

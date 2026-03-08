@@ -94,6 +94,18 @@ const isWeakStudent = (lead: Lead) => {
   return lead.academic_performance === 0 || (lead.gpa !== null && lead.gpa !== undefined && lead.gpa < 5.5);
 };
 
+// Profile status Vietnamese labels
+const PROFILE_STATUS_LABELS: Record<string, string> = {
+  draft: "Nháp",
+  submitted: "Đã nộp",
+  approved: "Đã duyệt",
+  confirmed: "Đã xác nhận",
+  enrolled: "Đã nhập học",
+  rejected: "Bị từ chối",
+  resubmitted: "Nộp lại",
+  overridden: "Ngoại lệ",
+};
+
 // Profile status color config
 const getProfileStatusStyle = (status: string) => {
   switch (status) {
@@ -493,7 +505,7 @@ export function LeadInfoTabs({
                         <div>
                           <span className={profileStyle.label}>Trạng thái:</span>{" "}
                           <span className={cn("font-medium", profileStyle.value)}>
-                            {lead.admission_profile.status}
+                            {PROFILE_STATUS_LABELS[lead.admission_profile.status] ?? lead.admission_profile.status}
                           </span>
                         </div>
                         {lead.admission_profile.student_code && (
