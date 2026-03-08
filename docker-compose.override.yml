@@ -61,10 +61,9 @@ services:
           memory: 3G
     develop:
       watch:
-        # Source code → sync into container, inotify triggers Turbopack HMR
-        # NOTE: On Windows, bind mounts don't propagate inotify events.
-        # docker compose watch handles this by copying files, which generates
-        # real inotify events inside the Linux container.
+        # Source code → sync into container, generates real inotify events
+        # for Turbopack HMR (Windows bind mounts don't propagate inotify).
+        # Requires: docker compose up --watch (or dev.cmd)
         - action: sync
           path: ./frontend/src
           target: /app/src

@@ -60,9 +60,13 @@ All services run in Docker containers. **Never run backend/frontend directly on 
 
 ```bash
 # Development (auto-loads docker-compose.override.yml)
+# Step 1: Start services
 docker compose up -d
-# - Backend: uvicorn --reload with bind mount (hot-reload)
-# - Frontend: npm run dev with docker compose watch (HMR)
+# Step 2: Enable frontend HMR (separate terminal, runs foreground)
+docker compose watch          # or just: dev.cmd
+# - Backend: uvicorn --reload with bind mount (auto hot-reload)
+# - Frontend: docker compose watch syncs src/ into container → Turbopack HMR
+#   (Windows bind mounts don't propagate inotify → watch is required)
 # - Ports exposed: backend:8000, frontend:3000, postgres:5433, redis:6380
 
 # Production
