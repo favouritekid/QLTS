@@ -30,6 +30,8 @@ DEFAULT_KPIS = {
     "response_time_hours": 2,
     "enrollments_monthly": 7,
     "enrollments_annual": 80,
+    "sla_compliance_rate": 80,  # 80% target
+    "consultation_effectiveness": 50,  # 50% target
 }
 
 

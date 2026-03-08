@@ -152,6 +152,14 @@ class KPIStats(BaseModel):
     avg_response_time: float
     avg_response_time_trend: TrendInfo
 
+    # SLA Compliance Rate (% leads responded within SLA target hours)
+    sla_compliance_rate: float = 0.0
+    sla_compliance_rate_trend: Optional[TrendInfo] = None
+
+    # Consultation Effectiveness (% of consulted final leads that converted)
+    consultation_effectiveness: float = 0.0
+    consultation_effectiveness_trend: Optional[TrendInfo] = None
+
 
 class PriorityAction(BaseModel):
     """AI-powered priority action suggestion."""

@@ -1583,3 +1583,343 @@ class OfficerRepository(BaseRepository[models.User]):
             return None
 
         return round(float(avg_hours), 1)
+
+    # =========================================================================
+    # SLA Compliance Rate
+    # =========================================================================
+
+    async def get_sla_compliance_stats(
+        self,
+        officer_id: int,
+        start_date: date,
+        end_date: date,
+        sla_hours: float,
+    ) -> Dict[str, Any]:
+        """
+        Calculate SLA compliance rate for an officer.
+
+        SLA = (Leads responded within sla_hours / Total eligible leads) × 100
+
+        Eligible leads:
+        - Contacted leads assigned in date range (have ≥1 consultation)
+        - Uncontacted leads assigned in range whose SLA has expired
+
+        Returns dict with compliant, total, overdue_uncontacted, rate.
+        """
+        now = datetime.now(timezone.utc)
+
+        # Subquery: first consultation per lead by this officer
+        first_consult_subq = (
+            select(
+                models.Consultation.lead_id,
+                func.min(models.Consultation.consultation_date).label("first_consultation"),
+            )
+            .where(
+                models.Consultation.officer_id == officer_id,
+                models.Consultation.deleted_at.is_(None),
+            )
+            .group_by(models.Consultation.lead_id)
+        ).subquery()
+
+        # Query 1: Contacted leads — count compliant vs total
+        contacted_query = (
+            select(
+                func.count().label("total_contacted"),
+                func.count().filter(
+                    func.extract(
+                        "epoch",
+                        first_consult_subq.c.first_consultation - models.Lead.assigned_at,
+                    )
+                    <= sla_hours * 3600
+                ).label("compliant"),
+            )
+            .join(
+                first_consult_subq,
+                first_consult_subq.c.lead_id == models.Lead.id,
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.assigned_at.isnot(None),
+                models.Lead.deleted_at.is_(None),
+                func.date(models.Lead.assigned_at) >= start_date,
+                func.date(models.Lead.assigned_at) <= end_date,
+                first_consult_subq.c.first_consultation >= models.Lead.assigned_at,
+            )
+        )
+
+        result1 = await self.db.execute(contacted_query)
+        row1 = result1.one()
+        total_contacted = row1.total_contacted or 0
+        compliant = row1.compliant or 0
+
+        # Query 2: Uncontacted leads whose SLA has expired
+        sla_deadline = now - timedelta(hours=sla_hours)
+        overdue_query = (
+            select(func.count().label("overdue_count"))
+            .select_from(models.Lead)
+            .outerjoin(
+                first_consult_subq,
+                first_consult_subq.c.lead_id == models.Lead.id,
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.assigned_at.isnot(None),
+                models.Lead.deleted_at.is_(None),
+                func.date(models.Lead.assigned_at) >= start_date,
+                func.date(models.Lead.assigned_at) <= end_date,
+                first_consult_subq.c.lead_id.is_(None),  # No consultation
+                models.Lead.assigned_at < sla_deadline,  # SLA expired
+            )
+        )
+
+        result2 = await self.db.execute(overdue_query)
+        overdue_uncontacted = result2.scalar() or 0
+
+        total = total_contacted + overdue_uncontacted
+        rate = round((compliant / total) * 100, 1) if total > 0 else 0.0
+
+        return {
+            "compliant": compliant,
+            "total": total,
+            "overdue_uncontacted": overdue_uncontacted,
+            "rate": rate,
+        }
+
+    async def get_aggregated_sla_compliance_stats(
+        self,
+        officer_ids: List[int],
+        start_date: date,
+        end_date: date,
+        sla_hours: float,
+    ) -> Dict[str, Any]:
+        """Aggregated SLA compliance for multiple officers."""
+        if not officer_ids:
+            return {"compliant": 0, "total": 0, "overdue_uncontacted": 0, "rate": 0.0}
+
+        now = datetime.now(timezone.utc)
+
+        first_consult_subq = (
+            select(
+                models.Consultation.lead_id,
+                func.min(models.Consultation.consultation_date).label("first_consultation"),
+            )
+            .where(
+                models.Consultation.officer_id.in_(officer_ids),
+                models.Consultation.deleted_at.is_(None),
+            )
+            .group_by(models.Consultation.lead_id)
+        ).subquery()
+
+        contacted_query = (
+            select(
+                func.count().label("total_contacted"),
+                func.count().filter(
+                    func.extract(
+                        "epoch",
+                        first_consult_subq.c.first_consultation - models.Lead.assigned_at,
+                    )
+                    <= sla_hours * 3600
+                ).label("compliant"),
+            )
+            .join(
+                first_consult_subq,
+                first_consult_subq.c.lead_id == models.Lead.id,
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.Lead.assigned_at.isnot(None),
+                models.Lead.deleted_at.is_(None),
+                func.date(models.Lead.assigned_at) >= start_date,
+                func.date(models.Lead.assigned_at) <= end_date,
+                first_consult_subq.c.first_consultation >= models.Lead.assigned_at,
+            )
+        )
+
+        result1 = await self.db.execute(contacted_query)
+        row1 = result1.one()
+        total_contacted = row1.total_contacted or 0
+        compliant = row1.compliant or 0
+
+        sla_deadline = now - timedelta(hours=sla_hours)
+        overdue_query = (
+            select(func.count().label("overdue_count"))
+            .select_from(models.Lead)
+            .outerjoin(
+                first_consult_subq,
+                first_consult_subq.c.lead_id == models.Lead.id,
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.Lead.assigned_at.isnot(None),
+                models.Lead.deleted_at.is_(None),
+                func.date(models.Lead.assigned_at) >= start_date,
+                func.date(models.Lead.assigned_at) <= end_date,
+                first_consult_subq.c.lead_id.is_(None),
+                models.Lead.assigned_at < sla_deadline,
+            )
+        )
+
+        result2 = await self.db.execute(overdue_query)
+        overdue_uncontacted = result2.scalar() or 0
+
+        total = total_contacted + overdue_uncontacted
+        rate = round((compliant / total) * 100, 1) if total > 0 else 0.0
+
+        return {
+            "compliant": compliant,
+            "total": total,
+            "overdue_uncontacted": overdue_uncontacted,
+            "rate": rate,
+        }
+
+    # =========================================================================
+    # Consultation Effectiveness
+    # =========================================================================
+
+    async def get_consultation_effectiveness_stats(
+        self,
+        officer_id: int,
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, Any]:
+        """
+        Consultation Effectiveness: % of consulted leads that converted (Won).
+
+        Only counts leads that:
+        - Have ≥1 consultation by this officer
+        - Have reached a final status (is_final=True)
+
+        Numerator: final + positive (Won)
+        Denominator: ALL final outcomes (positive + negative + neutral)
+
+        Returns dict with won_consulted, total_final_consulted, effectiveness.
+        """
+        # Subquery: leads with at least one consultation by this officer
+        consulted_leads_subq = (
+            select(models.Consultation.lead_id)
+            .where(
+                models.Consultation.officer_id == officer_id,
+                models.Consultation.deleted_at.is_(None),
+            )
+            .distinct()
+        ).subquery()
+
+        # Latest transition per lead (DISTINCT ON lead_id ORDER BY changed_at DESC)
+        latest_transitions = (
+            select(
+                models.LeadStatusHistory.lead_id,
+                models.ConsultationStatus.outcome_type,
+                models.ConsultationStatus.is_final,
+            )
+            .distinct(models.LeadStatusHistory.lead_id)
+            .join(
+                models.ConsultationStatus,
+                models.LeadStatusHistory.new_consultation_status_id == models.ConsultationStatus.id,
+            )
+            .join(
+                models.Lead,
+                models.LeadStatusHistory.lead_id == models.Lead.id,
+            )
+            .join(
+                consulted_leads_subq,
+                models.LeadStatusHistory.lead_id == consulted_leads_subq.c.lead_id,
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                func.date(models.LeadStatusHistory.changed_at) >= start_date,
+                func.date(models.LeadStatusHistory.changed_at) <= end_date,
+                models.Lead.deleted_at.is_(None),
+                models.LeadStatusHistory.new_consultation_status_id.isnot(None),
+            )
+            .order_by(
+                models.LeadStatusHistory.lead_id,
+                models.LeadStatusHistory.changed_at.desc(),
+            )
+        )
+
+        result = await self.db.execute(latest_transitions)
+        rows = result.fetchall()
+
+        won_consulted = sum(1 for r in rows if r.is_final and r.outcome_type == "positive")
+        total_final_consulted = sum(1 for r in rows if r.is_final)
+
+        effectiveness = (
+            round((won_consulted / total_final_consulted) * 100, 1)
+            if total_final_consulted > 0
+            else 0.0
+        )
+
+        return {
+            "won_consulted": won_consulted,
+            "total_final_consulted": total_final_consulted,
+            "effectiveness": effectiveness,
+        }
+
+    async def get_aggregated_consultation_effectiveness_stats(
+        self,
+        officer_ids: List[int],
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, Any]:
+        """Aggregated Consultation Effectiveness for multiple officers."""
+        if not officer_ids:
+            return {"won_consulted": 0, "total_final_consulted": 0, "effectiveness": 0.0}
+
+        consulted_leads_subq = (
+            select(models.Consultation.lead_id)
+            .where(
+                models.Consultation.officer_id.in_(officer_ids),
+                models.Consultation.deleted_at.is_(None),
+            )
+            .distinct()
+        ).subquery()
+
+        latest_transitions = (
+            select(
+                models.LeadStatusHistory.lead_id,
+                models.ConsultationStatus.outcome_type,
+                models.ConsultationStatus.is_final,
+            )
+            .distinct(models.LeadStatusHistory.lead_id)
+            .join(
+                models.ConsultationStatus,
+                models.LeadStatusHistory.new_consultation_status_id == models.ConsultationStatus.id,
+            )
+            .join(
+                models.Lead,
+                models.LeadStatusHistory.lead_id == models.Lead.id,
+            )
+            .join(
+                consulted_leads_subq,
+                models.LeadStatusHistory.lead_id == consulted_leads_subq.c.lead_id,
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                func.date(models.LeadStatusHistory.changed_at) >= start_date,
+                func.date(models.LeadStatusHistory.changed_at) <= end_date,
+                models.Lead.deleted_at.is_(None),
+                models.LeadStatusHistory.new_consultation_status_id.isnot(None),
+            )
+            .order_by(
+                models.LeadStatusHistory.lead_id,
+                models.LeadStatusHistory.changed_at.desc(),
+            )
+        )
+
+        result = await self.db.execute(latest_transitions)
+        rows = result.fetchall()
+
+        won_consulted = sum(1 for r in rows if r.is_final and r.outcome_type == "positive")
+        total_final_consulted = sum(1 for r in rows if r.is_final)
+
+        effectiveness = (
+            round((won_consulted / total_final_consulted) * 100, 1)
+            if total_final_consulted > 0
+            else 0.0
+        )
+
+        return {
+            "won_consulted": won_consulted,
+            "total_final_consulted": total_final_consulted,
+            "effectiveness": effectiveness,
+        }

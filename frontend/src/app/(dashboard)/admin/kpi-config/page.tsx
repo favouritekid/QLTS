@@ -119,6 +119,8 @@ const KPI_CODES = [
   { value: "conversion_rate", label: "TL chuyển đổi Lead mới (%)" },
   { value: "win_rate", label: "Tỉ lệ chốt đơn (%)" },
   { value: "response_time", label: "Thời gian phản hồi (giờ)" },
+  { value: "sla_compliance_rate", label: "SLA tuân thủ (%)" },
+  { value: "consultation_effectiveness", label: "Hiệu quả tư vấn (%)" },
 ];
 
 const PERIOD_TYPES = [

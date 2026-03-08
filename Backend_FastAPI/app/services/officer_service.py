@@ -710,10 +710,33 @@ async def get_enhanced_dashboard_stats(
             "comparison": "Chưa có dữ liệu"
         }
 
-    # === 5. PRIORITY ACTIONS ===
+    # === 5. SLA COMPLIANCE RATE ===
+    sla_hours = await kpi_service.get_kpi_target(
+        db, "response_time_hours", officer_id, user.unit_id, "daily"
+    )
+    sla_stats = await repo.get_sla_compliance_stats(officer_id, filter_start, filter_end, sla_hours)
+    prev_sla_stats = await repo.get_sla_compliance_stats(officer_id, prev_filter_start, prev_filter_end, sla_hours)
+    sla_diff = sla_stats["rate"] - prev_sla_stats["rate"]
+    sla_compliance_trend = {
+        "value": abs(round(sla_diff, 1)),
+        "direction": "up" if sla_diff > 0 else "down" if sla_diff < 0 else "neutral",
+        "comparison": f"vs {filter_days} ngày trước",
+    }
+
+    # === 6. CONSULTATION EFFECTIVENESS ===
+    effectiveness_stats = await repo.get_consultation_effectiveness_stats(officer_id, filter_start, filter_end)
+    prev_effectiveness_stats = await repo.get_consultation_effectiveness_stats(officer_id, prev_filter_start, prev_filter_end)
+    eff_diff = effectiveness_stats["effectiveness"] - prev_effectiveness_stats["effectiveness"]
+    effectiveness_trend = {
+        "value": abs(round(eff_diff, 1)),
+        "direction": "up" if eff_diff > 0 else "down" if eff_diff < 0 else "neutral",
+        "comparison": f"vs {filter_days} ngày trước",
+    }
+
+    # === 7. PRIORITY ACTIONS ===
     priority_actions = await _calculate_priority_actions(db, officer_id)
 
-    # === 6. PERFORMANCE TRENDS (within date range) - OPTIMIZED ===
+    # === 8. PERFORMANCE TRENDS (within date range) - OPTIMIZED ===
     # Use batch query instead of N+1 day loop (repo already initialized in section 4)
     trends_data = await repo.get_performance_trends_batch(officer_id, filter_start, filter_end)
     performance_trends = [
@@ -721,7 +744,7 @@ async def get_enhanced_dashboard_stats(
         for tp in trends_data.values()
     ]
     
-    # === 7. SALES FUNNEL (within date range) ===
+    # === 9. SALES FUNNEL (within date range) ===
     # Get funnel stages with leads created in date range
     sales_funnel = await _get_sales_funnel_in_range(db, officer_id, filter_start, filter_end)
 
@@ -744,7 +767,7 @@ async def get_enhanced_dashboard_stats(
         aggregated_loss_breakdown=aggregated_loss,
     )
 
-    # === 8. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
+    # === 10. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
     # Get annual target progress for enrollments KPI
     # Use fiscal year from date filter (filter_end.year)
     annual_progress = await kpi_service.get_annual_target_progress(
@@ -767,6 +790,10 @@ async def get_enhanced_dashboard_stats(
             "new_lead_conversion_rate_trend": new_lead_conversion_trend,
             "avg_response_time": avg_response_time,
             "avg_response_time_trend": avg_response_trend,
+            "sla_compliance_rate": sla_stats["rate"],
+            "sla_compliance_rate_trend": sla_compliance_trend,
+            "consultation_effectiveness": effectiveness_stats["effectiveness"],
+            "consultation_effectiveness_trend": effectiveness_trend,
         },
         "status_overview": base_stats["status_overview"],
         "priority_actions": priority_actions,
@@ -868,6 +895,13 @@ async def get_aggregated_dashboard_stats(
     # Aggregated Win Rate
     win_rate_data = await repo.get_aggregated_win_rate_stats(officer_ids, filter_start, filter_end)
 
+    # Aggregated SLA Compliance
+    sla_hours = await kpi_service.get_kpi_target(db, "response_time_hours")
+    agg_sla_stats = await repo.get_aggregated_sla_compliance_stats(officer_ids, filter_start, filter_end, sla_hours)
+
+    # Aggregated Consultation Effectiveness
+    agg_effectiveness_stats = await repo.get_aggregated_consultation_effectiveness_stats(officer_ids, filter_start, filter_end)
+
     # ==========================================================================
     # Aggregated Funnel using Repository (was N+1 loop)
     # ==========================================================================
@@ -947,6 +981,18 @@ async def get_aggregated_dashboard_stats(
                 "direction": "neutral",
                 "comparison": "",
             },
+            "sla_compliance_rate": agg_sla_stats["rate"],
+            "sla_compliance_rate_trend": {
+                "value": 0,
+                "direction": "neutral",
+                "comparison": f"trong {filter_days} ngày",
+            },
+            "consultation_effectiveness": agg_effectiveness_stats["effectiveness"],
+            "consultation_effectiveness_trend": {
+                "value": 0,
+                "direction": "neutral",
+                "comparison": f"trong {filter_days} ngày",
+            },
         },
         # Must match WorkloadStats schema
         "status_overview": {
@@ -984,6 +1030,10 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "new_lead_conversion_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "avg_response_time": 0,
             "avg_response_time_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "sla_compliance_rate": 0,
+            "sla_compliance_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "consultation_effectiveness": 0,
+            "consultation_effectiveness_trend": {"value": 0, "direction": "neutral", "comparison": ""},
         },
         # Must match WorkloadStats schema
         "status_overview": {
