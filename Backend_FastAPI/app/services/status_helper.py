@@ -153,22 +153,24 @@ class StatusHelper:
         This ensures:
         - lead.consultation_status_id = consultation_status.id
         - lead.pipeline_stage_id = consultation_status.stage_id
-        - lead.status = consultation_status.legacy_status
+        - lead.status = derived from consultation_status (NULL-safe fallback)
 
         Args:
             lead: Lead model instance
             consultation_status: ConsultationStatus to sync from
         """
+        from ..core.status_mapping import sync_lead_status_from_consultation
+
         lead.consultation_status_id = consultation_status.id
         lead.pipeline_stage_id = consultation_status.stage_id
-        lead.status = consultation_status.legacy_status
+        sync_lead_status_from_consultation(lead, consultation_status)
 
         log.debug(
             "Synced lead status from consultation_status",
             lead_id=getattr(lead, 'id', 'new'),
             consultation_status_id=consultation_status.id,
             pipeline_stage_id=consultation_status.stage_id,
-            status=consultation_status.legacy_status
+            status=lead.status,
         )
 
     @staticmethod

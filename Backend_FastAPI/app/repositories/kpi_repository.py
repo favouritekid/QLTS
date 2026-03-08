@@ -357,21 +357,22 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         fiscal_year: int,
     ) -> int:
         """
-        Count leads with final pipeline stage + positive KPI outcome.
-        
-        Uses:
+        Count leads with final pipeline stage + positive outcome for enrollment KPI.
+
+        Uses (defense-in-depth):
         - PipelineStage.is_final_stage == True
         - ConsultationStatus.counts_for_funnel == True
-        
+        - ConsultationStatus.outcome_type == "positive"  (excludes DROPPED_OUT)
+
         Args:
             officer_id: Officer ID
             fiscal_year: Fiscal year
-            
+
         Returns:
             Count of qualifying enrollments
         """
         from datetime import datetime, timezone
-        
+
         result = await self.db.execute(
             select(func.count(models.Lead.id))
             .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
@@ -380,6 +381,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
                 models.Lead.assigned_officer_id == officer_id,
                 models.PipelineStage.is_final_stage == True,
                 models.ConsultationStatus.counts_for_funnel == True,
+                models.ConsultationStatus.outcome_type == "positive",
                 models.Lead.deleted_at.is_(None),
                 models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
                 models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),

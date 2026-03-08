@@ -124,7 +124,7 @@ async def generate_recommendations(
             })
     
     # Rule 2: Low conversion rate
-    conversion_rate = kpis.get("conversion_rate", 0)
+    conversion_rate = kpis.get("new_lead_conversion_rate", 0)
     
     if conversion_rate < THRESHOLDS["conversion_rate_low"]:
         recommendations.append({

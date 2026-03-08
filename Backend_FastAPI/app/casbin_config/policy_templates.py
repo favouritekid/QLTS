@@ -131,6 +131,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # REMOVED: enroll is ADMIN-ONLY per Decision 10 (Admission State ≠ Authorization)
         # {"subject": "{role}", "object": "/api/admissions/{id}/enroll", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
+        # Admission aggregate endpoints (read-only)
+        {"subject": "{role}", "object": "/api/admissions/stats", "action": "GET"},  # Stats dashboard
+        {"subject": "{role}", "object": "/api/admissions/status-counts", "action": "GET"},  # Tab badges
+        {"subject": "{role}", "object": "/api/admissions/academic-years", "action": "GET"},  # Year filter
         # Admission config (read-only lookup data)
         {"subject": "{role}", "object": "/api/program-offerings", "action": "GET"},  # Dropdown data
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
@@ -274,9 +278,11 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # Admission State Machine (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md)
         {"subject": "{role}", "object": "/api/admissions/{id}/approve", "action": "POST"},  # Approve profile
         {"subject": "{role}", "object": "/api/admissions/{id}/reject", "action": "POST"},  # Reject profile
+        {"subject": "{role}", "object": "/api/admissions/{id}/request-revision", "action": "POST"},  # Request revision
         {"subject": "{role}", "object": "/api/admissions/{id}/override", "action": "POST"},  # Override decision
         {"subject": "{role}", "object": "/api/admissions/{id}/claim", "action": "POST"},  # Claim profile for review
         {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile
+        {"subject": "{role}", "object": "/api/admissions/{id}/drop", "action": "POST"},  # Drop enrolled student
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
         # Admission Configuration Console (Phase 1: Admission Path Management)
         # NOTE: Manager can create/edit paths, but ONLY ADMIN can activate/deactivate

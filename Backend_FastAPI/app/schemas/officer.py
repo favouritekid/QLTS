@@ -140,9 +140,13 @@ class KPIStats(BaseModel):
     active_leads: int
     active_leads_trend: TrendInfo
     
-    # Conversion rate (this month)
-    conversion_rate: float  # Percentage
-    conversion_rate_trend: TrendInfo
+    # Activity-based Win Rate (Officer performance)
+    win_rate: float = 0.0  # Won / (Won + Lost) in period
+    win_rate_trend: Optional[TrendInfo] = None
+
+    # Cohort-based New Lead Conversion (renamed from conversion_rate)
+    new_lead_conversion_rate: float = 0.0  # Converted / Total leads created in range
+    new_lead_conversion_rate_trend: Optional[TrendInfo] = None
     
     # Average response time (hours)
     avg_response_time: float

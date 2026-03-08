@@ -116,7 +116,8 @@ const KPI_CODES = [
   { value: "consultations_daily", label: "Tư vấn (Ngày)" },
   { value: "consultations_monthly", label: "Tư vấn (Tháng)" },
   { value: "enrollments", label: "Nhập học" },
-  { value: "conversion_rate", label: "Tỉ lệ chuyển đổi (%)" },
+  { value: "conversion_rate", label: "TL chuyển đổi Lead mới (%)" },
+  { value: "win_rate", label: "Tỉ lệ chốt đơn (%)" },
   { value: "response_time", label: "Thời gian phản hồi (giờ)" },
 ];
 

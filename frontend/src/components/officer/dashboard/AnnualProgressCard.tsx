@@ -89,7 +89,8 @@ const KPI_NAME_LABELS: Record<string, string> = {
   consultations: "Tư vấn",
 
   // Performance KPIs
-  conversion_rate: "Tỷ lệ chuyển đổi",
+  conversion_rate: "TL chuyển đổi Lead mới",
+  win_rate: "Tỉ lệ chốt đơn",
   response_time_hours: "Thời gian phản hồi",
 
   // Lead KPIs

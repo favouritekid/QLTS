@@ -653,22 +653,32 @@ async def get_enhanced_dashboard_stats(
         "comparison": f"trong {filter_days} ngày"
     }
     
-    conversion_rate = round((converted_in_range / total_in_range) * 100, 1)
-    
+    new_lead_conversion_rate = round((converted_in_range / total_in_range) * 100, 1)
+
     # Compare with previous period of same length
     prev_filter_end = filter_start - timedelta(days=1)
     prev_filter_start = prev_filter_end - timedelta(days=filter_days - 1)
-    
+
     # Get previous period KPIs using Repository
     prev_kpi_data = await repo.get_kpi_stats(officer_id, prev_filter_start, prev_filter_end)
     converted_prev = prev_kpi_data["converted_count"]
     total_prev = prev_kpi_data["total_leads"] or 1
     prev_rate = (converted_prev / total_prev) * 100
-    
-    conversion_diff = conversion_rate - prev_rate
-    conversion_trend = {
+
+    conversion_diff = new_lead_conversion_rate - prev_rate
+    new_lead_conversion_trend = {
         "value": abs(round(conversion_diff, 1)),
         "direction": "up" if conversion_diff > 0 else "down" if conversion_diff < 0 else "neutral",
+        "comparison": f"vs {filter_days} ngày trước"
+    }
+
+    # === Activity-based Win Rate ===
+    win_rate_data = await repo.get_win_rate_stats(officer_id, filter_start, filter_end)
+    prev_win_rate_data = await repo.get_win_rate_stats(officer_id, prev_filter_start, prev_filter_end)
+    win_rate_diff = win_rate_data["win_rate"] - prev_win_rate_data["win_rate"]
+    win_rate_trend = {
+        "value": abs(round(win_rate_diff, 1)),
+        "direction": "up" if win_rate_diff > 0 else "down" if win_rate_diff < 0 else "neutral",
         "comparison": f"vs {filter_days} ngày trước"
     }
 
@@ -751,8 +761,10 @@ async def get_enhanced_dashboard_stats(
             "consultations_trend": consultations_trend,
             "active_leads": active_leads,
             "active_leads_trend": active_leads_trend,
-            "conversion_rate": conversion_rate,
-            "conversion_rate_trend": conversion_trend,
+            "win_rate": win_rate_data["win_rate"],
+            "win_rate_trend": win_rate_trend,
+            "new_lead_conversion_rate": new_lead_conversion_rate,
+            "new_lead_conversion_rate_trend": new_lead_conversion_trend,
             "avg_response_time": avg_response_time,
             "avg_response_time_trend": avg_response_trend,
         },
@@ -851,8 +863,11 @@ async def get_aggregated_dashboard_stats(
     total_leads = kpi_data["total_leads"] or 1
     
     avg_consultations_per_day = round(total_consultations / filter_days, 1) if filter_days > 0 else 0
-    conversion_rate = round((converted_count / total_leads) * 100, 1)
-    
+    new_lead_conversion_rate = round((converted_count / total_leads) * 100, 1)
+
+    # Aggregated Win Rate
+    win_rate_data = await repo.get_aggregated_win_rate_stats(officer_ids, filter_start, filter_end)
+
     # ==========================================================================
     # Aggregated Funnel using Repository (was N+1 loop)
     # ==========================================================================
@@ -914,8 +929,14 @@ async def get_aggregated_dashboard_stats(
                 "direction": "neutral",
                 "comparison": f"{officer_count} officers",
             },
-            "conversion_rate": conversion_rate,
-            "conversion_rate_trend": {
+            "win_rate": win_rate_data["win_rate"],
+            "win_rate_trend": {
+                "value": 0,
+                "direction": "neutral",
+                "comparison": f"trong {filter_days} ngày",
+            },
+            "new_lead_conversion_rate": new_lead_conversion_rate,
+            "new_lead_conversion_rate_trend": {
                 "value": 0,
                 "direction": "neutral",
                 "comparison": f"trong {filter_days} ngày",
@@ -957,8 +978,10 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "consultations_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "active_leads": 0,
             "active_leads_trend": {"value": 0, "direction": "neutral", "comparison": ""},
-            "conversion_rate": 0,
-            "conversion_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "win_rate": 0,
+            "win_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "new_lead_conversion_rate": 0,
+            "new_lead_conversion_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "avg_response_time": 0,
             "avg_response_time_trend": {"value": 0, "direction": "neutral", "comparison": ""},
         },

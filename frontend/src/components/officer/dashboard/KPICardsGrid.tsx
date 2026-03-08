@@ -23,8 +23,10 @@ interface KPIStats {
   consultations_trend: TrendInfo;
   active_leads: number;
   active_leads_trend: TrendInfo;
-  conversion_rate: number;
-  conversion_rate_trend: TrendInfo;
+  win_rate: number;
+  win_rate_trend?: TrendInfo | null;
+  new_lead_conversion_rate: number;
+  new_lead_conversion_rate_trend?: TrendInfo | null;
   avg_response_time: number;
   avg_response_time_trend: TrendInfo;
 }
@@ -44,7 +46,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   const goToLeads = () => router.push("/leads");
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
       {/* Consultations Today */}
       <KPICard
         title="Tư vấn hôm nay"
@@ -65,12 +67,22 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         onClick={goToLeads}
       />
 
-      {/* Conversion Rate */}
+      {/* Win Rate - Activity-based */}
       <KPICard
-        title="Tỉ lệ chuyển đổi"
-        value={`${kpis.conversion_rate}%`}
+        title="Tỉ lệ chốt đơn"
+        value={`${kpis.win_rate}%`}
         subtitle={periodLabel}
-        trend={kpis.conversion_rate_trend}
+        trend={kpis.win_rate_trend ?? undefined}
+        icon={TrendingUp}
+        onClick={goToLeads}
+      />
+
+      {/* New Lead Conversion - Cohort-based */}
+      <KPICard
+        title="TL chuyển đổi Lead mới"
+        value={`${kpis.new_lead_conversion_rate}%`}
+        subtitle={periodLabel}
+        trend={kpis.new_lead_conversion_rate_trend ?? undefined}
         icon={TrendingUp}
         onClick={goToLeads}
       />

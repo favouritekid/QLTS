@@ -761,9 +761,127 @@ class OfficerRepository(BaseRepository[models.User]):
         }
     
     # =========================================================================
+    # Activity-based Win Rate (from LeadStatusHistory)
+    # =========================================================================
+
+    async def get_win_rate_stats(
+        self,
+        officer_id: int,
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, Any]:
+        """
+        Activity-based Win Rate: last transition per lead in date range.
+
+        Uses DISTINCT ON(lead_id) + ORDER BY changed_at DESC to get exactly
+        one row per lead (the most recent transition in the period).
+        Only counts Win/Lost if that latest transition is to a final status.
+
+        Edge cases handled:
+        - Lead reopened (final→non-final): not counted
+        - Lead transitions negative→positive in period: only latest counts
+        """
+        latest_transitions = (
+            select(
+                models.LeadStatusHistory.lead_id,
+                models.ConsultationStatus.outcome_type,
+                models.ConsultationStatus.is_final,
+            )
+            .distinct(models.LeadStatusHistory.lead_id)
+            .join(
+                models.ConsultationStatus,
+                models.LeadStatusHistory.new_consultation_status_id == models.ConsultationStatus.id,
+            )
+            .join(
+                models.Lead,
+                models.LeadStatusHistory.lead_id == models.Lead.id,
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                func.date(models.LeadStatusHistory.changed_at) >= start_date,
+                func.date(models.LeadStatusHistory.changed_at) <= end_date,
+                models.Lead.deleted_at.is_(None),
+                models.LeadStatusHistory.new_consultation_status_id.isnot(None),
+            )
+            .order_by(
+                models.LeadStatusHistory.lead_id,
+                models.LeadStatusHistory.changed_at.desc(),
+            )
+        )
+
+        result = await self.db.execute(latest_transitions)
+        rows = result.fetchall()
+
+        won = sum(1 for r in rows if r.is_final and r.outcome_type == "positive")
+        lost = sum(1 for r in rows if r.is_final and r.outcome_type == "negative")
+        total_closed = won + lost
+
+        return {
+            "won": won,
+            "lost": lost,
+            "total_closed": total_closed,
+            "win_rate": round((won / total_closed) * 100, 1) if total_closed > 0 else 0.0,
+        }
+
+    async def get_aggregated_win_rate_stats(
+        self,
+        officer_ids: List[int],
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, Any]:
+        """
+        Aggregated Win Rate for multiple officers.
+        Same DISTINCT ON logic as get_win_rate_stats but filters by officer_ids list.
+        """
+        if not officer_ids:
+            return {"won": 0, "lost": 0, "total_closed": 0, "win_rate": 0.0}
+
+        latest_transitions = (
+            select(
+                models.LeadStatusHistory.lead_id,
+                models.ConsultationStatus.outcome_type,
+                models.ConsultationStatus.is_final,
+            )
+            .distinct(models.LeadStatusHistory.lead_id)
+            .join(
+                models.ConsultationStatus,
+                models.LeadStatusHistory.new_consultation_status_id == models.ConsultationStatus.id,
+            )
+            .join(
+                models.Lead,
+                models.LeadStatusHistory.lead_id == models.Lead.id,
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                func.date(models.LeadStatusHistory.changed_at) >= start_date,
+                func.date(models.LeadStatusHistory.changed_at) <= end_date,
+                models.Lead.deleted_at.is_(None),
+                models.LeadStatusHistory.new_consultation_status_id.isnot(None),
+            )
+            .order_by(
+                models.LeadStatusHistory.lead_id,
+                models.LeadStatusHistory.changed_at.desc(),
+            )
+        )
+
+        result = await self.db.execute(latest_transitions)
+        rows = result.fetchall()
+
+        won = sum(1 for r in rows if r.is_final and r.outcome_type == "positive")
+        lost = sum(1 for r in rows if r.is_final and r.outcome_type == "negative")
+        total_closed = won + lost
+
+        return {
+            "won": won,
+            "lost": lost,
+            "total_closed": total_closed,
+            "win_rate": round((won / total_closed) * 100, 1) if total_closed > 0 else 0.0,
+        }
+
+    # =========================================================================
     # Actionable Leads
     # =========================================================================
-    
+
     async def get_high_score_leads(
         self,
         officer_id: int,

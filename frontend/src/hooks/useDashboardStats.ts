@@ -26,8 +26,10 @@ export interface KPIStats {
   consultations_trend: TrendInfo;
   active_leads: number;
   active_leads_trend: TrendInfo;
-  conversion_rate: number;
-  conversion_rate_trend: TrendInfo;
+  win_rate: number;
+  win_rate_trend?: TrendInfo | null;
+  new_lead_conversion_rate: number;
+  new_lead_conversion_rate_trend?: TrendInfo | null;
   avg_response_time: number;
   avg_response_time_trend: TrendInfo;
 }
