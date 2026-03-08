@@ -90,6 +90,10 @@ function formatScheduledTime(date: Date): string {
 function getActionBannerConfig(lead: Lead): BannerConfig | null {
   const now = new Date();
 
+  // Terminal leads (enrolled, final status) should never show action banners
+  const isTerminal = lead.consultation_status?.is_final || lead.pipeline_stage?.is_final_stage;
+  if (isTerminal) return null;
+
   // Priority 1: Overdue check (from cached field)
   // is_overdue = next_activity_at has passed
   if (lead.is_overdue && lead.next_activity_at) {
@@ -139,15 +143,11 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
 
   // Priority 3: Hot lead needing contact
   // is_hot_lead = lead_score >= 70 (set by LeadCacheService)
-  // Show banner if:
-  // - Lead is hot (score >= 70) AND
-  // - Either no recent contact OR urgency is elevated
-  // - NOT in a terminal state (is_final status or is_final_stage)
-  const isTerminal = lead.consultation_status?.is_final || lead.pipeline_stage?.is_final_stage;
+  // Show banner if lead is hot AND no recent contact (within 24h)
   const hasRecentContact = lead.consultation_count > 0 && lead.last_consultation_at &&
-    (new Date().getTime() - new Date(lead.last_consultation_at).getTime()) < 24 * 60 * 60 * 1000; // Within 24h
+    (now.getTime() - new Date(lead.last_consultation_at).getTime()) < 24 * 60 * 60 * 1000;
 
-  if (lead.is_hot_lead && !hasRecentContact && !isTerminal) {
+  if (lead.is_hot_lead && !hasRecentContact) {
     return {
       type: "hot_lead",
       priority: "high",
@@ -187,25 +187,25 @@ export function ActionBanner({ lead, onCall, onMarkComplete, className }: Action
   return (
     <div
       className={cn(
-        "flex items-center justify-between p-4 rounded-2xl border",
+        "flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl border",
         `bg-gradient-to-r ${config.gradient}`,
         config.type === "overdue" ? "border-error-200" : "border-warning-200",
         className
       )}
     >
       {/* Left: Icon + Message */}
-      <div className="flex items-center gap-3">
-        <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", config.iconBg)}>
+      <div className="flex items-center gap-3 min-w-0">
+        <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", config.iconBg)}>
           <Icon className={cn("w-5 h-5", config.iconColor)} />
         </div>
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className={cn("text-sm font-bold", config.textColor)}>{config.title}</span>
-            <Badge className={cn("text-xs font-medium", config.badgeColor)}>
+            <Badge className={cn("text-xs font-medium shrink-0", config.badgeColor)}>
               {config.priority === "critical" ? "Khẩn cấp" : "Ưu tiên"}
             </Badge>
           </div>
-          <p className={cn("text-sm mt-0.5", config.textColor)} suppressHydrationWarning>
+          <p className={cn("text-sm mt-0.5 truncate", config.textColor)} suppressHydrationWarning>
             <Clock className="w-3.5 h-3.5 inline mr-1" />
             {config.message}
           </p>
@@ -213,7 +213,7 @@ export function ActionBanner({ lead, onCall, onMarkComplete, className }: Action
       </div>
 
       {/* Right: Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 shrink-0">
         {config.actionSecondary && (
           <Button
             variant="ghost"
@@ -222,7 +222,8 @@ export function ActionBanner({ lead, onCall, onMarkComplete, className }: Action
             onClick={onMarkComplete}
           >
             <CheckCircle className="w-4 h-4 mr-1" />
-            {config.actionSecondary}
+            <span className="hidden sm:inline">{config.actionSecondary}</span>
+            <span className="sm:hidden">Hoàn thành</span>
           </Button>
         )}
         {config.actionPrimary && (
