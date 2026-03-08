@@ -123,6 +123,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       filterState.validityFilters.length === 0 &&
       filterState.stageFilters.length === 0 &&
       filterState.officerFilters.length === 0 &&
+      !filterState.unitId &&
       !filterState.dateFrom &&
       !filterState.dateTo &&
       filterState.sortBy === "created_at" &&
@@ -144,6 +145,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     filterState.offeringFilters.length ||
     filterState.stageFilters.length ||
     filterState.officerFilters.length ||
+    filterState.unitId ||
     filterState.dateFrom ||
     filterState.dateTo
   ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.validityFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.dateFrom, filterState.dateTo]);

@@ -28,6 +28,7 @@ export interface StoredFilters {
   offeringFilters: string[];
   stageFilters: string[];
   officerFilters: string[];
+  unitId: string;
   dateFrom: string;
   dateTo: string;
   dateField: "created_at" | "last_consultation_at";
@@ -53,6 +54,7 @@ export interface LeadsFilterHandlers {
   handleDateFromChange: (date: string) => void;
   handleDateToChange: (date: string) => void;
   handleDateFieldChange: (field: "created_at" | "last_consultation_at") => void;
+  handleUnitIdChange: (unitId: string) => void;
   handleSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void;
   resetFilters: () => void;
 }
@@ -70,7 +72,7 @@ export interface UseLeadsFilterReturn {
 
 const LEADS_FILTERS_STORAGE_KEY = "leads_filters";
 // ✅ VERSIONING: Increment when StoredFilters schema changes
-const STORAGE_VERSION = 3;
+const STORAGE_VERSION = 4;
 
 interface VersionedStorage {
   version: number;
@@ -86,6 +88,7 @@ const DEFAULT_FILTERS: StoredFilters = {
   offeringFilters: [],
   stageFilters: [],
   officerFilters: [],
+  unitId: "",
   dateFrom: "",
   dateTo: "",
   dateField: "created_at",
@@ -155,6 +158,7 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
     searchParams.get("offering") ||
     searchParams.get("stage") ||
     searchParams.get("officer") ||
+    searchParams.get("unit_id") ||
     searchParams.get("from") ||
     searchParams.get("to")
   );
@@ -170,6 +174,7 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
     offeringFilters: searchParams.get("offering")?.split(",").filter(Boolean) || [],
     stageFilters: searchParams.get("stage")?.split(",").filter(Boolean) || [],
     officerFilters: searchParams.get("officer")?.split(",").filter(Boolean) || [],
+    unitId: searchParams.get("unit_id") || "",
     dateFrom: searchParams.get("from") || "",
     dateTo: searchParams.get("to") || "",
     dateField: (searchParams.get("date_field") === "last_consultation_at" 
@@ -219,6 +224,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const [offeringFilters, setOfferingFilters] = useState<string[]>(initialValues.offeringFilters);
   const [stageFilters, setStageFilters] = useState<string[]>(initialValues.stageFilters);
   const [officerFilters, setOfficerFilters] = useState<string[]>(initialValues.officerFilters);
+  const [unitId, setUnitId] = useState(initialValues.unitId);
   const [dateFrom, setDateFrom] = useState(initialValues.dateFrom);
   const [dateTo, setDateTo] = useState(initialValues.dateTo);
   const [dateField, setDateField] = useState<"created_at" | "last_consultation_at">(
@@ -277,6 +283,9 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (JSON.stringify(urlFilters.officerFilters) !== JSON.stringify(officerFilters)) {
       setOfficerFilters(urlFilters.officerFilters);
     }
+    if (urlFilters.unitId !== unitId) {
+      setUnitId(urlFilters.unitId);
+    }
     if (urlFilters.search !== search) {
       setSearch(urlFilters.search);
     }
@@ -322,6 +331,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       if (offeringFilters.length > 0) params.set("offering", offeringFilters.join(","));
       if (stageFilters.length > 0) params.set("stage", stageFilters.join(","));
       if (officerFilters.length > 0) params.set("officer", officerFilters.join(","));
+      if (unitId) params.set("unit_id", unitId);
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
       if (dateField !== "created_at") params.set("date_field", dateField);
@@ -344,7 +354,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     };
   }, [
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
-    stageFilters, officerFilters, dateFrom, dateTo, dateField,
+    stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
     pathname,
   ]);
 
@@ -362,6 +372,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       offeringFilters,
       stageFilters,
       officerFilters,
+      unitId,
       dateFrom,
       dateTo,
       dateField,
@@ -377,6 +388,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       offeringFilters.length > 0 ||
       stageFilters.length > 0 ||
       officerFilters.length > 0 ||
+      !!unitId ||
       dateFrom ||
       dateTo;
 
@@ -387,7 +399,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     }
   }, [
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
-    stageFilters, officerFilters, dateFrom, dateTo, dateField,
+    stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
   ]);
 
   // ==========================================================================
@@ -429,6 +441,11 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     setPage(1);
   }, []);
 
+  const handleUnitIdChange = useCallback((newUnitId: string) => {
+    setUnitId(newUnitId);
+    setPage(1);
+  }, []);
+
   const handleScoreRangeChange = useCallback((range: [number, number]) => {
     setScoreRange(range);
   }, []);
@@ -463,6 +480,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     setOfferingFilters([]);
     setStageFilters([]);
     setOfficerFilters([]);
+    setUnitId("");
     setDateFrom("");
     setDateTo("");
     setDateField("created_at");
@@ -487,13 +505,14 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       offeringFilters.length > 0 ||
       stageFilters.length > 0 ||
       officerFilters.length > 0 ||
+      !!unitId ||
       hasScoreFilter ||
       dateFrom ||
       dateTo
     );
   }, [
     search, statusFilters, sourceFilters, validityFilters, offeringFilters,
-    stageFilters, officerFilters, hasScoreFilter, dateFrom, dateTo,
+    stageFilters, officerFilters, unitId, hasScoreFilter, dateFrom, dateTo,
   ]);
 
   const apiFilters = useMemo(() => {
@@ -511,6 +530,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (offeringFilters.length > 0) params.offering_id = offeringFilters.join(",");
     if (stageFilters.length > 0) params.pipeline_stage_id = stageFilters.join(",");
     if (officerFilters.length > 0) params.assigned_officer_id = officerFilters.join(",");
+    if (unitId) params.unit_id = parseInt(unitId, 10);
 
     if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
     if (dateTo) {
@@ -523,7 +543,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     return params;
   }, [
     page, pageSize, search, statusFilters, sourceFilters, validityFilters,
-    offeringFilters, stageFilters, officerFilters, dateFrom, dateTo, dateField,
+    offeringFilters, stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
     sortBy, sortOrder,
   ]);
 
@@ -543,6 +563,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       offeringFilters,
       stageFilters,
       officerFilters,
+      unitId,
       dateFrom,
       dateTo,
       dateField,
@@ -558,6 +579,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       handleOfferingChange,
       handleStageChange,
       handleOfficerChange,
+      handleUnitIdChange,
       handleScoreRangeChange,
       handleDateFromChange,
       handleDateToChange,

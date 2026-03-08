@@ -530,7 +530,7 @@ export function FunnelChart({
 
     // Include scope filters for drill-down context
     if (officerId) {
-      params.set("officer_id", officerId.toString());
+      params.set("officer", officerId.toString());
     } else if (scope === "team" && unitId) {
       params.set("unit_id", unitId.toString());
     } else if (scope === "organization" && unitId) {
@@ -547,7 +547,7 @@ export function FunnelChart({
         <CardHeader className="pb-4">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base font-semibold">
-              Pipeline Funnel
+              Phễu Pipeline
             </CardTitle>
 
             {/* SPEC 2026-02-04: Net Conversion as primary metric */}
@@ -555,7 +555,7 @@ export function FunnelChart({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-2 cursor-help">
-                    <span className="text-sm text-muted-foreground">Net Conversion:</span>
+                    <span className="text-sm text-muted-foreground">Chuyển đổi ròng:</span>
                     <span className={cn(
                       "text-lg font-bold",
                       netConversionRate >= 50 ? "text-success-600" :
@@ -580,7 +580,7 @@ export function FunnelChart({
                 <TooltipContent className="max-w-[280px]">
                   <div className="text-xs space-y-1.5">
                     <p className="font-medium border-b border-white/20 pb-1">
-                      Net Conversion Rate (Strategic KPI)
+                      Tỷ lệ chuyển đổi ròng (KPI chiến lược)
                     </p>
                     <p className="text-white/90">
                       <span className="font-semibold text-success-300">{enrolledCount}</span> enrolled /
@@ -660,7 +660,7 @@ export function FunnelChart({
                           {/* Historical Conversion Rate */}
                           <div className="space-y-0.5">
                             <p className="text-white/90">
-                              <span className="font-medium text-white">Tỷ lệ chuyển đổi (30 ngày):</span>
+                              <span className="font-medium text-white">Tỷ lệ chuyển đổi (30 ngày gần nhất):</span>
                               {" "}
                               {metrics.conversion !== null
                                 ? <span className={cn("font-bold",
@@ -671,7 +671,7 @@ export function FunnelChart({
                               }
                             </p>
                             <p className="text-white/50 text-[10px] italic">
-                              {`% leads đã tiến từ "${coreStages[index - 1].stage_name}" lên stage tiếp theo`}
+                              {`% leads đã tiến lên stage tiếp theo trong 30 ngày gần nhất (cố định, không theo bộ lọc ngày)`}
                             </p>
                           </div>
                           
@@ -775,7 +775,7 @@ export function FunnelChart({
                           <div className="flex flex-col items-end cursor-help text-xs">
                             {/* Entered (total at stage) */}
                             <div className="flex items-center gap-1">
-                              <span className="text-muted-foreground">Entered:</span>
+                              <span className="text-muted-foreground">Đầu vào:</span>
                               <span className="font-bold tabular-nums text-foreground">
                                 {stage.lead_count}
                               </span>
@@ -825,12 +825,12 @@ export function FunnelChart({
                             </p>
                             <div className="space-y-1">
                               <p className="text-white/90">
-                                <span className="text-white/60">Entered:</span>{" "}
+                                <span className="text-white/60">Đầu vào:</span>{" "}
                                 <span className="font-semibold">{stage.lead_count}</span> leads
                               </p>
                               {(stage.move_forward !== undefined || stage.early_exit_count !== undefined) && (
                                 <p className="text-success-300">
-                                  <span className="text-white/60">→ Moved Forward:</span>{" "}
+                                  <span className="text-white/60">→ Tiến lên:</span>{" "}
                                   <span className="font-semibold">
                                     {stage.move_forward ?? (stage.lead_count - (stage.early_exit_count || 0))}
                                   </span>
@@ -878,7 +878,7 @@ export function FunnelChart({
                               {stage.early_exit_count !== undefined && stage.early_exit_count > 0 && (
                                 <div className="text-error-300">
                                   <p>
-                                    <span className="text-white/60">✖ Early Exit:</span>{" "}
+                                    <span className="text-white/60">✖ Rời bỏ:</span>{" "}
                                     <span className="font-semibold">{stage.early_exit_count}</span>
                                     <span className="text-white/50 text-[10px] ml-1">
                                       (leads kết thúc tại đây)
@@ -991,7 +991,7 @@ export function FunnelChart({
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-1.5 cursor-help">
                     <Target className="h-3.5 w-3.5" />
-                    <span>Net Conversion: </span>
+                    <span>Chuyển đổi ròng: </span>
                     <strong className={cn(
                       netConversionRate >= 50 ? "text-success-600" :
                       netConversionRate >= 30 ? "text-warning-600" : "text-error-600"
@@ -1002,7 +1002,7 @@ export function FunnelChart({
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-[240px]">
                   <div className="text-xs space-y-1">
-                    <p className="font-medium">Net Conversion Rate</p>
+                    <p className="font-medium">Tỷ lệ chuyển đổi ròng</p>
                     <p className="text-white/80">
                       {enrolledCount} / ({enrolledCount} + {totalLost}) = {netConversionRate.toFixed(1)}%
                     </p>

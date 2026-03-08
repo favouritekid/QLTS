@@ -200,7 +200,7 @@ export function FunnelTable({
     params.set("stage", stageId);
     if (startDate) params.set("from", startDate);
     if (endDate) params.set("to", endDate);
-    if (officerId) params.set("officer_id", officerId.toString());
+    if (officerId) params.set("officer", officerId.toString());
     else if (unitId) params.set("unit_id", unitId.toString());
     router.push(`/leads?${params.toString()}`);
   };
