@@ -89,9 +89,16 @@ interface RecommendationsPanelProps {
   limit?: number;
   /** Optional class name */
   className?: string;
+  /** Dashboard scope — recommendations are personal only */
+  scope?: "personal" | "team" | "organization" | null;
 }
 
-export function RecommendationsPanel({ limit = 5, className }: RecommendationsPanelProps) {
+export function RecommendationsPanel({ limit = 5, className, scope = "personal" }: RecommendationsPanelProps) {
+  // Recommendations are always personal — hide in team/org view to avoid confusion
+  if (scope && scope !== "personal") {
+    return null;
+  }
+
   const { startDate, endDate } = useDashboardDate();
   const { data, isLoading, error } = useOfficerRecommendations(limit, { startDate, endDate });
 

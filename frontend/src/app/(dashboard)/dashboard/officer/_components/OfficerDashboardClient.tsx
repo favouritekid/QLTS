@@ -301,7 +301,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
             </div>
           </div>
           {/* Phase 7: Recommendations Panel */}
-          <RecommendationsPanel />
+          <RecommendationsPanel scope={scope} />
         </div>
 
         {/* Right Column - Action Center */}

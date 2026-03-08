@@ -163,7 +163,7 @@ export function WeeklyLeaderboard({ scope, unitId }: WeeklyLeaderboardProps) {
       <CardContent className="space-y-2">
         {data.leaderboard.length === 0 ? (
           <div className="text-center py-6 text-muted-foreground text-sm">
-            Chưa có dữ liệu tuần này
+            Chưa có dữ liệu trong kỳ
           </div>
         ) : (
           data.leaderboard.map((entry, index) => {

@@ -123,6 +123,11 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
         </div>
       </CardHeader>
       <CardContent>
+        {filteredTrends.length === 0 ? (
+          <div className="flex items-center justify-center h-[300px] text-sm text-muted-foreground">
+            Không có dữ liệu trong khoảng thời gian được chọn
+          </div>
+        ) : (
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -143,14 +148,14 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: "rgba(255, 255, 255, 0.95)", // High opacity white
-                border: "1px solid hsl(var(--border))", // border
+                backgroundColor: "hsl(var(--popover))",
+                border: "1px solid hsl(var(--border))",
                 borderRadius: "6px",
                 fontSize: "12px",
-                boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", // shadow-lg
+                boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
                 padding: "8px 12px",
                 zIndex: 50,
-                color: "#0f172a" // slate-900
+                color: "hsl(var(--popover-foreground))",
               }}
               wrapperStyle={{ zIndex: 50, pointerEvents: "none" }}
               cursor={{ stroke: "hsl(var(--muted-foreground))", strokeWidth: 1, strokeDasharray: "4 4" }}
@@ -222,7 +227,8 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             />
           </LineChart>
         </ResponsiveContainer>
-        
+        )}
+
         {/* Summary Stats */}
         <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t text-xs text-muted-foreground flex-wrap">
           <div className="flex items-center gap-2">
@@ -235,7 +241,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full ring-2 ring-success-500/20 bg-success-500" />
-            <span>Tỉ lệ: {totals.consultations > 0 ? Math.round((totals.converted / totals.consultations) * 100) : 0}%</span>
+            <span>Chuyển đổi/tư vấn: {totals.consultations > 0 ? Math.round((totals.converted / totals.consultations) * 100) : 0}%</span>
           </div>
           {teamAverage !== undefined && (
             <div className="flex items-center gap-2">

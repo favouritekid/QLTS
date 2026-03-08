@@ -39,12 +39,19 @@ function DashboardLoading() {
 /**
  * Compute default date range matching DashboardDateProvider "7d" preset
  */
+function formatLocalDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function getDefaultDateRange() {
   const today = new Date();
   const from = subDays(today, 6);
   return {
-    start_date: startOfDay(from).toISOString().split("T")[0],
-    end_date: endOfDay(today).toISOString().split("T")[0],
+    start_date: formatLocalDate(startOfDay(from)),
+    end_date: formatLocalDate(endOfDay(today)),
   };
 }
 

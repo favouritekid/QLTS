@@ -105,7 +105,7 @@ async def generate_recommendations(
                 "type": RecommendationType.INCREASE_ACTIVITY,
                 "priority": RecommendationPriority.CRITICAL,
                 "title": "Tăng cường hoạt động tư vấn",
-                "message": f"Bạn mới hoàn thành {consultations_today}/{consultations_target} tư vấn hôm nay. "
+                "message": f"Bạn mới hoàn thành {consultations_today}/{consultations_target} buổi tư vấn. "
                           f"Hãy liên hệ ngay với các lead có điểm cao nhất.",
                 "action": "Xem lead nóng",
                 "action_link": "/leads?filter=hot",
@@ -253,28 +253,36 @@ async def get_officer_recommendations(
     db: AsyncSession,
     officer_id: int,
     limit: int = 5,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get recommendations for an officer, intended for dashboard display.
-    
+
     Args:
         db: Database session
         officer_id: Officer ID
         limit: Maximum recommendations to return
-        
+        start_date: Optional start date (YYYY-MM-DD)
+        end_date: Optional end date (YYYY-MM-DD)
+
     Returns:
         List of recommendation objects
     """
-    # First, get current KPIs
+    # First, get current KPIs (with date range if provided)
     from app.services.officer_service import get_enhanced_dashboard_stats
-    
+
     try:
-        stats = await get_enhanced_dashboard_stats(db, officer_id)
+        stats = await get_enhanced_dashboard_stats(
+            db, officer_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
         kpis = stats.get("kpis", {})
     except Exception as e:
         log.warning(f"Could not fetch KPIs for recommendations: {e}")
         kpis = {}
-    
+
     recommendations = await generate_recommendations(db, officer_id, kpis)
-    
+
     return recommendations[:limit]

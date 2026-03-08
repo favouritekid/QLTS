@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Target, Zap, Flame, AlertTriangle, Calendar, Sparkles } from "lucide-react";
+import { Target, Zap, Flame, AlertTriangle, Calendar, Sparkles, MessageSquare } from "lucide-react";
 import { PriorityActionCard, type PriorityAction } from "./PriorityActionCard";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -20,13 +20,14 @@ interface PriorityActionsPanelProps {
   actions: PriorityAction[];
 }
 
-type FilterType = "all" | "hot_lead" | "overdue" | "scheduled" | "new_lead";
+type FilterType = "all" | "hot_lead" | "overdue" | "scheduled" | "follow_up" | "new_lead";
 
 const filterConfig: Record<FilterType, { label: string; icon?: typeof Flame; color?: string }> = {
   all: { label: "Tất cả" },
   hot_lead: { label: "Hot", icon: Flame, color: "text-error-500" },
   overdue: { label: "Quá hạn", icon: AlertTriangle, color: "text-amber-500" },
   scheduled: { label: "Lịch hẹn", icon: Calendar, color: "text-info-500" },
+  follow_up: { label: "Follow up", icon: MessageSquare, color: "text-purple-500" },
   new_lead: { label: "Mới", icon: Sparkles, color: "text-success-500" },
 };
 
@@ -47,6 +48,7 @@ export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
     hot_lead: actions.filter(a => a.type === "hot_lead").length,
     overdue: actions.filter(a => a.type === "overdue").length,
     scheduled: actions.filter(a => a.type === "scheduled").length,
+    follow_up: actions.filter(a => a.type === "follow_up").length,
     new_lead: actions.filter(a => a.type === "new_lead").length,
   }), [actions]);
 

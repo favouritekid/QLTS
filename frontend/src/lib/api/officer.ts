@@ -84,8 +84,13 @@ export const officerApi = {
     return response.data;
   },
 
-  getRecommendations: async (limit: number = 5) => {
-    const response = await api.get<RecommendationsResponse>(`/api/officer/recommendations?limit=${limit}`);
+  getRecommendations: async (limit: number = 5, startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    const response = await api.get<RecommendationsResponse>(
+      `/api/officer/recommendations?${params}`
+    );
     return response.data;
   },
 

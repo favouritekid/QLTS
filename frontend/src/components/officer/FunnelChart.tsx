@@ -358,17 +358,17 @@ export function FunnelChart({
   const router = useRouter();
   const { startDate, endDate } = useDashboardDate();
 
-  // Merge user config with defaults
-  const mergedConfig: FunnelConfig = {
+  // Merge user config with defaults — memoize to stabilize references
+  const mergedConfig: FunnelConfig = useMemo(() => ({
     ...DEFAULT_CONFIG,
     ...config,
-  };
+  }), [config]);
 
-  // Get all outcome stage IDs (both positive and negative)
-  const outcomeStageIds = [
-    ...mergedConfig.positiveStageIds,
-    ...mergedConfig.negativeStageIds,
-  ];
+  // Get all outcome stage IDs — memoize to prevent useMemo invalidation downstream
+  const outcomeStageIds = useMemo(
+    () => [...mergedConfig.positiveStageIds, ...mergedConfig.negativeStageIds],
+    [mergedConfig]
+  );
 
   // =========== EMPTY STATE HANDLING ===========
   if (!funnel || funnel.length === 0) {

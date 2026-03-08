@@ -4,11 +4,19 @@ import { officerKeys } from "./useWeeklyLeaderboard";
 export type { Recommendation } from "@/lib/api/officer"; // Re-export for UI
 
 
-export function useOfficerRecommendations(limit: number = 5) {
+export interface UseOfficerRecommendationsOptions {
+  startDate?: string;
+  endDate?: string;
+}
+
+export function useOfficerRecommendations(
+  limit: number = 5,
+  options?: UseOfficerRecommendationsOptions,
+) {
   return useQuery<RecommendationsResponse>({
-    queryKey: officerKeys.recommendations(limit),
+    queryKey: officerKeys.recommendations(limit, options?.startDate, options?.endDate),
     queryFn: async () => {
-      return officerApi.getRecommendations(limit);
+      return officerApi.getRecommendations(limit, options?.startDate, options?.endDate);
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });

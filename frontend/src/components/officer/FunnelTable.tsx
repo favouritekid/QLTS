@@ -116,6 +116,32 @@ interface FunnelTableProps {
 // HELPER FUNCTIONS
 // ============================================================================
 
+// Positive/Negative outcome IDs from pipeline_stage.csv seed data
+const POSITIVE_STAGE_IDS = ["stg06"];  // "Đã nhập học"
+const NEGATIVE_STAGE_IDS = ["stg07"];  // "Không đi học"
+
+/**
+ * Determine if a final stage is positive outcome.
+ * Mirrors FunnelChart's isPositiveOutcome logic (config IDs → heuristics → outcome_breakdown).
+ */
+const isPositiveOutcomeStage = (stage: FunnelStage): boolean => {
+  // 1. Check configured IDs
+  if (POSITIVE_STAGE_IDS.includes(stage.stage_id)) return true;
+  if (NEGATIVE_STAGE_IDS.includes(stage.stage_id)) return false;
+
+  // 2. Heuristics based on Vietnamese stage names
+  const nameLower = stage.stage_name.toLowerCase();
+  if (nameLower.includes("nhập học") || nameLower.includes("hoàn thành") || nameLower.includes("thành công")) return true;
+  if (nameLower.includes("không") || nameLower.includes("từ chối") || nameLower.includes("hủy")) return false;
+
+  // 3. Fallback: outcome breakdown
+  if (stage.outcome_breakdown) {
+    return stage.outcome_breakdown.positive > stage.outcome_breakdown.negative;
+  }
+
+  return false;
+};
+
 /** Format VND currency (compact) */
 const formatVND = (amount: number): string => {
   if (amount >= 1_000_000_000) return `${(amount / 1_000_000_000).toFixed(1)}B`;
@@ -428,7 +454,7 @@ export function FunnelTable({
                     </TableCell>
                   </TableRow>
                   {outcomeStages.map((stage) => {
-                    const isPositive = stage.stage_name.toLowerCase().includes("nhập học");
+                    const isPositive = isPositiveOutcomeStage(stage);
                     return (
                       <TableRow
                         key={stage.stage_id}

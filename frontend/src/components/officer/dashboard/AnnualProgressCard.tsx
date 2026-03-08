@@ -189,16 +189,21 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             value={Math.min(progress.progress_pct, 100)} 
             className="h-3"
           />
-          {/* Expected progress marker */}
-          {progress.status !== "completed" && (
-            <div 
-              className="absolute top-0 h-3 w-0.5 bg-muted-foreground dark:bg-muted-foreground"
-              style={{ 
-                left: `${Math.min(((12 - progress.months_left) / 12) * 100, 100)}%` 
-              }}
-              title={`Tiến độ kỳ vọng: ${((12 - progress.months_left) / 12 * 100).toFixed(0)}%`}
-            />
-          )}
+          {/* Expected progress marker — derive total months dynamically instead of hardcoding 12 */}
+          {progress.status !== "completed" && (() => {
+            const now = new Date();
+            const fyStart = new Date(progress.fiscal_year, 0, 1);
+            const monthsElapsed = (now.getFullYear() - fyStart.getFullYear()) * 12 + now.getMonth() - fyStart.getMonth();
+            const totalMonths = monthsElapsed + progress.months_left;
+            const expectedPct = totalMonths > 0 ? (monthsElapsed / totalMonths) * 100 : 0;
+            return (
+              <div
+                className="absolute top-0 h-3 w-0.5 bg-muted-foreground dark:bg-muted-foreground"
+                style={{ left: `${Math.min(expectedPct, 100)}%` }}
+                title={`Tiến độ kỳ vọng: ${expectedPct.toFixed(0)}%`}
+              />
+            );
+          })()}
         </div>
 
         {/* Bottom stats */}
