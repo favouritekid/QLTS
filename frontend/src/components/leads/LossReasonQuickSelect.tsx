@@ -11,7 +11,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -75,6 +75,11 @@ export function LossReasonQuickSelect({
   className,
 }: LossReasonQuickSelectProps) {
   const [localNote, setLocalNote] = useState(note);
+
+  // Sync localNote when parent resets note prop (e.g., switching between statuses)
+  useEffect(() => {
+    setLocalNote(note);
+  }, [note]);
 
   const handleSelect = (code: string) => {
     if (disabled) return;

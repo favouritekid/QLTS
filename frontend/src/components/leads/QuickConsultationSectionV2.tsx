@@ -183,10 +183,13 @@ export function QuickConsultationSectionV2({
   const pendingStatusRef = useRef<ConsultationStatus | null>(null);
 
   // --- Collapsible details ---
-  const [detailsOpen, setDetailsOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("qc-details-open") === "true";
-  });
+  // Initialize as false to avoid hydration mismatch, sync from localStorage after mount
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("qc-details-open");
+    if (stored === "true") setDetailsOpen(true);
+  }, []);
 
   // Persist collapse state
   const toggleDetails = useCallback(() => {

@@ -199,6 +199,7 @@ const groupTimelineByDate = (timeline: TimelineItem[]) => {
 const getInitials = (name: string) => {
   return name
     .split(" ")
+    .filter(Boolean)
     .map((n) => n[0])
     .join("")
     .toUpperCase()
@@ -472,6 +473,10 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                   title = "Phân công lead";
                   subtitle = assignData.reason || "";
                   actorName = assignData.officer?.full_name || "";
+                } else {
+                  // Fallback for other event types (lead_created, pipeline_moved, etc.)
+                  title = event.description || config.label;
+                  actorName = event.actor?.full_name || "";
                 }
 
                 return (
