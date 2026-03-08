@@ -899,15 +899,22 @@ async def get_aggregated_dashboard_stats(
     # Get officer IDs using Repository (was direct SQL)
     # ==========================================================================
     target_unit_id = requesting_user.unit_id if scope == "team" else unit_id
-    officer_ids = await repo.get_active_officer_ids(
-        scope=scope,
-        unit_id=target_unit_id,
-    )
+    if target_unit_id:
+        org_repo = OrganizationRepository(db)
+        descendant_unit_ids = await org_repo.get_descendant_unit_ids(target_unit_id)
+        # Flatten: get officers from ALL descendant units
+        officer_ids = []
+        for uid in descendant_unit_ids:
+            ids = await repo.get_active_officer_ids(scope=scope, unit_id=uid)
+            officer_ids.extend(ids)
+        officer_ids = list(set(officer_ids))  # dedupe
+    else:
+        officer_ids = await repo.get_active_officer_ids(scope=scope, unit_id=None)
     officer_count = len(officer_ids)
-    
+
     if officer_count == 0:
         return _empty_aggregated_stats(scope, filter_days)
-    
+
     log.info(
         "Aggregating dashboard for scope",
         scope=scope,
@@ -943,13 +950,13 @@ async def get_aggregated_dashboard_stats(
     # ==========================================================================
     # Aggregated Funnel using Repository (was N+1 loop)
     # ==========================================================================
-    sales_funnel = await repo.get_aggregated_funnel(officer_ids)
+    sales_funnel = await repo.get_aggregated_funnel(officer_ids, filter_start, filter_end)
 
     # ==========================================================================
     # Phase 2: Fetch metrics for aggregated funnel (loss_breakdown, velocity, lost_revenue)
     # Use unit_ids for filtering (more efficient than officer_ids for these queries)
     # ==========================================================================
-    unit_ids_for_metrics = [target_unit_id] if target_unit_id else None
+    unit_ids_for_metrics = descendant_unit_ids if target_unit_id else None
 
     # Fetch Phase 2 metrics (reusing existing repo methods with unit filter)
     loss_breakdown_by_stage = await repo.get_loss_reason_breakdown_by_stage(
@@ -982,7 +989,10 @@ async def get_aggregated_dashboard_stats(
     # Team Overview using Repository (was N+1 loop)
     # ==========================================================================
     team_overview = await repo.get_team_overview(officer_ids, filter_start, filter_end, limit=10)
-    
+
+    # Aggregated avg response time
+    agg_avg_response_time = await repo.get_avg_response_time_hours_multi(officer_ids, filter_start, filter_end)
+
     # ==========================================================================
     # Build response
     # ==========================================================================
@@ -1013,7 +1023,7 @@ async def get_aggregated_dashboard_stats(
                 "direction": "neutral",
                 "comparison": f"trong {filter_days} ngày",
             },
-            "avg_response_time": 0,  # TODO: Calculate aggregate
+            "avg_response_time": agg_avg_response_time or 0,
             "avg_response_time_trend": {
                 "value": 0,
                 "direction": "neutral",
@@ -1279,8 +1289,8 @@ async def get_weekly_leaderboard(
     if current_user_rank and current_user_rank > limit and current_user_stats:
         leaderboard.append(current_user_stats)
     
-    # If current user has no consultations this week, add with 0
-    if current_user_rank is None:
+    # If current user has no consultations this week, add with 0 (officers only)
+    if current_user_rank is None and requesting_user and requesting_user.role == "officer":
         user = await repo.get_officer_with_capacity(officer_id)
         if user:
             prev_rank = prev_ranks.get(officer_id)

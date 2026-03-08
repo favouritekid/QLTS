@@ -7,6 +7,7 @@
 "use client";
 
 import { useOfficerRecommendations, type Recommendation } from "@/hooks/officer/useOfficerRecommendations";
+import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -91,7 +92,8 @@ interface RecommendationsPanelProps {
 }
 
 export function RecommendationsPanel({ limit = 5, className }: RecommendationsPanelProps) {
-  const { data, isLoading, error } = useOfficerRecommendations(limit);
+  const { startDate, endDate } = useDashboardDate();
+  const { data, isLoading, error } = useOfficerRecommendations(limit, { startDate, endDate });
 
   const recommendations = data?.recommendations ?? [];
 
@@ -105,7 +107,7 @@ export function RecommendationsPanel({ limit = 5, className }: RecommendationsPa
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <Lightbulb aria-hidden="true" className="h-4 w-4 text-amber-500" />
-            Khuyến nghị hôm nay
+            Khuyến nghị
           </CardTitle>
           <div className="flex items-center gap-1.5">
             {criticalCount > 0 && (

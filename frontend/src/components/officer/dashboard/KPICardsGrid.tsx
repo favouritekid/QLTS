@@ -194,9 +194,9 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         {/* Tier 1: Primary KPI Cards (compact) */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <KPICard
-            title="Tư vấn hôm nay"
+            title={preset === "7d" ? "Tư vấn hôm nay" : "Tư vấn trong kỳ"}
             value={`${kpis.consultations_today}/${kpis.consultations_target}`}
-            subtitle="Mục tiêu hàng ngày"
+            subtitle={preset === "7d" ? "Mục tiêu hàng ngày" : periodLabel}
             tooltip={TOOLTIPS.consultations}
             trend={kpis.consultations_trend}
             icon={Phone}

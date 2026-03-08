@@ -670,7 +670,102 @@ class OfficerRepository(BaseRepository[models.User]):
                 trends[date_str].converted = row.count
         
         return trends
-    
+
+    async def get_performance_trends_batch_multi(
+        self,
+        officer_ids: List[int],
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, "TrendPoint"]:
+        """
+        Get aggregated performance trends across multiple officers.
+
+        Same structure as get_performance_trends_batch but filters by
+        officer_ids list instead of single officer_id.
+        Counts unique leads per day (deduped across officers).
+        """
+        trends: Dict[str, TrendPoint] = {}
+
+        current = start_date
+        while current <= end_date:
+            date_str = current.isoformat()
+            trends[date_str] = TrendPoint(date=date_str)
+            current += timedelta(days=1)
+
+        if not officer_ids:
+            return trends
+
+        # Query 1: Assignments per day
+        assigned_query = (
+            select(
+                func.date(models.AssignmentLog.timestamp).label("day"),
+                func.count(func.distinct(models.AssignmentLog.lead_id)).label("count"),
+            )
+            .join(models.Lead, models.AssignmentLog.lead_id == models.Lead.id)
+            .where(
+                models.AssignmentLog.officer_id.in_(officer_ids),
+                func.date(models.AssignmentLog.timestamp) >= start_date,
+                func.date(models.AssignmentLog.timestamp) <= end_date,
+                models.Lead.deleted_at.is_(None),
+            )
+            .group_by(func.date(models.AssignmentLog.timestamp))
+        )
+        assigned_result = await self.db.execute(assigned_query)
+        for row in assigned_result.fetchall():
+            date_str = str(row.day)
+            if date_str in trends:
+                trends[date_str].assigned = row.count
+
+        # Query 2: Consultations per day
+        consult_query = (
+            select(
+                func.date(models.Consultation.consultation_date).label("day"),
+                func.count(func.distinct(models.Consultation.lead_id)).label("count"),
+            )
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
+            .where(
+                models.Consultation.officer_id.in_(officer_ids),
+                func.date(models.Consultation.consultation_date) >= start_date,
+                func.date(models.Consultation.consultation_date) <= end_date,
+                models.Lead.deleted_at.is_(None),
+                models.Consultation.deleted_at.is_(None),
+            )
+            .group_by(func.date(models.Consultation.consultation_date))
+        )
+        consult_result = await self.db.execute(consult_query)
+        for row in consult_result.fetchall():
+            date_str = str(row.day)
+            if date_str in trends:
+                trends[date_str].consultations = row.count
+
+        # Query 3: Conversions per day
+        converted_query = (
+            select(
+                func.date(models.LeadStatusHistory.changed_at).label("day"),
+                func.count(func.distinct(models.LeadStatusHistory.lead_id)).label("count"),
+            )
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
+            .join(
+                models.PipelineStage,
+                models.LeadStatusHistory.new_pipeline_stage_id == models.PipelineStage.id,
+            )
+            .where(
+                models.LeadStatusHistory.changed_by_user_id.in_(officer_ids),
+                func.date(models.LeadStatusHistory.changed_at) >= start_date,
+                func.date(models.LeadStatusHistory.changed_at) <= end_date,
+                models.PipelineStage.is_final_stage == True,
+                models.Lead.deleted_at.is_(None),
+            )
+            .group_by(func.date(models.LeadStatusHistory.changed_at))
+        )
+        converted_result = await self.db.execute(converted_query)
+        for row in converted_result.fetchall():
+            date_str = str(row.day)
+            if date_str in trends:
+                trends[date_str].converted = row.count
+
+        return trends
+
     # =========================================================================
     # OPTIMIZED: KPI Stats (was 5 queries → 1 CTE-like approach)
     # =========================================================================
@@ -1297,6 +1392,8 @@ class OfficerRepository(BaseRepository[models.User]):
     async def get_aggregated_funnel(
         self,
         officer_ids: List[int],
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get aggregated sales funnel for multiple officers.
@@ -1359,8 +1456,14 @@ class OfficerRepository(BaseRepository[models.User]):
                 # SPEC: counts_for_funnel = TRUE
                 models.ConsultationStatus.counts_for_funnel == True,
             )
-            .group_by(models.Lead.pipeline_stage_id)
         )
+        # Optional date filter (same pattern as get_funnel_stage_counts_batch)
+        if start_date and end_date:
+            count_query = count_query.where(
+                func.date(models.Lead.created_at) >= start_date,
+                func.date(models.Lead.created_at) <= end_date,
+            )
+        count_query = count_query.group_by(models.Lead.pipeline_stage_id)
         count_result = await self.db.execute(count_query)
 
         # Build lookup with all metrics
@@ -1572,6 +1675,59 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Lead.assigned_at) >= start_date,
                 func.date(models.Lead.assigned_at) <= end_date,
                 # Ensure first consultation is after assignment (valid response)
+                first_consult_subq.c.first_consultation >= models.Lead.assigned_at,
+            )
+        )
+
+        result = await self.db.execute(query)
+        avg_hours = result.scalar()
+
+        if avg_hours is None:
+            return None
+
+        return round(float(avg_hours), 1)
+
+    async def get_avg_response_time_hours_multi(
+        self,
+        officer_ids: List[int],
+        start_date: date,
+        end_date: date,
+    ) -> Optional[float]:
+        """
+        Calculate average response time in hours across multiple officers.
+        Same logic as get_avg_response_time_hours but uses .in_(officer_ids).
+        """
+        first_consult_subq = (
+            select(
+                models.Consultation.lead_id,
+                func.min(models.Consultation.consultation_date).label("first_consultation")
+            )
+            .where(
+                models.Consultation.officer_id.in_(officer_ids),
+                models.Consultation.deleted_at.is_(None),
+            )
+            .group_by(models.Consultation.lead_id)
+        ).subquery()
+
+        query = (
+            select(
+                func.avg(
+                    func.extract(
+                        'epoch',
+                        first_consult_subq.c.first_consultation - models.Lead.assigned_at
+                    ) / 3600
+                ).label("avg_hours")
+            )
+            .join(
+                first_consult_subq,
+                first_consult_subq.c.lead_id == models.Lead.id
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.Lead.assigned_at.isnot(None),
+                models.Lead.deleted_at.is_(None),
+                func.date(models.Lead.assigned_at) >= start_date,
+                func.date(models.Lead.assigned_at) <= end_date,
                 first_consult_subq.c.first_consultation >= models.Lead.assigned_at,
             )
         )

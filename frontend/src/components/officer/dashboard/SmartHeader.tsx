@@ -113,7 +113,7 @@ export function SmartHeader({
     role: "officer",
     unit_id: filterUnitId,
     include_children: true,
-    page_size: 100,
+    page_size: 500,
   });
   const officers: UserType[] = usersData?.users ?? [];
 

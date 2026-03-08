@@ -182,23 +182,24 @@ async def get_team_stats(
     days: int = 30,
     start_date: str = None,
     end_date: str = None,
+    officer_id: int = None,
 ):
     """Get team average statistics for performance comparison."""
     from datetime import date
-    
+
     parsed_start = None
     parsed_end = None
-    
+
     if start_date and end_date:
         try:
             parsed_start = date.fromisoformat(start_date)
             parsed_end = date.fromisoformat(end_date)
         except ValueError:
             pass  # Fallback to days param
-            
+
     stats = await officer_service.get_team_stats(
-        db=db, 
-        officer_id=current_user.id, 
+        db=db,
+        officer_id=officer_id or current_user.id,
         days=days,
         start_date=parsed_start,
         end_date=parsed_end
@@ -253,24 +254,45 @@ async def get_recommendations(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth],
     limit: int = 5,
+    start_date: str = None,
+    end_date: str = None,
 ):
     """
     Phase 7: Auto Recommendations
-    
+
     Returns actionable recommendations based on:
     - KPI gaps (consultations vs target)
     - Conversion rate analysis
     - Response time optimization
     - Hot leads needing attention
     - Stale leads cleanup
-    
+
     Recommendations are prioritized: CRITICAL > HIGH > MEDIUM > LOW
     """
+    from datetime import date
     from app.services.recommendation_engine import get_officer_recommendations
-    
+
+    # Validate date format at router boundary
+    validated_start = None
+    validated_end = None
+    if start_date:
+        try:
+            date.fromisoformat(start_date)
+            validated_start = start_date
+        except ValueError:
+            pass
+    if end_date:
+        try:
+            date.fromisoformat(end_date)
+            validated_end = end_date
+        except ValueError:
+            pass
+
     recommendations = await get_officer_recommendations(
         db=db,
         officer_id=current_user.id,
         limit=limit,
+        start_date=validated_start,
+        end_date=validated_end,
     )
     return {"recommendations": recommendations, "count": len(recommendations)}
