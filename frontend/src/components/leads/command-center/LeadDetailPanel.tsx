@@ -46,7 +46,7 @@ import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
-import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
+import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
 import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -585,7 +585,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               </CardTitle>
             </CardHeader>
             <CardContent className="px-3 pt-0 pb-3 sm:px-4 sm:pb-4">
-              <QuickConsultationSection leadId={lead.id} />
+              <QuickConsultationSectionV2 leadId={lead.id} />
             </CardContent>
           </Card>
 

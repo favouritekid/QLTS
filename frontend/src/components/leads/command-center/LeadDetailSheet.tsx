@@ -27,7 +27,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
-import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
+import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
 interface LeadDetailSheetProps {
@@ -207,7 +207,7 @@ export function LeadDetailSheet({
               </TabsList>
 
               <TabsContent value="quick" className="mt-4">
-                <QuickConsultationSection leadId={lead.id} />
+                <QuickConsultationSectionV2 leadId={lead.id} />
               </TabsContent>
 
               <TabsContent value="timeline" className="mt-4">

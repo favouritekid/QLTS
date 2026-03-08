@@ -397,14 +397,10 @@ export function QuickConsultationSectionV2({
     return { universal, previousStage, sameStage, nextStage };
   }, [statuses, currentStatusId, lead?.pipeline_stage?.order, lead?.pipeline_stage_id]);
 
-  // Flatten result statuses for grid display
-  const resultStatuses = useMemo(() => {
-    return [
-      ...groupedStatuses.previousStage,
-      ...groupedStatuses.sameStage,
-      ...groupedStatuses.nextStage,
-    ];
-  }, [groupedStatuses]);
+  const hasResultStatuses =
+    groupedStatuses.previousStage.length > 0 ||
+    groupedStatuses.sameStage.length > 0 ||
+    groupedStatuses.nextStage.length > 0;
 
   // ==========================================================================
   // RENDER
@@ -436,62 +432,73 @@ export function QuickConsultationSectionV2({
     );
   }
 
-  // Helper: determine status group for visual hint
-  const getStatusGroup = (status: ConsultationStatus) => {
-    if (groupedStatuses.previousStage.includes(status)) return "previous";
-    if (groupedStatuses.sameStage.includes(status)) return "same";
-    return "next";
-  };
-
   // Helper: get style classes for a status button
-  const getStatusButtonClasses = (status: ConsultationStatus) => {
+  const getStatusButtonClasses = (
+    status: ConsultationStatus,
+    group: "previous" | "same" | "next"
+  ) => {
     const isCurrentStatus = status.id === currentStatusId;
     const isPending = pendingStatus?.id === status.id;
-    const group = getStatusGroup(status);
 
-    // Base classes
     const base =
       "relative flex items-center gap-2 rounded-lg px-3 text-sm font-medium min-h-[40px] transition-colors";
 
-    // Current status — strong highlight
     if (isCurrentStatus) {
-      return cn(
-        base,
-        "border-2 border-primary bg-primary/5 text-primary",
-        "cursor-default"
-      );
+      return cn(base, "border-2 border-primary bg-primary/5 text-primary", "cursor-default");
     }
-
-    // Pending (selected, awaiting countdown)
     if (isPending) {
-      return cn(
-        base,
-        "ring-2 ring-primary ring-offset-1 scale-[1.02]",
-        getOutcomeBg(status.outcome_type)
-      );
+      return cn(base, "ring-2 ring-primary ring-offset-1 scale-[1.02]", getOutcomeBg(status.outcome_type));
     }
-
-    // Previous stage — muted
     if (group === "previous") {
       return cn(base, "opacity-60 hover:opacity-90", getOutcomeBg(status.outcome_type));
     }
-
-    // Default
     return cn(base, getOutcomeBg(status.outcome_type));
   };
 
-  // Outcome-based background styles
   const getOutcomeBg = (outcomeType: string | null | undefined) => {
     switch (outcomeType) {
       case "positive":
         return "border border-success-200 bg-success-50 text-success-700 hover:bg-success-100";
       case "negative":
         return "border border-error-200 bg-error-50 text-error-600 hover:bg-error-100";
-      case "neutral":
       default:
         return "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100";
     }
   };
+
+  // Render a group of status buttons in a grid
+  const renderStatusGrid = (
+    items: ConsultationStatus[],
+    group: "previous" | "same" | "next"
+  ) => (
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {items.map((status) => {
+        const isCurrentStatus = status.id === currentStatusId;
+        return (
+          <button
+            key={status.id}
+            type="button"
+            className={getStatusButtonClasses(status, group)}
+            onClick={() => { if (!isCurrentStatus) handleStatusClick(status); }}
+            disabled={addConsultation.isPending || isCurrentStatus}
+            aria-label={`Chuyển sang trạng thái: ${status.name}`}
+          >
+            {savingStatusId === status.id ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" />
+            ) : isCurrentStatus ? (
+              <Check className="h-3.5 w-3.5 flex-shrink-0" />
+            ) : (
+              <span
+                className="h-2 w-2 flex-shrink-0 rounded-full"
+                style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
+              />
+            )}
+            <span className="truncate">{status.name}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -520,9 +527,9 @@ export function QuickConsultationSectionV2({
       )}
 
       {/* ================================================================ */}
-      {/* SECTION 2: Result Statuses — Grid Layout (PRIMARY ACTION)        */}
+      {/* SECTION 2: Result Statuses — Grouped Grid (PRIMARY ACTION)       */}
       {/* ================================================================ */}
-      {resultStatuses.length > 0 && (
+      {hasResultStatuses && (
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <Label className="text-muted-foreground text-xs font-medium">
@@ -540,38 +547,61 @@ export function QuickConsultationSectionV2({
             </TooltipProvider>
           </div>
 
-          {/* Result statuses grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {resultStatuses.map((status) => {
-              const isCurrentStatus = status.id === currentStatusId;
-              return (
-                <button
-                  key={status.id}
-                  type="button"
-                  className={getStatusButtonClasses(status)}
-                  onClick={() => {
-                    if (!isCurrentStatus) handleStatusClick(status);
-                  }}
-                  disabled={addConsultation.isPending || isCurrentStatus}
-                  aria-label={`Chuyển sang trạng thái: ${status.name}`}
-                >
-                  {savingStatusId === status.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" />
-                  ) : isCurrentStatus ? (
-                    <Check className="h-3.5 w-3.5 flex-shrink-0" />
-                  ) : (
-                    <span
-                      className="h-2 w-2 flex-shrink-0 rounded-full"
-                      style={{
-                        backgroundColor: sanitizeColorCode(status.color_code),
-                      }}
-                    />
-                  )}
-                  <span className="truncate">{status.name}</span>
-                </button>
-              );
-            })}
+          {/* Grouped result statuses */}
+          <div className="space-y-3">
+            {/* Previous stage (revert) */}
+            {groupedStatuses.previousStage.length > 0 && (
+              <div>
+                <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
+                  ← Giai đoạn trước
+                </div>
+                {renderStatusGrid(groupedStatuses.previousStage, "previous")}
+              </div>
+            )}
+
+            {/* Same stage (current) */}
+            {groupedStatuses.sameStage.length > 0 && (
+              <div>
+                {groupedStatuses.previousStage.length > 0 && (
+                  <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
+                    Giai đoạn hiện tại
+                  </div>
+                )}
+                {renderStatusGrid(groupedStatuses.sameStage, "same")}
+              </div>
+            )}
+
+            {/* Next stage (progress) */}
+            {groupedStatuses.nextStage.length > 0 && (
+              <div>
+                <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
+                  Tiến tới →
+                </div>
+                {renderStatusGrid(groupedStatuses.nextStage, "next")}
+              </div>
+            )}
           </div>
+
+          {/* Gradient progress bar */}
+          {(() => {
+            const prevColor = groupedStatuses.previousStage.length > 0
+              ? sanitizeColorCode(groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code, "#e2e8f0")
+              : "#e2e8f0";
+            const currColor = sanitizeColorCode(
+              groupedStatuses.sameStage.find((s) => s.id === currentStatusId)?.color_code
+                || groupedStatuses.sameStage[0]?.color_code,
+              "#3b82f6"
+            );
+            const nextColor = groupedStatuses.nextStage.length > 0
+              ? sanitizeColorCode(groupedStatuses.nextStage[0].color_code, "#a7f3d0")
+              : "#a7f3d0";
+            return (
+              <div
+                className="mt-1 h-1 rounded-full opacity-80"
+                style={{ background: `linear-gradient(to right, ${prevColor}, ${currColor}, ${nextColor})` }}
+              />
+            );
+          })()}
         </div>
       )}
 
