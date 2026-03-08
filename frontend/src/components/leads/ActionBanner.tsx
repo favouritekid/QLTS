@@ -10,6 +10,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { format } from "date-fns";
 import {
   AlertTriangle,
   Bell,
@@ -48,8 +49,13 @@ type BannerConfig = {
 function formatTimeAgo(date: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+
+  // Guard: if date is in the future (stale cache), show as "vừa xong"
+  if (diffMs < 0) return "vừa xong";
+
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
   if (diffDays > 0) {
     return `${diffDays} ngày trước`;
@@ -57,17 +63,16 @@ function formatTimeAgo(date: Date): string {
   if (diffHours > 0) {
     return `${diffHours} giờ trước`;
   }
+  if (diffMinutes > 0) {
+    return `${diffMinutes} phút trước`;
+  }
   return "vừa xong";
 }
 
 function formatScheduledTime(date: Date): string {
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
-
-  const time = date.toLocaleTimeString("vi-VN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const time = format(date, "HH:mm");
 
   if (isToday) {
     return `${time} hôm nay`;
@@ -79,12 +84,7 @@ function formatScheduledTime(date: Date): string {
     return `${time} ngày mai`;
   }
 
-  return date.toLocaleDateString("vi-VN", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return format(date, "dd/MM HH:mm");
 }
 
 function getActionBannerConfig(lead: Lead): BannerConfig | null {
@@ -142,10 +142,12 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
   // Show banner if:
   // - Lead is hot (score >= 70) AND
   // - Either no recent contact OR urgency is elevated
+  // - NOT in a terminal state (is_final status or is_final_stage)
+  const isTerminal = lead.consultation_status?.is_final || lead.pipeline_stage?.is_final_stage;
   const hasRecentContact = lead.consultation_count > 0 && lead.last_consultation_at &&
     (new Date().getTime() - new Date(lead.last_consultation_at).getTime()) < 24 * 60 * 60 * 1000; // Within 24h
 
-  if (lead.is_hot_lead && !hasRecentContact) {
+  if (lead.is_hot_lead && !hasRecentContact && !isTerminal) {
     return {
       type: "hot_lead",
       priority: "high",
@@ -203,7 +205,7 @@ export function ActionBanner({ lead, onCall, onMarkComplete, className }: Action
               {config.priority === "critical" ? "Khẩn cấp" : "Ưu tiên"}
             </Badge>
           </div>
-          <p className={cn("text-sm mt-0.5", config.textColor)}>
+          <p className={cn("text-sm mt-0.5", config.textColor)} suppressHydrationWarning>
             <Clock className="w-3.5 h-3.5 inline mr-1" />
             {config.message}
           </p>

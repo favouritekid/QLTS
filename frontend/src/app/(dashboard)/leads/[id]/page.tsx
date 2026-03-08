@@ -53,9 +53,18 @@ function LeadDetailLoading() {
  * Server Component - Fetches initial lead data + timeline + insights in parallel
  */
 async function LeadDetailPageContent({ leadId }: { leadId: number }) {
-  // ✅ Parallel fetch: lead detail, timeline, and insights on server
-  const [initialData, initialTimeline, initialInsights] = await Promise.all([
-    serverApi.leads.getLead(leadId),
+  // Fetch lead data — 404 triggers notFound(), other errors let client retry
+  let initialData: Awaited<ReturnType<typeof serverApi.leads.getLead>> | undefined;
+  try {
+    initialData = await serverApi.leads.getLead(leadId);
+  } catch {
+    // Lead not found or server error — show 404
+    // Client component will re-fetch and show proper error state
+    notFound();
+  }
+
+  // ✅ Parallel fetch: timeline and insights (non-critical, catch gracefully)
+  const [initialTimeline, initialInsights] = await Promise.all([
     serverApi.leads.getLeadTimeline(leadId).catch(() => undefined),
     serverApi.leads.getLeadInsights(leadId).catch(() => undefined),
   ]);
@@ -88,6 +97,9 @@ export default async function LeadDetailPage({
   }
   
   const leadId = Number(id);
+  if (!Number.isSafeInteger(leadId) || leadId <= 0) {
+    notFound();
+  }
 
   return (
     <Suspense fallback={<LeadDetailLoading />}>

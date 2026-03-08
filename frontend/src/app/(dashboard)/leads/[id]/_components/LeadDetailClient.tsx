@@ -14,18 +14,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ClipboardCheck,
   Edit,
   Trash2,
-  History,
   Zap,
-  Phone,
   PhoneCall,
   Copy,
   Check,
   MoreHorizontal,
-  Clock,
-  Calendar,
   TrendingUp,
   Target,
   FileText,
@@ -55,11 +50,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead, useAddConsultation } from "@/hooks/useLeads";
+import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hooks/useLeads";
 import { useWorkflowContext } from "@/hooks/useWorkflowContext";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
-import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
@@ -68,7 +62,7 @@ import { LeadScoringCollapsible } from "@/components/leads/LeadScoringCollapsibl
 import { AdmissionReadinessChecklist } from "@/components/leads/AdmissionReadinessChecklist";
 import { LeadInfoTabs } from "./LeadInfoTabs";
 import { WorkflowBreadcrumb } from "@/components/common";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import type { Lead, TimelineItem, LeadInsights } from "@/types/lead.types";
 
 interface LeadDetailClientProps {
@@ -106,7 +100,6 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
 
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
-  const [consultationDialogOpen, setConsultationDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [phoneCopied, setPhoneCopied] = useState(false);
 
@@ -129,9 +122,6 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
 
   // Delete mutation
   const deleteMutation = useDeleteLead();
-
-  // Add consultation mutation (for Mark Complete)
-  const addConsultationMutation = useAddConsultation();
 
   const handleDelete = () => {
     deleteMutation.mutate(leadId, {
@@ -157,13 +147,24 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
     }
   };
 
+  // BUG 5: Toggle to show all timeline entries
+  const [showAllTimeline, setShowAllTimeline] = useState(false);
+
   // Calculate quick stats
+  // BUG 2: Use UTC milliseconds to avoid timezone mismatch & hydration issues
   const daysInPipeline = lead
-    ? Math.floor((new Date().getTime() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    ? Math.floor((Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
     : 0;
-  const successfulContacts = lead?.consultations?.filter(
-    (c) => c.consultation_status?.outcome_type === "positive"
-  ).length || 0;
+  // BUG 3: Count from timeline (already loaded) instead of lead.consultations (not loaded by shallow API)
+  const successfulContacts = (timeline ?? []).filter(
+    (e) => {
+      const isConsultation = e.type === "consultation" || e.type === "consultation_added";
+      if (!isConsultation) return false;
+      const data = e.data as Record<string, unknown> | undefined;
+      const status = (data as { consultation_status?: { outcome_type?: string } })?.consultation_status;
+      return status?.outcome_type === "positive";
+    }
+  ).length;
 
   // Loading state
   if (isLoading) {
@@ -249,8 +250,8 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                     variant="outline"
                     className="border-0 font-medium shrink-0"
                     style={{
-                      backgroundColor: `${lead.consultation_status.color_code}20`,
-                      color: lead.consultation_status.color_code,
+                      backgroundColor: `${sanitizeColorCode(lead.consultation_status.color_code)}20`,
+                      color: sanitizeColorCode(lead.consultation_status.color_code),
                     }}
                   >
                     {lead.consultation_status.name}
@@ -452,12 +453,17 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
             <Card className="rounded-2xl border-border">
               <CardHeader className="pb-3 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-semibold">Lịch sử tư vấn gần đây</CardTitle>
-                <Button variant="link" size="sm" className="text-xs text-indigo-600 p-0 h-auto">
-                  Xem tất cả →
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="text-xs text-indigo-600 p-0 h-auto"
+                  onClick={() => setShowAllTimeline(!showAllTimeline)}
+                >
+                  {showAllTimeline ? "Thu gọn ←" : "Xem tất cả →"}
                 </Button>
               </CardHeader>
               <CardContent>
-                <LeadTimelineTab leadId={leadId} compact limit={3} />
+                <LeadTimelineTab leadId={leadId} compact limit={showAllTimeline ? undefined : 3} />
               </CardContent>
             </Card>
 
@@ -473,7 +479,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                 <div className="text-2xl font-bold text-success-600">{successfulContacts}</div>
                 <div className="text-xs text-muted-foreground">Kết nối thành công</div>
               </Card>
-              <Card className="rounded-2xl border-border text-center p-4">
+              <Card className="rounded-2xl border-border text-center p-4" suppressHydrationWarning>
                 <div className="text-2xl font-bold text-amber-600">{daysInPipeline}</div>
                 <div className="text-xs text-muted-foreground">Ngày từ lúc tạo</div>
               </Card>
@@ -498,13 +504,6 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
         open={assignDialogOpen}
         onOpenChange={setAssignDialogOpen}
         lead={lead}
-      />
-
-      <ConsultationDialog
-        open={consultationDialogOpen}
-        onOpenChange={setConsultationDialogOpen}
-        leadId={leadId}
-        mode="create"
       />
 
       {/* Delete Confirmation Dialog */}

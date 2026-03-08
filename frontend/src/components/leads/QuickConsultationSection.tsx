@@ -325,15 +325,6 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     setLossReasonCode(null);
     setLossReasonNote("");
 
-    // DEBUG: Remove after fix confirmed
-    console.log("[QuickConsultation] handleStatusClick:", {
-      statusId: status.id,
-      statusName: status.name,
-      is_final: status.is_final,
-      outcome_type: status.outcome_type,
-      requiresLossReason: requiresLossReason(status),
-    });
-
     if (requiresLossReason(status)) {
       // Negative final: pause for loss reason selection (no countdown yet)
       if (countdownRef.current) clearInterval(countdownRef.current);
@@ -955,7 +946,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   {/* Progress bar (shrinks from right to left) */}
                   <div
                     className="h-1 bg-info-500 transition-[width] duration-1000 ease-linear"
-                    style={{ width: `${(countdown / 3) * 100}%` }}
+                    style={{ width: `${(countdown / COUNTDOWN_SECONDS) * 100}%` }}
                   />
 
                   {/* Content */}

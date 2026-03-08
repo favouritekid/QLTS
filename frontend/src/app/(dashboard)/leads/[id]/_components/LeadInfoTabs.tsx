@@ -20,12 +20,8 @@ import {
   User,
   GraduationCap,
   AlertCircle,
-  Target,
-  Briefcase,
   FileText,
   PhoneCall,
-  Zap,
-  Star,
   UserPlus,
   Video,
   MessageSquare,
@@ -98,6 +94,25 @@ const isWeakStudent = (lead: Lead) => {
   return lead.academic_performance === 0 || (lead.gpa !== null && lead.gpa !== undefined && lead.gpa < 5.5);
 };
 
+// Profile status color config
+const getProfileStatusStyle = (status: string) => {
+  switch (status) {
+    case "approved":
+    case "confirmed":
+    case "enrolled":
+      return { bg: "bg-success-50", border: "border-success-200", label: "text-success-600", value: "text-success-800", icon: "text-success-600" };
+    case "rejected":
+      return { bg: "bg-error-50", border: "border-error-200", label: "text-error-600", value: "text-error-800", icon: "text-error-600" };
+    case "submitted":
+    case "resubmitted":
+      return { bg: "bg-info-50", border: "border-info-200", label: "text-info-600", value: "text-info-800", icon: "text-info-600" };
+    case "overridden":
+      return { bg: "bg-warning-50", border: "border-warning-200", label: "text-warning-600", value: "text-warning-800", icon: "text-warning-600" };
+    default: // draft
+      return { bg: "bg-muted", border: "border-border", label: "text-muted-foreground", value: "text-foreground", icon: "text-muted-foreground" };
+  }
+};
+
 // Get method icon and color
 const getMethodConfig = (method?: string) => {
   switch (method) {
@@ -161,7 +176,10 @@ export function LeadInfoTabs({
 }: LeadInfoTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
 
-  const recentTimeline = timeline?.slice(0, 5) || [];
+  // Sort by timestamp descending (newest first) before slicing
+  const recentTimeline = timeline
+    ? [...timeline].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 5)
+    : [];
 
   // Get current tab index for swipe navigation
   const activeIndex = tabs.findIndex((t) => t.id === activeTab);
@@ -354,7 +372,7 @@ export function LeadInfoTabs({
           <div className="space-y-2">
             {recentTimeline.length > 0 ? (
               recentTimeline.map((item, index) => {
-                const isConsultation = item.type === "consultation" || item.event_type === "consultation";
+                const isConsultation = item.type === "consultation" || item.type === "consultation_added" || item.type === "consultation_updated" || item.event_type === "consultation";
                 const consultData = isConsultation ? (item.data as {
                   method?: string;
                   notes?: string;
@@ -461,30 +479,35 @@ export function LeadInfoTabs({
           <div>
             {lead.admission_profile ? (
               <div className="space-y-4">
-                <div className="p-4 bg-success-50 border border-success-200 rounded-xl">
-                  <div className="flex items-center gap-2 mb-2">
-                    <FileText className="w-4 h-4 text-success-600" />
-                    <span className="text-sm font-semibold text-success-800">
-                      Hồ sơ tuyển sinh #{lead.admission_profile.id}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <span className="text-success-600">Trạng thái:</span>{" "}
-                      <span className="font-medium text-success-800">
-                        {lead.admission_profile.status}
-                      </span>
-                    </div>
-                    {lead.admission_profile.student_code && (
-                      <div>
-                        <span className="text-success-600">Mã SV:</span>{" "}
-                        <span className="font-medium text-success-800">
-                          {lead.admission_profile.student_code}
+                {(() => {
+                  const profileStyle = getProfileStatusStyle(lead.admission_profile.status);
+                  return (
+                    <div className={cn("p-4 border rounded-xl", profileStyle.bg, profileStyle.border)}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileText className={cn("w-4 h-4", profileStyle.icon)} />
+                        <span className={cn("text-sm font-semibold", profileStyle.value)}>
+                          Hồ sơ tuyển sinh #{lead.admission_profile.id}
                         </span>
                       </div>
-                    )}
-                  </div>
-                </div>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <span className={profileStyle.label}>Trạng thái:</span>{" "}
+                          <span className={cn("font-medium", profileStyle.value)}>
+                            {lead.admission_profile.status}
+                          </span>
+                        </div>
+                        {lead.admission_profile.student_code && (
+                          <div>
+                            <span className={profileStyle.label}>Mã SV:</span>{" "}
+                            <span className={cn("font-medium", profileStyle.value)}>
+                              {lead.admission_profile.student_code}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <Button className="w-full" onClick={onViewProfile}>
                   <FileText className="mr-2 h-4 w-4" />
                   Xem chi tiết hồ sơ

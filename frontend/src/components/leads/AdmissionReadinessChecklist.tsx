@@ -60,7 +60,10 @@ function deriveAdmissionChecklist(lead: Lead): ChecklistItem[] {
         profileStatus === "submitted" ||
         profileStatus === "approved" ||
         profileStatus === "confirmed" ||
-        profileStatus === "enrolled",
+        profileStatus === "enrolled" ||
+        profileStatus === "overridden" ||
+        profileStatus === "resubmitted" ||
+        profileStatus === "rejected",
       required: true,
     },
     {
@@ -69,7 +72,8 @@ function deriveAdmissionChecklist(lead: Lead): ChecklistItem[] {
       completed:
         profileStatus === "approved" ||
         profileStatus === "confirmed" ||
-        profileStatus === "enrolled",
+        profileStatus === "enrolled" ||
+        profileStatus === "overridden",
       required: true,
     },
   ];

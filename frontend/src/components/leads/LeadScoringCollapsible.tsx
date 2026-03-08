@@ -50,10 +50,11 @@ function ScoreBadge({
 }: {
   icon: React.ElementType;
   label: string;
-  value: number;
+  value: number | null;
   className?: string;
 }) {
-  const colorClass = getScoreColor(value);
+  const isNull = value === null;
+  const colorClass = isNull ? "text-muted-foreground bg-muted" : getScoreColor(value);
 
   return (
     <div className={cn("flex items-center gap-2", className)}>
@@ -64,8 +65,8 @@ function ScoreBadge({
         <p className="text-[10px] text-muted-foreground uppercase tracking-wide truncate">
           {label}
         </p>
-        <p className={cn("text-sm font-bold", colorClass.split(" ")[0])}>
-          {value}
+        <p className={cn("text-sm font-bold", isNull ? "text-muted-foreground" : colorClass.split(" ")[0])}>
+          {isNull ? "—" : value}
         </p>
       </div>
     </div>
@@ -81,9 +82,9 @@ export function LeadScoringCollapsible({
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   const overallScore = lead.lead_score;
-  const engagementScore = insights?.engagement_score ?? 0;
-  const fitScore = insights?.fit_score ?? 0;
-  const urgencyScore = lead.cached_urgency_score ?? insights?.urgency_score ?? 0;
+  const engagementScore = insights?.engagement_score ?? null;
+  const fitScore = insights?.fit_score ?? null;
+  const urgencyScore = lead.cached_urgency_score;
 
   return (
     <div className={cn("border rounded-lg bg-card", className)}>

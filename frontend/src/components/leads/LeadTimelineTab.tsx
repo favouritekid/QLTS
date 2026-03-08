@@ -28,7 +28,7 @@ import {
 import { useLeadTimeline, useDeleteConsultation } from "@/hooks/useLeads";
 import { format, isToday, isYesterday, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useState } from "react";
 import {
   AlertDialog,
@@ -61,7 +61,8 @@ interface LeadTimelineTabProps {
 // Get icon and color based on event type and method
 const getEventConfig = (eventType: string, method?: string) => {
   // Consultation events - differentiate by method
-  if (eventType === "consultation") {
+  // Match all consultation-related event types from backend
+  if (eventType === "consultation" || eventType === "consultation_added" || eventType === "consultation_updated") {
     switch (method) {
       case "phone":
         return {
@@ -289,7 +290,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                       >
                         <span
                           className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                          style={{ backgroundColor: statusColor }}
+                          style={{ backgroundColor: sanitizeColorCode(statusColor) }}
                         />
                         {statusName}
                       </Badge>
@@ -328,7 +329,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                 </div>
 
                 {/* Row 3: Notes (truncated) */}
-                {notes && !notes.startsWith("Ghi nhận:") && (
+                {notes && !notes.startsWith("Ghi nhận:") && !notes.startsWith("Ghi nhận nhanh:") && (
                   <p className="text-xs text-muted-foreground truncate mt-1 italic">&quot;{notes}&quot;</p>
                 )}
               </div>
@@ -506,7 +507,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                 >
                                   <span
                                     className="w-2 h-2 rounded-full mr-1.5 flex-shrink-0"
-                                    style={{ backgroundColor: statusColor }}
+                                    style={{ backgroundColor: sanitizeColorCode(statusColor) }}
                                   />
                                   {title}
                                 </Badge>
