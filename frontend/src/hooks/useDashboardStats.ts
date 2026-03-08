@@ -26,6 +26,7 @@ export interface KPIStats {
   consultations_target: number;
   consultations_trend: TrendInfo;
   active_leads: number;
+  active_leads_in_period?: number;
   active_leads_trend: TrendInfo;
   win_rate: number;
   win_rate_trend?: TrendInfo | null;
@@ -37,6 +38,7 @@ export interface KPIStats {
   sla_compliance_rate_trend?: TrendInfo | null;
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
+  consultations_avg_per_day?: number;
 }
 
 export interface StatusOverview {
@@ -62,6 +64,8 @@ export interface TrendPoint {
   assigned: number;
   consultations: number;
   converted: number;
+  enrolled?: number;
+  lost?: number;
 }
 
 /** Phase 2: Loss reason breakdown item */

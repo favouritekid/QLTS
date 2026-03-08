@@ -54,11 +54,13 @@ class FunnelStageData:
 
 class TrendPoint:
     """Data for a single day in performance trends."""
-    def __init__(self, date: str, assigned: int = 0, consultations: int = 0, converted: int = 0):
+    def __init__(self, date: str, assigned: int = 0, consultations: int = 0, converted: int = 0, enrolled: int = 0, lost: int = 0):
         self.date = date
         self.assigned = assigned
         self.consultations = consultations
-        self.converted = converted
+        self.converted = converted  # Backward compat: enrolled + lost
+        self.enrolled = enrolled
+        self.lost = lost
 
 
 # =============================================================================
@@ -529,6 +531,8 @@ class OfficerRepository(BaseRepository[models.User]):
         self,
         officer_id: int,
         days: int = 30,
+        start_date: date = None,
+        end_date: date = None,
     ) -> Dict[str, Dict[str, int]]:
         """
         Get transition counts between stages for conversion rate calculation.
@@ -536,8 +540,13 @@ class OfficerRepository(BaseRepository[models.User]):
         Returns:
             Dict[from_stage_id, Dict[to_stage_id, count]]
         """
-        since_date = datetime.now(timezone.utc) - timedelta(days=days)
-        
+        if start_date and end_date:
+            since_date = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
+            until_date = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=timezone.utc)
+        else:
+            since_date = datetime.now(timezone.utc) - timedelta(days=days)
+            until_date = None
+
         query = (
             select(
                 models.LeadStatusHistory.old_pipeline_stage_id,
@@ -546,7 +555,7 @@ class OfficerRepository(BaseRepository[models.User]):
             )
             .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
             .where(
-                models.LeadStatusHistory.changed_by_user_id == officer_id,
+                models.Lead.assigned_officer_id == officer_id,
                 models.LeadStatusHistory.changed_at >= since_date,
                 models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
                 models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
@@ -558,7 +567,10 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.LeadStatusHistory.new_pipeline_stage_id
             )
         )
-        
+
+        if until_date:
+            query = query.where(models.LeadStatusHistory.changed_at <= until_date)
+
         result = await self.db.execute(query)
         
         transition_map: Dict[str, Dict[str, int]] = {}
@@ -645,30 +657,37 @@ class OfficerRepository(BaseRepository[models.User]):
             if date_str in trends:
                 trends[date_str].consultations = row.count
         
-        # Query 3: Conversions per day (based on status history)
-        converted_query = (
+        # Query 3: Final outcomes per day — split enrolled (positive) vs lost (negative)
+        outcomes_query = (
             select(
                 func.date(models.LeadStatusHistory.changed_at).label("day"),
-                func.count(func.distinct(models.LeadStatusHistory.lead_id)).label("count")
+                func.count(func.distinct(case(
+                    (models.ConsultationStatus.outcome_type == "positive", models.LeadStatusHistory.lead_id),
+                ))).label("enrolled_count"),
+                func.count(func.distinct(case(
+                    (models.ConsultationStatus.outcome_type == "negative", models.LeadStatusHistory.lead_id),
+                ))).label("lost_count"),
             )
             .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
-            .join(models.PipelineStage, 
-                  models.LeadStatusHistory.new_pipeline_stage_id == models.PipelineStage.id)
+            .join(models.ConsultationStatus,
+                  models.LeadStatusHistory.new_consultation_status_id == models.ConsultationStatus.id)
             .where(
-                models.LeadStatusHistory.changed_by_user_id == officer_id,
+                models.Lead.assigned_officer_id == officer_id,
                 func.date(models.LeadStatusHistory.changed_at) >= start_date,
                 func.date(models.LeadStatusHistory.changed_at) <= end_date,
-                models.PipelineStage.is_final_stage == True,
-                models.Lead.deleted_at.is_(None)
+                models.ConsultationStatus.is_final == True,
+                models.Lead.deleted_at.is_(None),
             )
             .group_by(func.date(models.LeadStatusHistory.changed_at))
         )
-        converted_result = await self.db.execute(converted_query)
-        for row in converted_result.fetchall():
+        outcomes_result = await self.db.execute(outcomes_query)
+        for row in outcomes_result.fetchall():
             date_str = str(row.day)
             if date_str in trends:
-                trends[date_str].converted = row.count
-        
+                trends[date_str].enrolled = row.enrolled_count or 0
+                trends[date_str].lost = row.lost_count or 0
+                trends[date_str].converted = (row.enrolled_count or 0) + (row.lost_count or 0)
+
         return trends
 
     async def get_performance_trends_batch_multi(
@@ -738,31 +757,36 @@ class OfficerRepository(BaseRepository[models.User]):
             if date_str in trends:
                 trends[date_str].consultations = row.count
 
-        # Query 3: Conversions per day
-        converted_query = (
+        # Query 3: Final outcomes per day — split enrolled (positive) vs lost (negative)
+        outcomes_query = (
             select(
                 func.date(models.LeadStatusHistory.changed_at).label("day"),
-                func.count(func.distinct(models.LeadStatusHistory.lead_id)).label("count"),
+                func.count(func.distinct(case(
+                    (models.ConsultationStatus.outcome_type == "positive", models.LeadStatusHistory.lead_id),
+                ))).label("enrolled_count"),
+                func.count(func.distinct(case(
+                    (models.ConsultationStatus.outcome_type == "negative", models.LeadStatusHistory.lead_id),
+                ))).label("lost_count"),
             )
             .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
-            .join(
-                models.PipelineStage,
-                models.LeadStatusHistory.new_pipeline_stage_id == models.PipelineStage.id,
-            )
+            .join(models.ConsultationStatus,
+                  models.LeadStatusHistory.new_consultation_status_id == models.ConsultationStatus.id)
             .where(
-                models.LeadStatusHistory.changed_by_user_id.in_(officer_ids),
+                models.Lead.assigned_officer_id.in_(officer_ids),
                 func.date(models.LeadStatusHistory.changed_at) >= start_date,
                 func.date(models.LeadStatusHistory.changed_at) <= end_date,
-                models.PipelineStage.is_final_stage == True,
+                models.ConsultationStatus.is_final == True,
                 models.Lead.deleted_at.is_(None),
             )
             .group_by(func.date(models.LeadStatusHistory.changed_at))
         )
-        converted_result = await self.db.execute(converted_query)
-        for row in converted_result.fetchall():
+        outcomes_result = await self.db.execute(outcomes_query)
+        for row in outcomes_result.fetchall():
             date_str = str(row.day)
             if date_str in trends:
-                trends[date_str].converted = row.count
+                trends[date_str].enrolled = row.enrolled_count or 0
+                trends[date_str].lost = row.lost_count or 0
+                trends[date_str].converted = (row.enrolled_count or 0) + (row.lost_count or 0)
 
         return trends
 
@@ -846,11 +870,31 @@ class OfficerRepository(BaseRepository[models.User]):
         )
         lead_result = await self.db.execute(lead_query)
         lead_row = lead_result.fetchone()
-        
+
+        # Query 3: Realtime active leads (no date range — snapshot workload)
+        realtime_active_query = (
+            select(func.count(models.Lead.id))
+            .outerjoin(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.deleted_at.is_(None),
+                or_(
+                    models.ConsultationStatus.is_final == False,
+                    models.ConsultationStatus.is_final.is_(None),
+                ),
+            )
+        )
+        realtime_result = await self.db.execute(realtime_active_query)
+        active_leads_realtime = realtime_result.scalar() or 0
+
         return {
             "consultations_in_range": consultations_in_range,
             "consultations_today": consultations_today,
-            "active_leads": lead_row.active or 0,
+            "active_leads": active_leads_realtime,
+            "active_leads_in_period": lead_row.active or 0,
             "converted_count": lead_row.converted or 0,
             "total_leads": lead_row.total or 0,
         }
@@ -1096,7 +1140,30 @@ class OfficerRepository(BaseRepository[models.User]):
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
-    
+
+    async def get_upcoming_activities_multi(
+        self,
+        officer_ids: List[int],
+        start_of_month: datetime,
+        end_of_month: datetime,
+    ) -> List[models.Lead]:
+        """Get leads with next_activity_at for multiple officers (team/org scope)."""
+        if not officer_ids:
+            return []
+        query = (
+            select(models.Lead)
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.Lead.next_activity_at.isnot(None),
+                models.Lead.next_activity_at >= start_of_month,
+                models.Lead.next_activity_at < end_of_month,
+                models.Lead.deleted_at.is_(None),
+            )
+            .order_by(models.Lead.next_activity_at.asc())
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     # =========================================================================
     # Leaderboard
     # =========================================================================
@@ -1309,6 +1376,16 @@ class OfficerRepository(BaseRepository[models.User]):
         result = await self.db.execute(query)
         return [row[0] for row in result.fetchall()]
 
+    async def get_officers_total_capacity(self, officer_ids: List[int]) -> int:
+        """Sum actual max_capacity for given officers. NULL defaults to 100."""
+        if not officer_ids:
+            return 0
+        result = await self.db.execute(
+            select(func.coalesce(func.sum(func.coalesce(models.User.max_capacity, 100)), 0))
+            .where(models.User.id.in_(officer_ids))
+        )
+        return result.scalar() or 0
+
     async def get_aggregated_kpis(
         self,
         officer_ids: List[int],
@@ -1380,11 +1457,31 @@ class OfficerRepository(BaseRepository[models.User]):
         )
         lead_result = await self.db.execute(lead_query)
         lead_row = lead_result.fetchone()
-        
+
+        # Query 3: Realtime active leads (no date range — snapshot workload)
+        realtime_active_query = (
+            select(func.count(models.Lead.id))
+            .outerjoin(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.Lead.deleted_at.is_(None),
+                or_(
+                    models.ConsultationStatus.is_final == False,
+                    models.ConsultationStatus.is_final.is_(None),
+                ),
+            )
+        )
+        realtime_result = await self.db.execute(realtime_active_query)
+        active_leads_realtime = realtime_result.scalar() or 0
+
         return {
             "total_consultations": consult_row.range_count or 0,
             "today_consultations": consult_row.today_count or 0,
-            "active_leads": lead_row.active or 0,
+            "active_leads": active_leads_realtime,
+            "active_leads_in_period": lead_row.active or 0,
             "converted_count": lead_row.converted or 0,
             "total_leads": lead_row.total or 0,
         }

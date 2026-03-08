@@ -35,10 +35,9 @@ const PerformanceChart = dynamic(
 import { TodaySchedule } from "@/components/officer/TodaySchedule";
 import {
   KPICardsGrid,
-  PriorityActionsPanel,
+  ActionInsightsPanel,
   WeeklyLeaderboard,
   SmartHeader,
-  RecommendationsPanel,
   AnnualProgressCard
 } from "@/components/officer/dashboard";
 import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
@@ -91,6 +90,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     leads_assigned: t.assigned,
     consultations: t.consultations,
     converted: t.converted,
+    enrolled: t.enrolled ?? 0,
+    lost: t.lost ?? 0,
   })), [stats?.performance_trends]);
 
   const salesFunnel = useMemo(() => (stats?.sales_funnel ?? []).map((s) => ({
@@ -239,80 +240,83 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         </Alert>
       )}
 
-      {/* Main Content: Bento Grid 75/25 */}
+      {/* Row 1: Charts + Compact Info Cards */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
-        {/* Left Column - Charts + Recommendations */}
-        <div className="space-y-4 md:space-y-6">
-          <div className="grid gap-4 md:gap-6 md:grid-cols-2">
-            <PerformanceChart
-              trends={performanceTrends}
-              dailyGoal={stats.kpis.consultations_target}
-              teamAverage={scope === "personal" ? teamStats?.team_avg_consultations : undefined}
-            />
-            {/* Funnel Visualization with View Toggle */}
-            <div className="space-y-2">
-              {/* View Mode Toggle */}
-              <div className="flex justify-end">
-                <div className="inline-flex items-center rounded-lg border bg-muted p-1 text-muted-foreground">
-                  <button
-                    onClick={() => setFunnelViewMode("chart")}
-                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                      funnelViewMode === "chart"
-                        ? "bg-background text-foreground shadow-sm"
-                        : "hover:bg-background/50"
-                    }`}
-                  >
-                    <BarChart3 className="h-4 w-4" />
-                    <span className="hidden sm:inline">Biểu đồ</span>
-                  </button>
-                  <button
-                    onClick={() => setFunnelViewMode("table")}
-                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                      funnelViewMode === "table"
-                        ? "bg-background text-foreground shadow-sm"
-                        : "hover:bg-background/50"
-                    }`}
-                  >
-                    <Table2 className="h-4 w-4" />
-                    <span className="hidden sm:inline">Bảng</span>
-                  </button>
-                </div>
+        {/* Left — Analytics charts */}
+        <div className="grid gap-4 md:gap-6 md:grid-cols-2">
+          <PerformanceChart
+            trends={performanceTrends}
+            dailyGoal={stats.kpis.consultations_target}
+            teamAverage={scope === "personal" ? teamStats?.team_avg_consultations : undefined}
+          />
+          {/* Funnel Visualization with View Toggle */}
+          <div className="space-y-2">
+            {/* View Mode Toggle */}
+            <div className="flex justify-end">
+              <div className="inline-flex items-center rounded-lg border bg-muted p-1 text-muted-foreground">
+                <button
+                  onClick={() => setFunnelViewMode("chart")}
+                  className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    funnelViewMode === "chart"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "hover:bg-background/50"
+                  }`}
+                >
+                  <BarChart3 className="h-4 w-4" />
+                  <span className="hidden sm:inline">Biểu đồ</span>
+                </button>
+                <button
+                  onClick={() => setFunnelViewMode("table")}
+                  className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    funnelViewMode === "table"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "hover:bg-background/50"
+                  }`}
+                >
+                  <Table2 className="h-4 w-4" />
+                  <span className="hidden sm:inline">Bảng</span>
+                </button>
               </div>
-
-              {/* Funnel View */}
-              {funnelViewMode === "chart" ? (
-                <FunnelChart
-                  funnel={salesFunnel}
-                  netConversionTrend={funnelNetConversionTrend}
-                  scope={scope}
-                  unitId={selectedUnitId}
-                  officerId={selectedOfficerId}
-                  suggestions={funnelSuggestions}
-                />
-              ) : (
-                <FunnelTable
-                  funnel={salesFunnel}
-                  scope={scope}
-                  unitId={selectedUnitId}
-                  officerId={selectedOfficerId}
-                  suggestions={funnelSuggestions}
-                />
-              )}
             </div>
+
+            {/* Funnel View */}
+            {funnelViewMode === "chart" ? (
+              <FunnelChart
+                funnel={salesFunnel}
+                netConversionTrend={funnelNetConversionTrend}
+                scope={scope}
+                unitId={selectedUnitId}
+                officerId={selectedOfficerId}
+                suggestions={funnelSuggestions}
+              />
+            ) : (
+              <FunnelTable
+                funnel={salesFunnel}
+                scope={scope}
+                unitId={selectedUnitId}
+                officerId={selectedOfficerId}
+                suggestions={funnelSuggestions}
+              />
+            )}
           </div>
-          {/* Phase 7: Recommendations Panel */}
-          <RecommendationsPanel scope={scope} />
         </div>
 
-        {/* Right Column - Action Center */}
+        {/* Right — Compact info cards */}
         <div className="space-y-4 md:space-y-6">
-          {/* Phase 6: Annual Progress */}
-          <AnnualProgressCard progress={stats.annual_progress} />
-          <WorkloadCard statusOverview={stats.status_overview} />
-          <TodaySchedule />
-          <PriorityActionsPanel actions={stats.priority_actions} />
-          <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} />
+          {(scope === "personal" || stats.annual_progress) && (
+            <AnnualProgressCard progress={stats.annual_progress} />
+          )}
+          <WorkloadCard statusOverview={stats.status_overview} scope={scope} />
+          <TodaySchedule scope={scope} unitId={selectedUnitId} />
         </div>
+      </div>
+
+      {/* Row 2: Action Panels */}
+      <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
+        {/* Left — Action Insights (wider, more room for cards) */}
+        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} />
+        {/* Right — Leaderboard */}
+        <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} />
       </div>
     </div>
   );

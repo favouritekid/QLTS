@@ -7,6 +7,7 @@ export { KPICard } from "./KPICard";
 export { KPICardsGrid } from "./KPICardsGrid";
 export { PriorityActionCard, type PriorityAction } from "./PriorityActionCard";
 export { PriorityActionsPanel } from "./PriorityActionsPanel";
+export { ActionInsightsPanel } from "./ActionInsightsPanel";
 export { WeeklyLeaderboard } from "./WeeklyLeaderboard";
 export { SmartHeader } from "./SmartHeader";
 export { RecommendationsPanel } from "./RecommendationsPanel";

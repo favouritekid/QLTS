@@ -28,6 +28,8 @@ interface PerformanceTrend {
   leads_assigned: number;
   consultations: number;
   converted: number;
+  enrolled?: number;
+  lost?: number;
 }
 
 interface PerformanceChartProps {
@@ -63,7 +65,8 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
     }),
     "Leads được giao": trend.leads_assigned,
     "Lượt tư vấn": trend.consultations,
-    "Chuyển đổi": trend.converted,
+    "Nhập học": trend.enrolled ?? 0,
+    "Mất": trend.lost ?? 0,
     ...(teamAverage !== undefined && { "Trung bình team": teamAverage }),
   }));
 
@@ -72,9 +75,10 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
     (acc, curr) => ({
       leads: acc.leads + curr.leads_assigned,
       consultations: acc.consultations + curr.consultations,
-      converted: acc.converted + curr.converted,
+      enrolled: acc.enrolled + (curr.enrolled ?? 0),
+      lost: acc.lost + (curr.lost ?? 0),
     }),
-    { leads: 0, consultations: 0, converted: 0 }
+    { leads: 0, consultations: 0, enrolled: 0, lost: 0 }
   );
 
   // Calculate averages
@@ -84,7 +88,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
 
   // Calculate max value for Y-axis domain to ensure ReferenceLines are visible
   const maxDataValue = Math.max(
-    ...filteredTrends.map(t => Math.max(t.leads_assigned, t.consultations, t.converted)),
+    ...filteredTrends.map(t => Math.max(t.leads_assigned, t.consultations, t.enrolled ?? 0, t.lost ?? 0)),
     0
   );
   
@@ -102,9 +106,9 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
     if (dateRange?.from && dateRange?.to) {
       const fromStr = format(dateRange.from, "dd/MM", { locale: vi });
       const toStr = format(dateRange.to, "dd/MM", { locale: vi });
-      return `${fromStr} - ${toStr}: ${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
+      return `${fromStr} - ${toStr}: ${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.enrolled} nhập học • ${totals.lost} mất`;
     }
-    return `${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
+    return `${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.enrolled} nhập học • ${totals.lost} mất`;
   };
 
   return (
@@ -219,11 +223,20 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             />
             <Line
               type="monotone"
-              dataKey="Chuyển đổi"
+              dataKey="Nhập học"
               stroke="hsl(var(--success-500))" // success-500
               strokeWidth={2}
               dot={false}
               activeDot={{ r: 6, fill: "#10b981", strokeWidth: 0 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="Mất"
+              stroke="#ef4444" // Red-500
+              strokeWidth={2}
+              strokeDasharray="4 3"
+              dot={false}
+              activeDot={{ r: 6, fill: "#ef4444", strokeWidth: 0 }}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -241,7 +254,11 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full ring-2 ring-success-500/20 bg-success-500" />
-            <span>Chuyển đổi/tư vấn: {totals.consultations > 0 ? Math.round((totals.converted / totals.consultations) * 100) : 0}%</span>
+            <span>Nhập học: {totals.enrolled}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full ring-2 ring-red-500/20 bg-red-500" />
+            <span>Mất: {totals.lost}</span>
           </div>
           {teamAverage !== undefined && (
             <div className="flex items-center gap-2">

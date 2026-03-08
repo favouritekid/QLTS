@@ -4,11 +4,16 @@ import { officerKeys } from "./useWeeklyLeaderboard"; // Share keys
 export type { ScheduleActivity } from "@/lib/api/officer"; // Re-export for UI
 
 
-export function useOfficerSchedule(month: number, year: number) {
+export function useOfficerSchedule(
+  month: number,
+  year: number,
+  scope?: string,
+  unitId?: number | null,
+) {
   return useQuery<UpcomingActivitiesResponse>({
-    queryKey: officerKeys.upcomingActivities(month, year),
+    queryKey: [...officerKeys.upcomingActivities(month, year), scope, unitId],
     queryFn: async () => {
-      return officerApi.getUpcomingActivities(month, year);
+      return officerApi.getUpcomingActivities(month, year, scope, unitId ?? undefined);
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });

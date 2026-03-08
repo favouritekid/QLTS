@@ -197,12 +197,21 @@ async def get_team_stats(
         except ValueError:
             pass  # Fallback to days param
 
+    # BUG 17: Resolve unit_id for team stats context
+    target_officer_id = officer_id or current_user.id
+    if target_officer_id != current_user.id:
+        target_user = await db.get(models.User, target_officer_id)
+        resolved_unit_id = target_user.unit_id if target_user else current_user.unit_id
+    else:
+        resolved_unit_id = current_user.unit_id
+
     stats = await officer_service.get_team_stats(
         db=db,
-        officer_id=officer_id or current_user.id,
+        officer_id=target_officer_id,
         days=days,
         start_date=parsed_start,
-        end_date=parsed_end
+        end_date=parsed_end,
+        unit_id=resolved_unit_id,
     )
     return stats
 
@@ -221,21 +230,26 @@ async def get_upcoming_activities(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth],
     month: int = None,
-    year: int = None
+    year: int = None,
+    scope: str = "personal",
+    unit_id: int = None,
 ):
-    """Get leads with scheduled follow-ups for the given month."""
+    """Get leads with scheduled follow-ups for the given month. Supports scope filtering."""
     from datetime import datetime
-    
+
     if month is None or year is None:
         now = datetime.now()
         month = month or now.month
         year = year or now.year
-    
+
     result = await officer_service.get_upcoming_activities(
         db=db,
         officer_id=current_user.id,
         month=month,
-        year=year
+        year=year,
+        scope=scope,
+        unit_id=unit_id,
+        requesting_user=current_user,
     )
     return result
 

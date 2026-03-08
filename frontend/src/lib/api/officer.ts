@@ -77,9 +77,12 @@ export const officerApi = {
     return response.data;
   },
 
-  getUpcomingActivities: async (month: number, year: number) => {
+  getUpcomingActivities: async (month: number, year: number, scope?: string, unitId?: number) => {
+    const params: Record<string, string | number> = { month, year };
+    if (scope) params.scope = scope;
+    if (unitId) params.unit_id = unitId;
     const response = await api.get<UpcomingActivitiesResponse>("/api/officer/upcoming-activities", {
-      params: { month, year },
+      params,
     });
     return response.data;
   },

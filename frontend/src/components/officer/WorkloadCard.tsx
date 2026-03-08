@@ -26,11 +26,13 @@ interface StatusOverview {
 
 interface WorkloadCardProps {
   statusOverview: StatusOverview;
+  scope?: "personal" | "team" | "organization" | null;
 }
 
 import { useOfficerAvailability } from "@/hooks/officer/useOfficerAvailability";
 
-export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
+export function WorkloadCard({ statusOverview, scope }: WorkloadCardProps) {
+  const isPersonalScope = !scope || scope === "personal";
 
   // Derive isAvailable directly from props - avoids unnecessary sync with useEffect
   // Local state only tracks optimistic update during mutation
@@ -155,20 +157,22 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
           </div>
         </div>
 
-        {/* Availability Toggle */}
-        <div className="pt-3 border-t flex items-center justify-between">
-          <div className="text-sm">
-            <p className="font-medium">Nhận lead mới</p>
-            <p className="text-xs text-muted-foreground">
-              {isAvailable ? "Đang nhận leads tự động" : "Tạm dừng nhận leads"}
-            </p>
+        {/* Availability Toggle — personal scope only */}
+        {isPersonalScope && (
+          <div className="pt-3 border-t flex items-center justify-between">
+            <div className="text-sm">
+              <p className="font-medium">Nhận lead mới</p>
+              <p className="text-xs text-muted-foreground">
+                {isAvailable ? "Đang nhận leads tự động" : "Tạm dừng nhận leads"}
+              </p>
+            </div>
+            <Switch
+              checked={isAvailable}
+              onCheckedChange={handleAvailabilityToggle}
+              disabled={mutation.isPending}
+            />
           </div>
-          <Switch
-            checked={isAvailable}
-            onCheckedChange={handleAvailabilityToggle}
-            disabled={mutation.isPending}
-          />
-        </div>
+        )}
       </CardContent>
     </Card>
   );

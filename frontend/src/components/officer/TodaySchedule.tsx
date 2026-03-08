@@ -31,6 +31,8 @@ import { useOfficerSchedule, type ScheduleActivity } from "@/hooks/officer/useOf
 
 interface TodayScheduleProps {
   className?: string;
+  scope?: "personal" | "team" | "organization" | null;
+  unitId?: number | null;
 }
 
 // =============================================================================
@@ -191,13 +193,18 @@ function MiniCalendar({
 // MAIN COMPONENT
 // =============================================================================
 
-export function TodaySchedule({ className }: TodayScheduleProps) {
+export function TodaySchedule({ className, scope, unitId }: TodayScheduleProps) {
   const router = useRouter();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
-  
-  // Fetch upcoming activities for current view month
-  const { data, isLoading } = useOfficerSchedule(viewDate.getMonth() + 1, viewDate.getFullYear());
+
+  // Fetch upcoming activities for current view month (scope-aware)
+  const { data, isLoading } = useOfficerSchedule(
+    viewDate.getMonth() + 1,
+    viewDate.getFullYear(),
+    scope ?? undefined,
+    unitId,
+  );
   
   // Filter activities for selected date
   // Fix: Compare date strings directly to avoid timezone shift issues

@@ -41,7 +41,7 @@ async def get_officer_dashboard_stats(
     seven_days_ago = today - timedelta(days=6)
     trends_data = await repo.get_performance_trends_batch(officer_id, seven_days_ago, today)
     performance_trends = [
-        {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted}
+        {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted, "enrolled": tp.enrolled, "lost": tp.lost}
         for tp in trends_data.values()
     ]
     
@@ -285,7 +285,9 @@ async def _get_sales_funnel_in_range(
     stage_counts = await repo.get_funnel_stage_counts_batch(
         officer_id, start_date=filter_start, end_date=filter_end
     )
-    transition_rates = await repo.get_stage_transition_rates(officer_id, days=30)
+    transition_rates = await repo.get_stage_transition_rates(
+        officer_id, start_date=filter_start, end_date=filter_end
+    )
 
     # Phase 2: Get loss reason breakdown per stage
     loss_breakdown_by_stage = await repo.get_loss_reason_breakdown_by_stage(
@@ -626,7 +628,8 @@ async def get_enhanced_dashboard_stats(
     
     consultations_in_range = kpi_data["consultations_in_range"]
     consultations_today = kpi_data["consultations_today"]
-    active_leads = kpi_data["active_leads"]
+    active_leads = kpi_data["active_leads"]  # Realtime snapshot (no date filter)
+    active_leads_in_period = kpi_data["active_leads_in_period"]  # Period-scoped
     converted_in_range = kpi_data["converted_count"]
     total_in_range = kpi_data["total_leads"] or 1
     
@@ -644,13 +647,7 @@ async def get_enhanced_dashboard_stats(
     consultations_trend = {
         "value": abs(round(trend_pct, 1)),
         "direction": trend_direction,
-        "comparison": f"vs TB {filter_days} ngày"
-    }
-    
-    active_leads_trend = {
-        "value": 0,
-        "direction": "neutral",
-        "comparison": f"trong {filter_days} ngày"
+        "comparison": f"vs TB/ngày ({filter_days} ngày)"
     }
     
     new_lead_conversion_rate = round((converted_in_range / total_in_range) * 100, 1)
@@ -661,6 +658,21 @@ async def get_enhanced_dashboard_stats(
 
     # Get previous period KPIs using Repository
     prev_kpi_data = await repo.get_kpi_stats(officer_id, prev_filter_start, prev_filter_end)
+
+    # Active leads trend: compare period-scoped counts between current and previous period
+    prev_active_in_period = prev_kpi_data["active_leads_in_period"]
+    if prev_active_in_period > 0:
+        active_diff_pct = ((active_leads_in_period - prev_active_in_period) / prev_active_in_period) * 100
+        active_direction = "up" if active_diff_pct > 0 else "down" if active_diff_pct < 0 else "neutral"
+    else:
+        active_diff_pct = 0
+        active_direction = "up" if active_leads_in_period > 0 else "neutral"
+    active_leads_trend = {
+        "value": abs(round(active_diff_pct, 1)),
+        "direction": active_direction,
+        "comparison": f"vs {filter_days} ngày trước"
+    }
+
     converted_prev = prev_kpi_data["converted_count"]
     total_prev = prev_kpi_data["total_leads"] or 1
     prev_rate = (converted_prev / total_prev) * 100
@@ -740,7 +752,7 @@ async def get_enhanced_dashboard_stats(
     # Use batch query instead of N+1 day loop (repo already initialized in section 4)
     trends_data = await repo.get_performance_trends_batch(officer_id, filter_start, filter_end)
     performance_trends = [
-        {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted}
+        {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted, "enrolled": tp.enrolled, "lost": tp.lost}
         for tp in trends_data.values()
     ]
     
@@ -820,6 +832,7 @@ async def get_enhanced_dashboard_stats(
             ),
             "consultations_trend": consultations_trend,
             "active_leads": active_leads,
+            "active_leads_in_period": active_leads_in_period,
             "active_leads_trend": active_leads_trend,
             "win_rate": win_rate_data["win_rate"],
             "win_rate_trend": win_rate_trend,
@@ -831,6 +844,7 @@ async def get_enhanced_dashboard_stats(
             "sla_compliance_rate_trend": sla_compliance_trend,
             "consultation_effectiveness": effectiveness_stats["effectiveness"],
             "consultation_effectiveness_trend": effectiveness_trend,
+            "consultations_avg_per_day": round(consultations_avg, 1),
         },
         "status_overview": base_stats["status_overview"],
         "priority_actions": priority_actions,
@@ -846,6 +860,18 @@ async def get_enhanced_dashboard_stats(
 # =============================================================================
 # PHASE 2: Aggregated Dashboard for Manager/Admin
 # =============================================================================
+
+
+def _calc_trend(current: float, previous: float, label: str) -> Dict[str, Any]:
+    """Calculate trend direction and percentage change."""
+    if previous > 0:
+        pct = ((current - previous) / previous) * 100
+        direction = "up" if pct > 0 else "down" if pct < 0 else "neutral"
+    else:
+        pct = 0
+        direction = "up" if current > 0 else "neutral"
+    return {"value": abs(round(pct, 1)), "direction": direction, "comparison": label}
+
 
 async def get_aggregated_dashboard_stats(
     db: AsyncSession,
@@ -993,65 +1019,154 @@ async def get_aggregated_dashboard_stats(
     # Aggregated avg response time
     agg_avg_response_time = await repo.get_avg_response_time_hours_multi(officer_ids, filter_start, filter_end)
 
+    # BUG 14: Calculate previous period for trend comparison
+    prev_filter_end = filter_start - timedelta(days=1)
+    prev_filter_start = prev_filter_end - timedelta(days=filter_days - 1)
+    comparison_label = f"vs {filter_days} ngày trước"
+
+    prev_kpi_data = await repo.get_aggregated_kpis(officer_ids, prev_filter_start, prev_filter_end)
+    prev_win_rate_data = await repo.get_aggregated_win_rate_stats(officer_ids, prev_filter_start, prev_filter_end)
+    prev_sla_stats = await repo.get_aggregated_sla_compliance_stats(officer_ids, prev_filter_start, prev_filter_end, sla_hours)
+    prev_effectiveness_stats = await repo.get_aggregated_consultation_effectiveness_stats(officer_ids, prev_filter_start, prev_filter_end)
+    prev_avg_response_time = await repo.get_avg_response_time_hours_multi(officer_ids, prev_filter_start, prev_filter_end)
+
+    # Consultations trend
+    prev_consult_avg = prev_kpi_data["total_consultations"] / filter_days if filter_days > 0 else 0
+    consultations_trend = _calc_trend(avg_consultations_per_day, prev_consult_avg, comparison_label)
+
+    # Conversion rate trend
+    prev_total_leads = prev_kpi_data["total_leads"] or 1
+    prev_conversion = round((prev_kpi_data["converted_count"] / prev_total_leads) * 100, 1)
+    conversion_trend = _calc_trend(new_lead_conversion_rate, prev_conversion, comparison_label)
+
+    # Win rate trend
+    win_rate_trend = _calc_trend(win_rate_data["win_rate"], prev_win_rate_data["win_rate"], comparison_label)
+
+    # Active leads trend (compare period-scoped counts, not realtime)
+    curr_active_in_period = kpi_data["active_leads_in_period"]
+    prev_active_in_period = prev_kpi_data["active_leads_in_period"]
+    active_leads_trend = _calc_trend(float(curr_active_in_period), float(prev_active_in_period), comparison_label)
+
+    # SLA trend
+    sla_trend = _calc_trend(agg_sla_stats["rate"], prev_sla_stats["rate"], comparison_label)
+
+    # Effectiveness trend
+    eff_trend = _calc_trend(agg_effectiveness_stats["effectiveness"], prev_effectiveness_stats["effectiveness"], comparison_label)
+
+    # Response time trend (lower is better, but we report direction as-is)
+    prev_rt = prev_avg_response_time or 0
+    curr_rt = agg_avg_response_time or 0
+    if prev_rt > 0:
+        rt_pct = ((curr_rt - prev_rt) / prev_rt) * 100
+        rt_direction = "up" if rt_pct > 0 else "down" if rt_pct < 0 else "neutral"
+        response_time_trend = {"value": abs(round(rt_pct, 1)), "direction": rt_direction, "comparison": comparison_label}
+    else:
+        response_time_trend = {"value": 0, "direction": "neutral", "comparison": "Chưa có dữ liệu"}
+
+    # BUG 12: Get consultations target from KPI config instead of hardcoded
+    unit_consultations_target = await kpi_service.get_kpi_target(
+        db, "consultations_daily", unit_id=target_unit_id
+    )
+    consultations_target = officer_count * unit_consultations_target
+
+    # BUG 13: Get actual capacity from user records instead of hardcoded
+    total_capacity = await repo.get_officers_total_capacity(officer_ids)
+
+    # BUG 21: Annual progress for aggregated view
+    annual_target_per_officer = await kpi_service.get_kpi_target(
+        db, "enrollments_annual", unit_id=target_unit_id
+    )
+    aggregate_annual_target = officer_count * annual_target_per_officer
+
+    # Count enrolled YTD - use existing funnel data (positive outcomes at final stages)
+    fiscal_year = filter_end.year
+    year_start = date(fiscal_year, 1, 1)
+    ytd_kpi_data = await repo.get_aggregated_kpis(officer_ids, year_start, filter_end)
+    total_enrolled_ytd = ytd_kpi_data["converted_count"]
+
+    progress_pct = round((total_enrolled_ytd / aggregate_annual_target) * 100, 1) if aggregate_annual_target > 0 else 0
+    annual_progress = {
+        "kpi_code": "enrollments",
+        "fiscal_year": fiscal_year,
+        "annual_target": aggregate_annual_target,
+        "achieved_ytd": total_enrolled_ytd,
+        "remaining": max(0, aggregate_annual_target - total_enrolled_ytd),
+        "progress_pct": progress_pct,
+        "months_left": 12 - filter_end.month + 1,
+        "monthly_target": round(max(0, aggregate_annual_target - total_enrolled_ytd) / max(1, 12 - filter_end.month + 1), 1),
+        "status": "completed" if progress_pct >= 100 else "in_progress" if progress_pct >= (filter_end.month / 12 * 100 * 0.9) else "at_risk",
+        "on_track": progress_pct >= (filter_end.month / 12 * 100 * 0.9),
+        "surplus": total_enrolled_ytd - aggregate_annual_target if total_enrolled_ytd >= aggregate_annual_target else None,
+        "last_sync_at": None,
+    }
+
+    # BUG 21: Funnel net conversion trend
+    _agg_ncr_enrolled = sum(
+        s["outcome_breakdown"]["positive"] for s in sales_funnel if s["is_final_stage"]
+    )
+    _agg_ncr_lost = sum(
+        s["outcome_breakdown"]["negative"] for s in sales_funnel if s["is_final_stage"]
+    ) + sum(
+        s.get("early_exit_count", 0) for s in sales_funnel if not s["is_final_stage"]
+    )
+    current_ncr = round(
+        (_agg_ncr_enrolled / (_agg_ncr_enrolled + _agg_ncr_lost)) * 100, 1
+    ) if (_agg_ncr_enrolled + _agg_ncr_lost) > 0 else 0.0
+
+    # Previous period NCR
+    prev_agg_funnel = await repo.get_aggregated_funnel(officer_ids, prev_filter_start, prev_filter_end)
+    _prev_ncr_enrolled = sum(
+        s["outcome_breakdown"]["positive"] for s in prev_agg_funnel if s["is_final_stage"]
+    )
+    _prev_ncr_lost = sum(
+        s["outcome_breakdown"]["negative"] for s in prev_agg_funnel if s["is_final_stage"]
+    ) + sum(
+        s.get("early_exit_count", 0) for s in prev_agg_funnel if not s["is_final_stage"]
+    )
+    prev_ncr = round(
+        (_prev_ncr_enrolled / (_prev_ncr_enrolled + _prev_ncr_lost)) * 100, 1
+    ) if (_prev_ncr_enrolled + _prev_ncr_lost) > 0 else 0.0
+
+    ncr_diff = current_ncr - prev_ncr
+    funnel_net_conversion_trend = {
+        "value": abs(round(ncr_diff, 1)),
+        "direction": "up" if ncr_diff > 0 else "down" if ncr_diff < 0 else "neutral",
+        "comparison": comparison_label,
+    }
+
     # ==========================================================================
     # Build response
     # ==========================================================================
     return {
         "kpis": {
             "consultations_today": today_consultations,
-            "consultations_target": officer_count * 10,  # Aggregate target
-            "consultations_trend": {
-                "value": avg_consultations_per_day,
-                "direction": "neutral",
-                "comparison": f"TB/ngày trong {filter_days} ngày",
-            },
-            "active_leads": total_active_leads,
-            "active_leads_trend": {
-                "value": 0,
-                "direction": "neutral",
-                "comparison": f"{officer_count} officers",
-            },
+            "consultations_target": consultations_target,
+            "consultations_trend": consultations_trend,
+            "active_leads": kpi_data["active_leads"],
+            "active_leads_in_period": kpi_data["active_leads_in_period"],
+            "active_leads_trend": active_leads_trend,
             "win_rate": win_rate_data["win_rate"],
-            "win_rate_trend": {
-                "value": 0,
-                "direction": "neutral",
-                "comparison": f"trong {filter_days} ngày",
-            },
+            "win_rate_trend": win_rate_trend,
             "new_lead_conversion_rate": new_lead_conversion_rate,
-            "new_lead_conversion_rate_trend": {
-                "value": 0,
-                "direction": "neutral",
-                "comparison": f"trong {filter_days} ngày",
-            },
+            "new_lead_conversion_rate_trend": conversion_trend,
             "avg_response_time": agg_avg_response_time or 0,
-            "avg_response_time_trend": {
-                "value": 0,
-                "direction": "neutral",
-                "comparison": "",
-            },
+            "avg_response_time_trend": response_time_trend,
             "sla_compliance_rate": agg_sla_stats["rate"],
-            "sla_compliance_rate_trend": {
-                "value": 0,
-                "direction": "neutral",
-                "comparison": f"trong {filter_days} ngày",
-            },
+            "sla_compliance_rate_trend": sla_trend,
             "consultation_effectiveness": agg_effectiveness_stats["effectiveness"],
-            "consultation_effectiveness_trend": {
-                "value": 0,
-                "direction": "neutral",
-                "comparison": f"trong {filter_days} ngày",
-            },
+            "consultation_effectiveness_trend": eff_trend,
+            "consultations_avg_per_day": avg_consultations_per_day,
         },
         # Must match WorkloadStats schema
         "status_overview": {
             "current_workload": total_active_leads,
-            "max_capacity": officer_count * 30,  # Aggregate capacity
-            "utilization": round((total_active_leads / (officer_count * 30)) * 100, 1) if officer_count > 0 else 0,
+            "max_capacity": total_capacity,
+            "utilization": round((total_active_leads / total_capacity) * 100, 1) if total_capacity > 0 else 0,
             "availability_status": "available",
         },
         "priority_actions": [],  # Not applicable for aggregated view
         "performance_trends": [
-            {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted}
+            {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted, "enrolled": tp.enrolled, "lost": tp.lost}
             for tp in (await repo.get_performance_trends_batch_multi(officer_ids, filter_start, filter_end)).values()
         ],
         "sales_funnel": sales_funnel,
@@ -1063,6 +1178,8 @@ async def get_aggregated_dashboard_stats(
             "upcoming": [],
         },
         "team_overview": team_overview,  # Added for manager/admin view
+        "annual_progress": annual_progress,
+        "funnel_net_conversion_trend": funnel_net_conversion_trend,
     }
 
 
@@ -1074,6 +1191,7 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "consultations_target": 0,
             "consultations_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "active_leads": 0,
+            "active_leads_in_period": 0,
             "active_leads_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "win_rate": 0,
             "win_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
@@ -1085,13 +1203,14 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "sla_compliance_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "consultation_effectiveness": 0,
             "consultation_effectiveness_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "consultations_avg_per_day": 0.0,
         },
         # Must match WorkloadStats schema
         "status_overview": {
             "current_workload": 0,
             "max_capacity": 0,
             "utilization": 0,
-            "availability_status": "available",
+            "availability_status": "offline",
         },
         "priority_actions": [],
         "performance_trends": [],
@@ -1105,6 +1224,7 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
         },
         # Phase 6: Annual progress (null when no officers)
         "annual_progress": None,
+        "funnel_net_conversion_trend": {"value": 0, "direction": "neutral", "comparison": ""},
     }
 
 
@@ -1319,7 +1439,8 @@ async def get_team_stats(
     officer_id: int,
     days: int = 30,
     start_date: date = None,
-    end_date: date = None
+    end_date: date = None,
+    unit_id: int = None,
 ) -> Dict[str, Any]:
     """
     Get team average statistics for performance comparison.
@@ -1348,7 +1469,9 @@ async def get_team_stats(
         calc_days = days
     
     # Get all active officers using Repository
-    active_officers = await repo.get_active_officer_ids(scope="organization", unit_id=None)
+    active_officers = await repo.get_active_officer_ids(
+        scope="team" if unit_id else "organization", unit_id=unit_id
+    )
     
     if len(active_officers) == 0:
         return {
@@ -1359,7 +1482,7 @@ async def get_team_stats(
         }
     
     # Get team averages using Repository
-    team_data = await repo.get_team_averages(unit_id=None, start_date=calc_start, end_date=calc_end)
+    team_data = await repo.get_team_averages(unit_id=unit_id, start_date=calc_start, end_date=calc_end)
     
     # Get current officer's KPI for rank calculation
     officer_kpi = await repo.get_kpi_stats(officer_id, calc_start, calc_end)
@@ -1391,35 +1514,45 @@ async def get_upcoming_activities(
     db: AsyncSession,
     officer_id: int,
     month: int,
-    year: int
+    year: int,
+    scope: str = "personal",
+    unit_id: int = None,
+    requesting_user: models.User = None,
 ) -> Dict[str, Any]:
     """
-    Lấy các hoạt động sắp tới (leads có next_activity_at) cho officer.
-    
-    REFACTORED: Uses OfficerRepository.get_upcoming_activities.
-    
-    Trả về danh sách activities và các ngày có activities.
-    
-    Args:
-        db: Database session
-        officer_id: Officer user ID
-        month: Month (1-12)
-        year: Year (e.g., 2025)
-        
-    Returns:
-        Dict with activities list and dates with activities
+    Lấy các hoạt động sắp tới (leads có next_activity_at).
+
+    Scope-aware:
+    - personal: chỉ leads giao cho officer
+    - team: tất cả leads trong unit của requesting_user
+    - organization: tất cả leads (hoặc filter theo unit_id)
     """
     repo = OfficerRepository(db)
-    
+
     # Tính start/end của tháng
     start_of_month = datetime(year, month, 1, tzinfo=timezone.utc)
     if month == 12:
         end_of_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
     else:
         end_of_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
-    
-    # REFACTORED: Use Repository
-    leads = await repo.get_upcoming_activities(officer_id, start_of_month, end_of_month)
+
+    if scope == "personal" or not requesting_user:
+        leads = await repo.get_upcoming_activities(officer_id, start_of_month, end_of_month)
+    else:
+        # Resolve officer IDs for team/organization scope
+        target_unit_id = requesting_user.unit_id if scope == "team" else unit_id
+        if target_unit_id:
+            org_repo = OrganizationRepository(db)
+            descendant_unit_ids = await org_repo.get_descendant_unit_ids(target_unit_id)
+            officer_ids = []
+            for uid in descendant_unit_ids:
+                ids = await repo.get_active_officer_ids(scope=scope, unit_id=uid)
+                officer_ids.extend(ids)
+            officer_ids = list(set(officer_ids))
+        else:
+            officer_ids = await repo.get_active_officer_ids(scope=scope, unit_id=None)
+
+        leads = await repo.get_upcoming_activities_multi(officer_ids, start_of_month, end_of_month)
     
     # Build activities list and dates with activities
     activities = []

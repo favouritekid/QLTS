@@ -52,6 +52,7 @@ interface KPIStats {
   sla_compliance_rate_trend?: TrendInfo | null;
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
+  consultations_avg_per_day?: number;
 }
 
 interface KPICardsGridProps {
@@ -164,7 +165,7 @@ const TOOLTIPS = {
   consultations:
     "Số buổi tư vấn đã thực hiện hôm nay so với mục tiêu hàng ngày được cấu hình bởi quản lý",
   activeLeads:
-    "Tổng số lead đang trong quy trình xử lý (chưa kết thúc) được giao cho bạn",
+    "Tổng số lead đang xử lý hiện tại (realtime, không phụ thuộc kỳ). Trend so sánh leads mới trong kỳ này vs kỳ trước",
   winRate:
     "Tỉ lệ chốt đơn thành công: số lead Thắng chia cho tổng lead đã kết thúc (Thắng + Thua) trong kỳ",
   conversion:
@@ -183,10 +184,25 @@ const TOOLTIPS = {
 
 export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   const router = useRouter();
-  const { preset } = useDashboardDate();
+  const { preset, dateRange } = useDashboardDate();
 
   const periodLabel = DATE_PRESET_LABELS[preset] || preset;
   const goToLeads = () => router.push("/leads");
+
+  // Detect if today falls within the selected date range
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayInRange =
+    dateRange?.from && dateRange?.to &&
+    today >= new Date(new Date(dateRange.from).setHours(0, 0, 0, 0)) &&
+    today <= new Date(new Date(dateRange.to).setHours(23, 59, 59, 999));
+
+  // Consultations card: show today's count or period average depending on range
+  const consultationsTitle = todayInRange ? "Tư vấn hôm nay" : "TB tư vấn/ngày";
+  const consultationsValue = todayInRange
+    ? `${kpis.consultations_today}/${kpis.consultations_target}`
+    : fmtPct(kpis.consultations_avg_per_day ?? 0);
+  const consultationsSubtitle = todayInRange ? "Mục tiêu hàng ngày" : periodLabel;
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -194,9 +210,9 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         {/* Tier 1: Primary KPI Cards (compact) */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <KPICard
-            title="Tư vấn hôm nay"
-            value={`${kpis.consultations_today}/${kpis.consultations_target}`}
-            subtitle="Mục tiêu hàng ngày"
+            title={consultationsTitle}
+            value={consultationsValue}
+            subtitle={consultationsSubtitle}
             tooltip={TOOLTIPS.consultations}
             trend={kpis.consultations_trend}
             icon={Phone}
@@ -206,7 +222,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
           <KPICard
             title="Leads đang xử lý"
             value={kpis.active_leads}
-            subtitle={periodLabel}
+            subtitle="Hiện tại"
             tooltip={TOOLTIPS.activeLeads}
             trend={kpis.active_leads_trend}
             icon={Users}

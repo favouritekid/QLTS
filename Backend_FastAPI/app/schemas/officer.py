@@ -16,6 +16,8 @@ class TrendPoint(BaseModel):
     assigned: int
     consultations: int
     converted: int
+    enrolled: int = 0
+    lost: int = 0
 
 class OutcomeBreakdown(BaseModel):
     positive: int = 0
@@ -68,8 +70,10 @@ class FunnelStage(BaseModel):
     lead_count: int                    # Actual count at this stage
     is_final_stage: bool = False       # For separating outcomes
     fill: Optional[str] = None
-    conversion_rate: Optional[float] = None  # Historical conversion % (30 days)
+    conversion_rate: Optional[float] = None  # Historical conversion %
     outcome_breakdown: Optional[OutcomeBreakdown] = None  # positive/negative/neutral counts
+    early_exit_count: int = 0          # FINAL leads (negative) at non-final stages
+    move_forward: int = 0              # lead_count - early_exit_count
     loss_breakdown: Optional[List[LossBreakdownItem]] = None  # Phase 2: Loss reason analytics
     velocity: Optional[VelocityStats] = None  # Phase 2: Time in stage analytics
     estimated_lost_revenue: Optional[EstimatedLostRevenue] = None  # Phase 2: Lost revenue analytics
@@ -160,6 +164,11 @@ class KPIStats(BaseModel):
     consultation_effectiveness: float = 0.0
     consultation_effectiveness_trend: Optional[TrendInfo] = None
 
+    # Average consultations per day in selected period
+    consultations_avg_per_day: float = 0.0
+    # Leads created in period that are still active (for period analysis)
+    active_leads_in_period: int = 0
+
 
 class PriorityAction(BaseModel):
     """AI-powered priority action suggestion."""
@@ -185,6 +194,7 @@ class OfficerDashboardEnhanced(BaseModel):
     performance_trends: List[TrendPoint]
     sales_funnel: List[FunnelStage]
     funnel_net_conversion_trend: Optional[TrendInfo] = None
+    funnel_suggestions: List[FunnelSuggestion] = []
     actionable_lists: ActionableLists
     # Phase 6: Annual target progress (rolling targets)
     annual_progress: Optional["AnnualProgressInfo"] = None
