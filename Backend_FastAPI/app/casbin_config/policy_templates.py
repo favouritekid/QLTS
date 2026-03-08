@@ -101,6 +101,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/{id}/action", "action": "POST"},
         {"subject": "{role}", "object": "/api/leads/{id}/timeline", "action": "GET"},  # Lead timeline
         {"subject": "{role}", "object": "/api/leads/{id}/insights", "action": "GET"},  # Lead insights
+        {"subject": "{role}", "object": "/api/leads/{id}/audit-logs", "action": "GET"},  # Lead audit log history
         {"subject": "{role}", "object": "/api/leads/my/reassign-quota", "action": "GET"},  # Reassign quota
         {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads

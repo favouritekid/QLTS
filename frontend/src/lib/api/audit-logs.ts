@@ -90,7 +90,17 @@ export async function listAuditLogs(
 }
 
 /**
+ * Entity-specific audit log endpoint mapping.
+ * Uses IDOR-protected endpoints so officers can view audit logs for their assigned resources.
+ */
+const ENTITY_AUDIT_ENDPOINTS: Record<string, (id: number) => string> = {
+  Lead: (id) => `/api/leads/${id}/audit-logs`,
+};
+
+/**
  * Get audit log history for a specific entity.
+ * Uses entity-specific endpoints when available (IDOR-protected, accessible by officers).
+ * Falls back to admin endpoint for other entity types.
  */
 export async function getEntityAuditHistory(
   entityType: string,
@@ -102,9 +112,9 @@ export async function getEntityAuditHistory(
   if (options.page_size) params.append("page_size", String(options.page_size));
 
   const queryString = params.toString();
-  const url = queryString
-    ? `/api/admin/audit-logs/entity/${entityType}/${entityId}?${queryString}`
-    : `/api/admin/audit-logs/entity/${entityType}/${entityId}`;
+  const basePath = ENTITY_AUDIT_ENDPOINTS[entityType]?.(entityId)
+    ?? `/api/admin/audit-logs/entity/${entityType}/${entityId}`;
+  const url = queryString ? `${basePath}?${queryString}` : basePath;
 
   const response = await apiClient.get<AuditLogListResponse>(url);
   return response.data;

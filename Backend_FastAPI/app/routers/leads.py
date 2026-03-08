@@ -494,6 +494,74 @@ async def get_lead_details(
     return lead
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/{lead_id}/audit-logs")
+async def get_lead_audit_logs(
+    request: Request,
+    lead: models.Lead = LeadAccessDep,
+    db: AsyncSession = Depends(database.get_db),
+    page: int = 1,
+    page_size: int = 50,
+):
+    """
+    Lấy lịch sử audit log của một Lead.
+
+    IDOR-protected: Officer chỉ xem được audit log của lead được phân công.
+    Admin/Manager xem được tất cả.
+    """
+    from sqlalchemy import select, func, desc
+    from sqlalchemy.orm import selectinload
+
+    query = (
+        select(models.EntityAuditLog)
+        .options(selectinload(models.EntityAuditLog.actor))
+        .where(
+            models.EntityAuditLog.entity_type == "Lead",
+            models.EntityAuditLog.entity_id == lead.id,
+        )
+        .order_by(desc(models.EntityAuditLog.created_at))
+    )
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_query)).scalar() or 0
+
+    offset = (page - 1) * page_size
+    result = await db.execute(query.offset(offset).limit(page_size))
+    audit_logs = result.scalars().all()
+
+    items = []
+    for entry in audit_logs:
+        actor_data = None
+        if entry.actor:
+            actor_data = {
+                "id": entry.actor.id,
+                "username": entry.actor.username,
+                "full_name": entry.actor.full_name,
+            }
+        items.append({
+            "id": entry.id,
+            "entity_type": entry.entity_type,
+            "entity_id": entry.entity_id,
+            "action": entry.action,
+            "actor": actor_data,
+            "field_name": entry.field_name,
+            "old_value": entry.old_value,
+            "new_value": entry.new_value,
+            "changes": entry.changes,
+            "reason": entry.reason,
+            "source": entry.source,
+            "created_at": entry.created_at.isoformat(),
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (offset + len(items)) < total,
+    }
+
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{lead_id}", response_model=schemas.Lead)
 async def update_existing_lead(
