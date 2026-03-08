@@ -7,6 +7,8 @@ export type { Recommendation } from "@/lib/api/officer"; // Re-export for UI
 export interface UseOfficerRecommendationsOptions {
   startDate?: string;
   endDate?: string;
+  /** Disable query (e.g. when scope is not personal) */
+  enabled?: boolean;
 }
 
 export function useOfficerRecommendations(
@@ -19,5 +21,6 @@ export function useOfficerRecommendations(
       return officerApi.getRecommendations(limit, options?.startDate, options?.endDate);
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
+    enabled: options?.enabled ?? true,
   });
 }

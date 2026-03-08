@@ -94,13 +94,15 @@ interface RecommendationsPanelProps {
 }
 
 export function RecommendationsPanel({ limit = 5, className, scope = "personal" }: RecommendationsPanelProps) {
+  // Hooks must be called unconditionally (Rules of Hooks)
+  const { startDate, endDate } = useDashboardDate();
+  const isPersonal = !scope || scope === "personal";
+  const { data, isLoading, error } = useOfficerRecommendations(limit, { startDate, endDate, enabled: isPersonal });
+
   // Recommendations are always personal — hide in team/org view to avoid confusion
-  if (scope && scope !== "personal") {
+  if (!isPersonal) {
     return null;
   }
-
-  const { startDate, endDate } = useDashboardDate();
-  const { data, isLoading, error } = useOfficerRecommendations(limit, { startDate, endDate });
 
   const recommendations = data?.recommendations ?? [];
 
