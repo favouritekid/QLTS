@@ -1,0 +1,378 @@
+# QLTS State Machine Diagrams
+
+> Tổng hợp sơ đồ state machine cho toàn bộ các thành phần có trạng thái trong dự án QLTS.
+
+---
+
+## 1. Lead Phase Lifecycle (Phase Manager)
+
+Nguồn: [phase_manager.py](file:///d:/QLTS/Backend_FastAPI/app/services/phase_manager.py)
+
+Phase được xác định từ `admission_profile.status`, **không phải** từ pipeline stage.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> CONSULTATION : Chưa có hồ sơ
+    CONSULTATION --> ADMISSION : Tạo AdmissionProfile
+    ADMISSION --> FEE : Profile approved/confirmed/overridden
+    FEE --> ENROLLED : Profile enrolled
+
+    state CONSULTATION {
+        note right of CONSULTATION
+            Stages: stg01, stg02
+            Statuses: sts00, sts02-06
+        end note
+    }
+    state ADMISSION {
+        note right of ADMISSION
+            Stages: stg03, stg04
+            Statuses: sts07-09, sts13, sts16-17
+        end note
+    }
+    state FEE {
+        note right of FEE
+            Stage: stg05
+            Statuses: sts10, sts14, sts18
+        end note
+    }
+    state ENROLLED {
+        note right of ENROLLED
+            Stages: stg06, stg07
+            Statuses: sts11, sts12
+        end note
+    }
+```
+
+> [!IMPORTANT]
+> **Universal Statuses** (`sts01`, `sts15`, `sts19`) có thể chọn ở **MỌI** phase và không thay đổi stage.
+
+---
+
+## 2. Admission Profile State Machine
+
+Nguồn: [admission_state_machine.py](file:///d:/QLTS/Backend_FastAPI/app/services/admission_state_machine.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT : Officer tạo hồ sơ
+
+    DRAFT --> SUBMITTED : Officer submit
+
+    SUBMITTED --> APPROVED : Manager approve
+    SUBMITTED --> REJECTED : Manager reject
+
+    REJECTED --> RESUBMITTED : Officer fix & resubmit
+    REJECTED --> DRAFT : Officer revert to draft
+
+    RESUBMITTED --> APPROVED : Manager approve
+    RESUBMITTED --> REJECTED : Manager reject again
+
+    APPROVED --> CONFIRMED : Lead xác nhận nhập học
+    APPROVED --> OVERRIDDEN : Admin override
+
+    OVERRIDDEN --> ENROLLED : Hệ thống tạo Student
+
+    CONFIRMED --> ENROLLED : Hệ thống tạo Student
+
+    ENROLLED --> [*]
+
+    note right of ENROLLED
+        FINAL STATE
+        Tạo Student + StudentDocument
+        Không cho phép chuyển tiếp
+    end note
+```
+
+| Trạng thái | Chuyển tiếp hợp lệ | Ai thực hiện |
+|---|---|---|
+| `draft` | → `submitted` | Officer |
+| `submitted` | → [approved](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py#176-180), `rejected` | Manager |
+| `rejected` | → `resubmitted`, `draft` | Officer |
+| `resubmitted` | → [approved](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py#176-180), `rejected` | Manager |
+| [approved](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py#176-180) | → `confirmed`, `overridden` | Lead / Admin |
+| `confirmed` | → `enrolled` | System |
+| `overridden` | → `enrolled` | System |
+| `enrolled` | ∅ (terminal) | — |
+
+---
+
+## 3. Collaborator (CTV) Status
+
+Nguồn: [collaborator.py](file:///d:/QLTS/Backend_FastAPI/app/models/collaborator.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Đăng ký CTV mới
+
+    pending --> active : Manager duyệt
+    pending --> inactive : Manager từ chối
+
+    active --> suspended : Vi phạm / tạm khóa
+    active --> inactive : Chấm dứt hợp tác
+
+    suspended --> active : Mở khóa
+    suspended --> inactive : Chấm dứt
+
+    inactive --> [*]
+```
+
+---
+
+## 4. Lead Claim (CTV → Lead)
+
+Nguồn: [collaborator.py#LeadClaim](file:///d:/QLTS/Backend_FastAPI/app/models/collaborator.py#L129)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : CTV submit claim
+
+    pending --> approved : Staff duyệt → Tạo Lead + gắn referrer
+    pending --> rejected : Staff từ chối
+
+    approved --> [*]
+    rejected --> [*]
+```
+
+> [!NOTE]
+> Unique constraint: 1 CTV chỉ claim 1 lead 1 lần (`uq_claim_collaborator_lead`).
+
+---
+
+## 5. Commission Record
+
+Nguồn: [commission.py](file:///d:/QLTS/Backend_FastAPI/app/models/commission.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Trigger status đạt → Auto tạo
+
+    pending --> approved : Manager duyệt
+    pending --> rejected : Manager từ chối
+    pending --> cancelled : Lead bị hủy / rollback
+
+    approved --> paid : Kế toán xác nhận thanh toán
+    approved --> cancelled : Hủy sau khi duyệt
+
+    paid --> [*]
+    rejected --> [*]
+    cancelled --> [*]
+```
+
+| Trạng thái | Ý nghĩa |
+|---|---|
+| [pending](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py#171-175) | Chờ Manager duyệt |
+| [approved](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py#176-180) | Đã duyệt, chờ thanh toán |
+| [paid](file:///d:/QLTS/Backend_FastAPI/app/models/finance/invoice.py#219-223) | Đã thanh toán cho CTV |
+| `rejected` | Bị từ chối (có lý do) |
+| `cancelled` | Bị hủy (lead rollback/status thay đổi) |
+
+---
+
+## 6. Fee (Học phí)
+
+Nguồn: [fee.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/fee.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Tạo Fee record
+
+    pending --> calculated : Tính toán xong (base, discount, final)
+
+    calculated --> invoiced : Tạo Invoice
+    calculated --> waived : Admin miễn phí
+    calculated --> cancelled : Hủy fee
+
+    invoiced --> partial : Thanh toán 1 phần
+    invoiced --> paid : Thanh toán đủ
+    invoiced --> overdue : Quá hạn
+    invoiced --> cancelled : Hủy fee
+
+    partial --> paid : Thanh toán nốt phần còn lại
+    partial --> overdue : Quá hạn
+
+    overdue --> partial : Thanh toán 1 phần
+    overdue --> paid : Thanh toán đủ
+
+    paid --> [*]
+    waived --> [*]
+    cancelled --> [*]
+```
+
+---
+
+## 7. Invoice (Hóa đơn)
+
+Nguồn: [invoice.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/invoice.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> draft : Tạo invoice
+
+    draft --> issued : Phát hành cho sinh viên
+    draft --> cancelled : Hủy trước khi phát hành
+
+    issued --> partial : Thanh toán 1 phần
+    issued --> paid : Thanh toán đủ
+    issued --> overdue : Quá hạn
+    issued --> cancelled : Hủy invoice
+
+    partial --> paid : Thanh toán nốt
+    partial --> overdue : Quá hạn
+
+    overdue --> partial : Thanh toán 1 phần
+    overdue --> paid : Thanh toán đủ
+    overdue --> cancelled : Hủy
+
+    paid --> [*]
+    cancelled --> [*]
+```
+
+---
+
+## 8. Payment (Thanh toán)
+
+Nguồn: [payment.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/payment.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Ghi nhận thanh toán thủ công
+    [*] --> verified : Thanh toán online (auto-verify)
+
+    pending --> verified : Checker xác nhận (maker ≠ checker)
+    pending --> rejected : Checker từ chối
+
+    verified --> refunded : Hoàn tiền
+
+    verified --> [*]
+    rejected --> [*]
+    refunded --> [*]
+```
+
+> [!CAUTION]
+> **Maker-Checker**: DB constraint `chk_payment_no_self_approval` ngăn `created_by_id = verified_by_id`.
+
+---
+
+## 9. Payment Intent (Thanh toán online)
+
+Nguồn: [payment_intent.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/payment_intent.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> created : Tạo intent + URL thanh toán
+
+    created --> pending : User redirect tới gateway
+
+    pending --> completed : Gateway callback thành công → Tạo Payment
+    pending --> failed : Gateway báo lỗi
+    pending --> expired : Hết hạn timeout
+    pending --> cancelled : User/system hủy
+
+    created --> expired : Hết hạn trước khi redirect
+
+    completed --> [*]
+    failed --> [*]
+    expired --> [*]
+    cancelled --> [*]
+```
+
+---
+
+## 10. Refund Request (Yêu cầu hoàn tiền)
+
+Nguồn: [refund.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Officer tạo yêu cầu
+
+    pending --> approved : Manager/Admin duyệt
+    pending --> rejected : Manager/Admin từ chối
+
+    approved --> refunded : Kế toán thực hiện hoàn tiền
+
+    refunded --> [*]
+    rejected --> [*]
+```
+
+---
+
+## 11. Overpayment (Thừa tiền)
+
+Nguồn: [overpayment.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/overpayment.py)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Payment > Invoice amount
+
+    pending --> applied : Chuyển sang invoice khác (apply_to_next)
+    pending --> refunded : Hoàn tiền cho sinh viên (refund)
+    pending --> cancelled : Xóa sổ / write_off
+
+    applied --> [*]
+    refunded --> [*]
+    cancelled --> [*]
+```
+
+---
+
+## 12. Lead Validity (Chất lượng Lead)
+
+Nguồn: [lead.py#LeadValidityEnum](file:///d:/QLTS/Backend_FastAPI/app/models/lead.py#L11)
+
+```mermaid
+stateDiagram-v2
+    [*] --> raw : Lead mới tạo
+
+    raw --> valid : Staff xác nhận hợp lệ
+    raw --> invalid : Thông tin sai
+    raw --> duplicate : Trùng lặp
+
+    valid --> qualified : Đạt tiêu chuẩn tư vấn
+
+    qualified --> [*]
+    invalid --> [*]
+    duplicate --> [*]
+```
+
+---
+
+## 13. Lead Assignment Status
+
+Nguồn: [lead.py#assignment_status](file:///d:/QLTS/Backend_FastAPI/app/models/lead.py#L82)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Lead mới tạo / chưa phân công
+
+    pending --> assigned : Auto-assign hoặc manual assign
+    pending --> failed : Không tìm được officer phù hợp
+
+    assigned --> reassign_pending : Manager yêu cầu chuyển
+
+    reassign_pending --> assigned : Phân công lại thành công
+    reassign_pending --> failed : Không tìm officer mới
+
+    failed --> pending : Thử lại phân công
+```
+
+---
+
+## Tổng kết
+
+| # | Entity | Số trạng thái | Terminal States | Nguồn |
+|---|--------|--------------|-----------------|-------|
+| 1 | Lead Phase | 4 | `enrolled` | [phase_manager.py](file:///d:/QLTS/Backend_FastAPI/app/services/phase_manager.py) |
+| 2 | Admission Profile | 8 | `enrolled` | [admission_state_machine.py](file:///d:/QLTS/Backend_FastAPI/app/services/admission_state_machine.py) |
+| 3 | Collaborator | 4 | `inactive` | [collaborator.py](file:///d:/QLTS/Backend_FastAPI/app/models/collaborator.py) |
+| 4 | Lead Claim | 3 | [approved](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py#176-180), `rejected` | [collaborator.py](file:///d:/QLTS/Backend_FastAPI/app/models/collaborator.py) |
+| 5 | Commission Record | 5 | [paid](file:///d:/QLTS/Backend_FastAPI/app/models/finance/invoice.py#219-223), `rejected`, `cancelled` | [commission.py](file:///d:/QLTS/Backend_FastAPI/app/models/commission.py) |
+| 6 | Fee | 8 | [paid](file:///d:/QLTS/Backend_FastAPI/app/models/finance/invoice.py#219-223), `waived`, `cancelled` | [fee.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/fee.py) |
+| 7 | Invoice | 6 | [paid](file:///d:/QLTS/Backend_FastAPI/app/models/finance/invoice.py#219-223), `cancelled` | [invoice.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/invoice.py) |
+| 8 | Payment | 4 | [verified](file:///d:/QLTS/Backend_FastAPI/app/models/finance/payment.py#230-234), `rejected`, `refunded` | [payment.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/payment.py) |
+| 9 | Payment Intent | 6 | [completed](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py#181-185), `failed`, [expired](file:///d:/QLTS/Backend_FastAPI/app/models/finance/payment_intent.py#215-219), `cancelled` | [payment_intent.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/payment_intent.py) |
+| 10 | Refund Request | 4 | `refunded`, `rejected` | [refund.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/refund.py) |
+| 11 | Overpayment | 4 | `applied`, `refunded`, `cancelled` | [overpayment.py](file:///d:/QLTS/Backend_FastAPI/app/models/finance/overpayment.py) |
+| 12 | Lead Validity | 5 | `qualified`, `invalid`, `duplicate` | [lead.py](file:///d:/QLTS/Backend_FastAPI/app/models/lead.py) |
+| 13 | Lead Assignment | 4 | — (cyclic) | [lead.py](file:///d:/QLTS/Backend_FastAPI/app/models/lead.py) |
