@@ -196,7 +196,13 @@ async def create_plan(
     Returns: (KpiPlan with months loaded, post_commit_callback)
     """
     # --- Validation ---
+    if unit_id is None:
+        raise BusinessRuleViolation("unit_id bắt buộc — không hỗ trợ global plan")
     validate_annual_target(annual_target)
+    if not (0 <= sla_target <= 100):
+        raise BusinessRuleViolation(f"sla_target phải trong 0..100, nhận {sla_target}")
+    if not (1 <= response_time_target <= 48):
+        raise BusinessRuleViolation(f"response_time_target phải trong 1..48, nhận {response_time_target}")
 
     weights_list: List[float]
     weights_json: Optional[List[float]]
