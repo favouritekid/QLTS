@@ -32,6 +32,8 @@ export interface StoredFilters {
   dateFrom: string;
   dateTo: string;
   dateField: "created_at" | "last_consultation_at";
+  scoreMin: number;
+  scoreMax: number;
 }
 
 export interface LeadsFilterState extends StoredFilters {
@@ -92,6 +94,8 @@ const DEFAULT_FILTERS: StoredFilters = {
   dateFrom: "",
   dateTo: "",
   dateField: "created_at",
+  scoreMin: 0,
+  scoreMax: 100,
 };
 
 // =============================================================================
@@ -160,7 +164,9 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
     searchParams.get("officer") ||
     searchParams.get("unit_id") ||
     searchParams.get("from") ||
-    searchParams.get("to")
+    searchParams.get("to") ||
+    searchParams.get("score_min") ||
+    searchParams.get("score_max")
   );
 }
 
@@ -177,9 +183,11 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
     unitId: searchParams.get("unit_id") || "",
     dateFrom: searchParams.get("from") || "",
     dateTo: searchParams.get("to") || "",
-    dateField: (searchParams.get("date_field") === "last_consultation_at" 
-      ? "last_consultation_at" 
+    dateField: (searchParams.get("date_field") === "last_consultation_at"
+      ? "last_consultation_at"
       : "created_at") as "created_at" | "last_consultation_at",
+    scoreMin: parseInt(searchParams.get("score_min") || "0"),
+    scoreMax: parseInt(searchParams.get("score_max") || "100"),
   };
 }
 
@@ -220,7 +228,10 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const [statusFilters, setStatusFilters] = useState<LeadStatus[]>(initialValues.statusFilters);
   const [sourceFilters, setSourceFilters] = useState<string[]>(initialValues.sourceFilters);
   const [validityFilters, setValidityFilters] = useState<string[]>(initialValues.validityFilters);
-  const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
+  const [scoreRange, setScoreRange] = useState<[number, number]>([
+    initialValues.scoreMin ?? 0,
+    initialValues.scoreMax ?? 100,
+  ]);
   const [offeringFilters, setOfferingFilters] = useState<string[]>(initialValues.offeringFilters);
   const [stageFilters, setStageFilters] = useState<string[]>(initialValues.stageFilters);
   const [officerFilters, setOfficerFilters] = useState<string[]>(initialValues.officerFilters);
@@ -335,6 +346,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
       if (dateField !== "created_at") params.set("date_field", dateField);
+      if (scoreRange[0] > 0) params.set("score_min", scoreRange[0].toString());
+      if (scoreRange[1] < 100) params.set("score_max", scoreRange[1].toString());
 
       const queryString = params.toString();
       const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
@@ -354,7 +367,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     };
   }, [
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
-    stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
+    stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField, scoreRange,
     pathname,
   ]);
 
@@ -376,6 +389,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       dateFrom,
       dateTo,
       dateField,
+      scoreMin: scoreRange[0],
+      scoreMax: scoreRange[1],
     };
 
     // Save if any filter is active OR if not on page 1
@@ -565,6 +580,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       sourceFilters,
       validityFilters,
       scoreRange,
+      scoreMin: scoreRange[0],
+      scoreMax: scoreRange[1],
       offeringFilters,
       stageFilters,
       officerFilters,

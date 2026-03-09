@@ -17,18 +17,19 @@ export const LeadStats = React.memo(function LeadStats({
   totalCount,
   isLoading,
 }: LeadStatsProps) {
-  // Calculate stats from leads data — memoized to avoid 3x .filter() on every re-render
+  // All stats are page-level (from current page data only)
   const { newLeadsCount, highScoreCount, conversionRate } = React.useMemo(() => {
+    const pageTotal = leads.length;
     const newCount = leads.filter((l) => l.status === "new").length;
-    const highScore = leads.filter((l) => l.lead_score > 80).length;
+    const highScore = leads.filter((l) => l.lead_score >= 70).length;
     const converted = leads.filter((l) => l.status === "converted").length;
-    const rate = totalCount > 0 ? Math.round((converted / totalCount) * 100) : 0;
+    const rate = pageTotal > 0 ? Math.round((converted / pageTotal) * 100) : 0;
     return { newLeadsCount: newCount, highScoreCount: highScore, conversionRate: rate };
-  }, [leads, totalCount]);
+  }, [leads]);
 
   const stats = [
     {
-      title: "Tổng số (trang này)",
+      title: "Tổng",
       value: totalCount,
       icon: Users,
       color: "text-blue-600 dark:text-blue-400",

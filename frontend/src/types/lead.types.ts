@@ -632,7 +632,7 @@ export interface LeadListParams extends PaginationParams {
   // === DATE RANGE FILTER ===
   date_from?: string; // ISO datetime
   date_to?: string; // ISO datetime
-  date_field?: "created_at" | "updated_at";
+  date_field?: "created_at" | "updated_at" | "last_consultation_at";
   // === SCORE RANGE FILTER ===
   score_min?: number;
   score_max?: number;

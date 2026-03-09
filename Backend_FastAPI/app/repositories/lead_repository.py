@@ -285,12 +285,12 @@ class LeadRepository(BaseRepository[models.Lead]):
                     filters.append(models.Lead.pipeline_stage_id.in_(stage_ids))
 
         # === DATE RANGE FILTER ===
-        # Filter by date_from and/or date_to on specified date_field (created_at or updated_at)
+        # Filter by date_from and/or date_to on specified date_field
+        ALLOWED_DATE_FIELDS = {"created_at", "updated_at", "last_consultation_at"}
         if date_from or date_to:
-            # Validate date_field - only allow created_at or updated_at
-            if date_field not in ("created_at", "updated_at"):
+            if date_field not in ALLOWED_DATE_FIELDS:
                 date_field = "created_at"  # Default fallback
-            
+
             date_column = getattr(models.Lead, date_field)
             
             if date_from:

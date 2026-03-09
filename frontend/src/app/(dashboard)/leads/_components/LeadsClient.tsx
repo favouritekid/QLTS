@@ -148,8 +148,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     filterState.officerFilters.length ||
     filterState.unitId ||
     filterState.dateFrom ||
-    filterState.dateTo
-  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.validityFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.unitId, filterState.dateFrom, filterState.dateTo]);
+    filterState.dateTo ||
+    filterState.scoreRange[0] > 0 ||
+    filterState.scoreRange[1] < 100
+  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.validityFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.unitId, filterState.dateFrom, filterState.dateTo, filterState.scoreRange]);
 
   // ✅ Score filtering now done server-side via score_min/score_max params
   const filteredLeads = useMemo(() => {

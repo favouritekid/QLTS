@@ -362,8 +362,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
   }, [open, lead, isEdit, isCreate, form, user, resetDuplicateValidation]);
 
   const onSubmit = async (data: LeadFormValues, shouldCreateAnother: boolean = false) => {
-    // Block submit if duplicate validation failed
-    if (duplicateValidation.phone.state === "invalid") {
+    // Block submit if duplicate validation failed (phone or email)
+    if (duplicateValidation.phone.state === "invalid" || duplicateValidation.email.state === "invalid") {
       return;
     }
 
@@ -418,8 +418,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
   const { isDirty } = form.formState;
 
-  // Check if submit should be blocked
-  const isSubmitBlocked = duplicateValidation.phone.state === "invalid" || duplicateValidation.isChecking;
+  // Check if submit should be blocked (phone OR email invalid/checking)
+  const isSubmitBlocked = duplicateValidation.phone.state === "invalid" || duplicateValidation.email.state === "invalid" || duplicateValidation.isChecking;
 
   return (
     <FormDialog open={open} onOpenChange={onOpenChange} isDirty={isDirty}>

@@ -713,6 +713,10 @@ async def create_lead(
                         raise PermissionDeniedError(
                             detail="Can only assign leads to users with 'officer' role"
                         )
+                    if officer.status != "active":
+                        raise PermissionDeniedError(
+                            detail=f"Cannot assign to inactive officer (status: {officer.status})"
+                        )
                     direct_assignment_officer_id = create_data["assigned_officer_id"]
                     skip_auto_assignment = True
                     log.info(
