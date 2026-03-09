@@ -267,10 +267,13 @@ describe("useLeads Hook", () => {
     describe("useBulkAssignLeads", () => {
       it("should bulk assign multiple leads", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/admin/leads/bulk-assign`, async () => {
+          http.post(`${API_BASE_URL}/api/leads/bulk-assign`, async () => {
             return HttpResponse.json({
-              message: "Bulk assignment successful",
-              assigned_count: 3,
+              total: 3,
+              successful: 3,
+              failed: 0,
+              assigned_lead_ids: [1, 2, 3],
+              errors: [],
             });
           })
         );
@@ -288,7 +291,7 @@ describe("useLeads Hook", () => {
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
         expect(result.current.data).toBeDefined();
-        expect(result.current.data?.assigned_count).toBe(3);
+        expect(result.current.data?.successful).toBe(3);
       });
     });
 

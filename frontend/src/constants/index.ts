@@ -23,6 +23,7 @@ export {
   getLeadScoreTextColor,
   getLeadScoreLabel,
   getLeadScoreLabelShort,
+  getEducationLevelLabel,
   isComplexStatus,
   isSchedulableStatus,
 } from "./lead.constants";

@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
-import { getLeadScoreTextColor } from "@/constants";
+import { getLeadScoreTextColor, getEducationLevelLabel } from "@/constants";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
 interface LeadDetailSheetProps {
@@ -148,12 +148,14 @@ export function LeadDetailSheet({
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-3 text-sm">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <a href={`mailto:${lead.email}`} className="hover:underline">
-                  {lead.email}
-                </a>
-              </div>
+              {lead.email && (
+                <div className="flex items-center gap-3 text-sm">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <a href={`mailto:${lead.email}`} className="hover:underline">
+                    {lead.email}
+                  </a>
+                </div>
+              )}
               {lead.location && (
                 <div className="flex items-center gap-3 text-sm">
                   <MapPin className="h-4 w-4 text-muted-foreground" />
@@ -163,8 +165,8 @@ export function LeadDetailSheet({
               {lead.education_level && (
                 <div className="flex items-center gap-3 text-sm">
                   <GraduationCap className="h-4 w-4 text-muted-foreground" />
-                  <span className="capitalize">
-                    {lead.education_level.replace(/_/g, " ")}
+                  <span>
+                    {getEducationLevelLabel(lead.education_level)}
                     {lead.gpa && ` (GPA: ${lead.gpa})`}
                   </span>
                 </div>

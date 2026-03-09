@@ -11,6 +11,7 @@ import type {
   LeadUpdate,
   AssignLead,
   BulkAssignLeads,
+  BulkAssignResult,
   LeadAction,
   LeadsPage,
   LeadListParams,
@@ -141,33 +142,27 @@ export async function getReassignQuota(): Promise<ReassignQuota> {
 }
 
 /**
- * Bulk assign leads to officer(s)
- * Admin only endpoint
+ * Bulk assign leads to a specific officer
+ * Sends officer_id as query param, lead_ids in request body
  *
- * @throws {AxiosError} 403 if not admin
+ * @throws {AxiosError} 403 if not admin/manager
  *
  * @example
  * ```ts
- * // Auto-assign
- * await leadsApi.bulkAssignLeads({
- *   lead_ids: [1, 2, 3, 4, 5],
- *   method: 'automatic'
- * })
- *
- * // Manual assign to specific officer
  * await leadsApi.bulkAssignLeads({
  *   lead_ids: [1, 2, 3],
  *   officer_id: 5,
- *   method: 'manual'
  * })
  * ```
  */
 export async function bulkAssignLeads(
   data: BulkAssignLeads
-): Promise<{ message: string; assigned_count: number }> {
-  const response = await api.post<{ message: string; assigned_count: number }>(
-    '/api/admin/leads/bulk-assign',
-    data
+): Promise<BulkAssignResult> {
+  if (!data.officer_id) throw new Error("officer_id is required for bulk assign");
+  const response = await api.post<BulkAssignResult>(
+    '/api/leads/bulk-assign',
+    { lead_ids: data.lead_ids },
+    { params: { officer_id: data.officer_id } }
   )
   return response.data
 }

@@ -130,11 +130,14 @@ export const leadHandlers = [
   }),
 
   // Bulk assign leads
-  http.post(`${API_BASE_URL}/api/admin/leads/bulk-assign`, async ({ request }) => {
+  http.post(`${API_BASE_URL}/api/leads/bulk-assign`, async ({ request }) => {
     const body = (await request.json()) as { lead_ids: number[] };
     return HttpResponse.json({
-      message: `${body.lead_ids.length} leads assigned successfully`,
-      assigned_count: body.lead_ids.length,
+      total: body.lead_ids.length,
+      successful: body.lead_ids.length,
+      failed: 0,
+      assigned_lead_ids: body.lead_ids,
+      errors: [],
     });
   }),
 

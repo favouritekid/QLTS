@@ -12,6 +12,7 @@ import type {
   LeadListParams,
   AssignLead,
   BulkAssignLeads,
+  BulkAssignResult,
   LeadAction,
   LeadImportResult,
   TimelineItem,
@@ -500,7 +501,7 @@ export function useBulkAssignLeads() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    { message: string; assigned_count: number },
+    BulkAssignResult,
     AxiosError<ApiErrorResponse>,
     BulkAssignLeads
   >({
@@ -509,9 +510,10 @@ export function useBulkAssignLeads() {
     },
 
     onSuccess: (result) => {
-      toast.success("Bulk assignment successful!", {
-        description: `${result.assigned_count} leads assigned`,
-      });
+      toast.success(`Phân công thành công ${result.successful}/${result.total} lead`);
+      if (result.failed > 0) {
+        toast.warning(`${result.failed} lead không thể phân công`);
+      }
 
       // Invalidate lead lists and pipeline — don't wipe individual lead details
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
@@ -525,8 +527,8 @@ export function useBulkAssignLeads() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to bulk assign leads";
-      toast.error("Error", { description: message });
+            : "Phân công hàng loạt thất bại";
+      toast.error("Lỗi phân công", { description: message });
     },
   });
 }
@@ -570,8 +572,8 @@ export function useBulkUpdateLeadsStage() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to update leads stage";
-      toast.error("Error", { description: message });
+            : "Cập nhật giai đoạn thất bại";
+      toast.error("Lỗi cập nhật", { description: message });
     },
   });
 }
@@ -614,8 +616,8 @@ export function useBulkDeleteLeads() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to delete leads";
-      toast.error("Error", { description: message });
+            : "Xóa hàng loạt thất bại";
+      toast.error("Lỗi xóa", { description: message });
     },
   });
 }
@@ -719,7 +721,7 @@ export function useAddConsultation() {
     },
 
     onSuccess: async (_consultation, { leadId }) => {
-      toast.success("Consultation added successfully!");
+      toast.success("Ghi nhận tư vấn thành công!");
 
       // ✅ FIX: Invalidate queries with exact: true to prevent cascade
       // Using invalidateQueries instead of refetchQueries to let React Query
@@ -757,8 +759,8 @@ export function useAddConsultation() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to add consultation";
-      toast.error("Error", { description: message });
+            : "Thêm tư vấn thất bại";
+      toast.error("Lỗi tư vấn", { description: message });
     },
   });
 }
@@ -789,7 +791,7 @@ export function useUpdateConsultation() {
     },
 
     onSuccess: async (_consultation, { leadId, data }) => {
-      toast.success("Consultation updated successfully!");
+      toast.success("Cập nhật tư vấn thành công!");
 
       // ✅ FIX: Use invalidateQueries with exact: true to prevent cascade
       await queryClient.invalidateQueries({
@@ -819,8 +821,8 @@ export function useUpdateConsultation() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Failed to update consultation";
-      toast.error("Error", { description: message });
+            : "Cập nhật tư vấn thất bại";
+      toast.error("Lỗi cập nhật", { description: message });
     },
   });
 }
@@ -902,8 +904,8 @@ export function useDeleteConsultation() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to delete consultation";
-      toast.error("Error", { description: message });
+            : "Xóa tư vấn thất bại";
+      toast.error("Lỗi xóa", { description: message });
     },
   });
 }
@@ -952,7 +954,7 @@ export function useRestoreConsultation() {
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : "Không thể khôi phục ghi nhận tư vấn";
-      toast.error("Error", { description: message });
+      toast.error("Lỗi khôi phục", { description: message });
     },
   });
 }
@@ -980,8 +982,8 @@ export function useImportLeads() {
     },
 
     onSuccess: (result) => {
-      toast.success("Import completed!", {
-        description: `${result.successful_imports} leads imported, ${result.failed_imports} failed`,
+      toast.success("Nhập dữ liệu thành công!", {
+        description: `${result.successful_imports} lead đã nhập, ${result.failed_imports} thất bại`,
       });
 
       // Invalidate all lead lists
@@ -996,8 +998,8 @@ export function useImportLeads() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to import leads";
-      toast.error("Error", { description: message });
+            : "Nhập dữ liệu thất bại";
+      toast.error("Lỗi nhập dữ liệu", { description: message });
     },
   });
 }
@@ -1081,8 +1083,8 @@ export function useExportLeads() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      toast.success("Export successful!", {
-        description: "File downloaded",
+      toast.success("Xuất dữ liệu thành công!", {
+        description: "File đã được tải về",
       });
     },
 
@@ -1091,8 +1093,8 @@ export function useExportLeads() {
       const message =
         typeof detail === "string"
           ? detail
-          : "Failed to export leads";
-      toast.error("Error", { description: message });
+          : "Xuất dữ liệu thất bại";
+      toast.error("Lỗi xuất dữ liệu", { description: message });
     },
   });
 }

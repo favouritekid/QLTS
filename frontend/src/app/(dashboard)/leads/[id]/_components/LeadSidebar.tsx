@@ -34,7 +34,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { DynamicColorBadge, ColorDot } from "@/components/ui/dynamic-color-badge";
 import { STAGE_COLORS } from "@/types/pipeline.types";
-import { LEAD_SOURCE_OPTIONS, getLeadScoreColor, getLeadScoreLabel } from "@/constants";
+import { LEAD_SOURCE_OPTIONS, getLeadScoreColor, getLeadScoreLabel, getEducationLevelLabel } from "@/constants";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import type { Lead, TimelineItem } from "@/types/lead.types";
 
@@ -53,19 +53,6 @@ const getInitials = (name: string) => {
     .join("")
     .toUpperCase()
     .slice(0, 2);
-};
-
-const getEducationLevelLabel = (level: string | null | undefined) => {
-  if (!level) return null;
-  const labels: Record<string, string> = {
-    high_school: "THPT",
-    diploma: "Trung cấp/Cao đẳng",
-    bachelor: "Đại học",
-    master: "Thạc sĩ",
-    phd: "Tiến sĩ",
-    other: "Khác",
-  };
-  return labels[level] || level;
 };
 
 const getSourceLabel = (source: string | null | undefined) => {

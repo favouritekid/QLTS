@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils";
 import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { AuditLogTimeline } from "@/components/audit/AuditLogTimeline";
-import { LEAD_SOURCE_OPTIONS } from "@/constants";
+import { LEAD_SOURCE_OPTIONS, getEducationLevelLabel } from "@/constants";
 import type { Lead, TimelineItem } from "@/types/lead.types";
 
 interface LeadInfoTabsProps {
@@ -54,19 +54,6 @@ const tabs: { id: TabId; label: string }[] = [
 ];
 
 // Helper functions
-const getEducationLevelLabel = (level: string | null | undefined) => {
-  if (!level) return "N/A";
-  const labels: Record<string, string> = {
-    high_school: "THPT",
-    diploma: "Trung cấp/Cao đẳng",
-    bachelor: "Đại học",
-    master: "Thạc sĩ",
-    phd: "Tiến sĩ",
-    other: "Khác",
-  };
-  return labels[level] || level;
-};
-
 const getSourceLabel = (source: string | null | undefined) => {
   if (!source) return "N/A";
   return LEAD_SOURCE_OPTIONS.find((o) => o.value === source)?.label || source;

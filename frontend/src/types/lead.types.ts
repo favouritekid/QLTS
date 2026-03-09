@@ -197,9 +197,19 @@ export interface AssignLead {
  */
 export interface BulkAssignLeads {
   lead_ids: number[];
-  officer_id?: number; // If not provided, use auto-assignment
-  method?: AssignmentMethod;
+  officer_id: number;
   reason?: string;
+}
+
+/**
+ * Bulk assignment result from backend
+ */
+export interface BulkAssignResult {
+  total: number;
+  successful: number;
+  failed: number;
+  assigned_lead_ids: number[];
+  errors: Array<{ lead_id: number; error: string }>;
 }
 
 /**

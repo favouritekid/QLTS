@@ -208,6 +208,30 @@ export const getLeadScoreLabelShort = (score: number): string => {
 };
 
 // =============================================================================
+// EDUCATION LEVEL LABELS (Canonical — use everywhere)
+// =============================================================================
+// DO NOT duplicate this logic in components — import from here.
+
+import type { EducationLevel } from "@/types/lead.types";
+
+const EDUCATION_LEVEL_LABELS: Record<string, string> = {
+  high_school: "THPT",
+  diploma: "Trung cấp/Cao đẳng",
+  bachelor: "Đại học",
+  master: "Thạc sĩ",
+  phd: "Tiến sĩ",
+  other: "Khác",
+};
+
+/**
+ * Get Vietnamese label for education level
+ */
+export const getEducationLevelLabel = (level: EducationLevel | string | null | undefined): string | null => {
+  if (!level) return null;
+  return EDUCATION_LEVEL_LABELS[level] || level;
+};
+
+// =============================================================================
 // LEAD VALIDITY OPTIONS (CTV System)
 // =============================================================================
 

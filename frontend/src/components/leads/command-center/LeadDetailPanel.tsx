@@ -50,6 +50,7 @@ import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultation
 import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
+import { getEducationLevelLabel } from "@/constants";
 import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
 import type { Lead } from "@/types/lead.types";
 
@@ -98,18 +99,6 @@ const getInitials = (name: string) => {
     .join("")
     .toUpperCase()
     .slice(0, 2);
-};
-
-const getEducationLevelLabel = (level: string) => {
-  const labels: Record<string, string> = {
-    high_school: "Trung học phổ thông",
-    diploma: "Cao đẳng",
-    bachelor: "Cử nhân",
-    master: "Thạc sĩ",
-    phd: "Tiến sĩ",
-    other: "Khác",
-  };
-  return labels[level] || level;
 };
 
 export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
@@ -420,7 +409,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     <div 
                       className={cn(
                         "h-full rounded-full transition-[width] duration-500",
-                        lead.lead_score >= 70 ? "bg-success-500" : lead.lead_score >= 40 ? "bg-info-500" : "bg-muted-foreground/50"
+                        lead.lead_score >= 70 ? "bg-success-500" : lead.lead_score >= 50 ? "bg-info-500" : lead.lead_score >= 30 ? "bg-warning-500" : "bg-muted-foreground/50"
                       )}
                       style={{ width: `${Math.min(lead.lead_score, 100)}%` }}
                     />

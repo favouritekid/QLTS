@@ -238,6 +238,28 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      // Validate file size (max 10MB)
+      const MAX_FILE_SIZE = 10 * 1024 * 1024;
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error("Tệp quá lớn (tối đa 10MB)");
+        event.target.value = "";
+        return;
+      }
+
+      // Validate file type (.csv, .xlsx)
+      const allowedTypes = [
+        "text/csv",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+      ];
+      const allowedExtensions = [".csv", ".xlsx", ".xls"];
+      const fileExtension = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+      if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExtension)) {
+        toast.error("Chỉ chấp nhận tệp CSV hoặc Excel");
+        event.target.value = "";
+        return;
+      }
+
       importMutation.mutate(file);
       event.target.value = "";
     }
