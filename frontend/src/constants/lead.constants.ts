@@ -197,6 +197,16 @@ export const getLeadScoreLabel = (score: number): string => {
   return "Rất thấp";
 };
 
+/**
+ * Get short score label (for compact badges)
+ */
+export const getLeadScoreLabelShort = (score: number): string => {
+  if (score >= 70) return "Cao";
+  if (score >= 50) return "TB";
+  if (score >= 30) return "Thấp";
+  return "Yếu";
+};
+
 // =============================================================================
 // LEAD VALIDITY OPTIONS (CTV System)
 // =============================================================================

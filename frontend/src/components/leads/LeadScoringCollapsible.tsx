@@ -17,7 +17,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getLeadScoreTextColor } from "@/constants";
+import { getLeadScoreTextColor, getLeadScoreLabelShort } from "@/constants";
 import type { Lead, LeadInsights } from "@/types/lead.types";
 
 interface LeadScoringCollapsibleProps {
@@ -27,12 +27,6 @@ interface LeadScoringCollapsibleProps {
   className?: string;
 }
 
-const getScoreLabel = (score: number) => {
-  if (score >= 70) return "Cao";
-  if (score >= 50) return "TB";
-  if (score >= 30) return "Thấp";
-  return "Yếu";
-};
 
 // Mini score badge component
 function ScoreBadge({
@@ -108,7 +102,7 @@ export function LeadScoringCollapsible({
               <TrendingUp className="h-3 w-3" />
               {overallScore}
               <span className="text-[10px] font-normal opacity-80">
-                ({getScoreLabel(overallScore)})
+                ({getLeadScoreLabelShort(overallScore)})
               </span>
             </div>
           </div>
@@ -133,7 +127,7 @@ export function LeadScoringCollapsible({
               </div>
             </div>
             <div className="text-right">
-              <p className="text-sm font-medium">{getScoreLabel(overallScore)}</p>
+              <p className="text-sm font-medium">{getLeadScoreLabelShort(overallScore)}</p>
               <p className="text-xs opacity-70">
                 {lead.is_hot_lead ? "Hot Lead" : "Lead thường"}
               </p>
