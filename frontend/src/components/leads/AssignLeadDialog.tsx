@@ -130,9 +130,9 @@ export function AssignLeadDialog({
 
   const isSubmitting = assignMutation.isPending || bulkAssignMutation.isPending;
 
-  // Filter users to get only officers/admins
+  // Filter users to get only officers (backend rejects non-officer assignments)
   const officers = usersData?.users?.filter(
-    (user) => user.role === "officer" || user.role === "admin" // architecture-allow legacy
+    (user) => user.role === "officer"
   ) || [];
 
   return (

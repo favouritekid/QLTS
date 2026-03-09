@@ -1900,6 +1900,7 @@ async def assign_lead_manually(
 
             # Lưu trạng thái cũ
             old_state = _get_current_lead_state(lead)
+            old_officer_id = lead.assigned_officer_id
 
             # Cập nhật Lead
             lead.assigned_officer_id = officer.id
@@ -1911,14 +1912,20 @@ async def assign_lead_manually(
             officer.last_assigned_at = datetime.now(timezone.utc)
             db.add(officer)  # Đánh dấu officer là dirty
 
-            # Tạo Assignment Log
-            log_reason = f"Manually assigned by {assigner.role} {assigner.username}"
+            # Tạo Assignment Log (distinguish initial assignment vs reassignment)
+            is_reassignment = old_officer_id is not None and old_officer_id != officer_id
+            log_method = "manual_reassignment" if is_reassignment else "manual"
+            log_reason = (
+                f"Reassigned from officer #{old_officer_id} to #{officer_id} by {assigner.role} {assigner.username}"
+                if is_reassignment
+                else f"Manually assigned by {assigner.role} {assigner.username}"
+            )
             log_entry = models.AssignmentLog(
                 lead_id=lead_id,
                 officer_id=officer_id,
-                method="manual",
+                method=log_method,
                 reason=log_reason,
-                timestamp=datetime.now(timezone.utc),  # Thêm timestamp
+                timestamp=datetime.now(timezone.utc),
             )
             db.add(lead)  # Đánh dấu lead là dirty
             db.add(log_entry)
@@ -2527,7 +2534,12 @@ async def update_consultation(
                     )
 
                 # 4. Phải trong vòng 24 giờ kể từ khi tạo
-                consultation_age = datetime.now(timezone.utc) - (consultation.created_at or consultation.consultation_date)
+                edit_window_anchor = consultation.created_at or consultation.consultation_date
+                if not edit_window_anchor:
+                    raise PermissionDeniedError(
+                        detail="Không thể xác định thời gian tạo consultation, liên hệ admin."
+                    )
+                consultation_age = datetime.now(timezone.utc) - edit_window_anchor
                 if consultation_age.total_seconds() > 24 * 60 * 60:  # 24 hours in seconds
                     raise PermissionDeniedError(
                         detail="Ngoài giờ không được chỉnh sửa, hãy liên hệ admin hoặc manager để nhờ hỗ trợ."
@@ -3931,6 +3943,9 @@ async def restore_lead(
                 .values(deleted_at=None)
             )
             consultations_restored = consultation_update_result.rowcount
+
+            # Flush to ensure restored consultations are visible to subsequent queries
+            await db.flush()
 
             # Clear deleted_at to restore the lead
             lead.deleted_at = None
