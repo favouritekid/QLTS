@@ -135,13 +135,13 @@ def compute_derived_kpis(
             "consultation_effectiveness": None,
         }
 
-    # M_t = 0 → no enrollment target → counts are 0, rates are NULL
+    # M_t = 0 → no enrollment target → daily=0, rates=NULL, effectiveness=floor
     if m_t == 0:
         return {
             "consultations_daily": 0,
             "conversion_rate": None,
             "win_rate": None,
-            "consultation_effectiveness": None,
+            "consultation_effectiveness": Decimal(str(DEFAULT_CONSULTATION_EFFECTIVENESS_FLOOR)),
         }
 
     # L_t default = 6 * M_t, C_t default = 3 * M_t
@@ -181,10 +181,14 @@ async def create_plan(
     sla_target: float = 85.0,
     response_time_target: float = 2.0,
     seasonal_weights: Optional[List[float]] = None,
+    officer_id: Optional[int] = None,
     created_by: Optional[int] = None,
 ) -> Tuple[KpiPlan, Callback]:
     """
     Create a new KPI plan and auto-generate 12 KpiPlanMonth records.
+
+    officer_id=None → unit plan (baseline for all officers without own plan).
+    officer_id=N → officer-specific plan (overrides unit plan for that officer).
 
     Validates inputs, distributes M_t via Largest Remainder, computes derived KPIs.
     Service does NOT commit — caller (router) commits.
@@ -205,23 +209,29 @@ async def create_plan(
         weights_list = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
         weights_json = None  # NULL = use defaults
 
-    # --- Check duplicate active plan ---
-    existing = await db.execute(
-        select(KpiPlan.id).where(
-            KpiPlan.unit_id == unit_id,
-            KpiPlan.fiscal_year == fiscal_year,
-            KpiPlan.is_active == True,  # noqa: E712
-            KpiPlan.officer_id.is_(None),  # unit plan check
-        )
-    )
+    # --- Check duplicate active plan (scope-aware) ---
+    dup_filters = [
+        KpiPlan.unit_id == unit_id,
+        KpiPlan.fiscal_year == fiscal_year,
+        KpiPlan.is_active == True,  # noqa: E712
+    ]
+    if officer_id is None:
+        dup_filters.append(KpiPlan.officer_id.is_(None))
+        scope_label = f"unit plan (unit_id={unit_id})"
+    else:
+        dup_filters.append(KpiPlan.officer_id == officer_id)
+        scope_label = f"officer plan (unit_id={unit_id}, officer_id={officer_id})"
+
+    existing = await db.execute(select(KpiPlan.id).where(*dup_filters))
     if existing.scalar_one_or_none() is not None:
         raise DuplicateResourceError(
-            f"Active unit plan already exists for unit_id={unit_id}, fiscal_year={fiscal_year}"
+            f"Active {scope_label} already exists for fiscal_year={fiscal_year}"
         )
 
     # --- Create plan ---
     plan = KpiPlan(
         unit_id=unit_id,
+        officer_id=officer_id,
         fiscal_year=fiscal_year,
         annual_enrollment_target=annual_target,
         sla_target=Decimal(str(sla_target)),
