@@ -1,7 +1,11 @@
 # app/models/config.py
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, Integer, Numeric, String, text
+from sqlalchemy import (
+    JSON, BigInteger, Boolean, Column, CheckConstraint, Date, DateTime,
+    ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -605,4 +609,147 @@ class ConfigSubjectGroup(Base):
 
     def __repr__(self):
         return f"<ConfigSubjectGroup {self.code}: {self.name}>"
+
+
+# =============================================================================
+# KPI PLANNING MODELS (Phase A1)
+# =============================================================================
+
+class KpiPlan(Base):
+    """
+    KPI Planning — reverse-funnel from annual target to 7 monthly KPIs + 1 annual KPI.
+    Always scoped to a unit (unit_id NOT NULL). officer_id NULL = unit plan.
+    """
+    __tablename__ = "kpi_plan"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    unit_id = Column(
+        Integer,
+        ForeignKey("organization_unit.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Required — no global plans"
+    )
+    officer_id = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        comment="NULL = unit plan"
+    )
+    fiscal_year = Column(Integer, nullable=False)
+
+    # Anchor input
+    annual_enrollment_target = Column(Integer, nullable=False)
+
+    # Guardrails (plan-level, same for all 12 months)
+    sla_target = Column(Numeric(5, 2), nullable=False, server_default="85.00")
+    response_time_target = Column(Numeric(5, 2), nullable=False, server_default="2.00")
+
+    # Seasonal weights (JSONB array of 12 floats, sum ≈ 1.0)
+    seasonal_weights = Column(JSONB, nullable=True, comment="NULL = use DEFAULT_ENROLLMENT_WEIGHTS")
+
+    # Meta
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
+
+    # Relationships
+    unit = relationship("OrganizationUnit", foreign_keys=[unit_id])
+    officer = relationship("User", foreign_keys=[officer_id])
+    creator = relationship("User", foreign_keys=[created_by])
+    months = relationship("KpiPlanMonth", back_populates="plan", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index(
+            'uix_kpi_plan_active_unit',
+            'unit_id', 'fiscal_year',
+            unique=True,
+            postgresql_where=text("is_active = true AND officer_id IS NULL"),
+        ),
+        Index(
+            'uix_kpi_plan_active_officer',
+            'unit_id', 'officer_id', 'fiscal_year',
+            unique=True,
+            postgresql_where=text("is_active = true AND officer_id IS NOT NULL"),
+        ),
+    )
+
+    def __repr__(self):
+        scope = f"officer={self.officer_id}" if self.officer_id else f"unit={self.unit_id}"
+        return f"<KpiPlan {self.fiscal_year} target={self.annual_enrollment_target} ({scope})>"
+
+
+class KpiPlanMonth(Base):
+    """Monthly breakdown of KPI plan with derived targets and actuals."""
+    __tablename__ = "kpi_plan_month"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    plan_id = Column(Integer, ForeignKey("kpi_plan.id", ondelete="CASCADE"), nullable=False, index=True)
+    month = Column(Integer, nullable=False)
+
+    # Distributable inputs
+    enrollment_target = Column(Integer, nullable=False, comment="M_t")
+    working_days = Column(Integer, nullable=False, server_default="0", comment="WD_t")
+    weight = Column(Numeric(6, 4), nullable=False)
+
+    # Historical factors
+    k_factor = Column(Numeric(6, 2), nullable=False, server_default="7.00")
+    lead_forecast = Column(Integer, nullable=True, comment="L_t (NULL = 6*M_t)")
+    close_forecast = Column(Integer, nullable=True, comment="C_t (NULL = 3*M_t)")
+
+    # Derived KPI targets (nullable — NULL when not computable)
+    consultations_daily = Column(Integer, nullable=True)
+    conversion_rate = Column(Numeric(6, 2), nullable=True)
+    win_rate = Column(Numeric(6, 2), nullable=True)
+    consultation_effectiveness = Column(Numeric(6, 2), nullable=True)
+
+    # Per-field override tracking
+    overridden_fields = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    override_reason = Column(Text, nullable=True)
+    overridden_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    overridden_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Actuals (filled by sync job at month end)
+    actual_enrollments = Column(Integer, nullable=True)
+    actual_consultations_avg = Column(Numeric(6, 2), nullable=True)
+    actual_conversion_rate = Column(Numeric(6, 2), nullable=True)
+    actual_win_rate = Column(Numeric(6, 2), nullable=True)
+    actual_consultation_effectiveness = Column(Numeric(6, 2), nullable=True)
+    actual_sla_compliance_rate = Column(Numeric(6, 2), nullable=True)
+
+    # Audit
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
+
+    # Relationships
+    plan = relationship("KpiPlan", back_populates="months")
+    override_user = relationship("User", foreign_keys=[overridden_by])
+
+    __table_args__ = (
+        CheckConstraint("month BETWEEN 1 AND 12", name="ck_kpi_plan_month_range"),
+        UniqueConstraint("plan_id", "month", name="uq_kpi_plan_month_plan_month"),
+    )
+
+    def __repr__(self):
+        return f"<KpiPlanMonth plan={self.plan_id} month={self.month} M_t={self.enrollment_target}>"
+
+
+class HolidayCalendar(Base):
+    """Holiday calendar for working days calculation (T2-T7 minus holidays)."""
+    __tablename__ = "holiday_calendar"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, unique=True)
+    name = Column(String(200), nullable=False)
+    year = Column(Integer, nullable=False, index=True)
+    is_recurring = Column(Boolean, nullable=False, server_default="false",
+                          comment="TRUE = repeats yearly (1/1, 30/4); FALSE = lunar/one-off")
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
+
+    creator = relationship("User", foreign_keys=[created_by])
+
+    def __repr__(self):
+        return f"<Holiday {self.date} {self.name}>"
 

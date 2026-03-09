@@ -11,8 +11,11 @@ from .config import (
     ConfigOfferingType,
     ConfigSubjectGroup,  # Phase 6: Admission Scoring
     ConfigSystemCategory,
+    HolidayCalendar,  # A1: KPI Planning
     KpiConfig,
     KpiMonthlySnapshot,
+    KpiPlan,  # A1: KPI Planning
+    KpiPlanMonth,  # A1: KPI Planning
     KpiTarget,
     LeadScoringConfig,
     OfficerAssignmentConfig,
@@ -26,7 +29,7 @@ from .collaborator import Collaborator, LeadClaim
 from .commission import CommissionPolicy, CommissionRecord
 
 # Lead management models
-from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
+from .lead import Application, AssignmentDecisionLog, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 
 # Admission models (NEW: Replacement for Application)
@@ -123,8 +126,11 @@ __all__ = [
     "ConfigOfferingType",
     "ConfigSubjectGroup",  # Phase 6: Admission Scoring
     "ConfigSystemCategory",
+    "HolidayCalendar",  # A1: KPI Planning
     "KpiConfig",
     "KpiMonthlySnapshot",
+    "KpiPlan",  # A1: KPI Planning
+    "KpiPlanMonth",  # A1: KPI Planning
     "KpiTarget",
     "LeadScoringConfig",
     "OfficerAssignmentConfig",
@@ -137,6 +143,7 @@ __all__ = [
     "CommissionRecord",
     # Lead
     "Application",
+    "AssignmentDecisionLog",  # A1: KPI Planning instrumentation
     "AssignmentLog",
     "Consultation",
     "CRMInteraction",

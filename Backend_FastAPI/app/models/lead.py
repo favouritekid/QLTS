@@ -2,7 +2,8 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -389,3 +390,32 @@ class AssignmentLog(Base):
         "User", back_populates="assignment_logs_involved", foreign_keys=[officer_id]
     )
     lead = relationship("Lead", back_populates="assignment_logs")
+
+
+class AssignmentDecisionLog(Base):
+    """Assignment decision log for fairness analysis (v2.1 prep)."""
+    __tablename__ = "assignment_decision_log"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    lead_id = Column(Integer, ForeignKey("lead.id", ondelete="CASCADE"), nullable=False, index=True)
+    assigned_officer_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)
+    decision_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    # Context snapshot
+    eligible_officer_ids = Column(ARRAY(Integer), nullable=False)
+    channel = Column(String(50), nullable=True)
+    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=True)
+
+    # Scoring factors (snapshot, no FK)
+    scores_snapshot = Column(JSONB, nullable=True)
+    capacity_snapshot = Column(JSONB, nullable=True)
+
+    # Result
+    reason = Column(String(200), nullable=True)
+
+    # Relationships
+    lead = relationship("Lead", foreign_keys=[lead_id])
+    assigned_officer = relationship("User", foreign_keys=[assigned_officer_id])
+
+    def __repr__(self):
+        return f"<AssignmentDecisionLog lead={self.lead_id} officer={self.assigned_officer_id}>"
