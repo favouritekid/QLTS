@@ -16,6 +16,7 @@ import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { format, isToday, isPast, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import type { Lead, LeadStatus } from "@/types/lead.types";
+import { getLeadStatusLabel } from "@/constants";
 
 // Activity status helpers
 type ActivityStatus = "overdue" | "today" | "future" | "none";
@@ -184,7 +185,7 @@ export const LeadCard = React.memo(function LeadCard({
                 getStatusColor(lead.status as LeadStatus)
               )}
             />
-            {lead.status}
+            {getLeadStatusLabel(lead.status as LeadStatus)}
           </Badge>
 
           {/* Consultation Status Badge */}

@@ -10,7 +10,8 @@ import { Mail, Phone, TrendingUp, User, Eye, GripVertical } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Lead } from "@/types/lead.types";
+import type { Lead, LeadSource } from "@/types/lead.types";
+import { getLeadSourceLabel } from "@/constants";
 
 interface LeadKanbanCardProps {
   lead: Lead;
@@ -120,14 +121,18 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
           <div className="flex items-center justify-between pt-2 border-t">
             <div className="flex items-center gap-2">
               <Badge variant="outline" className={`text-xs ${getSourceColor(lead.source)}`}>
-                {lead.source.replace(/_/g, " ")}
+                {getLeadSourceLabel(lead.source as LeadSource)}
               </Badge>
-              {lead.assigned_officer_id && (
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <User className="h-3 w-3" />
-                  <span>#{lead.assigned_officer_id}</span>
-                </div>
-              )}
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <User className="h-3 w-3" />
+                <span>
+                  {lead.assigned_officer?.full_name
+                    ? lead.assigned_officer.full_name
+                    : lead.assigned_officer_id
+                      ? `#${lead.assigned_officer_id}`
+                      : "Chưa phân công"}
+                </span>
+              </div>
             </div>
             <Button
               variant="ghost"
@@ -146,7 +151,7 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
           {/* Time indicator - hydration safe */}
           {daysInPipeline !== null && (
             <div className="text-xs text-muted-foreground">
-              {daysInPipeline} days in pipeline
+              {daysInPipeline} ngày trong pipeline
             </div>
           )}
         </CardContent>

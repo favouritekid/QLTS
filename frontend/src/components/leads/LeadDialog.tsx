@@ -163,7 +163,15 @@ function ValidationIndicator({
   state: "idle" | "checking" | "valid" | "invalid";
   message: string | null;
 }) {
-  if (state === "idle") return null;
+  if (state === "idle" && !message) return null;
+  if (state === "idle" && message) {
+    return (
+      <div className="flex items-center gap-1.5 mt-1" role="status" aria-live="polite">
+        <Info className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+        <span className="text-xs text-muted-foreground">{message}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-1.5 mt-1" role="status" aria-live="polite">
@@ -823,7 +831,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
-                              <SelectItem value="0">Chưa xác định</SelectItem>
+                              <SelectItem value="0">Xa</SelectItem>
                               <SelectItem value="1">Lân cận (+2đ)</SelectItem>
                               <SelectItem value="2">Gần (+5đ)</SelectItem>
                             </SelectContent>

@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from .collaborator import CollaboratorShallow
 from .organization import ProgramOffering, OrganizationUnitShallow
@@ -265,6 +265,18 @@ class LeadUpdate(BaseModel):
             return None
         return v
 
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def validate_full_name(cls, v):
+        """Strip whitespace and reject empty string for full_name."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v = v.strip()
+            if v == "":
+                raise ValueError("Họ tên không được để trống")
+        return v
+
     @field_validator("phone", "phone2", mode="before")
     @classmethod
     def normalize_and_validate_phone(cls, v, info):
@@ -273,28 +285,37 @@ class LeadUpdate(BaseModel):
         All fields optional on update, so None is always allowed.
         """
         from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
-        
+
         # Allow None for all fields on update
         if v is None:
             return None
-        
-        # Allow empty string, convert to None
+
+        # For primary phone, reject empty string instead of coercing to None
         if isinstance(v, str) and v.strip() == "":
+            if info.field_name == "phone":
+                raise ValueError("Số điện thoại chính không được để trống")
             return None
-        
+
         # Normalize the phone number
         normalized = normalize_vietnam_phone(v)
         if normalized is None:
             return None
-        
+
         # Validate against Vietnam format
         if not validate_vietnam_phone(normalized, normalize=False):
             raise ValueError(
                 f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
                 f"(VD: 0901234567, +84901234567)"
             )
-        
+
         return normalized
+
+    @model_validator(mode="after")
+    def phone2_must_differ_from_phone(self):
+        """Ensure phone2 is different from phone when both are provided."""
+        if self.phone is not None and self.phone2 is not None and self.phone2 == self.phone:
+            raise ValueError("Số điện thoại phụ phải khác số điện thoại chính")
+        return self
 
 
 class LeadStatusUpdate(BaseModel):

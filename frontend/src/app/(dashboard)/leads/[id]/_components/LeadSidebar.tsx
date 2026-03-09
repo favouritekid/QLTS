@@ -8,8 +8,9 @@
 
 "use client";
 
-import { 
-  Phone, 
+import { useRef } from "react";
+import {
+  Phone,
   Mail, 
   MapPin, 
   GraduationCap, 
@@ -158,9 +159,15 @@ function InfoRow({
 
 export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: LeadSidebarProps) {
   const stageColor = lead.pipeline_stage?.color_code || STAGE_COLORS[lead.pipeline_stage?.id || 0];
-  const daysInPipeline = Math.floor(
-    (new Date().getTime() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-  );
+
+  // L2: Avoid hydration mismatch — computed client-side only via ref to skip cascading renders
+  const daysInPipelineRef = useRef<number | null>(null);
+  if (typeof window !== "undefined" && daysInPipelineRef.current === null) {
+    daysInPipelineRef.current = Math.floor(
+      (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
+    );
+  }
+  const daysInPipeline = daysInPipelineRef.current;
 
   return (
     <div className={cn(
@@ -343,7 +350,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
               <Clock className="h-3 w-3" />
               <span className="text-[10px]">Trong pipeline</span>
             </div>
-            <div className="font-semibold text-sm">{daysInPipeline} ngày</div>
+            <div className="font-semibold text-sm" suppressHydrationWarning>{daysInPipeline ?? "..."} ngày</div>
           </div>
           <div className="bg-background rounded-md p-2 border">
             <div className="flex items-center gap-1 text-muted-foreground mb-0.5">

@@ -28,28 +28,28 @@ export const LeadStats = React.memo(function LeadStats({
 
   const stats = [
     {
-      title: "Tổng số",
+      title: "Tổng số (trang này)",
       value: totalCount,
       icon: Users,
       color: "text-blue-600 dark:text-blue-400",
       bgColor: "bg-blue-100 dark:bg-blue-900/40",
     },
     {
-      title: "Mới",
+      title: "Mới (trang này)",
       value: newLeadsCount,
       icon: UserPlus,
       color: "text-emerald-600 dark:text-emerald-400",
       bgColor: "bg-emerald-100 dark:bg-emerald-900/40",
     },
     {
-      title: "Điểm cao",
+      title: "Điểm cao (trang này)",
       value: highScoreCount,
       icon: Flame,
       color: "text-orange-600 dark:text-orange-400",
       bgColor: "bg-orange-100 dark:bg-orange-900/40",
     },
     {
-      title: "Chuyển đổi",
+      title: "Chuyển đổi (trang này)",
       value: `${conversionRate}%`,
       icon: TrendingUp,
       color: "text-purple-600 dark:text-purple-400",

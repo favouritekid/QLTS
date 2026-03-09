@@ -2,7 +2,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -284,6 +284,8 @@ class Consultation(Base):
     consultation_status_id = Column(
         String(50), ForeignKey("consultation_status.id"), nullable=True, index=True
     )
+    # Record creation timestamp (for 24h edit window calculation)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     # Soft delete support - when parent lead is deleted, consultations are also soft-deleted
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
 

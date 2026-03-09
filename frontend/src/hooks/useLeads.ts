@@ -312,12 +312,18 @@ export function useUpdateLead() {
       // Snapshot the previous value
       const previousLead = queryClient.getQueryData<Lead>(leadsKeys.detail(id));
 
-      // Optimistically update the cache
+      // Optimistically update the cache (only merge scalar fields to avoid corrupting nested objects)
       if (previousLead) {
+        const scalarUpdates: Partial<Lead> = {};
+        for (const [key, value] of Object.entries(data)) {
+          if (value !== undefined && typeof value !== "object") {
+            (scalarUpdates as Record<string, unknown>)[key] = value;
+          }
+        }
         queryClient.setQueryData<Lead>(leadsKeys.detail(id), {
           ...previousLead,
-          ...data,
-        } as Lead);
+          ...scalarUpdates,
+        });
       }
 
       return { previousLead };

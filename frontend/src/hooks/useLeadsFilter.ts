@@ -540,11 +540,15 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     }
     if (dateFrom || dateTo) params.date_field = dateField;
 
+    // === SCORE RANGE FILTER (server-side) ===
+    if (scoreRange[0] > 0) params.score_min = scoreRange[0];
+    if (scoreRange[1] < 100) params.score_max = scoreRange[1];
+
     return params;
   }, [
     page, pageSize, search, statusFilters, sourceFilters, validityFilters,
     offeringFilters, stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
-    sortBy, sortOrder,
+    sortBy, sortOrder, scoreRange,
   ]);
 
   // ==========================================================================

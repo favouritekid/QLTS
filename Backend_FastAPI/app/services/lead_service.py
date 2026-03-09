@@ -179,17 +179,6 @@ async def update_lead_next_activity(
         db: Database session
         lead_id: Lead ID cần update
     """
-    from sqlalchemy import and_
-
-    # Lấy lead
-    lead = await db.get(models.Lead, lead_id)
-    if not lead:
-        log.warning("update_lead_next_activity: Lead not found", lead_id=lead_id)
-        return
-
-    # Tìm scheduled_at sớm nhất chưa reminder
-    now = datetime.now(timezone.utc)
-
     # ✅ REFACTORED: Use LeadRepository
     repo = LeadRepository(db)
     await repo.update_next_activity(lead_id)
@@ -617,6 +606,11 @@ async def get_leads(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     date_field: str = "created_at",
+    # === SCORE RANGE FILTER ===
+    score_min: Optional[int] = None,
+    score_max: Optional[int] = None,
+    # === SELECTIVE EXPORT ===
+    lead_ids: Optional[List[int]] = None,
 ) -> Tuple[int, List[models.Lead]]:
     """
     Lấy danh sách Leads (List View).
@@ -644,6 +638,11 @@ async def get_leads(
         date_from=date_from,
         date_to=date_to,
         date_field=date_field,
+        # === SCORE RANGE FILTER ===
+        score_min=score_min,
+        score_max=score_max,
+        # === SELECTIVE EXPORT ===
+        lead_ids=lead_ids,
     )
 
 
@@ -1517,25 +1516,8 @@ async def update_lead(
         # === POST-COMMIT ACTIONS (Only if transaction succeeded) ===
         _reassign_cb = None
 
-        # 1. Dispatch Celery task for auto-assignment if reassignment was triggered
         if reassignment_triggered:
-            try:
-                from ..celery_utils import process_automatic_lead_assignment_task
-                process_automatic_lead_assignment_task.delay(lead_id)
-                log.info(
-                    "Auto-assignment task dispatched after offering change",
-                    lead_id=lead_id
-                )
-            except Exception as e:
-                log.error(
-                    "Failed to dispatch auto-assignment task after offering change",
-                    lead_id=lead_id,
-                    error=str(e),
-                    exc_info=True
-                )
-                # Don't fail the request - assignment can be done manually
-
-            # 2. Dispatch notification for lead reassignment in savepoint
+            # Dispatch notification for lead reassignment in savepoint (safe for post-commit callback)
             try:
                 async with db.begin_nested():
                     _, _reassign_cb = await dispatch(
@@ -1566,7 +1548,18 @@ async def update_lead(
         async def _post_commit():
             """Execute after router commits the transaction."""
             if _reassign_cb:
-                await _reassign_cb()
+                try:
+                    await _reassign_cb()
+                except Exception:
+                    log.error("Failed to execute reassignment notification callback", lead_id=lead_id, exc_info=True)
+
+            if reassignment_triggered:
+                try:
+                    from ..celery_utils import process_automatic_lead_assignment_task
+                    process_automatic_lead_assignment_task.delay(lead_id)
+                    log.info("Auto-assignment task dispatched after offering change", lead_id=lead_id)
+                except Exception:
+                    log.error("Failed to dispatch auto-assignment task after offering change", lead_id=lead_id, exc_info=True)
 
         # Trả về lead đã được tải đầy đủ (bao gồm relations)
         lead = await get_lead_by_id(db, lead_id)
@@ -1602,9 +1595,9 @@ async def add_consultation(
             if not officer:
                 raise ResourceNotFoundError(f"Officer with id {officer_id} not found.")
 
-            # ✅ FIX: Kiểm tra quyền - Admin có thể thêm consultation cho bất kỳ lead
+            # ✅ FIX: Kiểm tra quyền - Admin và Manager có thể thêm consultation cho bất kỳ lead trong scope
             # Officer phải được gán cho Lead này
-            if officer.role != UserRole.ADMIN:
+            if officer.role not in (UserRole.ADMIN, UserRole.MANAGER):
                 if lead.assigned_officer_id != officer_id:
                     raise PermissionDeniedError(detail="You are not assigned to this lead.")
 
@@ -1713,6 +1706,14 @@ async def add_consultation(
             # Lưu trạng thái Lead cũ
             old_state = _get_current_lead_state(lead)
 
+            # ✅ LOSS REASON VALIDATION: Require loss_reason_code for final negative status
+            # Validate BEFORE mutating lead/consultation state
+            if new_status.is_final and new_status.outcome_type == "negative":
+                if not data.loss_reason_code:
+                    raise BadRequest(
+                        detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
+                    )
+
             # ✅ TERMINAL STATUS GUARD (Issue #3) - Using check result from earlier
             # skip_status_update flag was set by check_terminal_status_guard() above
             if skip_status_update:
@@ -1776,17 +1777,12 @@ async def add_consultation(
             # Thêm các đối tượng vào session
             db.add(new_consultation)
             if new_status.updates_pipeline:
+                # ✅ M9: Increment version when lead state mutates via consultation
+                lead.version = (lead.version or 1) + 1
                 db.add(lead)  # Chỉ đánh dấu lead dirty nếu có thay đổi
 
             # Lấy trạng thái Lead mới
             new_state = _get_current_lead_state(lead)
-
-            # ✅ LOSS REASON VALIDATION: Require loss_reason_code for final negative status
-            if new_status.is_final and new_status.outcome_type == "negative":
-                if not data.loss_reason_code:
-                    raise BadRequest(
-                        detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
-                    )
 
             # Ghi log lịch sử thay đổi trạng thái Lead (chỉ khi có thay đổi thực sự)
             if new_status.updates_pipeline and old_state != new_state:
@@ -2084,6 +2080,16 @@ async def delete_consultation(
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot modify consultations for a deleted lead.")
 
+            # ✅ H4: TERMINAL STATUS GUARD: Block deletion for enrolled leads
+            terminal_guard = await check_terminal_status_guard(db, lead)
+            if terminal_guard.hard_block:
+                raise BusinessRuleViolation(
+                    detail=terminal_guard.reason
+                )
+
+            # Soft terminal: allow deletion but skip status revert
+            skip_status_revert = terminal_guard.is_terminal
+
             # Lấy Consultation cần xóa với row-level lock
             # ✅ FIX: Use FOR UPDATE to prevent concurrent modification
             # ✅ FIX: Filter out already soft-deleted consultations
@@ -2193,16 +2199,25 @@ async def delete_consultation(
                     new_status_id = None
                     new_stage_id = None
 
-            # Cập nhật trạng thái Lead
-            lead.consultation_status_id = new_status_id
-            lead.pipeline_stage_id = new_stage_id
-            # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
-            if revert_status_obj:
-                sync_lead_status_from_consultation(lead, revert_status_obj)
+            if not skip_status_revert:
+                # Cập nhật trạng thái Lead
+                lead.consultation_status_id = new_status_id
+                lead.pipeline_stage_id = new_stage_id
+                # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+                if revert_status_obj:
+                    sync_lead_status_from_consultation(lead, revert_status_obj)
+                else:
+                    # Fallback khi không tìm thấy status object
+                    lead.status = "new"
+                # ✅ M9: Increment version when lead state mutates via consultation delete
+                lead.version = (lead.version or 1) + 1
+                db.add(lead)  # Đánh dấu lead là dirty
             else:
-                # Fallback khi không tìm thấy status object
-                lead.status = "new"
-            db.add(lead)  # Đánh dấu lead là dirty
+                log.warning(
+                    "Terminal guard SOFT BLOCK: skipping lead status revert on consultation delete",
+                    lead_id=lead_id,
+                    current_status_id=lead.consultation_status_id,
+                )
 
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(lead)
@@ -2467,6 +2482,11 @@ async def update_consultation(
                 raise ResourceNotFoundError(
                     detail=f"Consultation with id {consultation_id} not found."
                 )
+            # ✅ H3: Block updating soft-deleted consultation
+            if consultation.deleted_at is not None:
+                raise ResourceNotFoundError(
+                    detail=f"Consultation with id {consultation_id} not found or already deleted."
+                )
             # Kiểm tra consultation thuộc đúng Lead
             if consultation.lead_id != lead_id:
                 raise BadRequest(
@@ -2506,7 +2526,7 @@ async def update_consultation(
                     )
 
                 # 4. Phải trong vòng 24 giờ kể từ khi tạo
-                consultation_age = datetime.now(timezone.utc) - consultation.consultation_date
+                consultation_age = datetime.now(timezone.utc) - (consultation.created_at or consultation.consultation_date)
                 if consultation_age.total_seconds() > 24 * 60 * 60:  # 24 hours in seconds
                     raise PermissionDeniedError(
                         detail="Ngoài giờ không được chỉnh sửa, hãy liên hệ admin hoặc manager để nhờ hỗ trợ."
@@ -3792,12 +3812,10 @@ async def delete_lead(
 
             return lead
 
-    except ResourceNotFoundError:
-        # Lead not found or already deleted
+    except (ResourceNotFoundError, BusinessRuleViolation):
         raise
     except Exception as e:
-        # Rollback on any error
-        await db.rollback()
+        # begin_nested() handles savepoint rollback automatically
         log.error(
             "Failed to delete lead",
             lead_id=lead_id,
@@ -3916,8 +3934,33 @@ async def restore_lead(
             # Clear deleted_at to restore the lead
             lead.deleted_at = None
 
-            # Restore status to a valid state
-            lead.status = "new"  # Default to 'new' status
+            # ✅ H5: Restore status from latest non-deleted consultation (no hardcode "new")
+            repo = LeadRepository(db)
+            latest_consultation = await repo.get_latest_consultation(lead_id)
+            if latest_consultation and latest_consultation.consultation_status_id:
+                latest_status = await db.get(
+                    models.ConsultationStatus, latest_consultation.consultation_status_id
+                )
+                if latest_status:
+                    lead.consultation_status_id = latest_status.id
+                    lead.pipeline_stage_id = latest_status.stage_id
+                    sync_lead_status_from_consultation(lead, latest_status)
+                else:
+                    initial_status = await StatusHelper.get_initial_status(db)
+                    if initial_status:
+                        lead.consultation_status_id = initial_status.id
+                        lead.pipeline_stage_id = initial_status.stage_id
+                        sync_lead_status_from_consultation(lead, initial_status)
+                    else:
+                        lead.status = "new"
+            else:
+                initial_status = await StatusHelper.get_initial_status(db)
+                if initial_status:
+                    lead.consultation_status_id = initial_status.id
+                    lead.pipeline_stage_id = initial_status.stage_id
+                    sync_lead_status_from_consultation(lead, initial_status)
+                else:
+                    lead.status = "new"
 
             # Mark as modified
             db.add(lead)
@@ -3965,7 +4008,7 @@ async def restore_lead(
     except (ResourceNotFoundError, BusinessRuleViolation):
         raise
     except Exception as e:
-        await db.rollback()
+        # ✅ M10: Removed redundant full-session rollback; begin_nested() handles savepoint rollback automatically
         log.error(
             "Failed to restore lead",
             lead_id=lead_id,

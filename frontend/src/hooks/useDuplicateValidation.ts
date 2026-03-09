@@ -160,9 +160,9 @@ export function useDuplicateValidation(
         return;
       }
 
-      // Need unitId for email check
+      // Need unitId for email check — inform user instead of silently skipping
       if (!unitId) {
-        setEmailValidation({ state: "idle", message: null });
+        setEmailValidation({ state: "idle", message: "Chọn đơn vị để kiểm tra email trùng" });
         return;
       }
 

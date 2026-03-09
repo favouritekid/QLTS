@@ -148,7 +148,7 @@ async def update_lead_cache(
     if lead.pipeline_stage_id:
         # Need to check pipeline_stage.is_final
         # For now, check common final stage IDs
-        FINAL_STAGE_IDS = ["stg05", "stg06"]  # Converted, Lost
+        FINAL_STAGE_IDS = ["stg06", "stg07"]  # Enrolled, Lost
         is_final_stage = lead.pipeline_stage_id in FINAL_STAGE_IDS
     
     # 5. Calculate urgency score

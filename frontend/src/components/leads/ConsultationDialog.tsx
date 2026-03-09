@@ -36,6 +36,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { DateTimePicker } from "@/components/common/form";
 
+import { toast } from "sonner";
 import { useAddConsultation, useUpdateConsultation, useLead } from "@/hooks/useLeads";
 import { useAllowedNextStatuses, useConsultationStatuses } from "@/hooks/usePipeline";
 import { useWorkflowContext, getAllowedStatusIds } from "@/hooks/useWorkflowContext";
@@ -223,8 +224,21 @@ export function ConsultationDialog({
 
     if (isCreate) {
       // Create mode: validate required fields
-      if (!data.scheduled_at || !data.status_id) {
-        return; // Let zod validation handle this
+      if (!data.scheduled_at) {
+        form.setError("scheduled_at", {
+          type: "required",
+          message: "Vui lòng chọn ngày giờ hẹn",
+        });
+        toast.error("Vui lòng chọn ngày giờ hẹn");
+        return;
+      }
+      if (!data.status_id) {
+        form.setError("status_id", {
+          type: "required",
+          message: "Vui lòng chọn trạng thái",
+        });
+        toast.error("Vui lòng chọn trạng thái");
+        return;
       }
 
       addMutation.mutate(

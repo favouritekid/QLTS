@@ -96,6 +96,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const [bulkStageDialogOpen, setBulkStageDialogOpen] = useState(false);
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [selectedLeadsForBulk, setSelectedLeadsForBulk] = useState<Lead[]>([]);
+  const [bulkAssignLeadIds, setBulkAssignLeadIds] = useState<number[]>([]);
   const [resetSelectionKey, setResetSelectionKey] = useState(0);
 
   // Ref for file import input
@@ -148,17 +149,12 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     filterState.unitId ||
     filterState.dateFrom ||
     filterState.dateTo
-  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.validityFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.dateFrom, filterState.dateTo]);
+  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.validityFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.unitId, filterState.dateFrom, filterState.dateTo]);
 
-  // Filter leads by score range (client-side)
+  // ✅ Score filtering now done server-side via score_min/score_max params
   const filteredLeads = useMemo(() => {
-    if (!leadsPage?.leads) return [];
-    return leadsPage.leads.filter(
-      (lead) => 
-        lead.lead_score >= filterState.scoreRange[0] && 
-        lead.lead_score <= filterState.scoreRange[1]
-    );
-  }, [leadsPage, filterState.scoreRange]);
+    return leadsPage?.leads ?? [];
+  }, [leadsPage]);
 
   // Auto-clear selectedLeadId if lead is deleted/no longer exists
   useEffect(() => {
@@ -248,7 +244,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   // ✅ Option B: Bulk action handlers with dialogs
   const handleBulkAssign = useCallback((leads: Lead[]) => {
     if (leads.length > 0) {
-      setSelectedLead(leads[0]);
+      setBulkAssignLeadIds(leads.map((l) => l.id));
       setAssignDialogOpen(true);
       toast.info(`Gán ${leads.length} lead cho cán bộ`);
     }
@@ -260,7 +256,11 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   }, []);
 
   const handleBulkExport = useCallback((leads: Lead[]) => {
-    exportMutation.mutate({ format: "csv", filters: apiFilters });
+    const filters = { ...apiFilters };
+    if (leads.length > 0) {
+      filters.lead_ids = leads.map((l) => l.id).join(",");
+    }
+    exportMutation.mutate({ format: "csv", filters });
     toast.success(`Xuất ${leads.length} lead đã chọn`);
   }, [exportMutation, apiFilters]);
 
@@ -547,8 +547,16 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
       <AssignLeadDialog
         open={assignDialogOpen}
-        onOpenChange={setAssignDialogOpen}
+        onOpenChange={(open) => {
+          setAssignDialogOpen(open);
+          if (!open) setBulkAssignLeadIds([]);
+        }}
         lead={selectedLead}
+        leadIds={bulkAssignLeadIds.length > 0 ? bulkAssignLeadIds : undefined}
+        onSuccess={() => {
+          setBulkAssignLeadIds([]);
+          setResetSelectionKey(prev => prev + 1);
+        }}
       />
 
       {/* Single Lead Delete */}

@@ -257,28 +257,78 @@ async def _apply_stage_guard(
 
     SPEC RULE #7:
     If to_status.updates_pipeline = true:
-        to_status.stage_id MUST == lead.pipeline_stage_id
+        to_status.stage.order MUST >= current_stage.order (no backward movement)
+    Non-pipeline statuses (updates_pipeline = false) are always allowed.
     """
     if not current_status_id:
         # New lead - skip stage guard
         return statuses
 
-    # Get current status to know current stage
-    current_status = await db.get(models.ConsultationStatus, current_status_id)
+    # Get current status with its stage eagerly loaded
+    result = await db.execute(
+        select(models.ConsultationStatus)
+        .where(models.ConsultationStatus.id == current_status_id)
+        .options(selectinload(models.ConsultationStatus.stage))
+    )
+    current_status = result.scalar_one_or_none()
     if not current_status:
         log.warning("Current status not found", status_id=current_status_id)
         return statuses
 
     current_stage_id = current_status.stage_id
 
+    # If current status has no stage, we cannot enforce stage ordering
+    if not current_status.stage:
+        log.debug(
+            "Stage guard skipped - current status has no stage",
+            current_status_id=current_status_id
+        )
+        return statuses
+
+    current_stage_order = current_status.stage.order
+
+    # Preload all stage orders we'll need for comparison
+    to_stage_ids = {
+        s.stage_id for s in statuses
+        if s.updates_pipeline and s.stage_id
+    }
+    stage_order_map = {}
+    if to_stage_ids:
+        stage_result = await db.execute(
+            select(models.PipelineStage)
+            .where(models.PipelineStage.id.in_(to_stage_ids))
+        )
+        for stage in stage_result.scalars().all():
+            stage_order_map[stage.id] = stage.order
+
     safe = []
     for to_status in statuses:
-        # ✅ RULE #7: Stage guard for pipeline updates
-        if to_status.updates_pipeline and to_status.stage_id:
-            # Allow same stage or natural progression
-            # For now, we trust the transition table
-            # (Could add additional stage.order progression check here)
-            pass
+        # Non-pipeline statuses (activities, etc.) are never blocked by stage guard
+        if not to_status.updates_pipeline or not to_status.stage_id:
+            safe.append(to_status)
+            continue
+
+        # ✅ RULE #7: Reject backward stage movement for pipeline-updating statuses
+        to_stage_order = stage_order_map.get(to_status.stage_id)
+        if to_stage_order is None:
+            log.warning(
+                "Stage order not found for to_status stage",
+                to_status_id=to_status.id,
+                stage_id=to_status.stage_id
+            )
+            safe.append(to_status)  # Allow if we can't determine order
+            continue
+
+        if to_stage_order < current_stage_order:
+            log.debug(
+                "Stage guard blocked backward pipeline transition",
+                current_stage_id=current_stage_id,
+                current_stage_order=current_stage_order,
+                to_status_id=to_status.id,
+                to_stage_id=to_status.stage_id,
+                to_stage_order=to_stage_order
+            )
+            continue
 
         safe.append(to_status)
 
@@ -483,11 +533,11 @@ async def execute_system_transition(
 
     # ✅ RULE #13.2: Check if lead was EVER in this status before (prevent loops)
     result = await db.execute(
-        select(models.LeadHistory)
+        select(models.LeadStatusHistory)
         .where(
             and_(
-                models.LeadHistory.lead_id == lead.id,
-                models.LeadHistory.consultation_status_id == to_status_id
+                models.LeadStatusHistory.lead_id == lead.id,
+                models.LeadStatusHistory.new_consultation_status_id == to_status_id
             )
         )
         .limit(1)
@@ -500,7 +550,7 @@ async def execute_system_transition(
             lead_id=lead.id,
             from_status=lead.consultation_status_id,
             to_status=to_status_id,
-            previous_at=previous_occurrence.created_at,
+            previous_at=previous_occurrence.changed_at,
             reason="idempotent_history_check"
         )
         return False
@@ -535,15 +585,25 @@ async def execute_system_transition(
         log.error("Target status not found", status_id=to_status_id)
         return False
 
+    # ✅ Capture old state BEFORE mutation for accurate history
+    old_status = lead.status
+    old_consultation_status_id = lead.consultation_status_id
+    old_pipeline_stage_id = lead.pipeline_stage_id
+
     # Update lead status using StatusHelper
     await StatusHelper.sync_lead_status(lead, to_status)
 
-    # Create history record
-    history = models.LeadHistory(
+    # Create history record (using pre-mutation values for old_*)
+    history = models.LeadStatusHistory(
         lead_id=lead.id,
-        consultation_status_id=to_status_id,
+        old_status=old_status,
+        new_status=lead.status,
+        old_consultation_status_id=old_consultation_status_id,
+        new_consultation_status_id=to_status_id,
+        old_pipeline_stage_id=old_pipeline_stage_id,
+        new_pipeline_stage_id=to_status.stage_id,
         changed_by_user_id=None,  # System change
-        notes=f"System transition: {reason}"
+        reason=f"System transition: {reason}"
     )
     db.add(history)
 

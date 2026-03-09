@@ -633,6 +633,11 @@ export interface LeadListParams extends PaginationParams {
   date_from?: string; // ISO datetime
   date_to?: string; // ISO datetime
   date_field?: "created_at" | "updated_at";
+  // === SCORE RANGE FILTER ===
+  score_min?: number;
+  score_max?: number;
+  // === SELECTIVE EXPORT ===
+  lead_ids?: string; // Comma-separated lead IDs
 }
 
 /**

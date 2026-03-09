@@ -187,6 +187,11 @@ class LeadRepository(BaseRepository[models.Lead]):
         # === COLLABORATOR FILTERS ===
         referrer_id: Optional[int] = None,
         validity_status: Optional[str] = None,
+        # === SCORE RANGE FILTER ===
+        score_min: Optional[int] = None,
+        score_max: Optional[int] = None,
+        # === SELECTIVE EXPORT ===
+        lead_ids: Optional[List[int]] = None,
     ) -> Tuple[int, List[models.Lead]]:
         """
         Get filtered list of leads with pagination and eager loading.
@@ -302,6 +307,16 @@ class LeadRepository(BaseRepository[models.Lead]):
             if v_statuses:
                 filters.append(models.Lead.validity_status.in_(v_statuses))
 
+        # === SCORE RANGE FILTER ===
+        if score_min is not None:
+            filters.append(models.Lead.lead_score >= score_min)
+        if score_max is not None:
+            filters.append(models.Lead.lead_score <= score_max)
+
+        # === SELECTIVE EXPORT (lead_ids) ===
+        if lead_ids:
+            filters.append(models.Lead.id.in_(lead_ids))
+
         # Apply filters to both queries
         if filters:
             base_query = base_query.where(*filters)
@@ -315,6 +330,13 @@ class LeadRepository(BaseRepository[models.Lead]):
             return 0, []
 
         # Apply sorting
+        ALLOWED_SORT_FIELDS = {
+            "created_at", "updated_at", "full_name", "email", "phone",
+            "lead_score", "status", "source", "last_consultation_at",
+            "next_activity_at", "consultation_count", "cached_urgency_score",
+        }
+        if sort_by not in ALLOWED_SORT_FIELDS:
+            sort_by = "created_at"
         sort_column = getattr(models.Lead, sort_by, models.Lead.created_at)
 
         # Only apply activity bubble-up when sorting by urgency-related columns.
@@ -1144,7 +1166,11 @@ class LeadRepository(BaseRepository[models.Lead]):
                 models.Lead.deleted_at.is_(None),
                 models.Lead.updated_at < threshold_date,
                 # Only non-final status leads are considered stale
-                models.ConsultationStatus.is_final == False,
+                # Include leads with NULL status (no consultation yet)
+                or_(
+                    models.ConsultationStatus.is_final == False,
+                    models.Lead.consultation_status_id.is_(None)
+                ),
             )
         )
         result = await self.db.execute(query)

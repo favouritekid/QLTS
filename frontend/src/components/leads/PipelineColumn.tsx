@@ -13,6 +13,12 @@ import { sanitizeColorCode } from "@/lib/utils";
 import type { PipelineStageWithStats } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
+// Helper: handles both ratio (0-1) and percentage (0-100)
+function formatConversionRate(value: number): number {
+  if (value <= 1) return value * 100;
+  return value;
+}
+
 interface PipelineColumnProps {
   stage: PipelineStageWithStats;
   leads: Lead[];
@@ -35,8 +41,8 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
   const columnStyle = getColumnStyle(stageHexColor);
   const leadIds = leads.map((lead) => lead.id);
 
-  // Determine conversion trend
-  const conversionRate = stage.conversion_rate || 0;
+  // Determine conversion trend (normalize to percentage)
+  const conversionRate = formatConversionRate(stage.conversion_rate || 0);
   let TrendIcon = Minus;
   let trendColor = "text-muted-foreground";
   if (conversionRate > 75) {
@@ -64,7 +70,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
                 {stage.name}
               </h3>
               <p className="text-xs text-muted-foreground mt-1 tabular-nums">
-                {stage.lead_count} {stage.lead_count === 1 ? "lead" : "leads"}
+                {stage.lead_count} lead
               </p>
             </div>
             <Badge variant="secondary" className="text-xs">
@@ -83,9 +89,9 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
             {stage.avg_time_in_stage_days && (
               <div className="text-xs text-muted-foreground tabular-nums">
                 <span className="font-medium">
-                  {Math.round(stage.avg_time_in_stage_days)}d
+                  {Math.round(stage.avg_time_in_stage_days)} ngày
                 </span>{" "}
-                avg
+                TB
               </div>
             )}
           </div>
@@ -95,7 +101,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
           <SortableContext items={leadIds} strategy={verticalListSortingStrategy}>
             {leads.length === 0 ? (
               <div className="flex items-center justify-center h-32 text-sm text-muted-foreground border-2 border-dashed rounded-lg">
-                No leads in this stage
+                Chưa có lead trong giai đoạn này
               </div>
             ) : (
               leads.map((lead) => (

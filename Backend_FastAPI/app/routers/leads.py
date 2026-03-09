@@ -247,6 +247,9 @@ async def get_all_leads(
     date_field: str = Query(
         "created_at", description="Date field to filter on (created_at or updated_at)"
     ),
+    # === SCORE RANGE FILTER ===
+    score_min: Optional[int] = Query(None, ge=0, le=100, description="Minimum lead score"),
+    score_max: Optional[int] = Query(None, ge=0, le=100, description="Maximum lead score"),
     # === KẾT THÚC THÊM THAM SỐ ===
 ):
     """
@@ -282,6 +285,9 @@ async def get_all_leads(
         date_from=date_from,
         date_to=date_to,
         date_field=date_field,
+        # === SCORE RANGE FILTER ===
+        score_min=score_min,
+        score_max=score_max,
         # === KẾT THÚC TRUYỀN THAM SỐ ===
     )
     return {"total_count": total, "leads": leads}
@@ -330,6 +336,11 @@ async def export_leads(
     date_field: str = Query(
         "created_at", description="Date field to filter on (created_at or updated_at)"
     ),
+    # === SCORE RANGE FILTER ===
+    score_min: Optional[int] = Query(None, ge=0, le=100, description="Minimum lead score"),
+    score_max: Optional[int] = Query(None, ge=0, le=100, description="Maximum lead score"),
+    # === SELECTIVE EXPORT ===
+    lead_ids: Optional[str] = Query(None, description="Comma-separated lead IDs to export"),
 ):
     """
     Export leads to CSV or Excel file.
@@ -342,6 +353,18 @@ async def export_leads(
     # ✅ Use role-enforced filter from dependency (same as list endpoint)
     effective_officer_id = lead_filter.assigned_officer_id
     effective_unit_id = lead_filter.unit_id
+
+    # Parse and validate lead_ids if provided
+    parsed_lead_ids = None
+    if lead_ids:
+        try:
+            parsed_lead_ids = list(set(int(x.strip()) for x in lead_ids.split(",") if x.strip()))
+            if any(x <= 0 for x in parsed_lead_ids):
+                raise ValueError("IDs must be positive")
+            if len(parsed_lead_ids) > 10000:
+                raise ValueError("Too many IDs")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid lead_ids: {e}")
 
     # Get filtered leads (no pagination, but limit to 10,000)
     total, leads = await lead_service.get_leads(
@@ -360,6 +383,9 @@ async def export_leads(
         date_from=date_from,
         date_to=date_to,
         date_field=date_field,
+        score_min=score_min,
+        score_max=score_max,
+        lead_ids=parsed_lead_ids,
     )
 
     # Helper: extract display names from relationships (already eager-loaded)
@@ -1457,16 +1483,23 @@ async def update_lead_consultation_status(
 
     # Store old status for history/notification
     old_status_id = lead.consultation_status_id
-    
+    old_status = lead.status
+    old_pipeline_stage_id = lead.pipeline_stage_id
+
     # ✅ UPDATE STATUS: Use StatusHelper to sync all fields
     await StatusHelper.sync_lead_status(lead, validated_status)
-    
+
     # Create history record
-    history = models.LeadHistory(
+    history = models.LeadStatusHistory(
         lead_id=lead.id,
-        consultation_status_id=validated_status.id,
+        old_status=old_status,
+        new_status=lead.status,
+        old_consultation_status_id=old_status_id,
+        new_consultation_status_id=validated_status.id,
+        old_pipeline_stage_id=old_pipeline_stage_id,
+        new_pipeline_stage_id=validated_status.stage_id,
         changed_by_user_id=current_user.id,
-        notes=f"Status updated via FSM-validated endpoint"
+        reason="Status updated via FSM-validated endpoint"
     )
     db.add(history)
     

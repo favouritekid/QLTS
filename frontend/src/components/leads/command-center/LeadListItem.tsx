@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { format, isToday, isPast, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import type { Lead, LeadStatus } from "@/types/lead.types";
+import { getLeadStatusLabel } from "@/constants";
 
 // Activity status helpers
 type ActivityStatus = "overdue" | "today" | "future" | "none";
@@ -23,7 +24,7 @@ const getActivityStatus = (nextActivityAt: string | null | undefined): ActivityS
   if (!nextActivityAt) return "none";
 
   const date = parseISO(nextActivityAt);
-  if (isPast(date)) return "overdue";
+  if (isPast(date) && !isToday(date)) return "overdue";
   if (isToday(date)) return "today";
   return "future";
 };
@@ -184,7 +185,7 @@ export const LeadListItem = React.memo(function LeadListItem({
                   getStatusColor(lead.status as LeadStatus)
                 )}
               />
-              {lead.status}
+              {getLeadStatusLabel(lead.status as LeadStatus)}
             </Badge>
 
             {/* Offering Badge */}
@@ -236,18 +237,20 @@ export const LeadListItem = React.memo(function LeadListItem({
           >
             <Phone className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={(e) => {
-              e.stopPropagation();
-              window.location.href = `mailto:${lead.email}`;
-            }}
-            aria-label="Gửi email"
-          >
-            <Mail className="h-3.5 w-3.5" />
-          </Button>
+          {lead.email && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={(e) => {
+                e.stopPropagation();
+                window.location.href = `mailto:${lead.email}`;
+              }}
+              aria-label="Gửi email"
+            >
+              <Mail className="h-3.5 w-3.5" />
+            </Button>
+          )}
           {!lead.assigned_officer && onQuickAssign && (
             <Button
               variant="ghost"
@@ -269,7 +272,7 @@ export const LeadListItem = React.memo(function LeadListItem({
       {lead.assigned_officer && (
         <div className="mt-2 pt-2 border-t border-dashed">
           <span className="text-[10px] text-muted-foreground">
-            Assigned to: <span className="font-medium">{lead.assigned_officer.full_name}</span>
+            Phân công: <span className="font-medium">{lead.assigned_officer.full_name}</span>
           </span>
         </div>
       )}
