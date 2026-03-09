@@ -377,7 +377,7 @@ export async function getPipelineStats(
       stage_id: stage.id,
       stage_name: stage.name,
       lead_count: stage.lead_count,
-      conversion_rate: stage.conversion_rate || 0,
+      conversion_rate: stage.conversion_rate ?? 0,
     })),
   }
 }

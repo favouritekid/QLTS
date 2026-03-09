@@ -265,7 +265,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {pipeline.conversion_rate !== undefined
+              {pipeline.conversion_rate != null
                 ? `${formatConversionRate(pipeline.conversion_rate).toFixed(1)}%`
                 : "N/A"}
             </div>

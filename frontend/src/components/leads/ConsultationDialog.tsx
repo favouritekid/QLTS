@@ -389,8 +389,10 @@ export function ConsultationDialog({
                       value={field.value}
                       onChange={(value) => {
                         field.onChange(value);
-                        // Clear loss reason error when status changes
+                        // Clear loss reason error AND values when status changes
                         form.clearErrors("loss_reason_code");
+                        form.setValue("loss_reason_code", null);
+                        form.setValue("loss_reason_note", "");
                       }}
                       placeholder="Chọn trạng thái"
                       allowedStatusIds={filteredAllowedStatusIds}

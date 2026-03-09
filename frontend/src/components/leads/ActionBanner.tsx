@@ -90,9 +90,10 @@ function formatScheduledTime(date: Date): string {
 function getActionBannerConfig(lead: Lead): BannerConfig | null {
   const now = new Date();
 
-  // Terminal leads (enrolled, final status) should never show action banners
-  const isTerminal = lead.consultation_status?.is_final || lead.pipeline_stage?.is_final_stage;
-  if (isTerminal) return null;
+  // Hard-terminal leads (enrolled + final) should never show action banners
+  // Soft-terminal leads (final but not enrolled) can still receive consultations
+  const isHardTerminal = lead.consultation_status?.is_final && lead.consultation_status?.phase === "enrolled";
+  if (isHardTerminal) return null;
 
   // Priority 1: Overdue check (from cached field)
   // is_overdue = next_activity_at has passed

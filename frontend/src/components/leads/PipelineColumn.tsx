@@ -42,7 +42,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
   const leadIds = leads.map((lead) => lead.id);
 
   // Determine conversion trend (normalize to percentage)
-  const conversionRate = formatConversionRate(stage.conversion_rate || 0);
+  const conversionRate = formatConversionRate(stage.conversion_rate ?? 0);
   let TrendIcon = Minus;
   let trendColor = "text-muted-foreground";
   if (conversionRate > 75) {
