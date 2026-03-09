@@ -114,11 +114,11 @@ interface KpiTarget {
 
 const KPI_CODES = [
   { value: "consultations_daily", label: "Tư vấn (Ngày)" },
-  { value: "consultations_monthly", label: "Tư vấn (Tháng)" },
-  { value: "enrollments", label: "Nhập học" },
+  { value: "enrollments_monthly", label: "Nhập học (Tháng)" },
+  { value: "enrollments_annual", label: "Nhập học (Năm)" },
   { value: "conversion_rate", label: "TL chuyển đổi Lead mới (%)" },
   { value: "win_rate", label: "Tỉ lệ chốt đơn (%)" },
-  { value: "response_time", label: "Thời gian phản hồi (giờ)" },
+  { value: "response_time_hours", label: "Thời gian phản hồi (giờ)" },
   { value: "sla_compliance_rate", label: "SLA tuân thủ (%)" },
   { value: "consultation_effectiveness", label: "Hiệu quả tư vấn (%)" },
 ];
@@ -220,7 +220,7 @@ export default function KpiConfigPage() {
   });
 
   const [targetFormData, setTargetFormData] = useState({
-    kpi_code: "enrollments",
+    kpi_code: "enrollments_annual",
     annual_target: 100,
     fiscal_year: new Date().getFullYear(),
     unit_id: null as number | null,
@@ -306,7 +306,7 @@ export default function KpiConfigPage() {
       setIsTargetDialogOpen(false);
       // Reset form after success
       setTargetFormData({
-        kpi_code: "enrollments",
+        kpi_code: "enrollments_annual",
         annual_target: 100,
         fiscal_year: new Date().getFullYear(),
         unit_id: null,
@@ -389,7 +389,7 @@ export default function KpiConfigPage() {
     });
     // Also reset target form defaults if needed, though usually on open
     setTargetFormData({
-      kpi_code: "enrollments",
+      kpi_code: "enrollments_annual",
       annual_target: 100,
       fiscal_year: new Date().getFullYear(),
       unit_id: null,
@@ -637,7 +637,7 @@ export default function KpiConfigPage() {
                 />
                 <Label htmlFor="show-inactive-targets">Hiển thị đã xóa</Label>
               </div>
-              <Button variant="outline" onClick={() => { setEditingTarget(null); setTargetFormData({ kpi_code: 'enrollments', annual_target: 100, fiscal_year: new Date().getFullYear(), unit_id: null, officer_id: null, scope: 'global' }); setIsTargetDialogOpen(true); }}>
+              <Button variant="outline" onClick={() => { setEditingTarget(null); setTargetFormData({ kpi_code: 'enrollments_annual', annual_target: 100, fiscal_year: new Date().getFullYear(), unit_id: null, officer_id: null, scope: 'global' }); setIsTargetDialogOpen(true); }}>
                 <Target className="mr-2 h-4 w-4" />
                 Thêm Mục tiêu Năm
               </Button>
@@ -863,7 +863,7 @@ export default function KpiConfigPage() {
                 onChange={(e) =>
                   setFormData({
                     ...formData,
-                    target_value: parseInt(e.target.value) || 0,
+                    target_value: parseFloat(e.target.value) || 0,
                   })
                 }
               />

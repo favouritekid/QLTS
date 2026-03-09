@@ -51,7 +51,7 @@ AdminOrManagerDep = Depends(deps.require_admin_or_manager)
 class KpiConfigBase(BaseModel):
     """Base schema for KPI configuration."""
     kpi_code: str = Field(..., description="KPI identifier, e.g., 'consultations_daily'")
-    target_value: int = Field(..., ge=0, description="Target value")
+    target_value: float = Field(..., ge=0, description="Target value (NUMERIC — supports both counts and percentages)")
     period_type: str = Field(default="daily", description="daily, monthly, annual")
     unit_id: Optional[int] = Field(None, description="Unit ID for unit-level config (None = global)")
     officer_id: Optional[int] = Field(None, description="Officer ID for officer-specific config")
@@ -64,7 +64,7 @@ class KpiConfigCreate(KpiConfigBase):
 
 class KpiConfigUpdate(BaseModel):
     """Update KPI configuration."""
-    target_value: Optional[int] = Field(None, ge=0)
+    target_value: Optional[float] = Field(None, ge=0)
     is_active: Optional[bool] = None
 
 
@@ -121,7 +121,14 @@ async def list_kpi_configs(
     unit_id: Optional[int] = None,
     is_active: bool = True,
 ):
-    """List KPI configurations with optional filters. Admin/Manager only."""
+    """List KPI configurations with optional filters. Admin/Manager only.
+    IDOR: Manager sees only their unit's configs + global configs."""
+    # IDOR: Manager can only see their own unit scope + global
+    if current_user.role == "manager":
+        return await kpi_service.list_kpi_configs(
+            db, kpi_code=kpi_code, unit_id=current_user.unit_id,
+            is_active=is_active, include_global=True,
+        )
     return await kpi_service.list_kpi_configs(
         db, kpi_code=kpi_code, unit_id=unit_id, is_active=is_active
     )
@@ -225,9 +232,15 @@ async def list_kpi_targets(
     kpi_code: Optional[str] = None,
     is_active: bool = True,
 ):
-    """List annual KPI targets. Admin/Manager only."""
+    """List annual KPI targets. Admin/Manager only.
+    IDOR: Manager sees only their unit's targets."""
+    # IDOR: Manager can only see their own unit scope
+    unit_id = None
+    if current_user.role == "manager":
+        unit_id = current_user.unit_id
     return await kpi_service.list_kpi_targets(
-        db, fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active
+        db, fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active,
+        unit_id=unit_id,
     )
 
 

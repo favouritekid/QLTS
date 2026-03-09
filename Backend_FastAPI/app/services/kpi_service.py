@@ -27,6 +27,7 @@ log = structlog.get_logger(__name__)
 DEFAULT_KPIS = {
     "consultations_daily": 10,
     "conversion_rate": 15,  # percentage
+    "win_rate": 33,  # 33% — consistent with C_t = 3 × M_t
     "response_time_hours": 2,
     "enrollments_monthly": 7,
     "enrollments_annual": 80,
@@ -45,12 +46,12 @@ async def get_kpi_target(
     officer_id: Optional[int] = None,
     unit_id: Optional[int] = None,
     period_type: str = "daily"
-) -> int:
+) -> float:
     """
     Get KPI target value with inheritance.
-    
-    REFACTORED: Uses KpiRepository for data access.
-    
+
+    Returns float (NUMERIC(12,2) in DB). A0: KPI Planning Foundation.
+
     Priority order:
     1. Officer-specific (if officer_id provided)
     2. Unit-level (if unit_id provided)
@@ -58,10 +59,10 @@ async def get_kpi_target(
     4. Hardcoded default (if no config exists)
     """
     from ..repositories import KpiRepository
-    
+
     repo = KpiRepository(db)
     default = DEFAULT_KPIS.get(kpi_code, 0)
-    
+
     target = await repo.get_kpi_target_with_inheritance(
         kpi_code=kpi_code,
         officer_id=officer_id,
@@ -69,16 +70,16 @@ async def get_kpi_target(
         period_type=period_type,
         default=default
     )
-    
+
     log.debug("KPI target resolved", kpi_code=kpi_code, value=target)
-    return target
+    return float(target)
 
 
 async def get_all_kpi_targets(
     db: AsyncSession,
     officer_id: Optional[int] = None,
     unit_id: Optional[int] = None,
-) -> Dict[str, int]:
+) -> Dict[str, float]:
     """
     Get all configured KPI targets for an officer/unit.
     
@@ -109,7 +110,7 @@ async def get_all_kpi_targets(
 async def get_annual_target_progress(
     db: AsyncSession,
     officer_id: int,
-    kpi_code: str = "enrollments",
+    kpi_code: str = "enrollments_annual",
     fiscal_year: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -280,12 +281,12 @@ async def sync_officer_ytd(
     # Sync enrollments YTD via repository
     # Count leads that reached FINAL pipeline stage with counts_for_funnel=True
     enrollments_ytd = await repo.count_enrollments_ytd(officer_id, fiscal_year)
-    synced["enrollments"] = enrollments_ytd
-    
+    synced["enrollments_annual"] = enrollments_ytd
+
     # Update kpi_target record via repository
     await repo.update_achieved_ytd(
         officer_id=officer_id,
-        kpi_code="enrollments",
+        kpi_code="enrollments_annual",
         fiscal_year=fiscal_year,
         ytd_value=enrollments_ytd,
     )
@@ -335,17 +336,22 @@ async def list_kpi_configs(
     kpi_code: Optional[str] = None,
     unit_id: Optional[int] = None,
     is_active: bool = True,
+    include_global: bool = False,
 ) -> List[models.KpiConfig]:
-    """List KPI configurations with filters."""
+    """List KPI configurations with filters.
+    include_global: when True + unit_id set, includes global configs (unit_id IS NULL)."""
     from ..repositories import KpiRepository
     repo = KpiRepository(db)
-    return await repo.list_configs(kpi_code=kpi_code, unit_id=unit_id, is_active=is_active)
+    return await repo.list_configs(
+        kpi_code=kpi_code, unit_id=unit_id, is_active=is_active,
+        include_global=include_global,
+    )
 
 
 async def create_kpi_config(
     db: AsyncSession,
     kpi_code: str,
-    target_value: int,
+    target_value: float,
     period_type: str = "daily",
     unit_id: Optional[int] = None,
     officer_id: Optional[int] = None,
@@ -404,7 +410,7 @@ async def create_kpi_config(
 async def update_kpi_config(
     db: AsyncSession,
     config_id: int,
-    target_value: Optional[int] = None,
+    target_value: Optional[float] = None,
     is_active: Optional[bool] = None,
     updated_by: Optional[models.User] = None,
 ) -> Tuple[models.KpiConfig, Callback]:
@@ -484,11 +490,14 @@ async def list_kpi_targets(
     fiscal_year: Optional[int] = None,
     kpi_code: Optional[str] = None,
     is_active: bool = True,
+    unit_id: Optional[int] = None,
 ) -> List[models.KpiTarget]:
-    """List annual KPI targets with filters."""
+    """List annual KPI targets with filters. unit_id for IDOR scope filtering."""
     from ..repositories import KpiRepository
     repo = KpiRepository(db)
-    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active)
+    return await repo.list_targets(
+        fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active, unit_id=unit_id
+    )
 
 
 async def create_kpi_target(

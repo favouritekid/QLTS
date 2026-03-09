@@ -1,7 +1,7 @@
 # app/models/config.py
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, Integer, Numeric, String, text
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -255,9 +255,9 @@ class KpiConfig(Base):
         comment="KPI identifier: consultations_daily, conversion_rate, etc."
     )
     target_value = Column(
-        Integer,
+        Numeric(12, 2),
         nullable=False,
-        comment="Target value (interpretation depends on kpi_code)"
+        comment="Target value as NUMERIC (supports both counts and percentages)"
     )
     
     # Period
@@ -268,6 +268,23 @@ class KpiConfig(Base):
         comment="Period: daily, weekly, monthly, quarterly, annual"
     )
     
+    # Temporal resolution (A0: KPI Planning Foundation)
+    effective_month = Column(
+        Integer,
+        nullable=True,
+        comment="Month this target applies to (NULL = evergreen/legacy)"
+    )
+    effective_year = Column(
+        Integer,
+        nullable=True,
+        comment="Year this target applies to (NULL = evergreen/legacy)"
+    )
+    source_plan_id = Column(
+        Integer,
+        nullable=True,
+        comment="FK to kpi_plan (constraint added in A1 after table creation)"
+    )
+
     # Metadata
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(
@@ -287,12 +304,26 @@ class KpiConfig(Base):
     officer = relationship("User", foreign_keys=[officer_id])
 
     __table_args__ = (
-        # Unique constraint: one config per kpi_code per scope
+        # Evergreen records (legacy, effective_month IS NULL): 1 per scope
         Index(
-            'uq_kpi_config_scope',
+            'uq_kpi_config_scope_evergreen',
             'unit_id', 'officer_id', 'kpi_code', 'period_type',
             unique=True,
-            postgresql_where=Column('is_active') == True
+            postgresql_where=text("is_active = true AND effective_month IS NULL"),
+        ),
+        # Monthly records (from planning sync): 1 per scope per month
+        Index(
+            'uq_kpi_config_scope_monthly',
+            'unit_id', 'officer_id', 'kpi_code', 'period_type',
+            'effective_year', 'effective_month',
+            unique=True,
+            postgresql_where=text("is_active = true AND effective_month IS NOT NULL"),
+        ),
+        # Lookup index for get_kpi_target() performance
+        Index(
+            'idx_kpi_config_effective_lookup',
+            'kpi_code', 'unit_id', 'officer_id', 'effective_year', 'effective_month',
+            postgresql_where=text("is_active = true"),
         ),
     )
 

@@ -820,7 +820,7 @@ async def get_enhanced_dashboard_stats(
     # Get annual target progress for enrollments KPI
     # Use fiscal year from date filter (filter_end.year)
     annual_progress = await kpi_service.get_annual_target_progress(
-        db, officer_id, kpi_code="enrollments", fiscal_year=filter_end.year
+        db, officer_id, kpi_code="enrollments_annual", fiscal_year=filter_end.year
     )
     
     # Build enhanced response
@@ -1086,7 +1086,7 @@ async def get_aggregated_dashboard_stats(
 
     progress_pct = round((total_enrolled_ytd / aggregate_annual_target) * 100, 1) if aggregate_annual_target > 0 else 0
     annual_progress = {
-        "kpi_code": "enrollments",
+        "kpi_code": "enrollments_annual",
         "fiscal_year": fiscal_year,
         "annual_target": aggregate_annual_target,
         "achieved_ytd": total_enrolled_ytd,

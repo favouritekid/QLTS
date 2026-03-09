@@ -1652,25 +1652,42 @@ async def get_kpi_target_for_admin(
     current_user: models.User = Depends(require_admin_or_manager),
 ) -> models.KpiTarget:
     """
-    Fetch KPI Target with admin/manager authorization.
+    Fetch KPI Target with admin/manager authorization + IDOR scope check.
 
-    This dependency replaces direct db.get() in router per
-    AUTHORIZATION_GUIDELINES.md Section 4 (IDOR Protection).
+    A0: Manager can only access targets belonging to their own unit (or global).
+    Always returns 404 (never 403) to prevent inference IDOR.
 
     Args:
         target_id: ID of the KPI Target to fetch
 
     Returns:
-        KpiTarget if found and active
+        KpiTarget if found, active, and within user's scope
 
     Raises:
-        ResourceNotFoundError: If target not found or inactive
+        ResourceNotFoundError: If target not found, inactive, or outside scope
     """
     from ..models.config import KpiTarget
 
     target = await db.get(KpiTarget, target_id)
     if not target or not target.is_active:
         raise ResourceNotFoundError(detail="KPI Target not found")
+
+    # IDOR: Manager scope check
+    if current_user.role == "manager":
+        # "True global" = unit_id IS NULL AND officer_id IS NULL → manager can see
+        is_true_global = target.unit_id is None and target.officer_id is None
+        # Unit-scoped → must match manager's unit
+        is_own_unit = target.unit_id is not None and target.unit_id == current_user.unit_id
+        # Officer-scoped with unit_id=NULL → check officer belongs to manager's unit
+        if not is_true_global and not is_own_unit:
+            if target.officer_id is not None and target.unit_id is None:
+                # Resolve officer's unit via DB
+                officer = await db.get(models.User, target.officer_id)
+                if not officer or officer.unit_id != current_user.unit_id:
+                    raise ResourceNotFoundError(detail="KPI Target not found")
+            elif not is_own_unit:
+                raise ResourceNotFoundError(detail="KPI Target not found")  # 404, not 403
+
     return target
 
 

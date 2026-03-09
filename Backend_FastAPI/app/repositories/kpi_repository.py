@@ -31,7 +31,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         kpi_code: str,
         officer_id: int,
         period_type: str = "daily"
-    ) -> Optional[int]:
+    ) -> Optional[float]:
         """Get officer-specific KPI target."""
         result = await self.db.execute(
             select(models.KpiConfig.target_value)
@@ -49,7 +49,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         kpi_code: str,
         unit_id: int,
         period_type: str = "daily"
-    ) -> Optional[int]:
+    ) -> Optional[float]:
         """Get unit-level KPI target."""
         result = await self.db.execute(
             select(models.KpiConfig.target_value)
@@ -67,7 +67,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         self,
         kpi_code: str,
         period_type: str = "daily"
-    ) -> Optional[int]:
+    ) -> Optional[float]:
         """Get global default KPI target."""
         result = await self.db.execute(
             select(models.KpiConfig.target_value)
@@ -87,8 +87,8 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         officer_id: Optional[int] = None,
         unit_id: Optional[int] = None,
         period_type: str = "daily",
-        default: int = 0
-    ) -> int:
+        default: float = 0
+    ) -> float:
         """
         Get KPI target with inheritance chain.
         
@@ -174,17 +174,31 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         kpi_code: Optional[str] = None,
         unit_id: Optional[int] = None,
         is_active: Optional[bool] = True,
+        include_global: bool = False,
     ) -> List[models.KpiConfig]:
         """
         List all KPI configs with filters.
-        Used by admin router.
+        include_global: when True + unit_id set, also returns global configs (unit_id IS NULL).
+        Used by admin router (IDOR: manager sees unit + global).
         """
         query = select(models.KpiConfig)
-        
+
         if kpi_code:
             query = query.where(models.KpiConfig.kpi_code == kpi_code)
         if unit_id is not None:
-            query = query.where(models.KpiConfig.unit_id == unit_id)
+            if include_global:
+                # Manager scope: unit's configs + "true global" (unit=NULL AND officer=NULL)
+                query = query.where(
+                    or_(
+                        models.KpiConfig.unit_id == unit_id,
+                        and_(
+                            models.KpiConfig.unit_id.is_(None),
+                            models.KpiConfig.officer_id.is_(None),
+                        ),
+                    )
+                )
+            else:
+                query = query.where(models.KpiConfig.unit_id == unit_id)
         if is_active is not None:
             query = query.where(models.KpiConfig.is_active == is_active)
         
@@ -223,20 +237,33 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         fiscal_year: Optional[int] = None,
         kpi_code: Optional[str] = None,
         is_active: Optional[bool] = True,
+        unit_id: Optional[int] = None,
     ) -> List[models.KpiTarget]:
         """
         List annual KPI targets with filters.
+        unit_id: IDOR scope filter — when set, returns only targets for this unit + global.
         Used by admin router.
         """
         query = select(models.KpiTarget)
-        
+
         if is_active is not None:
             query = query.where(models.KpiTarget.is_active == is_active)
-        
+
         if fiscal_year:
             query = query.where(models.KpiTarget.fiscal_year == fiscal_year)
         if kpi_code:
             query = query.where(models.KpiTarget.kpi_code == kpi_code)
+        if unit_id is not None:
+            # Manager scope: unit's targets + "true global" (unit=NULL AND officer=NULL)
+            query = query.where(
+                or_(
+                    models.KpiTarget.unit_id == unit_id,
+                    and_(
+                        models.KpiTarget.unit_id.is_(None),
+                        models.KpiTarget.officer_id.is_(None),
+                    ),
+                )
+            )
         
         query = query.order_by(
             models.KpiTarget.fiscal_year.desc(),
@@ -317,7 +344,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         
         Args:
             officer_id: Officer ID
-            kpi_code: KPI code (e.g., "enrollments")
+            kpi_code: KPI code (e.g., "enrollments_annual")
             fiscal_year: Fiscal year
             unit_id: Officer's unit_id for fallback
             
