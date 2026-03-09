@@ -2209,15 +2209,16 @@ async def delete_consultation(
                 else:
                     # Fallback khi không tìm thấy status object
                     lead.status = "new"
-                # ✅ M9: Increment version when lead state mutates via consultation delete
-                lead.version = (lead.version or 1) + 1
-                db.add(lead)  # Đánh dấu lead là dirty
             else:
                 log.warning(
                     "Terminal guard SOFT BLOCK: skipping lead status revert on consultation delete",
                     lead_id=lead_id,
                     current_status_id=lead.consultation_status_id,
                 )
+
+            # ✅ Always increment version when consultation is deleted (data changed)
+            lead.version = (lead.version or 1) + 1
+            db.add(lead)
 
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(lead)

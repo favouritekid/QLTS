@@ -11,19 +11,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Lead, LeadSource } from "@/types/lead.types";
-import { getLeadSourceLabel } from "@/constants";
+import { getLeadSourceLabel, getLeadScoreColor } from "@/constants";
 
 interface LeadKanbanCardProps {
   lead: Lead;
   isDragging?: boolean;
 }
-
-// Helper to get score color
-const getScoreColor = (score: number) => {
-  if (score >= 75) return "bg-success-100 text-success-800 border-success-300";
-  if (score >= 50) return "bg-warning-100 text-warning-800 border-warning-300";
-  return "bg-error-100 text-error-800 border-error-300";
-};
 
 // Helper to get source badge color
 const getSourceColor = (source: string) => {
@@ -94,7 +87,7 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
               </div>
             </div>
             <Badge
-              className={`text-xs font-semibold border ${getScoreColor(lead.lead_score)}`}
+              className={`text-xs font-semibold border ${getLeadScoreColor(lead.lead_score)}`}
             >
               <TrendingUp className="h-3 w-3 mr-1" />
               {lead.lead_score}

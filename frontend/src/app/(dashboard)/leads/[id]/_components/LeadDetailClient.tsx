@@ -11,7 +11,7 @@
  */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Edit,
@@ -62,6 +62,7 @@ import { AdmissionReadinessChecklist } from "@/components/leads/AdmissionReadine
 import { LeadInfoTabs } from "./LeadInfoTabs";
 import { WorkflowBreadcrumb } from "@/components/common";
 import { cn, sanitizeColorCode } from "@/lib/utils";
+import { getLeadScoreLabel, getLeadScoreTextColor } from "@/constants";
 import type { Lead, TimelineItem, LeadInsights } from "@/types/lead.types";
 
 interface LeadDetailClientProps {
@@ -79,20 +80,6 @@ const getInitials = (name: string) => {
     .join("")
     .toUpperCase()
     .slice(0, 2);
-};
-
-const getScoreLabel = (score: number) => {
-  if (score >= 70) return "Tiềm năng cao";
-  if (score >= 50) return "Trung bình";
-  if (score >= 30) return "Thấp";
-  return "Rất thấp";
-};
-
-const getScoreColor = (score: number) => {
-  if (score >= 70) return "text-success-600 bg-success-50";
-  if (score >= 50) return "text-info-600 bg-info-50";
-  if (score >= 30) return "text-warning-600 bg-warning-50";
-  return "text-muted-foreground bg-muted";
 };
 
 export function LeadDetailClient({ leadId, initialData, initialTimeline, initialInsights }: LeadDetailClientProps) {
@@ -151,15 +138,14 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const [showAllTimeline, setShowAllTimeline] = useState(false);
 
   // Calculate quick stats
-  // BUG 2: Use UTC milliseconds to avoid timezone mismatch & hydration issues
-  const [daysInPipeline, setDaysInPipeline] = useState(0);
-  useEffect(() => {
-    if (lead) {
-      setDaysInPipeline(
-        Math.floor((Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
-      );
-    }
-  }, [lead]);
+  // Client-side only via ref to avoid hydration mismatch and layout shift
+  const daysInPipelineRef = useRef<number>(0);
+  if (lead && typeof window !== "undefined") {
+    daysInPipelineRef.current = Math.floor(
+      (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
+    );
+  }
+  const daysInPipeline = daysInPipelineRef.current;
   // BUG 3: Count from timeline (already loaded) instead of lead.consultations (not loaded by shallow API)
   const successfulContacts = (timeline ?? []).filter(
     (e) => {
@@ -272,10 +258,10 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                 )}
                 <span className="flex items-center gap-1 md:gap-1.5">
                   <Target className="w-3.5 h-3.5 md:w-4 md:h-4 text-amber-500" />
-                  <span className={cn("font-semibold", getScoreColor(lead.lead_score).split(" ")[0])}>
+                  <span className={cn("font-semibold", getLeadScoreTextColor(lead.lead_score).split(" ")[0])}>
                     {lead.lead_score} điểm
                   </span>
-                  <span className="text-muted-foreground hidden sm:inline">• {getScoreLabel(lead.lead_score)}</span>
+                  <span className="text-muted-foreground hidden sm:inline">• {getLeadScoreLabel(lead.lead_score)}</span>
                 </span>
               </div>
             </div>

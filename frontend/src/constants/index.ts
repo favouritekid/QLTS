@@ -19,6 +19,9 @@ export {
   getLeadStatusLabel,
   getLeadSourceOption,
   getLeadSourceLabel,
+  getLeadScoreColor,
+  getLeadScoreTextColor,
+  getLeadScoreLabel,
   isComplexStatus,
   isSchedulableStatus,
 } from "./lead.constants";

@@ -586,6 +586,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onSuccess={() => {
           setSelectedLeadsForBulk([]);
           setResetSelectionKey(prev => prev + 1);
+          filterHandlers.setPage(1);
         }}
       />
 
@@ -597,6 +598,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onSuccess={() => {
           setSelectedLeadsForBulk([]);
           setResetSelectionKey(prev => prev + 1);
+          filterHandlers.setPage(1);
         }}
       />
     </div>

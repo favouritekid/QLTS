@@ -466,8 +466,20 @@ class LeadRepository(BaseRepository[models.Lead]):
         if not lead:
             return
 
-        # Các status được coi là "pending" (chưa hoàn thành)
-        PENDING_STATUS_IDS = ["sts01", "sts03"]  # Lên lịch, Cần theo dõi
+        # Query pending status IDs dynamically (non-final, non-universal)
+        pending_result = await self.db.execute(
+            select(models.ConsultationStatus.id).where(
+                models.ConsultationStatus.is_final == False,
+                models.ConsultationStatus.is_universal == False,
+                models.ConsultationStatus.is_active == True,
+            )
+        )
+        pending_status_ids = [row[0] for row in pending_result.all()]
+
+        if not pending_status_ids:
+            lead.next_activity_at = None
+            await self.db.flush()
+            return
 
         result = await self.db.execute(
             select(func.min(models.Consultation.scheduled_at))
@@ -475,7 +487,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 and_(
                     models.Consultation.lead_id == lead_id,
                     models.Consultation.scheduled_at.isnot(None),
-                    models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
+                    models.Consultation.consultation_status_id.in_(pending_status_ids),
                     models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
                 )
             )

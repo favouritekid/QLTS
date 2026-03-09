@@ -75,7 +75,7 @@ import { useIsMobile } from "@/hooks/useMediaQuery";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import type { Lead } from "@/types/lead.types";
-import { LEAD_SOURCE_OPTIONS } from "@/constants";
+import { LEAD_SOURCE_OPTIONS, getLeadScoreTextColor } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { TableToolbar, type DensityMode } from "./TableToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
@@ -503,13 +503,8 @@ export function LeadsTable({
         ),
         cell: ({ row }) => {
           const score = row.original.lead_score ?? 0;
-          // Color coding based on score ranges
-          let colorClass = "text-muted-foreground";
-          if (score >= 70) colorClass = "text-success-600 font-semibold";
-          else if (score >= 50) colorClass = "text-info-600 font-medium";
-          else if (score >= 30) colorClass = "text-warning-600";
           return (
-            <div className={cn("text-sm text-right tabular-nums pr-2", colorClass)}>
+            <div className={cn("text-sm text-right tabular-nums pr-2 font-medium", getLeadScoreTextColor(score).split(" ")[0])}>
               {score}
             </div>
           );

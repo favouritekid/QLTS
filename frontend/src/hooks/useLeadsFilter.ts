@@ -448,6 +448,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
 
   const handleScoreRangeChange = useCallback((range: [number, number]) => {
     setScoreRange(range);
+    setPage(1);
   }, []);
 
   const handleDateFromChange = useCallback((date: string) => {

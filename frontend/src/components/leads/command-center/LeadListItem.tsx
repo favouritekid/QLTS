@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { format, isToday, isPast, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import type { Lead, LeadStatus } from "@/types/lead.types";
-import { getLeadStatusLabel } from "@/constants";
+import { getLeadStatusLabel, getLeadScoreColor } from "@/constants";
 
 // Activity status helpers
 type ActivityStatus = "overdue" | "today" | "future" | "none";
@@ -104,12 +104,6 @@ const getStatusColor = (status: LeadStatus) => {
   }
 };
 
-const getScoreColor = (score: number) => {
-  if (score >= 80) return "bg-error-100 text-error-700 border-error-200";
-  if (score >= 50) return "bg-warning-100 text-warning-700 border-warning-200";
-  return "bg-muted text-muted-foreground border-border";
-};
-
 const getInitials = (name: string) => {
   return name
     .split(" ")
@@ -169,7 +163,7 @@ export const LeadListItem = React.memo(function LeadListItem({
             {/* Score Badge */}
             <Badge
               variant="outline"
-              className={cn("text-[10px] px-1.5 py-0", getScoreColor(lead.lead_score))}
+              className={cn("text-[10px] px-1.5 py-0", getLeadScoreColor(lead.lead_score))}
             >
               {lead.lead_score}
             </Badge>
@@ -225,31 +219,23 @@ export const LeadListItem = React.memo(function LeadListItem({
 
         {/* Quick Actions (Visible on Hover) */}
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shrink-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={(e) => {
-              e.stopPropagation();
-              window.location.href = `tel:${lead.phone}`;
-            }}
+          <a
+            href={`tel:${lead.phone}`}
+            className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-accent hover:text-accent-foreground"
+            onClick={(e) => e.stopPropagation()}
             aria-label="Gọi điện"
           >
             <Phone className="h-3.5 w-3.5" />
-          </Button>
+          </a>
           {lead.email && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={(e) => {
-                e.stopPropagation();
-                window.location.href = `mailto:${lead.email}`;
-              }}
+            <a
+              href={`mailto:${lead.email}`}
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-accent hover:text-accent-foreground"
+              onClick={(e) => e.stopPropagation()}
               aria-label="Gửi email"
             >
               <Mail className="h-3.5 w-3.5" />
-            </Button>
+            </a>
           )}
           {!lead.assigned_officer && onQuickAssign && (
             <Button

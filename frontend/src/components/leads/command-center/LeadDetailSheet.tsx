@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
+import { getLeadScoreTextColor } from "@/constants";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
 interface LeadDetailSheetProps {
@@ -58,12 +59,6 @@ const getStatusColor = (status: LeadStatus) => {
     default:
       return "bg-muted-foreground";
   }
-};
-
-const getScoreColor = (score: number) => {
-  if (score >= 80) return "text-error-600 bg-error-50";
-  if (score >= 50) return "text-warning-600 bg-warning-50";
-  return "text-muted-foreground bg-muted";
 };
 
 const getInitials = (name: string) => {
@@ -119,7 +114,7 @@ export function LeadDetailSheet({
                   <div className="flex items-center gap-2">
                     <Badge
                       variant="outline"
-                      className={cn("font-bold", getScoreColor(lead.lead_score))}
+                      className={cn("font-bold", getLeadScoreTextColor(lead.lead_score))}
                     >
                       Score: {lead.lead_score}
                     </Badge>

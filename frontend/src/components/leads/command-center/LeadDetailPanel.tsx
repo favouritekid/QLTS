@@ -91,13 +91,6 @@ const getAssignmentStatusLabel = (status: string) => {
   }
 };
 
-// ✅ TECHNICAL DEBT FIX: Score display color helper
-const getScoreColor = (score: number) => {
-  if (score >= 80) return "text-error-600 bg-error-50 border-error-200";
-  if (score >= 50) return "text-warning-600 bg-warning-50 border-warning-200";
-  return "text-muted-foreground bg-muted border-border";
-};
-
 const getInitials = (name: string) => {
   return name
     .split(" ")

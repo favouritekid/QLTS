@@ -34,7 +34,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { DynamicColorBadge, ColorDot } from "@/components/ui/dynamic-color-badge";
 import { STAGE_COLORS } from "@/types/pipeline.types";
-import { LEAD_SOURCE_OPTIONS } from "@/constants";
+import { LEAD_SOURCE_OPTIONS, getLeadScoreColor, getLeadScoreLabel } from "@/constants";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import type { Lead, TimelineItem } from "@/types/lead.types";
 
@@ -71,20 +71,6 @@ const getEducationLevelLabel = (level: string | null | undefined) => {
 const getSourceLabel = (source: string | null | undefined) => {
   if (!source) return null;
   return LEAD_SOURCE_OPTIONS.find((o) => o.value === source)?.label || source;
-};
-
-const getScoreColor = (score: number) => {
-  if (score >= 70) return "bg-success-100 text-success-700 border-success-200";
-  if (score >= 50) return "bg-info-100 text-info-700 border-info-200";
-  if (score >= 30) return "bg-warning-100 text-warning-700 border-warning-200";
-  return "bg-muted text-muted-foreground border-border";
-};
-
-const getScoreLabel = (score: number) => {
-  if (score >= 70) return "Tiềm năng cao";
-  if (score >= 50) return "Trung bình";
-  if (score >= 30) return "Thấp";
-  return "Rất thấp";
 };
 
 const getLocationProximityLabel = (value: number | null | undefined) => {
@@ -193,7 +179,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
             {/* Score Badge */}
             <div className={cn(
               "flex items-center justify-between rounded-lg border p-2.5",
-              getScoreColor(lead.lead_score)
+              getLeadScoreColor(lead.lead_score)
             )}>
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4" />
@@ -201,7 +187,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
               </div>
               <div className="text-right">
                 <div className="font-bold text-lg">{lead.lead_score}</div>
-                <div className="text-xs opacity-80">{getScoreLabel(lead.lead_score)}</div>
+                <div className="text-xs opacity-80">{getLeadScoreLabel(lead.lead_score)}</div>
               </div>
             </div>
 

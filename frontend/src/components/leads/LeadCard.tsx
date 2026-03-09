@@ -16,7 +16,7 @@ import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { format, isToday, isPast, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import type { Lead, LeadStatus } from "@/types/lead.types";
-import { getLeadStatusLabel } from "@/constants";
+import { getLeadStatusLabel, getLeadScoreColor } from "@/constants";
 
 // Activity status helpers
 type ActivityStatus = "overdue" | "today" | "future" | "none";
@@ -68,12 +68,6 @@ const getStatusColor = (status: LeadStatus) => {
     default:
       return "bg-muted-foreground";
   }
-};
-
-const getScoreColor = (score: number) => {
-  if (score >= 80) return "bg-error-100 text-error-700 border-error-200";
-  if (score >= 50) return "bg-warning-100 text-warning-700 border-warning-200";
-  return "bg-muted text-muted-foreground border-border";
 };
 
 // Get border color based on score
@@ -169,7 +163,7 @@ export const LeadCard = React.memo(function LeadCard({
           {/* Score Badge */}
           <Badge
             variant="outline"
-            className={cn("text-[10px] px-1.5 py-0 font-bold", getScoreColor(lead.lead_score))}
+            className={cn("text-[10px] px-1.5 py-0 font-bold", getLeadScoreColor(lead.lead_score))}
           >
             {lead.lead_score}
           </Badge>

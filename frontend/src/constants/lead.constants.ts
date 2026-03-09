@@ -162,6 +162,42 @@ export const isSchedulableStatus = (status: LeadStatus): boolean =>
   SCHEDULABLE_STATUS_SET.has(status);
 
 // =============================================================================
+// LEAD SCORE COLOR & LABEL (Canonical — use everywhere)
+// =============================================================================
+// 4-tier system: ≥70 success, ≥50 info, ≥30 warning, <30 muted
+// DO NOT duplicate this logic in components — import from here.
+
+/**
+ * Get score color classes (border variant for badges)
+ */
+export const getLeadScoreColor = (score: number): string => {
+  if (score >= 70) return "bg-success-100 text-success-700 border-success-200";
+  if (score >= 50) return "bg-info-100 text-info-700 border-info-200";
+  if (score >= 30) return "bg-warning-100 text-warning-700 border-warning-200";
+  return "bg-muted text-muted-foreground border-border";
+};
+
+/**
+ * Get score color classes (text variant for inline display)
+ */
+export const getLeadScoreTextColor = (score: number): string => {
+  if (score >= 70) return "text-success-600 bg-success-50";
+  if (score >= 50) return "text-info-600 bg-info-50";
+  if (score >= 30) return "text-warning-600 bg-warning-50";
+  return "text-muted-foreground bg-muted";
+};
+
+/**
+ * Get human-readable score label
+ */
+export const getLeadScoreLabel = (score: number): string => {
+  if (score >= 70) return "Tiềm năng cao";
+  if (score >= 50) return "Trung bình";
+  if (score >= 30) return "Thấp";
+  return "Rất thấp";
+};
+
+// =============================================================================
 // LEAD VALIDITY OPTIONS (CTV System)
 // =============================================================================
 

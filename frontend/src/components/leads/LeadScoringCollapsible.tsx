@@ -17,6 +17,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getLeadScoreTextColor } from "@/constants";
 import type { Lead, LeadInsights } from "@/types/lead.types";
 
 interface LeadScoringCollapsibleProps {
@@ -25,14 +26,6 @@ interface LeadScoringCollapsibleProps {
   defaultExpanded?: boolean;
   className?: string;
 }
-
-// Score color utility
-const getScoreColor = (score: number) => {
-  if (score >= 70) return "text-success-600 bg-success-50";
-  if (score >= 50) return "text-info-600 bg-info-50";
-  if (score >= 30) return "text-warning-600 bg-warning-50";
-  return "text-muted-foreground bg-muted";
-};
 
 const getScoreLabel = (score: number) => {
   if (score >= 70) return "Cao";
@@ -54,7 +47,7 @@ function ScoreBadge({
   className?: string;
 }) {
   const isNull = value === null;
-  const colorClass = isNull ? "text-muted-foreground bg-muted" : getScoreColor(value);
+  const colorClass = isNull ? "text-muted-foreground bg-muted" : getLeadScoreTextColor(value);
 
   return (
     <div className={cn("flex items-center gap-2", className)}>
@@ -109,7 +102,7 @@ export function LeadScoringCollapsible({
             <div
               className={cn(
                 "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold",
-                getScoreColor(overallScore)
+                getLeadScoreTextColor(overallScore)
               )}
             >
               <TrendingUp className="h-3 w-3" />
@@ -129,7 +122,7 @@ export function LeadScoringCollapsible({
           <div
             className={cn(
               "flex items-center justify-between p-3 rounded-lg mb-3",
-              getScoreColor(overallScore)
+              getLeadScoreTextColor(overallScore)
             )}
           >
             <div className="flex items-center gap-2">
