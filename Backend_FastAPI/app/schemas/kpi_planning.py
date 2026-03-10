@@ -144,3 +144,12 @@ class KpiPlanPreviewResponse(BaseModel):
     sla_target: float
     response_time_target: float
     months: List[KpiPlanPreviewMonth]
+
+
+class HolidayStatusResponse(BaseModel):
+    """Holiday calendar completeness status for a given year (Phase A9)."""
+    year: int
+    total_holidays: int
+    has_lunar_holidays: bool
+    is_complete: bool
+    warning: Optional[str] = None

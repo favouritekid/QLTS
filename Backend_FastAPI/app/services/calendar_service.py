@@ -144,3 +144,69 @@ async def get_working_days_override(
         return working_days
 
     return None
+
+
+# =============================================================================
+# HOLIDAY STATUS CHECK (Phase A9)
+# =============================================================================
+
+# Known lunar holidays that require manual seeding each year
+LUNAR_HOLIDAY_KEYWORDS = ["Tết Nguyên Đán", "Giỗ Tổ Hùng Vương"]
+HOLIDAY_COMPLETE_THRESHOLD = 8  # Minimum holidays expected for a complete year
+
+
+async def get_holiday_status(db: AsyncSession, year: int) -> dict:
+    """
+    Check if holiday_calendar is sufficiently seeded for a given year.
+
+    Returns dict with:
+      - year, total_holidays, has_lunar_holidays, is_complete, warning
+    Read-only — no commit.
+    """
+    from sqlalchemy import func
+
+    # Count all holidays applicable to this year:
+    # - Non-recurring: year column matches
+    # - Recurring: always apply (match by is_recurring=TRUE)
+    stmt = select(
+        HolidayCalendar.name,
+        HolidayCalendar.is_recurring,
+        HolidayCalendar.year,
+    ).where(
+        or_(
+            and_(HolidayCalendar.is_recurring == False, HolidayCalendar.year == year),  # noqa: E712
+            HolidayCalendar.is_recurring == True,  # noqa: E712
+        )
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    total = len(rows)
+
+    # Check for lunar holidays by keyword match
+    all_names = " ".join(r.name for r in rows)
+    has_tet = any(kw in all_names for kw in ["Tết Nguyên Đán"])
+    has_hung_vuong = any(kw in all_names for kw in ["Hùng Vương"])
+    has_lunar = has_tet and has_hung_vuong
+
+    is_complete = total >= HOLIDAY_COMPLETE_THRESHOLD and has_lunar
+
+    # Build warning message
+    warning = None
+    if not is_complete:
+        missing = []
+        if not has_tet:
+            missing.append("Tết Nguyên Đán")
+        if not has_hung_vuong:
+            missing.append("Giỗ Tổ Hùng Vương")
+        if total < HOLIDAY_COMPLETE_THRESHOLD:
+            missing.append(f"chỉ có {total}/{HOLIDAY_COMPLETE_THRESHOLD} ngày lễ")
+        warning = f"Chưa cấu hình đầy đủ ngày lễ cho năm {year}: {', '.join(missing)}"
+
+    return {
+        "year": year,
+        "total_holidays": total,
+        "has_lunar_holidays": has_lunar,
+        "is_complete": is_complete,
+        "warning": warning,
+    }

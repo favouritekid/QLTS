@@ -148,6 +148,13 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- Holiday Calendar Yearly Check (Phase A9) ---
+    "check-next-year-holidays": {
+        "task": "check_next_year_holidays_task",
+        "schedule": crontab(hour=9, minute=0, day_of_month=1, month_of_year=11),  # Nov 1, 09:00
+        "options": {"queue": "default"},
+    },
+
     # --- CTV Weekly Summary (Phase 2) ---
     "send-ctv-weekly-summary": {
         "task": "send_ctv_weekly_summary_task",

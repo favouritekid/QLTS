@@ -293,3 +293,62 @@ def sync_kpi_plan_monthly_task(self):
         result.get("total_officers", 0),
     )
     return result
+
+
+# ============================================================================
+# Holiday Calendar Yearly Check (spec §7 — Nov 1st, Phase A9)
+# ============================================================================
+@celery_app.task(
+    name="check_next_year_holidays_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=1,
+    default_retry_delay=3600,
+)
+def check_next_year_holidays_task(self):
+    """
+    Celery Beat yearly task — check if holiday_calendar is seeded for next year.
+
+    Runs on November 1st (2 months before new year) to give admin time to
+    configure lunar holidays (Tết Nguyên Đán, Giỗ Tổ Hùng Vương).
+    Logs warning if calendar is incomplete.
+    """
+    task_name = "check_next_year_holidays_task"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Starting next-year holiday calendar check...")
+
+    async def _run_check() -> dict:
+        from zoneinfo import ZoneInfo
+        from ..services.calendar_service import get_holiday_status
+
+        VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+        next_year = datetime.now(VN_TZ).year + 1
+
+        async with task_db_session() as session:
+            status = await get_holiday_status(session, next_year)
+
+        return status
+
+    result = run_async_task(
+        async_func=_run_check,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["year", "total_holidays", "is_complete"],
+    )
+
+    if not result["is_complete"]:
+        task_log.warning(
+            "HOLIDAY CALENDAR INCOMPLETE for year %d: %s "
+            "(total=%d, lunar=%s). Admin action required.",
+            result["year"],
+            result.get("warning", ""),
+            result["total_holidays"],
+            result["has_lunar_holidays"],
+        )
+    else:
+        task_log.info(
+            "Holiday calendar OK for year %d: %d holidays, lunar=%s",
+            result["year"], result["total_holidays"], result["has_lunar_holidays"],
+        )
+
+    return result

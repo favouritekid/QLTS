@@ -22,6 +22,7 @@ from app.models import User
 from app.models.config import KpiPlan, KpiPlanMonth
 from app.repositories.kpi_planning_repository import KpiPlanningRepository
 from app.schemas.kpi_planning import (
+    HolidayStatusResponse,
     KpiPlanCreate,
     KpiPlanListResponse,
     KpiPlanPreview,
@@ -30,6 +31,7 @@ from app.schemas.kpi_planning import (
     KpiPlanUpdate,
 )
 from app.services import kpi_planning_service
+from app.services.calendar_service import get_holiday_status
 
 router = APIRouter(
     prefix="/api/admin/kpi-planning",
@@ -253,3 +255,27 @@ async def preview_plan(
         seasonal_weights=data.seasonal_weights,
     )
     return result
+
+
+# =============================================================================
+# HOLIDAY STATUS (Phase A9)
+# =============================================================================
+
+@router.get(
+    "/holidays/status/{year}",
+    response_model=HolidayStatusResponse,
+    summary="Check holiday calendar completeness for a year",
+)
+async def holiday_status(
+    year: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminOrManagerDep],
+):
+    """
+    Check if holiday_calendar is sufficiently seeded for the given year.
+
+    Returns total holidays, whether lunar holidays are present, and a warning
+    message if the calendar is incomplete. Used by Admin Dashboard to show
+    a banner when holidays need to be configured for the next year.
+    """
+    return await get_holiday_status(db, year)
