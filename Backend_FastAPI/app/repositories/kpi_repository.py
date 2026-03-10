@@ -87,32 +87,108 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         officer_id: Optional[int] = None,
         unit_id: Optional[int] = None,
         period_type: str = "daily",
-        default: float = 0
+        default: float = 0,
+        effective_year: Optional[int] = None,
+        effective_month: Optional[int] = None,
     ) -> float:
         """
-        Get KPI target with inheritance chain.
-        
-        Priority: officer → unit → global → default
+        Get KPI target with inheritance chain + temporal resolution (Phase B8).
+
+        Resolution order (spec §8.4):
+        1. Monthly record matching effective_year/month (officer → unit → global)
+        2. Evergreen record effective_month IS NULL (officer → unit → global)
+        3. Hardcoded DEFAULT_KPIS
+
+        If effective_year/month not provided, falls back to evergreen-only
+        (original behavior — backward compatible).
         """
-        # 1. Officer-specific
+        # --- Phase B8: Try monthly records first (if effective_date provided) ---
+        if effective_year is not None and effective_month is not None:
+            target = await self._get_monthly_target(
+                kpi_code, period_type, effective_year, effective_month,
+                officer_id=officer_id, unit_id=unit_id,
+            )
+            if target is not None:
+                return target
+
+        # --- Evergreen fallback (original chain: officer → unit → global) ---
         if officer_id:
             target = await self.get_target_by_officer(kpi_code, officer_id, period_type)
             if target is not None:
                 return target
-        
-        # 2. Unit-level
+
         if unit_id:
             target = await self.get_target_by_unit(kpi_code, unit_id, period_type)
             if target is not None:
                 return target
-        
-        # 3. Global
+
         target = await self.get_global_target(kpi_code, period_type)
         if target is not None:
             return target
-        
-        # 4. Default
+
         return default
+
+    async def _get_monthly_target(
+        self,
+        kpi_code: str,
+        period_type: str,
+        effective_year: int,
+        effective_month: int,
+        officer_id: Optional[int] = None,
+        unit_id: Optional[int] = None,
+    ) -> Optional[float]:
+        """
+        Find monthly KpiConfig record with inheritance (Phase B8).
+
+        Tries officer-specific → unit-level → global monthly records.
+        Only matches records with effective_month IS NOT NULL.
+        """
+        # 1. Officer-specific monthly
+        if officer_id:
+            result = await self.db.execute(
+                select(models.KpiConfig.target_value).where(
+                    models.KpiConfig.officer_id == officer_id,
+                    models.KpiConfig.kpi_code == kpi_code,
+                    models.KpiConfig.period_type == period_type,
+                    models.KpiConfig.effective_year == effective_year,
+                    models.KpiConfig.effective_month == effective_month,
+                    models.KpiConfig.is_active == True,  # noqa: E712
+                )
+            )
+            val = result.scalar_one_or_none()
+            if val is not None:
+                return val
+
+        # 2. Unit-level monthly
+        if unit_id:
+            result = await self.db.execute(
+                select(models.KpiConfig.target_value).where(
+                    models.KpiConfig.unit_id == unit_id,
+                    models.KpiConfig.officer_id.is_(None),
+                    models.KpiConfig.kpi_code == kpi_code,
+                    models.KpiConfig.period_type == period_type,
+                    models.KpiConfig.effective_year == effective_year,
+                    models.KpiConfig.effective_month == effective_month,
+                    models.KpiConfig.is_active == True,  # noqa: E712
+                )
+            )
+            val = result.scalar_one_or_none()
+            if val is not None:
+                return val
+
+        # 3. Global monthly
+        result = await self.db.execute(
+            select(models.KpiConfig.target_value).where(
+                models.KpiConfig.unit_id.is_(None),
+                models.KpiConfig.officer_id.is_(None),
+                models.KpiConfig.kpi_code == kpi_code,
+                models.KpiConfig.period_type == period_type,
+                models.KpiConfig.effective_year == effective_year,
+                models.KpiConfig.effective_month == effective_month,
+                models.KpiConfig.is_active == True,  # noqa: E712
+            )
+        )
+        return result.scalar_one_or_none()
     
     async def get_all_active_configs(
         self,

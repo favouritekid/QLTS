@@ -45,33 +45,57 @@ async def get_kpi_target(
     kpi_code: str,
     officer_id: Optional[int] = None,
     unit_id: Optional[int] = None,
-    period_type: str = "daily"
+    period_type: str = "daily",
+    effective_date: Optional[Any] = None,
 ) -> float:
     """
-    Get KPI target value with inheritance.
+    Get KPI target value with inheritance + temporal resolution (Phase B8).
 
-    Returns float (NUMERIC(12,2) in DB). A0: KPI Planning Foundation.
+    Returns float (NUMERIC(12,2) in DB). Backward compatible.
 
-    Priority order:
-    1. Officer-specific (if officer_id provided)
-    2. Unit-level (if unit_id provided)
-    3. Global default (unit_id IS NULL, officer_id IS NULL)
-    4. Hardcoded default (if no config exists)
+    Resolution order:
+    1. Monthly record matching effective_date's year/month (officer → unit → global)
+    2. Evergreen record effective_month IS NULL (officer → unit → global)
+    3. Hardcoded DEFAULT_KPIS
+
+    Args:
+        effective_date: Optional date/datetime. If None, uses current month.
+                        When provided, resolves target for that specific month
+                        (e.g. viewing dashboard for a past period).
     """
     from ..repositories import KpiRepository
 
     repo = KpiRepository(db)
     default = DEFAULT_KPIS.get(kpi_code, 0)
 
+    # Extract year/month for temporal resolution
+    effective_year = None
+    effective_month = None
+    if effective_date is not None:
+        effective_year = effective_date.year
+        effective_month = effective_date.month
+    else:
+        # Default to current month (spec §8.4: "Khi effective_date=None: dùng tháng hiện tại")
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+        now = dt.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+        effective_year = now.year
+        effective_month = now.month
+
     target = await repo.get_kpi_target_with_inheritance(
         kpi_code=kpi_code,
         officer_id=officer_id,
         unit_id=unit_id,
         period_type=period_type,
-        default=default
+        default=default,
+        effective_year=effective_year,
+        effective_month=effective_month,
     )
 
-    log.debug("KPI target resolved", kpi_code=kpi_code, value=target)
+    log.debug(
+        "KPI target resolved", kpi_code=kpi_code, value=target,
+        effective=f"{effective_year}/{effective_month}",
+    )
     return float(target)
 
 
