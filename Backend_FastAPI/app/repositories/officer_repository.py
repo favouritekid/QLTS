@@ -810,15 +810,24 @@ class OfficerRepository(BaseRepository[models.User]):
         - converted_count
         - total_leads
         """
-        today = datetime.now(timezone.utc).date()
-        
+        # P1 fix: use Asia/Ho_Chi_Minh for today boundary (spec §15.3)
+        from zoneinfo import ZoneInfo
+        VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+        now_vn = datetime.now(VN_TZ)
+        today_start = now_vn.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
         # Query 1: Consultations (range + today in one query with conditional)
-        # D5: filter method IS DISTINCT FROM 'system' (NULL-safe exclude system consultations)
+        # D5: filter method IS DISTINCT FROM 'system' (NULL-safe)
+        # today_count uses VN timezone range [day_start, day_end) instead of DATE()
         consult_query = (
             select(
                 func.count(models.Consultation.id).label("range_count"),
                 func.count(
-                    case((func.date(models.Consultation.consultation_date) == today, 1))
+                    case((and_(
+                        models.Consultation.consultation_date >= today_start,
+                        models.Consultation.consultation_date < today_end,
+                    ), 1))
                 ).label("today_count"),
             )
             .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
@@ -828,7 +837,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) <= end_date,
                 models.Lead.deleted_at.is_(None),
                 models.Consultation.deleted_at.is_(None),
-                models.Consultation.method.is_distinct_from("system"),  # D5: NULL-safe
+                models.Consultation.method.is_distinct_from("system"),
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -2311,7 +2320,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.LeadStatusHistory.changed_at <= d7_end,
                 or_(
                     and_(new_ps.c.order > old_ps.c.order,
-                         ~models.LeadStatusHistory.new_consultation_status_id.in_(neg_st)),
+                         or_(models.LeadStatusHistory.new_consultation_status_id.is_(None),
+                             ~models.LeadStatusHistory.new_consultation_status_id.in_(neg_st))),
                     and_(new_ps.c.is_final_stage == True,  # noqa: E712
                          models.LeadStatusHistory.new_consultation_status_id.in_(pos_st)),
                 ),

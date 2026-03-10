@@ -1,6 +1,6 @@
 # app/schemas/officer.py
 from typing import List, Optional, Literal
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 # --- Shared Models ---
@@ -176,9 +176,9 @@ class KPIStats(BaseModel):
 
     # Rolling Quality KPIs (data has 7/3 day lag)
     progress_rate_d7: Optional[float] = None  # NULL when insufficient data
-    progress_rate_d7_date: Optional[str] = None  # ISO date of actual D (today - 7)
+    progress_rate_d7_date: Optional[date] = None  # actual D (today - 7)
     rollback_rate_d3: Optional[float] = None
-    rollback_rate_d3_date: Optional[str] = None  # ISO date of actual D (today - 3)
+    rollback_rate_d3_date: Optional[date] = None  # actual D (today - 3)
 
 
 class PriorityAction(BaseModel):
