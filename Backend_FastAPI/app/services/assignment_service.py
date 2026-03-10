@@ -24,6 +24,38 @@ from .status_helper import StatusHelper, AssignmentStatus
 default_log = logging.getLogger(__name__)
 
 
+async def _log_assignment_decision(
+    db: AsyncSession,
+    lead_id: int,
+    assigned_officer_id: int | None,
+    eligible_officer_ids: list[int],
+    unit_id: int | None,
+    channel: str,
+    reason: str,
+    scores_snapshot: dict | None = None,
+    capacity_snapshot: dict | None = None,
+    log: logging.Logger = default_log,
+) -> None:
+    """
+    Phase A8: Log assignment decision for fairness analysis (v2.1 prep).
+    Fail-safe — exceptions are caught and warned, never fail the assign flow.
+    """
+    try:
+        entry = models.AssignmentDecisionLog(
+            lead_id=lead_id,
+            assigned_officer_id=assigned_officer_id,
+            eligible_officer_ids=eligible_officer_ids,
+            channel=channel,
+            unit_id=unit_id,
+            scores_snapshot=scores_snapshot,
+            capacity_snapshot=capacity_snapshot,
+            reason=reason,
+        )
+        db.add(entry)
+    except Exception as e:
+        log.warning(f"[Lead ID: {lead_id}] Failed to log assignment decision: {e}")
+
+
 # Thêm tham số logger=None
 async def automatically_assign_lead(
     lead_id: int, db: AsyncSession, logger: logging.Logger = None
@@ -145,6 +177,12 @@ async def automatically_assign_lead(
                             f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
+                    # A8: Log decision — no officers available
+                    await _log_assignment_decision(
+                        db, lead_id=lead_id, assigned_officer_id=None,
+                        eligible_officer_ids=[], unit_id=lead_unit_id,
+                        channel="auto", reason="no_officers", log=log,
+                    )
                     return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.NO_OFFICERS, "lead_id": lead_id, "unit_id": lead_unit_id}, _post_commit_callbacks
 
                 log.debug(
@@ -241,6 +279,17 @@ async def automatically_assign_lead(
                             f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
+                    # A8: Log decision — all at capacity
+                    await _log_assignment_decision(
+                        db, lead_id=lead_id, assigned_officer_id=None,
+                        eligible_officer_ids=officer_ids, unit_id=lead_unit_id,
+                        channel="auto", reason="at_capacity",
+                        capacity_snapshot={
+                            str(o.id): {"current": workload_map.get(o.id, 0),
+                                        "max": o.max_capacity or 100}
+                            for o in available_officers
+                        }, log=log,
+                    )
                     return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.AT_CAPACITY, "lead_id": lead_id, "unit_id": lead_unit_id}, _post_commit_callbacks
 
                 # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===
@@ -288,6 +337,25 @@ async def automatically_assign_lead(
 
                 # Thêm tất cả các thay đổi vào session
                 db.add_all([lead, chosen_one, log_entry])
+
+                # A8: Log decision — successful assignment
+                await _log_assignment_decision(
+                    db, lead_id=lead_id, assigned_officer_id=chosen_one.id,
+                    eligible_officer_ids=officer_ids, unit_id=lead_unit_id,
+                    channel="auto", reason="lowest_workload",
+                    scores_snapshot={
+                        str(ol["officer"].id): round(ol["utilization"], 4)
+                        for ol in officer_loads
+                    },
+                    capacity_snapshot={
+                        str(ol["officer"].id): {
+                            "current": ol["workload"],
+                            "max": ol["officer"].max_capacity or 100,
+                        }
+                        for ol in officer_loads
+                    }, log=log,
+                )
+
                 log.info(
                     f"[Lead ID: {lead_id}] Lead assignment successful to officer {chosen_one.id}."
                 )
