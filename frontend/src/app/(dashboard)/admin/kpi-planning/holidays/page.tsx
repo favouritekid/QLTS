@@ -26,7 +26,7 @@ import {
   useSeedHolidays,
   useUpdateHoliday,
 } from "@/hooks/useKpiPlanning";
-import type { Holiday, HolidayCreate } from "@/types/kpi-planning.types";
+import type { Holiday } from "@/types/kpi-planning.types";
 
 const currentYear = new Date().getFullYear();
 
@@ -36,7 +36,7 @@ export default function HolidayManagementPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editHoliday, setEditHoliday] = useState<Holiday | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Holiday | null>(null);
-  const [seedYear, setSeedYear] = useState(currentYear + 1);
+  const seedYear = currentYear + 1;
 
   // Form state
   const [formDate, setFormDate] = useState("");
