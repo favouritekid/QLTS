@@ -912,6 +912,9 @@ async def recalibrate_factors(
 
     Returns: (KpiPlan, callback)
     """
+    if not (1 <= up_to_month <= 12):
+        raise BusinessRuleViolation(f"up_to_month phải trong 1..12, nhận {up_to_month}")
+
     from sqlalchemy import select, exists
     from app.services.historical_metrics_service import (
         get_historical_k_factor,
@@ -965,7 +968,10 @@ async def recalibrate_factors(
 
         # k_factor: always update (not in OVERRIDABLE_FIELDS, it's an input factor)
         current_k = float(pm.k_factor)
-        damped_k = _clamp(new_k, current_k * damping_lo, current_k * damping_hi)
+        if current_k > 0:
+            damped_k = _clamp(new_k, current_k * damping_lo, current_k * damping_hi)
+        else:
+            damped_k = new_k  # current=0 → pass-through (no meaningful bounds)
         pm.k_factor = Decimal(str(round(damped_k, 2)))
 
         # L_t: lead_forecast
