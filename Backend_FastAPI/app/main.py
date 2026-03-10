@@ -51,6 +51,7 @@ from .routers import (
     installment_plans,  # ✅ FINANCE MODULE: Installment Plans
     invoices,  # ✅ FINANCE MODULE: Invoice Lifecycle
     kpi_config,  # ✅ PHASE 5: KPI Configuration Admin
+    kpi_planning,  # ✅ PHASE A6: KPI Planning Engine
     leads,
     monitoring,
     notification_preferences,
@@ -721,6 +722,7 @@ fastapi_app.include_router(pipeline.router, prefix="/api/pipeline")
 fastapi_app.include_router(organization.router, prefix="/api")
 fastapi_app.include_router(officer.router, prefix="/api")
 fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration Admin
+fastapi_app.include_router(kpi_planning.router)  # ✅ PHASE A6: KPI Planning Engine
 fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api")
 # ✅ FINANCE MODULE: Phase 4 - API Layer

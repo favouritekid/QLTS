@@ -123,9 +123,14 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=0),  # Runs at 01:00 daily
         "options": {"queue": "default"},
     },
+    "sync-kpi-plan-monthly": {
+        "task": "sync_kpi_plan_monthly_task",
+        "schedule": crontab(hour=2, minute=0, day_of_month=1),  # Day 1, 02:00 AM (spec §6)
+        "options": {"queue": "default"},
+    },
     "cleanup-old-notifications-daily": {
         "task": "cleanup_old_notifications_task",
-        "schedule": crontab(hour=2, minute=0),  # Runs at 02:00 daily
+        "schedule": crontab(hour=2, minute=30),  # Shifted to 02:30 (was 02:00, now taken by plan sync)
         "options": {"queue": "default"},
     },
 

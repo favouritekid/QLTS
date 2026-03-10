@@ -160,3 +160,112 @@ def sync_kpi_ytd_task(self):
         f"synced={result['synced']}, errors={result['errors']}"
     )
     return result
+
+
+# ============================================================================
+# KPI Plan Monthly Sync Task (spec §6 Job 1 — Day 1 of month, 02:00 AM)
+# ============================================================================
+@celery_app.task(
+    name="sync_kpi_plan_monthly_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=300,
+)
+def sync_kpi_plan_monthly_task(self):
+    """
+    Celery Beat monthly task — push KPI plan targets into KpiConfig/KpiTarget.
+
+    Runs on day 1 of each month at 02:00 AM (after all T-1 transactions settle).
+    For each active KpiPlan (current fiscal year):
+      1. Sync current month's targets → KpiConfig (7 KPIs per officer)
+      2. Sync annual target → KpiTarget (1 per officer)
+    Commits per plan (isolation — 1 plan failure doesn't block others).
+    """
+    task_name = "sync_kpi_plan_monthly_task"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Starting KPI plan monthly sync...")
+
+    async def _run_plan_sync() -> dict:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from ..models.config import KpiPlan
+        from ..services import kpi_planning_service
+
+        fiscal_year = datetime.now(timezone.utc).year
+        current_month = datetime.now(timezone.utc).month
+
+        result = {"plans": 0, "synced": 0, "errors": 0, "total_officers": 0}
+
+        # Find all active plans for current fiscal year
+        async with task_db_session() as session:
+            plans_result = await session.execute(
+                select(KpiPlan)
+                .options(selectinload(KpiPlan.months))
+                .where(
+                    KpiPlan.is_active == True,  # noqa: E712
+                    KpiPlan.fiscal_year == fiscal_year,
+                    KpiPlan.officer_id.is_(None),  # Only unit plans (officers resolved inside sync)
+                )
+            )
+            unit_plans = list(plans_result.scalars().unique().all())
+            result["plans"] = len(unit_plans)
+
+            if result["plans"] == 0:
+                task_log.info("No active unit plans found for fiscal year %d", fiscal_year)
+                return result
+
+            task_log.info(
+                "Found %d active unit plans for fiscal year %d",
+                result["plans"], fiscal_year,
+            )
+
+        # Process each plan in its own session (commit-per-plan isolation)
+        for plan in unit_plans:
+            try:
+                async with task_db_session() as session:
+                    # Re-load plan in this session (detached from previous session)
+                    plan_result = await session.execute(
+                        select(KpiPlan)
+                        .options(selectinload(KpiPlan.months))
+                        .where(KpiPlan.id == plan.id)
+                    )
+                    fresh_plan = plan_result.scalar_one_or_none()
+                    if fresh_plan is None or not fresh_plan.is_active:
+                        continue
+
+                    stats = await kpi_planning_service.sync_plan_to_kpi_config(
+                        session, fresh_plan, current_month,
+                    )
+                    await session.commit()
+
+                    result["synced"] += 1
+                    result["total_officers"] += stats.get("officers_synced", 0)
+                    task_log.info(
+                        "Plan %d synced: %d officers, %d configs",
+                        plan.id,
+                        stats.get("officers_synced", 0),
+                        stats.get("configs_upserted", 0),
+                    )
+
+            except Exception as e:
+                result["errors"] += 1
+                task_log.error(
+                    "Error syncing plan %d: %s", plan.id, e, exc_info=True,
+                )
+
+        return result
+
+    result = run_async_task(
+        async_func=_run_plan_sync,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["plans", "synced", "errors"],
+    )
+
+    task_log.info(
+        "KPI plan monthly sync completed: plans=%d, synced=%d, errors=%d, officers=%d",
+        result["plans"], result["synced"], result["errors"],
+        result.get("total_officers", 0),
+    )
+    return result

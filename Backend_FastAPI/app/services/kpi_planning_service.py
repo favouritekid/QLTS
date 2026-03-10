@@ -15,9 +15,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import structlog
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.config import KpiPlan, KpiPlanMonth
 from app.services.calendar_service import count_working_days, get_working_days_override
@@ -215,21 +213,15 @@ async def create_plan(
         weights_list = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
         weights_json = None  # NULL = use defaults
 
-    # --- Check duplicate active plan (scope-aware) ---
-    dup_filters = [
-        KpiPlan.unit_id == unit_id,
-        KpiPlan.fiscal_year == fiscal_year,
-        KpiPlan.is_active == True,  # noqa: E712
-    ]
-    if officer_id is None:
-        dup_filters.append(KpiPlan.officer_id.is_(None))
-        scope_label = f"unit plan (unit_id={unit_id})"
-    else:
-        dup_filters.append(KpiPlan.officer_id == officer_id)
-        scope_label = f"officer plan (unit_id={unit_id}, officer_id={officer_id})"
+    # --- Check duplicate active plan (scope-aware, via repository) ---
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+    repo = KpiPlanningRepository(db)
 
-    existing = await db.execute(select(KpiPlan.id).where(*dup_filters))
-    if existing.scalar_one_or_none() is not None:
+    if await repo.check_duplicate_active_plan(unit_id, fiscal_year, officer_id):
+        scope_label = (
+            f"officer plan (unit_id={unit_id}, officer_id={officer_id})"
+            if officer_id else f"unit plan (unit_id={unit_id})"
+        )
         raise DuplicateResourceError(
             f"Active {scope_label} already exists for fiscal_year={fiscal_year}"
         )
@@ -277,12 +269,10 @@ async def generate_monthly_kpis(
 
     Returns: (KpiPlan with refreshed months, post_commit_callback)
     """
-    plan = await db.execute(
-        select(KpiPlan)
-        .options(selectinload(KpiPlan.months))
-        .where(KpiPlan.id == plan_id, KpiPlan.is_active == True)  # noqa: E712
-    )
-    plan = plan.scalar_one_or_none()
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+    repo = KpiPlanningRepository(db)
+
+    plan = await repo.get_plan_by_id(plan_id, with_months=True)
     if plan is None:
         raise ResourceNotFoundError("KpiPlan", plan_id)
 
@@ -381,3 +371,349 @@ async def _generate_months_for_plan(
         db.add(plan_month)
 
     await db.flush()
+
+
+# =============================================================================
+# PREVIEW PLAN — dry-run, no persist (spec §5.1, §7)
+# =============================================================================
+
+async def preview_plan(
+    db: AsyncSession,
+    unit_id: int,
+    fiscal_year: int,
+    annual_target: int,
+    sla_target: float = 85.0,
+    response_time_target: float = 2.0,
+    seasonal_weights: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """
+    Dry-run: compute 12 monthly KPIs WITHOUT persisting.
+
+    Returns dict matching KpiPlanPreviewResponse schema.
+    Pure computation + working-days lookup (read-only DB access).
+    """
+    validate_annual_target(annual_target)
+    if not (0 <= sla_target <= 100):
+        raise BusinessRuleViolation(f"sla_target phải trong 0..100, nhận {sla_target}")
+    if not (1 <= response_time_target <= 48):
+        raise BusinessRuleViolation(f"response_time_target phải trong 1..48, nhận {response_time_target}")
+
+    if seasonal_weights is not None:
+        validate_seasonal_weights(seasonal_weights)
+        weights_list = seasonal_weights
+    else:
+        weights_list = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+
+    monthly_targets = distribute_by_largest_remainder(annual_target, weights_list)
+
+    months_preview: List[Dict[str, Any]] = []
+    for month_idx in range(12):
+        month_num = month_idx + 1
+        m_t = monthly_targets[month_idx]
+        wd_t = await count_working_days(db, fiscal_year, month_num)
+        k_t = DEFAULT_K_FACTOR
+
+        derived = compute_derived_kpis(m_t, wd_t, k_t, None, None)
+        # Convert Decimal to float for JSON serialization
+        for key, val in derived.items():
+            if isinstance(val, Decimal):
+                derived[key] = float(val)
+
+        months_preview.append({
+            "month": month_num,
+            "enrollment_target": m_t,
+            "working_days": wd_t,
+            "weight": weights_list[month_idx],
+            "k_factor": k_t,
+            "lead_forecast": None,
+            "close_forecast": None,
+            **derived,
+        })
+
+    return {
+        "annual_enrollment_target": annual_target,
+        "sla_target": sla_target,
+        "response_time_target": response_time_target,
+        "months": months_preview,
+    }
+
+
+# =============================================================================
+# UPDATE PLAN — basic metadata update (spec §5.1, Phase A6 wiring)
+# =============================================================================
+
+async def update_plan(
+    db: AsyncSession,
+    plan: KpiPlan,
+    annual_target: Optional[int] = None,
+    sla_target: Optional[float] = None,
+    response_time_target: Optional[float] = None,
+    seasonal_weights: Optional[List[float]] = None,
+) -> Tuple[KpiPlan, Callback]:
+    """
+    Update plan metadata and regenerate derived KPIs.
+
+    Note: Full mid-year redistribute logic is Phase B6.
+    This A6 implementation updates fields and regenerates all 12 months.
+    """
+    changed = False
+
+    if annual_target is not None:
+        validate_annual_target(annual_target)
+        plan.annual_enrollment_target = annual_target
+        changed = True
+
+    if sla_target is not None:
+        if not (0 <= sla_target <= 100):
+            raise BusinessRuleViolation(f"sla_target phải trong 0..100, nhận {sla_target}")
+        plan.sla_target = Decimal(str(sla_target))
+        changed = True
+
+    if response_time_target is not None:
+        if not (1 <= response_time_target <= 48):
+            raise BusinessRuleViolation(f"response_time_target phải trong 1..48, nhận {response_time_target}")
+        plan.response_time_target = Decimal(str(response_time_target))
+        changed = True
+
+    if seasonal_weights is not None:
+        validate_seasonal_weights(seasonal_weights)
+        plan.seasonal_weights = seasonal_weights
+        changed = True
+
+    if not changed:
+        return plan, None
+
+    await db.flush()
+
+    # Regenerate derived KPIs with updated inputs
+    plan, _ = await generate_monthly_kpis(db, plan.id)
+
+    log.info("KPI plan updated", plan_id=plan.id)
+    return plan, None
+
+
+# =============================================================================
+# DEACTIVATE PLAN — soft delete (spec §5.1, Phase A6 wiring)
+# =============================================================================
+
+async def deactivate_plan(
+    db: AsyncSession,
+    plan: KpiPlan,
+) -> Tuple[KpiPlan, Callback]:
+    """
+    Soft-delete: set is_active = FALSE.
+
+    Note: Full cleanup of future KpiConfig records (using source_plan_id)
+    is Phase B7. This A6 implementation only deactivates the plan.
+    """
+    plan.is_active = False
+    await db.flush()
+
+    log.info("KPI plan deactivated", plan_id=plan.id)
+    return plan, None
+
+
+# =============================================================================
+# SYNC PLAN → KpiConfig / KpiTarget (spec §5.1, §8.3 — Phase A7)
+# =============================================================================
+
+# Mapping: kpi_plan_month fields → KpiConfig records
+# source="month" reads from KpiPlanMonth, source="plan" reads from KpiPlan
+KPI_SYNC_MAPPING = [
+    {"kpi_code": "consultations_daily",        "period_type": "daily",   "source": "month", "field": "consultations_daily"},
+    {"kpi_code": "conversion_rate",            "period_type": "monthly", "source": "month", "field": "conversion_rate"},
+    {"kpi_code": "win_rate",                   "period_type": "monthly", "source": "month", "field": "win_rate"},
+    {"kpi_code": "consultation_effectiveness", "period_type": "monthly", "source": "month", "field": "consultation_effectiveness"},
+    {"kpi_code": "enrollments_monthly",        "period_type": "monthly", "source": "month", "field": "enrollment_target"},
+    {"kpi_code": "sla_compliance_rate",        "period_type": "monthly", "source": "plan",  "field": "sla_target"},
+    {"kpi_code": "response_time_hours",        "period_type": "daily",   "source": "plan",  "field": "response_time_target"},
+]
+
+
+async def sync_plan_to_kpi_config(
+    db: AsyncSession,
+    plan: KpiPlan,
+    month: int,
+) -> Dict[str, int]:
+    """
+    Push KPI plan targets into KpiConfig (7 monthly KPIs) + KpiTarget (1 annual KPI)
+    for all active officers in the plan's unit.
+
+    Resolution order per officer:
+      1. Officer plan (if exists) → use officer plan's month data
+      2. Unit plan (fallback) → use this plan's month data
+
+    Idempotent: upserts by unique scope (officer_id, kpi_code, period_type,
+    effective_year, effective_month). Running twice produces the same result.
+
+    NULL derived KPI → COALESCE to 0 (spec §8.3: prevents DEFAULT_KPIS fallback).
+    Does NOT commit — caller (Celery task) commits.
+
+    Returns: {"officers_synced": N, "configs_upserted": N}
+    """
+    from sqlalchemy import select
+    from app.models.config import KpiConfig, KpiTarget
+    from app.models.user import User
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+
+    repo = KpiPlanningRepository(db)
+    stats = {"officers_synced": 0, "configs_upserted": 0}
+
+    # --- Find the target plan month ---
+    plan_month = None
+    if plan.months:
+        plan_month = next((m for m in plan.months if m.month == month), None)
+    if plan_month is None:
+        log.warning("sync_plan_to_kpi_config: month not found", plan_id=plan.id, month=month)
+        return stats
+
+    # --- Get active officers in unit ---
+    result = await db.execute(
+        select(User.id, User.unit_id)
+        .where(
+            User.unit_id == plan.unit_id,
+            User.role == "officer",
+            User.status == "active",
+        )
+    )
+    officers = result.all()
+
+    if not officers:
+        log.info("sync: no active officers in unit", unit_id=plan.unit_id)
+        return stats
+
+    for officer_id, officer_unit_id in officers:
+        # --- Resolve effective plan: officer plan > unit plan ---
+        effective_plan = plan
+        effective_month_data = plan_month
+
+        officer_plan = await repo.get_active_plan_by_scope(
+            unit_id=plan.unit_id,
+            fiscal_year=plan.fiscal_year,
+            officer_id=officer_id,
+            with_months=True,
+        )
+        if officer_plan is not None:
+            effective_plan = officer_plan
+            opm = next((m for m in officer_plan.months if m.month == month), None)
+            if opm is not None:
+                effective_month_data = opm
+
+        # --- Upsert 7 KPI monthly → KpiConfig ---
+        for mapping in KPI_SYNC_MAPPING:
+            kpi_code = mapping["kpi_code"]
+            period_type = mapping["period_type"]
+
+            # Read value from correct source
+            if mapping["source"] == "month":
+                raw_value = getattr(effective_month_data, mapping["field"])
+            else:  # "plan"
+                raw_value = getattr(effective_plan, mapping["field"])
+
+            # COALESCE NULL → 0 (spec §8.3)
+            target_value = float(raw_value) if raw_value is not None else 0.0
+
+            # Upsert: find existing monthly record for this exact scope
+            existing = await _find_monthly_kpi_config(
+                db, kpi_code=kpi_code, period_type=period_type,
+                officer_id=officer_id, unit_id=plan.unit_id,
+                effective_year=plan.fiscal_year, effective_month=month,
+            )
+
+            if existing is not None:
+                existing.target_value = target_value
+                existing.source_plan_id = effective_plan.id
+            else:
+                db.add(KpiConfig(
+                    kpi_code=kpi_code,
+                    target_value=target_value,
+                    period_type=period_type,
+                    officer_id=officer_id,
+                    unit_id=plan.unit_id,
+                    effective_month=month,
+                    effective_year=plan.fiscal_year,
+                    source_plan_id=effective_plan.id,
+                    is_active=True,
+                ))
+            stats["configs_upserted"] += 1
+
+        # --- Upsert enrollments_annual → KpiTarget ---
+        annual_target_value = effective_plan.annual_enrollment_target
+        existing_target = await _find_annual_kpi_target(
+            db, officer_id=officer_id, unit_id=plan.unit_id,
+            fiscal_year=plan.fiscal_year,
+        )
+        if existing_target is not None:
+            existing_target.annual_target = annual_target_value
+        else:
+            db.add(KpiTarget(
+                kpi_code="enrollments_annual",
+                annual_target=annual_target_value,
+                fiscal_year=plan.fiscal_year,
+                officer_id=officer_id,
+                unit_id=plan.unit_id,
+                is_active=True,
+                achieved_ytd=0,
+            ))
+        stats["configs_upserted"] += 1
+
+        stats["officers_synced"] += 1
+
+    await db.flush()
+
+    log.info(
+        "sync_plan_to_kpi_config completed",
+        plan_id=plan.id, month=month,
+        officers=stats["officers_synced"],
+        upserted=stats["configs_upserted"],
+    )
+    return stats
+
+
+async def _find_monthly_kpi_config(
+    db: AsyncSession,
+    kpi_code: str,
+    period_type: str,
+    officer_id: int,
+    unit_id: int,
+    effective_year: int,
+    effective_month: int,
+):
+    """Find existing active monthly KpiConfig record (for upsert)."""
+    from sqlalchemy import select
+    from app.models.config import KpiConfig
+
+    result = await db.execute(
+        select(KpiConfig).where(
+            KpiConfig.kpi_code == kpi_code,
+            KpiConfig.period_type == period_type,
+            KpiConfig.officer_id == officer_id,
+            KpiConfig.unit_id == unit_id,
+            KpiConfig.effective_year == effective_year,
+            KpiConfig.effective_month == effective_month,
+            KpiConfig.is_active == True,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _find_annual_kpi_target(
+    db: AsyncSession,
+    officer_id: int,
+    unit_id: int,
+    fiscal_year: int,
+):
+    """Find existing active annual KpiTarget record (for upsert)."""
+    from sqlalchemy import select
+    from app.models.config import KpiTarget
+
+    result = await db.execute(
+        select(KpiTarget).where(
+            KpiTarget.kpi_code == "enrollments_annual",
+            KpiTarget.officer_id == officer_id,
+            KpiTarget.unit_id == unit_id,
+            KpiTarget.fiscal_year == fiscal_year,
+            KpiTarget.is_active == True,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()

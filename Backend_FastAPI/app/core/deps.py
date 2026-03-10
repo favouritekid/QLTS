@@ -47,6 +47,8 @@ __all__ = [
     "get_notification_template_for_admin",
     "get_notification_rule_for_admin",
     "get_kpi_target_for_admin",  # Phase 2.3
+    "get_kpi_plan_for_user",  # Phase A6: KPI Planning IDOR
+    "get_kpi_plan_month_for_user",  # Phase A6: KPI Planning IDOR
     "get_officer_dashboard_scope",
     "get_criteria_access",
     "get_config_filter",
@@ -1965,6 +1967,62 @@ async def validate_status_transition(
     )
 
     return to_status
+
+
+# =============================================================================
+# KPI PLANNING IDOR DEPENDENCIES (Phase A6 — spec §2.6)
+# =============================================================================
+
+async def get_kpi_plan_for_user(
+    plan_id: int = Path(..., description="KPI Plan ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> "models.KpiPlan":
+    """
+    IDOR-safe: Admin sees all, Manager sees only own unit's plans.
+    Returns 404 if not found OR not authorized (never 403).
+    """
+    from ..repositories.kpi_planning_repository import KpiPlanningRepository
+
+    repo = KpiPlanningRepository(db)
+    plan = await repo.get_plan_by_id(plan_id, with_months=True)
+
+    if not plan or not plan.is_active:
+        raise ResourceNotFoundError(detail="KPI Plan not found")
+
+    if current_user.role == "admin":
+        return plan
+
+    if current_user.role == "manager" and plan.unit_id == current_user.unit_id:
+        return plan
+
+    raise ResourceNotFoundError(detail="KPI Plan not found")  # 404, not 403
+
+
+async def get_kpi_plan_month_for_user(
+    month_id: int = Path(..., description="KPI Plan Month ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> "models.KpiPlanMonth":
+    """
+    IDOR-safe for plan month. Joins plan to check unit scope.
+    Returns 404 if not found OR not authorized (never 403).
+    """
+    from ..repositories.kpi_planning_repository import KpiPlanningRepository
+
+    repo = KpiPlanningRepository(db)
+    month = await repo.get_month_with_plan(month_id)
+
+    if not month or not month.plan.is_active:
+        raise ResourceNotFoundError(detail="KPI Plan Month not found")
+
+    if current_user.role == "admin":
+        return month
+
+    if current_user.role == "manager" and month.plan.unit_id == current_user.unit_id:
+        return month
+
+    raise ResourceNotFoundError(detail="KPI Plan Month not found")  # 404, not 403
 
 
 # =============================================================================
