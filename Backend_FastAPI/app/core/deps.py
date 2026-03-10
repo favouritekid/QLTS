@@ -571,6 +571,7 @@ async def get_officer_dashboard_scope(
     - Officers: Can only view personal data
     - Managers: Can view team data (their unit only)
     - Admins: Full access to all scopes and filters
+    - All other roles: Denied (fail-closed)
     
     This dependency REPLACES inline role checks in router with centralized
     security logic per MASTER_ARCHITECTURE.md Section 0.2.
@@ -645,11 +646,17 @@ async def get_officer_dashboard_scope(
         )
     
     # === ADMIN: Full access ===
-    return OfficerDashboardScope(
-        scope=scope,
-        officer_id=officer_id,
-        unit_id=unit_id,
-        requesting_user=current_user
+    if user_role == UserRole.ADMIN:
+        return OfficerDashboardScope(
+            scope=scope,
+            officer_id=officer_id,
+            unit_id=unit_id,
+            requesting_user=current_user
+        )
+
+    # === ALL OTHER ROLES: Deny by default (fail-closed) ===
+    raise PermissionDeniedError(
+        detail="Your role is not allowed to access officer dashboard"
     )
 
 

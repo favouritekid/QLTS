@@ -88,8 +88,8 @@ export const navigationConfig: NavigationConfig = {
           label: "Performance Dashboard",
           href: "/dashboard/officer",
           icon: TrendingUp,
-          roles: [], // Unified dashboard for ALL roles
-          // Officers see personal data, Managers see team, Admins see organization
+          roles: ["admin", "manager", "officer"], // Only roles supported by officer dashboard scopes
+          // Officer = personal, Manager = team, Admin = organization
         },
         {
           label: "Admin Dashboard",

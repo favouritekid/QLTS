@@ -1,7 +1,7 @@
 // src/app/(dashboard)/dashboard/officer/_components/OfficerDashboardClient.tsx
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -55,18 +55,25 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
 
   // Resolve scope from user role (null if user not yet hydrated)
   const resolvedScope: DashboardScope | null = user
-    ? (user.role === "admin" ? "organization" : user.role === "manager" ? "team" : "personal")
+    ? (
+      user.role === "admin"
+        ? "organization"
+        : user.role === "manager"
+          ? "team"
+          : user.role === "officer"
+            ? "personal"
+            : null
+    )
     : null;
 
   const [scope, setScope] = useState<DashboardScope | null>(null);
-  const [scopeInitialized, setScopeInitialized] = useState(false);
+  const prevResolvedRef = useRef<DashboardScope | null>(null);
 
-  useEffect(() => {
-    if (resolvedScope && !scopeInitialized) {
-      setScope(resolvedScope);
-      setScopeInitialized(true);
-    }
-  }, [resolvedScope, scopeInitialized]);
+  // Sync scope from role during render (no useEffect needed)
+  if (resolvedScope !== prevResolvedRef.current) {
+    prevResolvedRef.current = resolvedScope;
+    setScope(resolvedScope);
+  }
 
   // Secondary filter states
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
@@ -80,8 +87,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     scope: scope ?? "personal",
     officerId: selectedOfficerId ?? undefined,
     unitId: selectedUnitId ?? undefined,
-    initialData: scopeInitialized && scope === "personal" ? initialStats : undefined,
-    enabled: scopeInitialized,
+    initialData: scope === "personal" ? initialStats : undefined,
+    enabled: !!scope,
   });
 
   // === DATA TRANSFORMERS (must be before any early returns — Rules of Hooks) ===
@@ -109,8 +116,23 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     estimated_lost_revenue: s.estimated_lost_revenue,
   })), [stats?.sales_funnel]);
 
+  const isUnsupportedRole = !!user && resolvedScope === null;
+
+  if (isUnsupportedRole) {
+    return (
+      <div className="container mx-auto px-4 py-4 md:p-6">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Không có quyền truy cập</AlertTitle>
+          <AlertDescription>
+            Vai trò của bạn không được phép truy cập Performance Dashboard.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
   // Guard: show skeleton until scope is determined
-  if (!scopeInitialized) {
+  if (!scope) {
     return (
       <div className="container mx-auto px-4 py-4 md:p-6 space-y-4 md:space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

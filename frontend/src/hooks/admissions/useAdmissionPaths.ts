@@ -192,11 +192,9 @@ export function useUpdatePathDocuments() {
 
   return useMutation({
     mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionPathDocumentUpsert[] }) => {
-      console.log("useUpdatePathDocuments: Mutation called with:", { pathId, data });
       return updatePathDocuments(pathId, data);
     },
     onSuccess: (updatedPath, variables) => {
-      console.log("useUpdatePathDocuments: Mutation success:", updatedPath);
       // Immediately update cache with fresh data to avoid stale prop issue
       queryClient.setQueryData(admissionPathKeys.detail(variables.pathId), updatedPath)
       // Invalidate documents query for this path
