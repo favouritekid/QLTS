@@ -288,6 +288,7 @@ export function LoginHistoryClient() {
     mutationFn: secureAccount,
     onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
+      queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
       setSecureDialogOpen(false);
       setSuccessMessage(
         `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đăng nhập đã bị thu hồi. Đang chuyển đến trang đổi mật khẩu...`

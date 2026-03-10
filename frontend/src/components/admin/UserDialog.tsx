@@ -61,28 +61,28 @@ function capitalizeRole(role: string): string {
 const createUserSchema = z.object({
   username: z
     .string()
-    .min(3, "Username must be at least 3 characters")
-    .max(64, "Username must be less than 64 characters")
-    .regex(/^[a-zA-Z0-9_-]+$/, "Username can only contain letters, numbers, hyphens, and underscores"),
-  email: z.string().email("Invalid email address"),
+    .min(3, "Tên đăng nhập phải có ít nhất 3 ký tự")
+    .max(64, "Tên đăng nhập không được quá 64 ký tự")
+    .regex(/^[a-zA-Z0-9_-]+$/, "Tên đăng nhập chỉ chứa chữ cái, số, gạch ngang và gạch dưới"),
+  email: z.string().email("Địa chỉ email không hợp lệ"),
   password: z
     .string()
     .min(12, "Mật khẩu phải có ít nhất 12 ký tự")
-    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-    .regex(/\d/, "Password must contain at least one number")
-    .regex(/[@$!%*?&]/, "Password must contain at least one special character"),
-  full_name: z.string().max(120, "Full name must be less than 120 characters").optional(),
-  role: z.string().min(1, "Role is required").default("user"),
+    .regex(/[A-Z]/, "Mật khẩu phải chứa chữ cái viết hoa")
+    .regex(/[a-z]/, "Mật khẩu phải chứa chữ cái viết thường")
+    .regex(/\d/, "Mật khẩu phải chứa số")
+    .regex(/[@$!%*?&]/, "Mật khẩu phải chứa ký tự đặc biệt"),
+  full_name: z.string().min(1, "Họ tên là bắt buộc").max(120, "Họ tên không được quá 120 ký tự"),
+  role: z.string().min(1, "Vai trò là bắt buộc").default("user"),
   status: z.enum(["active", "pending", "banned"]).default("active"),
   avatar: z.instanceof(File).optional(),
 });
 
 const editUserSchema = z.object({
-  full_name: z.string().max(120, "Full name must be less than 120 characters").optional(),
-  email: z.string().email("Invalid email address"),
-  phone_number: z.string().max(20, "Phone number must be less than 20 characters").optional(),
-  role: z.string().min(1, "Role is required"),
+  full_name: z.string().max(120, "Họ tên không được quá 120 ký tự").optional(),
+  email: z.string().email("Địa chỉ email không hợp lệ"),
+  phone_number: z.string().max(20, "Số điện thoại không được quá 20 ký tự").optional(),
+  role: z.string().min(1, "Vai trò là bắt buộc"),
   status: z.enum(["active", "pending", "banned"]),
   avatar: z.instanceof(File).optional(),
 });
@@ -192,7 +192,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
       if (!file.type.startsWith("image/")) {
         form.setError("avatar", {
           type: "manual",
-          message: "Please select a valid image file",
+          message: "Vui lòng chọn tệp hình ảnh hợp lệ",
         });
         return;
       }
@@ -201,7 +201,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
       if (file.size > 5 * 1024 * 1024) {
         form.setError("avatar", {
           type: "manual",
-          message: "Image size must be less than 5MB",
+          message: "Kích thước ảnh phải nhỏ hơn 5MB",
         });
         return;
       }
@@ -305,7 +305,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 {form.formState.errors.avatar && (
                   <p className="text-destructive text-xs">
                     {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                    {String((form.formState.errors.avatar as any)?.message || "Invalid file")}
+                    {String((form.formState.errors.avatar as any)?.message || "Tệp không hợp lệ")}
                   </p>
                 )}
               </div>
