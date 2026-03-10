@@ -576,8 +576,17 @@ async def sync_plan_to_kpi_config(
 
     # --- Get officers to sync ---
     if target_officer_id is not None:
-        # Orphan officer plan: sync only the specific officer
-        officers = [(target_officer_id, plan.unit_id)]
+        # Orphan officer plan: verify officer is active + belongs to this unit
+        row = (await db.execute(
+            select(User.id, User.unit_id)
+            .where(
+                User.id == target_officer_id,
+                User.unit_id == plan.unit_id,
+                User.role == "officer",
+                User.status == "active",
+            )
+        )).one_or_none()
+        officers = [row] if row is not None else []
     else:
         # Unit plan: sync all active officers in unit
         result = await db.execute(
