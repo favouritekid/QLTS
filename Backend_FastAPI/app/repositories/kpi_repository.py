@@ -32,25 +32,26 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         officer_id: int,
         period_type: str = "daily"
     ) -> Optional[float]:
-        """Get officer-specific KPI target."""
+        """Get officer-specific evergreen KPI target (effective_month IS NULL)."""
         result = await self.db.execute(
             select(models.KpiConfig.target_value)
             .where(
                 models.KpiConfig.officer_id == officer_id,
                 models.KpiConfig.kpi_code == kpi_code,
                 models.KpiConfig.period_type == period_type,
+                models.KpiConfig.effective_month.is_(None),
                 models.KpiConfig.is_active == True,
             )
         )
         return result.scalar_one_or_none()
-    
+
     async def get_target_by_unit(
         self,
         kpi_code: str,
         unit_id: int,
         period_type: str = "daily"
     ) -> Optional[float]:
-        """Get unit-level KPI target."""
+        """Get unit-level evergreen KPI target (effective_month IS NULL)."""
         result = await self.db.execute(
             select(models.KpiConfig.target_value)
             .where(
@@ -58,17 +59,18 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
                 models.KpiConfig.officer_id.is_(None),
                 models.KpiConfig.kpi_code == kpi_code,
                 models.KpiConfig.period_type == period_type,
+                models.KpiConfig.effective_month.is_(None),
                 models.KpiConfig.is_active == True,
             )
         )
         return result.scalar_one_or_none()
-    
+
     async def get_global_target(
         self,
         kpi_code: str,
         period_type: str = "daily"
     ) -> Optional[float]:
-        """Get global default KPI target."""
+        """Get global evergreen KPI target (effective_month IS NULL)."""
         result = await self.db.execute(
             select(models.KpiConfig.target_value)
             .where(
@@ -76,6 +78,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
                 models.KpiConfig.officer_id.is_(None),
                 models.KpiConfig.kpi_code == kpi_code,
                 models.KpiConfig.period_type == period_type,
+                models.KpiConfig.effective_month.is_(None),
                 models.KpiConfig.is_active == True,
             )
         )
@@ -143,17 +146,20 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         Tries officer-specific → unit-level → global monthly records.
         Only matches records with effective_month IS NOT NULL.
         """
-        # 1. Officer-specific monthly
+        # 1. Officer-specific monthly (scoped to unit if provided)
         if officer_id:
+            filters = [
+                models.KpiConfig.officer_id == officer_id,
+                models.KpiConfig.kpi_code == kpi_code,
+                models.KpiConfig.period_type == period_type,
+                models.KpiConfig.effective_year == effective_year,
+                models.KpiConfig.effective_month == effective_month,
+                models.KpiConfig.is_active == True,  # noqa: E712
+            ]
+            if unit_id is not None:
+                filters.append(models.KpiConfig.unit_id == unit_id)
             result = await self.db.execute(
-                select(models.KpiConfig.target_value).where(
-                    models.KpiConfig.officer_id == officer_id,
-                    models.KpiConfig.kpi_code == kpi_code,
-                    models.KpiConfig.period_type == period_type,
-                    models.KpiConfig.effective_year == effective_year,
-                    models.KpiConfig.effective_month == effective_month,
-                    models.KpiConfig.is_active == True,  # noqa: E712
-                )
+                select(models.KpiConfig.target_value).where(*filters)
             )
             val = result.scalar_one_or_none()
             if val is not None:
