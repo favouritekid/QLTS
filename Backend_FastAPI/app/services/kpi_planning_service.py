@@ -768,6 +768,10 @@ async def override_month_kpi(
     """
     from datetime import datetime, timezone
 
+    # Guard: must override at least 1 field
+    if not overrides:
+        raise BusinessRuleViolation("overrides không được rỗng — phải override ít nhất 1 field")
+
     # Validate field names
     invalid = set(overrides.keys()) - OVERRIDABLE_FIELDS
     if invalid:
@@ -775,12 +779,12 @@ async def override_month_kpi(
             f"Không thể override field: {invalid}. Chỉ cho phép: {sorted(OVERRIDABLE_FIELDS)}"
         )
 
-    # Validate values
+    # Validate values (reject None and bool)
     for field, value in overrides.items():
-        if value is None:
-            raise BusinessRuleViolation(f"Override value cho '{field}' không được NULL. Dùng reset thay vì override.")
+        if value is None or isinstance(value, bool):
+            raise BusinessRuleViolation(f"Override value cho '{field}' phải là số, nhận {value!r}")
         if field == "consultations_daily":
-            if not isinstance(value, int) or value < 0:
+            if not isinstance(value, (int, float)) or value != int(value) or int(value) < 0:
                 raise BusinessRuleViolation(f"consultations_daily phải là integer >= 0, nhận {value}")
         else:
             # conversion_rate, win_rate, consultation_effectiveness: float 0..100
@@ -795,7 +799,7 @@ async def override_month_kpi(
     existing_overridden = dict(plan_month.overridden_fields or {})
     for field, value in overrides.items():
         if field == "consultations_daily":
-            setattr(plan_month, field, value)
+            setattr(plan_month, field, int(value))
         else:
             setattr(plan_month, field, Decimal(str(value)))
         existing_overridden[field] = True
@@ -831,8 +835,8 @@ async def reset_month_override(
     existing_overridden = dict(plan_month.overridden_fields or {})
 
     if fields is None:
-        # Reset all
-        fields_to_reset = set(existing_overridden.keys())
+        # Reset all — recalculate ALL derived fields (spec §5.1)
+        fields_to_reset = set(OVERRIDABLE_FIELDS)
         plan_month.overridden_fields = {}
         plan_month.override_reason = None
         plan_month.overridden_by = None

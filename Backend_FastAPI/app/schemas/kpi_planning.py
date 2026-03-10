@@ -6,7 +6,7 @@ Request/Response models for KPI Planning CRUD + Preview endpoints.
 Follows project conventions: BaseModel + ConfigDict(from_attributes=True).
 """
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -170,8 +170,9 @@ OVERRIDABLE_FIELDS = {
 
 class MonthOverrideRequest(BaseModel):
     """Override 1+ derived KPI fields for a single plan month (spec §5.1)."""
-    overrides: dict = Field(
+    overrides: Dict[str, float] = Field(
         ...,
+        min_length=1,
         description='Map of field name to value, e.g. {"consultations_daily": 16, "win_rate": 40.0}',
     )
     reason: str = Field(..., min_length=5, max_length=500, description="Lý do override (>= 5 ký tự)")
@@ -188,7 +189,7 @@ class MonthResetRequest(BaseModel):
 class BatchOverrideRequest(BaseModel):
     """Override same fields for multiple plan months (spec §7: PUT /months/batch-override)."""
     month_ids: List[int] = Field(..., min_length=1, max_length=12)
-    overrides: dict = Field(...)
+    overrides: Dict[str, float] = Field(..., min_length=1)
     reason: str = Field(..., min_length=5, max_length=500)
 
 
