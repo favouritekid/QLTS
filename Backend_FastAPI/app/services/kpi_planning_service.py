@@ -534,10 +534,17 @@ async def sync_plan_to_kpi_config(
     db: AsyncSession,
     plan: KpiPlan,
     month: int,
+    target_officer_id: Optional[int] = None,
 ) -> Dict[str, int]:
     """
     Push KPI plan targets into KpiConfig (7 monthly KPIs) + KpiTarget (1 annual KPI)
-    for all active officers in the plan's unit.
+    for active officers in the plan's unit.
+
+    Args:
+        plan: KpiPlan (with months eager-loaded)
+        month: Target month (1-12)
+        target_officer_id: If set, sync only this officer (for orphan officer plans).
+                           If None, sync all active officers in unit.
 
     Resolution order per officer:
       1. Officer plan (if exists) → use officer plan's month data
@@ -567,19 +574,24 @@ async def sync_plan_to_kpi_config(
         log.warning("sync_plan_to_kpi_config: month not found", plan_id=plan.id, month=month)
         return stats
 
-    # --- Get active officers in unit ---
-    result = await db.execute(
-        select(User.id, User.unit_id)
-        .where(
-            User.unit_id == plan.unit_id,
-            User.role == "officer",
-            User.status == "active",
+    # --- Get officers to sync ---
+    if target_officer_id is not None:
+        # Orphan officer plan: sync only the specific officer
+        officers = [(target_officer_id, plan.unit_id)]
+    else:
+        # Unit plan: sync all active officers in unit
+        result = await db.execute(
+            select(User.id, User.unit_id)
+            .where(
+                User.unit_id == plan.unit_id,
+                User.role == "officer",
+                User.status == "active",
+            )
         )
-    )
-    officers = result.all()
+        officers = result.all()
 
     if not officers:
-        log.info("sync: no active officers in unit", unit_id=plan.unit_id)
+        log.info("sync: no officers to sync", unit_id=plan.unit_id)
         return stats
 
     for officer_id, officer_unit_id in officers:

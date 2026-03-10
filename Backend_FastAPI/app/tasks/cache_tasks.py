@@ -192,12 +192,16 @@ def sync_kpi_plan_monthly_task(self):
         from ..models.config import KpiPlan
         from ..services import kpi_planning_service
 
-        fiscal_year = datetime.now(timezone.utc).year
-        current_month = datetime.now(timezone.utc).month
+        # P1 fix: use Asia/Ho_Chi_Minh (matches Celery timezone config)
+        from zoneinfo import ZoneInfo
+        VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+        now_local = datetime.now(VN_TZ)
+        fiscal_year = now_local.year
+        current_month = now_local.month
 
         result = {"plans": 0, "synced": 0, "errors": 0, "total_officers": 0}
 
-        # Find all active plans for current fiscal year
+        # Find ALL active plans for current fiscal year (unit + officer plans)
         async with task_db_session() as session:
             plans_result = await session.execute(
                 select(KpiPlan)
@@ -205,23 +209,40 @@ def sync_kpi_plan_monthly_task(self):
                 .where(
                     KpiPlan.is_active == True,  # noqa: E712
                     KpiPlan.fiscal_year == fiscal_year,
-                    KpiPlan.officer_id.is_(None),  # Only unit plans (officers resolved inside sync)
                 )
             )
-            unit_plans = list(plans_result.scalars().unique().all())
-            result["plans"] = len(unit_plans)
+            all_plans = list(plans_result.scalars().unique().all())
+
+            # Separate unit plans and officer plans
+            unit_plans = [p for p in all_plans if p.officer_id is None]
+            officer_plans = [p for p in all_plans if p.officer_id is not None]
+            result["plans"] = len(all_plans)
 
             if result["plans"] == 0:
-                task_log.info("No active unit plans found for fiscal year %d", fiscal_year)
+                task_log.info("No active plans found for fiscal year %d", fiscal_year)
                 return result
 
             task_log.info(
-                "Found %d active unit plans for fiscal year %d",
-                result["plans"], fiscal_year,
+                "Found %d active plans (%d unit, %d officer) for fiscal year %d",
+                result["plans"], len(unit_plans), len(officer_plans), fiscal_year,
             )
 
-        # Process each plan in its own session (commit-per-plan isolation)
-        for plan in unit_plans:
+        # Collect unit_ids covered by unit plans (officer plans already resolved inside sync)
+        covered_unit_ids = {p.unit_id for p in unit_plans}
+
+        # Officer plans whose unit has NO unit plan — sync these directly per officer
+        orphan_officer_plans = [
+            p for p in officer_plans if p.unit_id not in covered_unit_ids
+        ]
+        if orphan_officer_plans:
+            task_log.info(
+                "%d orphan officer plans (unit has no unit plan) — will sync directly",
+                len(orphan_officer_plans),
+            )
+
+        # Process: unit plans first (covers most officers), then orphan officer plans
+        plans_to_process = unit_plans + orphan_officer_plans
+        for plan in plans_to_process:
             try:
                 async with task_db_session() as session:
                     # Re-load plan in this session (detached from previous session)
@@ -234,8 +255,11 @@ def sync_kpi_plan_monthly_task(self):
                     if fresh_plan is None or not fresh_plan.is_active:
                         continue
 
+                    # Orphan officer plans: sync only that officer
+                    target_officer = fresh_plan.officer_id  # None for unit plans
                     stats = await kpi_planning_service.sync_plan_to_kpi_config(
                         session, fresh_plan, current_month,
+                        target_officer_id=target_officer,
                     )
                     await session.commit()
 
