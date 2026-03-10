@@ -273,7 +273,7 @@ export function UserDetailClient({ userId, initialData }: UserDetailClientProps)
                     </div>
                     <div>
                       <p className="text-sm font-medium text-muted-foreground">Trạng thái sẵn sàng</p>
-                      <p className="text-sm">{user.availability_status || "N/A"}</p>
+                      <p className="text-sm">{user.availability_status || "Không có"}</p>
                     </div>
                   </div>
                   {user.skills && user.skills.length > 0 && (

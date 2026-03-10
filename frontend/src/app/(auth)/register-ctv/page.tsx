@@ -100,7 +100,7 @@ export default function RegisterCTVPage() {
                   <FormItem>
                     <FormLabel>Họ tên <span className="text-destructive">*</span></FormLabel>
                     <FormControl>
-                      <Input placeholder="Nguyễn Văn A" autoComplete="name" {...field} />
+                      <Input placeholder="Nguyễn Văn A" autoComplete="name" disabled={isSubmitting} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -114,7 +114,7 @@ export default function RegisterCTVPage() {
                   <FormItem>
                     <FormLabel>Số điện thoại <span className="text-destructive">*</span></FormLabel>
                     <FormControl>
-                      <Input placeholder="0901234567" autoComplete="tel" {...field} />
+                      <Input placeholder="0901234567" autoComplete="tel" disabled={isSubmitting} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -128,7 +128,7 @@ export default function RegisterCTVPage() {
                   <FormItem>
                     <FormLabel>Email</FormLabel>
                     <FormControl>
-                      <Input type="email" placeholder="email@example.com" autoComplete="email" {...field} value={field.value ?? ""} />
+                      <Input type="email" placeholder="email@example.com" autoComplete="email" disabled={isSubmitting} {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -145,6 +145,7 @@ export default function RegisterCTVPage() {
                       <Input
                         type="number"
                         placeholder="VD: 1"
+                        disabled={isSubmitting}
                         {...field}
                         value={field.value ?? ""}
                         onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : undefined)}
@@ -162,7 +163,7 @@ export default function RegisterCTVPage() {
                   <FormItem>
                     <FormLabel>Số CMND/CCCD</FormLabel>
                     <FormControl>
-                      <Input placeholder="012345678901" {...field} value={field.value ?? ""} />
+                      <Input placeholder="012345678901" disabled={isSubmitting} {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -176,7 +177,7 @@ export default function RegisterCTVPage() {
                   <FormItem>
                     <FormLabel>Địa chỉ</FormLabel>
                     <FormControl>
-                      <Input placeholder="Địa chỉ liên hệ" {...field} value={field.value ?? ""} />
+                      <Input placeholder="Địa chỉ liên hệ" disabled={isSubmitting} {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -190,7 +191,7 @@ export default function RegisterCTVPage() {
                   <FormItem>
                     <FormLabel>Ghi chú</FormLabel>
                     <FormControl>
-                      <Textarea placeholder="Thông tin bổ sung..." rows={3} {...field} value={field.value ?? ""} />
+                      <Textarea placeholder="Thông tin bổ sung..." rows={3} disabled={isSubmitting} {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

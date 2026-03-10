@@ -17,7 +17,7 @@ export function PasswordStrengthIndicator({
   const strength = useMemo(() => {
     let score = 0;
     const checks = {
-      length: password.length >= 8,
+      length: password.length >= 12,
       uppercase: /[A-Z]/.test(password),
       lowercase: /[a-z]/.test(password),
       number: /\d/.test(password),
@@ -65,7 +65,7 @@ export function PasswordStrengthIndicator({
       {showRequirements && (
         <div className="space-y-1 pt-2">
           <p className="text-xs text-muted-foreground">Mật khẩu phải chứa:</p>
-          <RequirementItem met={strength.checks.length} text="Ít nhất 8 ký tự" />
+          <RequirementItem met={strength.checks.length} text="Ít nhất 12 ký tự" />
           <RequirementItem met={strength.checks.uppercase} text="Một chữ cái viết hoa (A-Z)" />
           <RequirementItem met={strength.checks.lowercase} text="Một chữ cái viết thường (a-z)" />
           <RequirementItem met={strength.checks.number} text="Một số (0-9)" />

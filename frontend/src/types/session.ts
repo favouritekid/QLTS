@@ -27,6 +27,7 @@ export interface UserSession {
 export interface UserSessionListResponse {
   sessions: UserSession[];
   total: number;
+  current_session_id: number | null;
 }
 
 export interface RevokeAllSessionsRequest {

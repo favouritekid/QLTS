@@ -329,7 +329,7 @@ export function LoginHistoryClient() {
   };
 
   const handleSecureConfirm = () => {
-    if (selectedLoginId) {
+    if (selectedLoginId !== null) {
       secureMutation.mutate(selectedLoginId);
     }
   };

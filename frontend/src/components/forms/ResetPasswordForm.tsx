@@ -32,11 +32,11 @@ const resetPasswordSchema = z
   .object({
     new_password: z
       .string()
-      .min(8, { message: "Mật khẩu phải có ít nhất 8 ký tự" })
+      .min(12, { message: "Mật khẩu phải có ít nhất 12 ký tự" })
       .regex(/[A-Z]/, { message: "Phải chứa chữ cái viết hoa" })
       .regex(/[a-z]/, { message: "Phải chứa chữ cái viết thường" })
       .regex(/[0-9]/, { message: "Phải chứa số" })
-      .regex(/[^A-Za-z0-9]/, { message: "Phải chứa ký tự đặc biệt" }),
+      .regex(/[@$!%*?&]/, { message: "Phải chứa ký tự đặc biệt (@$!%*?&)" }),
     confirm_new_password: z.string(),
   })
   .refine((data) => data.new_password === data.confirm_new_password, {

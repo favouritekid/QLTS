@@ -33,11 +33,11 @@ const registerSchema = z
     password: z
       .string()
       .min(1, { message: "Mật khẩu là bắt buộc" })
-      .min(8, { message: "Mật khẩu phải có ít nhất 8 ký tự" })
+      .min(12, { message: "Mật khẩu phải có ít nhất 12 ký tự" })
       .regex(/[A-Z]/, { message: "Mật khẩu phải chứa chữ cái viết hoa" })
       .regex(/[a-z]/, { message: "Mật khẩu phải chứa chữ cái viết thường" })
       .regex(/[0-9]/, { message: "Mật khẩu phải chứa số" })
-      .regex(/[^A-Za-z0-9]/, { message: "Mật khẩu phải chứa ký tự đặc biệt" }),
+      .regex(/[@$!%*?&]/, { message: "Mật khẩu phải chứa ký tự đặc biệt (@$!%*?&)" }),
     confirmPassword: z.string().min(1, { message: "Vui lòng xác nhận mật khẩu" }),
   })
   .refine((data) => data.password === data.confirmPassword, {

@@ -299,7 +299,7 @@ export function NotificationSettingsClient({
             </div>
             <div className="text-center flex items-center justify-center gap-1">
               <Smartphone className="h-4 w-4" />
-              SMS
+              SMS (Sắp có)
             </div>
           </div>
 

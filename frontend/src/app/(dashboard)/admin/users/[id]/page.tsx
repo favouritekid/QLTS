@@ -76,6 +76,9 @@ export default async function UserDetailPage({
   }
   
   const userId = Number(id);
+  if (isNaN(userId) || userId <= 0) {
+    notFound();
+  }
 
   return (
     <Suspense fallback={<UserDetailLoading />}>

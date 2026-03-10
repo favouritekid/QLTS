@@ -172,7 +172,7 @@ export function UserAssignmentDialog({
       toast.success(`Đã cập nhật ${toAssign.length + toUnassign.length} người dùng`);
 
       // Close dialog on success
-      onOpenChange(false);
+      handleOpenChange(false);
     } catch (error) {
       console.error("Failed to update user assignments:", error);
       toast.error("Không thể cập nhật người dùng. Vui lòng thử lại.");
@@ -335,7 +335,7 @@ export function UserAssignmentDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
               disabled={isAssigning}
             >
               Hủy

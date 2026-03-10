@@ -102,7 +102,6 @@ import { toast } from "sonner";
 import type { UsersPage } from "@/types/api.types";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { TableEmptyState } from "@/components/common/EmptyState";
-import { cn } from "@/lib/utils";
 
 interface AdminUsersClientProps {
   initialData: UsersPage; // ✅ Initial data from server
@@ -189,6 +188,12 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     },
     [sortBy, sortOrder]
   );
+
+  const handleEditUser = useCallback((user: User) => {
+    setSelectedUser(user);
+    setDialogMode("edit");
+    setUserDialogOpen(true);
+  }, []);
 
   // Table columns definition
   const columns = useMemo<ColumnDef<User>[]>(
@@ -327,7 +332,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         },
       },
     ],
-    [getSortIcon, handleSort, currentUser?.id]
+    [getSortIcon, handleSort, currentUser?.id, handleEditUser]
   );
 
   // Setup TanStack Table
@@ -345,12 +350,6 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     pageCount: data ? Math.ceil(data.total_count / 10) : 0,
     getRowId: (row) => String(row.id), // Ensure consistent row ID for mobile/desktop selection
   });
-
-  const handleEditUser = (user: User) => {
-    setSelectedUser(user);
-    setDialogMode("edit");
-    setUserDialogOpen(true);
-  };
 
   const handleCreateUser = () => {
     setSelectedUser(null);
@@ -564,6 +563,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                 <SelectItem value="all">Tất cả vai trò</SelectItem>
                 <SelectItem value="admin">Admin</SelectItem>
                 <SelectItem value="manager">Quản lý</SelectItem>
+                <SelectItem value="accountant">Kế toán</SelectItem>
                 <SelectItem value="officer">Nhân viên</SelectItem>
                 <SelectItem value="user">Người dùng</SelectItem>
               </SelectContent>
@@ -779,7 +779,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Xoá nhiều người dùng?</AlertDialogTitle>
             <AlertDialogDescription>
-              Thao tác này sẽ xoá vĩnh viễn <strong>{selectedCount} người dùng</strong>. Không thể hoàn tác.
+              Thao tác này sẽ xoá vĩnh viễn <strong>{currentUser?.id && rowSelection[String(currentUser.id)] ? selectedCount - 1 : selectedCount} người dùng</strong>. Không thể hoàn tác.
               {currentUser?.id && rowSelection[String(currentUser.id)] && (
                 <span className="block mt-2 text-warning-500 font-medium">
                   Hệ thống sẽ bỏ qua tài khoản của bạn.

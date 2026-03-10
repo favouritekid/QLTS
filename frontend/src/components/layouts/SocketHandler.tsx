@@ -334,7 +334,9 @@ export function SocketHandler() {
               onClick: () => {
                 // ✅ Mark as read BEFORE navigating (updates bell icon)
                 markAsRead.mutate({ notification_ids: [notification.id] });
-                window.location.href = notification.link!;
+                if (notification.link && isSafeUrl(notification.link)) {
+                  window.location.href = notification.link;
+                }
               },
             }
           : undefined,
@@ -785,7 +787,7 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received user_role_changed event:", data);
 
       // Important: User's role changed, should refresh permissions
-      queryClient.invalidateQueries({ queryKey: ["me"] });
+      queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
 
       // Show prominent toast

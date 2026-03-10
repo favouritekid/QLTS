@@ -42,8 +42,12 @@ export function SessionsClient({ initialData }: SessionsClientProps) {
     try {
       setError(null);
       const currentSession = sessions.find((s) => s.is_current);
+      if (!currentSession) {
+        setError("Không thể xác định phiên hiện tại. Vui lòng tải lại trang.");
+        return;
+      }
       await revokeAllOthersMutation.mutateAsync({
-        currentSessionId: currentSession?.id,
+        currentSessionId: currentSession.id,
       });
       setSuccessMessage("Thu hồi tất cả phiên khác thành công");
       setTimeout(() => setSuccessMessage(null), 3000);

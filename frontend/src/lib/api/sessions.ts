@@ -32,6 +32,6 @@ export async function revokeSession(sessionId: number): Promise<void> {
  */
 export async function revokeAllOtherSessions(currentSessionId?: number): Promise<void> {
   await api.post(API_ENDPOINTS.SESSIONS.REVOKE_ALL, {
-    current_session_id: currentSessionId || null,
+    current_session_id: currentSessionId ?? null,
   });
 }

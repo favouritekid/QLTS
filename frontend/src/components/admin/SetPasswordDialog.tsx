@@ -32,7 +32,7 @@ import type { User } from "@/types/api.types";
 const setPasswordSchema = z.object({
   new_password: z
     .string()
-    .min(8, "Mật khẩu phải có ít nhất 8 ký tự")
+    .min(12, "Mật khẩu phải có ít nhất 12 ký tự")
     .regex(/[A-Z]/, "Mật khẩu phải có ít nhất một chữ cái viết hoa")
     .regex(/[a-z]/, "Mật khẩu phải có ít nhất một chữ cái viết thường")
     .regex(/\d/, "Mật khẩu phải có ít nhất một số")
