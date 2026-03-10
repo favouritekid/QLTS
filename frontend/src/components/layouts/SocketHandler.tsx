@@ -791,11 +791,11 @@ export function SocketHandler() {
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
 
       // Show prominent toast
-      toast.warning("🔔 Your role has been changed", {
-        description: `${data.old_role} → ${data.new_role}. Please refresh the page.`,
+      toast.warning("Vai trò của bạn đã được thay đổi", {
+        description: `${data.old_role} → ${data.new_role}. Vui lòng tải lại trang.`,
         duration: 10000,
         action: {
-          label: "Refresh",
+          label: "Tải lại",
           onClick: () => window.location.reload(),
         },
       });

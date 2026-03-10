@@ -19,7 +19,7 @@ import { cn, getAvatarUrl } from "@/lib/utils";
 export function NavUser({ isCollapsed }: { isCollapsed: boolean }) {
   const { user, logout, isLoading } = useAuth();
 
-  if (isLoading) {
+  if (isLoading && !user) {
     return (
       <div className="flex items-center gap-2 px-3 py-2">
         <div className="bg-muted h-8 w-8 animate-pulse rounded-full" />

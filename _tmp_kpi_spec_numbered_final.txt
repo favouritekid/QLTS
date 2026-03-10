@@ -1,0 +1,1393 @@
+   1: # KPI Planning Engine — Reverse-Funnel Spec
+   2: 
+   3: > **Trạng thái**: Đã chốt — sẵn sàng implement
+   4: > **Input**: 1 con số (annual enrollment target) → Output: 8 KPI × 12 tháng
+   5: > **Revision**: v3 — chuẩn hóa kiểu dữ liệu (NUMERIC), canonical KPI codes, historical target resolution
+   6: 
+   7: ---
+   8: 
+   9: ## 1. Tổng quan mô hình
+  10: 
+  11: ```
+  12: Admin nhập: enrollments_annual = 300
+  13:                     ↓
+  14:          Seasonal Weights (12 tháng)
+  15:                     ↓
+  16:          M_t = enrollments_monthly per tháng
+  17:                     ↓
+  18:     ┌───────────────┼───────────────┐
+  19:     ↓               ↓               ↓
+  20:  DERIVED         DERIVED        GUARDRAIL
+  21:  (từ M_t +       (từ M_t +      (policy,
+  22:   historical)     forecast)      không đổi
+  23:                                  theo volume)
+  24: ```
+  25: 
+  26: ### 3 lớp KPI
+  27: 
+  28: | Lớp | KPI codes | Logic |
+  29: |-----|-----------|-------|
+  30: | **Anchor** | `enrollments_annual`, `enrollments_monthly` | Input + phân bổ seasonal |
+  31: | **Derived** | `consultations_daily`, `conversion_rate`, `win_rate`, `consultation_effectiveness` | Tính ngược từ M_t + k_t/L_t/C_t |
+  32: | **Guardrail** | `sla_compliance_rate`, `response_time_hours` | Chính sách, admin set trực tiếp |
+  33: 
+  34: ### Định nghĩa biến
+  35: 
+  36: | Biến | Ý nghĩa |
+  37: |------|---------|
+  38: | `M_t` | Chỉ tiêu nhập học tháng t |
+  39: | `k_t` | Hệ số tư vấn — số lượt tư vấn cần thiết để có 1 nhập học |
+  40: | `WD_t` | Số ngày làm việc (T2-T7, trừ lễ) trong tháng t |
+  41: | `L_t` | Dự báo số leads mới trong tháng t |
+  42: | `C_t` | Dự báo số leads đóng (won + lost) trong tháng t |
+  43: | `consulted_closed_t` | Số leads đã tư vấn ít nhất 1 lần VÀ đã đóng (won hoặc lost) trong tháng t. Dùng để đo hiệu quả tư vấn: bao nhiêu % leads được tư vấn cuối cùng chuyển đổi thành nhập học |
+  44: 
+  45: ### Công thức quy đổi 8 KPI cho tháng t
+  46: 
+  47: ```
+  48: enrollments_annual      = 300                           (input)
+  49: enrollments_monthly_t   = round(300 × weight_t)         (seasonal, có reconciliation)
+  50: consultations_daily_t   = ceil(M_t × k_t / WD_t)        (reverse-funnel, WD_t=0 → NULL)
+  51: conversion_rate_t       = (M_t / L_t) × 100             (reverse-funnel, guard: L_t > 0)
+  52: win_rate_t              = (M_t / C_t) × 100              (reverse-funnel, guard: C_t > 0)
+  53: consultation_effectiveness_t = max(floor, M_t / consulted_closed_t × 100)  (guard: consulted_closed_t > 0)
+  54: sla_compliance_rate_t   = guardrail (e.g. 85%)           (policy)
+  55: response_time_hours_t   = guardrail (e.g. 2h)            (policy)
+  56: ```
+  57: 
+  58: ### Reconciliation — đảm bảo sum(M_t) == annual_target (Largest Remainder Method)
+  59: 
+  60: ```python
+  61: # Bước 1: Tính M_t thô (giữ phần thập phân)
+  62: exact = [annual_target * w for w in weights]
+  63: floored = [math.floor(x) for x in exact]
+  64: 
+  65: # Bước 2: Tính diff cần phân bổ (có thể dương HOẶC âm)
+  66: diff = annual_target - sum(floored)
+  67: 
+  68: # Bước 3: Sắp xếp tháng theo phần lẻ (remainder) giảm dần
+  69: remainders = [(i, exact[i] - floored[i]) for i in range(12)]
+  70: remainders.sort(key=lambda x: x[1], reverse=True)
+  71: 
+  72: if diff > 0:
+  73:     # Bước 4a: Thiếu → cộng 1 cho diff tháng có remainder lớn nhất
+  74:     for i in range(diff):
+  75:         floored[remainders[i][0]] += 1
+  76: elif diff < 0:
+  77:     # Bước 4b: Thừa (tổng weights > 1.0) → trừ 1 cho |diff| tháng có remainder nhỏ nhất
+  78:     for i in range(abs(diff)):
+  79:         floored[remainders[-(i+1)][0]] -= 1
+  80: 
+  81: # Kết quả: sum(floored) == annual_target, cả khi tổng weights > 1 hoặc < 1
+  82: # Ví dụ 1: annual=300, weights sum=0.998 → floor sum=293, diff=+7 → cộng 1 cho 7 tháng top remainder
+  83: # Ví dụ 2: annual=300, weights sum=1.002, diff=-1 → trừ 1 cho tháng bottom remainder
+  84: ```
+  85: 
+  86: ### Division-by-zero & NULL semantics (2 lớp)
+  87: 
+  88: **Lớp 1: Planning internal (`kpi_plan_month`)** — nullable, ghi nhận "không tính được"
+  89: 
+  90: ```python
+  91: # Rule duy nhất: WD_t cho phép = 0 (tháng nghỉ toàn bộ)
+  92: # Khi WD_t = 0:
+  93: consultations_daily_t = NULL     # Không tính được
+  94: conversion_rate_t = NULL
+  95: win_rate_t = NULL
+  96: consultation_effectiveness_t = NULL
+  97: 
+  98: # Khi L_t = 0 hoặc C_t = 0:
+  99: conversion_rate_t = NULL
+ 100: win_rate_t = NULL
+ 101: 
+ 102: # Khi consulted_closed_t = 0:
+ 103: consultation_effectiveness_t = floor  # Fallback về floor (50%)
+ 104: 
+ 105: # Khi M_t = 0 (weight rất nhỏ + annual_target nhỏ):
+ 106: consultations_daily = 0          # Hợp lệ: 0 tư vấn cần thiết
+ 107: conversion_rate = NULL
+ 108: win_rate = NULL
+ 109: consultation_effectiveness = floor
+ 110: ```
+ 111: 
+ 112: **Lớp 2: Dashboard contract (`KPIStats`, `KpiConfig`)** — non-null, luôn trả số
+ 113: 
+ 114: ```python
+ 115: # Dashboard schemas hiện tại dùng non-null float (KPIStats.win_rate: float = 0.0)
+ 116: # KHÔNG đổi contract này. Giữ backward compatible.
+ 117: 
+ 118: # Sync job xử lý NULL → non-null:
+ 119: # Khi kpi_plan_month field = NULL:
+ 120: #   → Sync job KHÔNG upsert KpiConfig cho kpi_code đó
+ 121: #   → get_kpi_target() fallback về DEFAULT_KPIS (luôn trả số)
+ 122: #   → Dashboard hiện DEFAULT value — chấp nhận cho edge case hiếm (WD_t=0)
+ 123: 
+ 124: # Admin Planning UI (GET /plans/{id}) — dùng schema riêng:
+ 125: #   → Response trả Optional[float] cho derived fields
+ 126: #   → Admin UI hiện "N/A" khi NULL
+ 127: #   → Không ảnh hưởng officer dashboard schema
+ 128: ```
+ 129: 
+ 130: > **Tóm tắt**: NULL chỉ tồn tại trong `kpi_plan_month` table và Admin Planning API.
+ 131: > Officer dashboard contract (`KPIStats`, `get_kpi_target()`) **không thay đổi** — luôn non-null.
+ 132: > Edge case WD_t=0 cực hiếm (tháng toàn nghỉ lễ = gần như không xảy ra thực tế).
+ 133: 
+ 134: ---
+ 135: 
+ 136: ## 2. Quyết định đã chốt
+ 137: 
+ 138: ### 2.1 Scope & Inheritance
+ 139: 
+ 140: ```
+ 141: Officer KpiPlanMonth  →  Unit KpiPlanMonth  →  Global KpiConfig  →  DEFAULT_KPIS
+ 142:    (nếu có)                (mặc định)           (fallback)          (hardcode)
+ 143: ```
+ 144: 
+ 145: - **Unit plan** = mặc định. Manager tạo plan cho unit, áp dụng tất cả officers.
+ 146: - **Officer override** = tùy chọn per tháng. Khi officer cần target cá nhân hóa.
+ 147: - **Officer plan** khi có: override **toàn bộ 8 KPI** cho tháng đó (không partial merge với unit plan). Lý do: tránh logic kế thừa phức tạp, admin set rõ ràng.
+ 148: - Sync job: lấy effective target theo inheritance chain trên.
+ 149: 
+ 150: #### Bảng precedence cho 1 KPI field cụ thể (VD: `consultations_daily` tháng T3)
+ 151: 
+ 152: | # | Source | Điều kiện | Ví dụ |
+ 153: |---|--------|-----------|-------|
+ 154: | 1 | **Officer plan month field override** | Officer plan tồn tại + field nằm trong `overridden_fields` | Admin override Officer A T3: `consultations_daily = 20` |
+ 155: | 2 | **Officer plan month derived** | Officer plan tồn tại + field KHÔNG trong `overridden_fields` | Officer A plan tính ra `consultations_daily = 13` |
+ 156: | 3 | **Unit plan month field override** | Không có officer plan + field nằm trong `overridden_fields` | Manager override unit T3: `consultations_daily = 15` |
+ 157: | 4 | **Unit plan month derived** | Không có officer plan + field KHÔNG trong `overridden_fields` | Unit plan tính ra `consultations_daily = 12` |
+ 158: | 5 | **Global KpiConfig** | Không có plan nào (hoặc plan inactive) | Admin set global `consultations_daily = 10` |
+ 159: | 6 | **DEFAULT_KPIS (hardcode)** | Không có KpiConfig record | `DEFAULT_KPIS["consultations_daily"] = 10` |
+ 160: 
+ 161: > **Quy tắc**: Đi từ trên xuống, dừng ở level đầu tiên tìm thấy giá trị.
+ 162: > Officer plan khi có sẽ bỏ qua toàn bộ unit plan (không partial merge).
+ 163: > `overridden_fields` chỉ ảnh hưởng bên trong cùng 1 plan (sync job skip recalculate field đó).
+ 164: 
+ 165: ### 2.2 Mặc định năm đầu (chưa có data lịch sử)
+ 166: 
+ 167: | Biến | Default | Ý nghĩa |
+ 168: |------|---------|---------|
+ 169: | `k_t` | 7 | 7 tư vấn để có 1 nhập học |
+ 170: | `L_t` | `6 × M_t` | Conversion target mặc định ~16.7% |
+ 171: | `C_t` | `3 × M_t` | Win rate target mặc định ~33.3% |
+ 172: | `consultation_effectiveness` floor | 50% | Khi chưa đủ data |
+ 173: 
+ 174: > **Cần thêm** `win_rate` vào `DEFAULT_KPIS` trong `kpi_service.py` (hiện chỉ có 7 codes, thiếu `win_rate`):
+ 175: > ```python
+ 176: > DEFAULT_KPIS["win_rate"] = 33  # 33% — consistent với C_t = 3 × M_t
+ 177: > ```
+ 178: 
+ 179: ### 2.3 Auto-calibration (từ tháng thứ 4+)
+ 180: 
+ 181: - **Nguồn**: Rolling 3 tháng gần nhất (EMA — Exponential Moving Average)
+ 182: - **Damping**: Giới hạn thay đổi ±15%/tháng so với tháng trước
+ 183: - **Lần đầu từ default**: Cho phép ±30% (vì default có thể xa thực tế)
+ 184: - **Không áp dụng cho**: Ô đã override thủ công (field nằm trong `overridden_fields`)
+ 185: 
+ 186: ```python
+ 187: # EMA calculation
+ 188: k_new = 0.5 * k_actual_this_month + 0.3 * k_prev + 0.2 * k_prev_prev
+ 189: 
+ 190: # Damping
+ 191: if is_first_calibration:  # Lần đầu chuyển từ default sang actual
+ 192:     k_clamped = clamp(k_new, k_current * 0.70, k_current * 1.30)
+ 193: else:
+ 194:     k_clamped = clamp(k_new, k_current * 0.85, k_current * 1.15)
+ 195: ```
+ 196: 
+ 197: #### Fallback khi < 3 tháng data
+ 198: 
+ 199: ```python
+ 200: if months_with_data == 0:
+ 201:     return default_value  # k=7, L=6×M, C=3×M
+ 202: 
+ 203: if months_with_data == 1:
+ 204:     k_new = k_actual_month_1  # Dùng trực tiếp, không EMA
+ 205: 
+ 206: if months_with_data == 2:
+ 207:     k_new = 0.6 * k_actual_month_2 + 0.4 * k_actual_month_1
+ 208: 
+ 209: if months_with_data >= 3:
+ 210:     k_new = 0.5 * k_month_3 + 0.3 * k_month_2 + 0.2 * k_month_1  # Full EMA
+ 211: ```
+ 212: 
+ 213: ### 2.4 Working days
+ 214: 
+ 215: - **Tự động**: Thứ 2-7 (T2-T7), loại trừ ngày lễ VN từ bảng `holiday_calendar`
+ 216: - **Admin override**: Có thể sửa WD_t per tháng (bù ngày làm đặc biệt)
+ 217: - **Audit**: Lưu `overridden_by`, `overridden_at` khi sửa
+ 218: - **Cho phép WD_t = 0**: Tháng toàn nghỉ lễ → derived KPIs = NULL, sync skip (xem section 1 "Division-by-zero & NULL semantics")
+ 219: 
+ 220: ### 2.5 Override KPI derived — Per-field granularity
+ 221: 
+ 222: - **Cho phép**: Admin/Manager override bất kỳ KPI derived nào per tháng
+ 223: - **Granularity**: Override theo **từng field**, không phải cả row
+ 224: - **Bắt buộc**: `override_reason`, `overridden_by`, `overridden_at`, `overridden_fields` (JSONB)
+ 225: - **Sync protection**: Job monthly KHÔNG ghi đè field nằm trong `overridden_fields`
+ 226: - **Reset**: Admin có thể "reset về auto" → xóa field khỏi `overridden_fields`, job tính lại field đó
+ 227: - **IDOR**: Xem section 2.6 bên dưới
+ 228: 
+ 229: ### 2.6 Security: IDOR Dependencies (MANDATORY)
+ 230: 
+ 231: > **Tuân thủ**: `Backend_FastAPI/AUTHORIZATION_GUIDELINES.md` — KHÔNG dùng `if` trong
+ 232: > Router/Service để check quyền. LUÔN trả 404, KHÔNG BAO GIỜ trả 403.
+ 233: 
+ 234: ```python
+ 235: # app/core/deps.py — Dependency mới cho KPI Planning
+ 236: 
+ 237: async def get_kpi_plan_for_user(
+ 238:     plan_id: int,
+ 239:     db: AsyncSession = Depends(get_db),
+ 240:     current_user: User = Depends(get_current_active_user),
+ 241: ) -> KpiPlan:
+ 242:     """
+ 243:     IDOR-safe: Admin thấy tất cả, Manager chỉ thấy plan thuộc unit mình.
+ 244:     Trả 404 nếu không tìm thấy HOẶC không có quyền (chống inference).
+ 245:     """
+ 246:     plan = await kpi_planning_repo.get_by_id(db, plan_id)
+ 247:     if not plan or not plan.is_active:
+ 248:         raise ResourceNotFoundError("KpiPlan", plan_id)  # 404
+ 249:     if current_user.role == "admin":
+ 250:         return plan
+ 251:     if current_user.role == "manager" and plan.unit_id == current_user.unit_id:
+ 252:         return plan
+ 253:     raise ResourceNotFoundError("KpiPlan", plan_id)  # 404, KHÔNG 403
+ 254: 
+ 255: 
+ 256: async def get_kpi_plan_month_for_user(
+ 257:     month_id: int,
+ 258:     db: AsyncSession = Depends(get_db),
+ 259:     current_user: User = Depends(get_current_active_user),
+ 260: ) -> KpiPlanMonth:
+ 261:     """
+ 262:     IDOR-safe cho plan month. Join plan → check unit scope.
+ 263:     """
+ 264:     month = await kpi_planning_repo.get_month_with_plan(db, month_id)
+ 265:     if not month or not month.plan.is_active:
+ 266:         raise ResourceNotFoundError("KpiPlanMonth", month_id)
+ 267:     if current_user.role == "admin":
+ 268:         return month
+ 269:     if current_user.role == "manager" and month.plan.unit_id == current_user.unit_id:
+ 270:         return month
+ 271:     raise ResourceNotFoundError("KpiPlanMonth", month_id)
+ 272: ```
+ 273: 
+ 274: ```python
+ 275: # Router sử dụng — KHÔNG có logic check quyền trong router body
+ 276: @router.put("/months/{month_id}/override")
+ 277: async def override_month(
+ 278:     overrides: OverrideRequest,
+ 279:     month: KpiPlanMonth = Depends(get_kpi_plan_month_for_user),  # IDOR ở đây
+ 280:     db: AsyncSession = Depends(get_db),
+ 281: ):
+ 282:     result, callback = await kpi_planning_service.override_month_kpi(...)
+ 283:     await db.commit()
+ 284:     if callback: await callback()
+ 285:     return result
+ 286: ```
+ 287: 
+ 288: > **Checklist cho dev**:
+ 289: > - Tất cả endpoint có `{plan_id}` → dùng `Depends(get_kpi_plan_for_user)`
+ 290: > - Tất cả endpoint có `{month_id}` → dùng `Depends(get_kpi_plan_month_for_user)`
+ 291: > - List endpoint: query filter `WHERE unit_id = user.unit_id` cho Manager (trong repository)
+ 292: > - KHÔNG BAO GIỜ raise `HTTPException(403)` trong toàn bộ module KPI Planning
+ 293: > - **Existing KPI endpoints** (`/api/admin/kpi-config`): cũng cần IDOR check. Hiện tại
+ 294: >   `kpi_config.py` router chưa filter theo unit scope cho Manager. Phase A0 nên thêm
+ 295: >   `get_kpi_config_for_user` dependency hoặc ít nhất filter query theo `user.unit_id`
+ 296: >   cho GET/PUT/DELETE endpoints. Trả 404 khi Manager access KpiConfig ngoài unit mình.
+ 297: 
+ 298: ---
+ 299: 
+ 300: ## 3. Data Model
+ 301: 
+ 302: ### 3.1 Prerequisite migration: `KpiConfig.target_value` Integer → NUMERIC
+ 303: 
+ 304: ```sql
+ 305: -- KpiConfig hiện tại lưu target_value dạng INTEGER.
+ 306: -- Các KPI như conversion_rate (16.7%), win_rate (33.3%) cần thập phân.
+ 307: -- Migration cần chạy TRƯỚC khi planning sync bắt đầu ghi dữ liệu.
+ 308: 
+ 309: -- CHỈ KpiConfig.target_value cần NUMERIC (vì chứa cả rates lẫn counts)
+ 310: ALTER TABLE kpi_config
+ 311:     ALTER COLUMN target_value TYPE NUMERIC(12,2) USING target_value::NUMERIC(12,2);
+ 312: 
+ 313: -- KpiTarget: GIỮ INTEGER — chỉ đếm enrollment (không có tỷ lệ)
+ 314: -- annual_target = 300 (hồ sơ), achieved_ytd = 67 (hồ sơ) → luôn nguyên
+ 315: -- Nếu sau này thêm kpi_code khác cần decimal, tạo bảng mới thay vì sửa
+ 316: 
+ 317: -- KpiMonthlySnapshot: GIỮ INTEGER — cùng semantics với KpiTarget
+ 318: -- target_value/actual_value/gap đều là snapshot enrollment counts
+ 319: ```
+ 320: 
+ 321: > **Backward compatible**: Existing integer values trong KpiConfig (e.g. 10, 85) tự cast sang
+ 322: > NUMERIC (10.00, 85.00). Code hiện tại so sánh `>`, `<` vẫn hoạt động.
+ 323: 
+ 324: ```python
+ 325: # Schema/API changes CHỈ cho KpiConfig:
+ 326: #   KpiConfigCreate.target_value: int → float (Pydantic)
+ 327: #   KpiConfigResponse.target_value: int → float
+ 328: #   get_kpi_target() return type: int → float
+ 329: #   get_all_kpi_targets() return type: Dict[str, int] → Dict[str, float]
+ 330: #
+ 331: # KpiTarget/KpiMonthlySnapshot schemas: KHÔNG ĐỔI (giữ int)
+ 332: ```
+ 333: 
+ 334: ### 3.2 Bảng mới: `kpi_plan`
+ 335: 
+ 336: ```sql
+ 337: CREATE TABLE kpi_plan (
+ 338:     id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ 339:     unit_id         INTEGER NOT NULL REFERENCES organization_unit(id) ON DELETE CASCADE,  -- bắt buộc, không có global plan
+ 340:     officer_id      INTEGER REFERENCES "user"(id) ON DELETE CASCADE,  -- NULL = unit plan
+ 341:     fiscal_year     INTEGER NOT NULL,
+ 342: 
+ 343:     -- Anchor input
+ 344:     annual_enrollment_target  INTEGER NOT NULL,  -- 300
+ 345: 
+ 346:     -- Guardrails
+ 347:     sla_target              NUMERIC(5,2) NOT NULL DEFAULT 85.00,   -- %
+ 348:     response_time_target    NUMERIC(5,2) NOT NULL DEFAULT 2.00,    -- hours
+ 349: 
+ 350:     -- Seasonal weights (JSON array of 12 floats, sum ≈ 1.0)
+ 351:     -- NULL = dùng DEFAULT_ENROLLMENT_WEIGHTS
+ 352:     seasonal_weights        JSONB,
+ 353: 
+ 354:     -- Meta
+ 355:     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+ 356:     created_by      INTEGER REFERENCES "user"(id),
+ 357:     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ 358:     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ 359: );
+ 360: 
+ 361: -- ⚠️ PostgreSQL: NULL != NULL trong unique index.
+ 362: -- Nếu officer_id IS NULL (unit plan), 1 index gộp sẽ cho phép duplicate.
+ 363: -- Giải pháp: 2 partial indexes tách biệt.
+ 364: 
+ 365: -- Unit plan: 1 plan active per unit per year
+ 366: CREATE UNIQUE INDEX uix_kpi_plan_active_unit
+ 367: ON kpi_plan (unit_id, fiscal_year)
+ 368: WHERE is_active = TRUE AND officer_id IS NULL;
+ 369: 
+ 370: -- Officer plan: 1 plan active per officer per unit per year
+ 371: CREATE UNIQUE INDEX uix_kpi_plan_active_officer
+ 372: ON kpi_plan (unit_id, officer_id, fiscal_year)
+ 373: WHERE is_active = TRUE AND officer_id IS NOT NULL;
+ 374: 
+ 375: COMMENT ON TABLE kpi_plan IS 'KPI planning — reverse-funnel từ annual target ra 8 KPI × 12 tháng';
+ 376: ```
+ 377: 
+ 378: ### 3.3 Bảng mới: `kpi_plan_month`
+ 379: 
+ 380: ```sql
+ 381: CREATE TABLE kpi_plan_month (
+ 382:     id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ 383:     plan_id         INTEGER NOT NULL REFERENCES kpi_plan(id) ON DELETE CASCADE,
+ 384:     month           INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+ 385: 
+ 386:     -- Distributable inputs
+ 387:     enrollment_target       INTEGER NOT NULL,            -- M_t: 46
+ 388:     working_days            INTEGER NOT NULL DEFAULT 0,  -- WD_t: 26 (0 = tháng nghỉ toàn bộ)
+ 389:     weight                  NUMERIC(6,4) NOT NULL,       -- 0.1530
+ 390: 
+ 391:     -- Historical factors (computed or manual)
+ 392:     k_factor                NUMERIC(6,2) NOT NULL DEFAULT 7.00,  -- k_t
+ 393:     lead_forecast           INTEGER,                     -- L_t (NULL = 6×M_t)
+ 394:     close_forecast          INTEGER,                     -- C_t (NULL = 3×M_t)
+ 395: 
+ 396:     -- Derived KPI targets (auto-calculated, overridable per-field)
+ 397:     -- NULL = không tính được (WD_t=0, M_t=0, etc.) → UI hiển thị "N/A"
+ 398:     consultations_daily     INTEGER,                     -- NULL khi WD_t=0
+ 399:     conversion_rate         NUMERIC(6,2),                -- % (NULL khi L_t=0)
+ 400:     win_rate                NUMERIC(6,2),                -- % (NULL khi C_t=0)
+ 401:     consultation_effectiveness NUMERIC(6,2),             -- %
+ 402: 
+ 403:     -- Per-field override tracking
+ 404:     -- Ví dụ: {"consultations_daily": true, "win_rate": true}
+ 405:     -- Sync job chỉ skip field nằm trong JSONB này, các field khác vẫn recalculate
+ 406:     overridden_fields       JSONB NOT NULL DEFAULT '{}',
+ 407:     override_reason         TEXT,           -- DB nullable, nhưng API enforce NOT NULL khi overridden_fields != '{}'
+ 408:     overridden_by           INTEGER REFERENCES "user"(id),  -- idem
+ 409:     overridden_at           TIMESTAMPTZ,    -- idem, service tự set = now()
+ 410: 
+ 411:     -- ⚠️ DB cho nullable vì record mới (chưa override) không cần giá trị.
+ 412:     -- API validation: khi overridden_fields != '{}', bắt buộc:
+ 413:     --   override_reason NOT NULL AND len >= 5
+ 414:     --   overridden_by NOT NULL (service tự set từ current_user)
+ 415:     --   overridden_at NOT NULL (service tự set = now())
+ 416: 
+ 417:     -- Actuals (filled by sync job at month end)
+ 418:     actual_enrollments              INTEGER,
+ 419:     actual_consultations_avg        NUMERIC(6,2),
+ 420:     actual_conversion_rate          NUMERIC(6,2),
+ 421:     actual_win_rate                 NUMERIC(6,2),
+ 422:     actual_consultation_effectiveness NUMERIC(6,2),
+ 423:     actual_sla_compliance_rate      NUMERIC(6,2),
+ 424: 
+ 425:     -- Audit
+ 426:     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ 427: 
+ 428:     UNIQUE (plan_id, month)
+ 429: );
+ 430: 
+ 431: COMMENT ON TABLE kpi_plan_month IS 'Monthly breakdown of KPI plan with derived targets and actuals';
+ 432: ```
+ 433: 
+ 434: ### 3.3 Bảng mới: `holiday_calendar`
+ 435: 
+ 436: ```sql
+ 437: CREATE TABLE holiday_calendar (
+ 438:     id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ 439:     date            DATE NOT NULL UNIQUE,
+ 440:     name            VARCHAR(200) NOT NULL,       -- "Tết Nguyên Đán"
+ 441:     year            INTEGER NOT NULL,
+ 442:     is_recurring    BOOLEAN NOT NULL DEFAULT FALSE,  -- TRUE = lặp hàng năm (1/1, 30/4, ...)
+ 443:     created_by      INTEGER REFERENCES "user"(id),
+ 444:     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ 445: );
+ 446: 
+ 447: -- Seed VN holidays 2026
+ 448: INSERT INTO holiday_calendar (date, name, year, is_recurring) VALUES
+ 449: ('2026-01-01', 'Tết Dương lịch', 2026, TRUE),
+ 450: ('2026-01-28', 'Tết Nguyên Đán (28 Tết)', 2026, FALSE),
+ 451: ('2026-01-29', 'Tết Nguyên Đán (29 Tết)', 2026, FALSE),
+ 452: ('2026-01-30', 'Tết Nguyên Đán (30 Tết)', 2026, FALSE),
+ 453: ('2026-01-31', 'Tết Nguyên Đán (Mùng 1)', 2026, FALSE),
+ 454: ('2026-02-01', 'Tết Nguyên Đán (Mùng 2)', 2026, FALSE),
+ 455: ('2026-02-02', 'Tết Nguyên Đán (Mùng 3)', 2026, FALSE),
+ 456: ('2026-04-30', 'Ngày Giải phóng', 2026, TRUE),
+ 457: ('2026-05-01', 'Ngày Quốc tế Lao động', 2026, TRUE),
+ 458: ('2026-09-02', 'Ngày Quốc khánh', 2026, TRUE),
+ 459: ('2026-09-03', 'Nghỉ bù Quốc khánh', 2026, FALSE),
+ 460: ('2026-04-07', 'Giỗ Tổ Hùng Vương', 2026, FALSE);
+ 461: 
+ 462: -- LƯU Ý: Giỗ Tổ Hùng Vương (10/3 âm lịch) và Tết Nguyên Đán theo âm lịch
+ 463: -- → is_recurring = FALSE, admin cần seed ngày cụ thể cho mỗi năm mới
+ 464: -- → Admin UI có nút "Tạo ngày lễ năm [X]" để nhập các ngày âm lịch
+ 465: ```
+ 466: 
+ 467: ---
+ 468: 
+ 469: ## 4. Validation Rules
+ 470: 
+ 471: ### 4.1 `seasonal_weights`
+ 472: 
+ 473: ```python
+ 474: def validate_seasonal_weights(weights: list[float]) -> None:
+ 475:     """Validate trước khi save vào kpi_plan.seasonal_weights."""
+ 476:     assert len(weights) == 12, "Phải có đúng 12 phần tử"
+ 477:     assert all(w > 0 for w in weights), "Mỗi weight phải > 0"
+ 478:     total = sum(weights)
+ 479:     assert 0.99 <= total <= 1.01, f"Tổng weights = {total}, phải ∈ [0.99, 1.01]"
+ 480: ```
+ 481: 
+ 482: ### 4.2 `annual_enrollment_target`
+ 483: 
+ 484: - Tối thiểu: 1
+ 485: - Tối đa: 10000 (configurable, phòng nhập nhầm)
+ 486: - Phải là số nguyên dương
+ 487: 
+ 488: ### 4.3 Guardrails
+ 489: 
+ 490: - `sla_target`: 0-100 (%)
+ 491: - `response_time_target`: 1-48 (hours)
+ 492: 
+ 493: ---
+ 494: 
+ 495: ## 5. Service Layer
+ 496: 
+ 497: > **MANDATORY RULE**: Service KHÔNG BAO GIỜ gọi `await db.commit()`.
+ 498: > Service chỉ `flush()` (hoặc không flush). Router gọi `commit()` sau khi service trả về.
+ 499: > **Ngoại lệ duy nhất**: Celery tasks tự quản session → được phép `commit()`.
+ 500: > Xem `Backend_FastAPI/CLAUDE.md` — "Router commits, Service flushes".
+ 501: 
+ 502: ### 5.1 `kpi_planning_service.py` — Engine chính
+ 503: 
+ 504: ```python
+ 505: # Các hàm chính:
+ 506: # ⚠️ Tất cả hàm dưới đây chỉ flush(), KHÔNG commit().
+ 507: # Return type: Tuple[result, Optional[Callable]] — theo pattern (result, post_commit_callback).
+ 508: 
+ 509: async def create_plan(db, unit_id, fiscal_year, annual_target,
+ 510:                       guardrails, seasonal_weights=None, created_by=None):
+ 511:     """
+ 512:     Tạo plan mới → auto-generate 12 KpiPlanMonth records.
+ 513:     Nếu seasonal_weights = None → dùng DEFAULT_ENROLLMENT_WEIGHTS.
+ 514:     Validate: seasonal_weights, annual_target range.
+ 515:     Reconciliation: Largest Remainder đảm bảo sum(M_t) == annual_target.
+ 516:     """
+ 517: 
+ 518: async def generate_monthly_kpis(db, plan_id):
+ 519:     """
+ 520:     Từ plan → tính 12 bộ KPI.
+ 521:     Với mỗi tháng t:
+ 522:       1. M_t = round(annual × weight_t) + Largest Remainder reconciliation
+ 523:       2. WD_t = count_working_days(year, month) — từ holiday_calendar
+ 524:       3. k_t = get_k_factor(officer_id, month) hoặc default 7
+ 525:       4. L_t = lead_forecast hoặc 6 × M_t
+ 526:       5. C_t = close_forecast hoặc 3 × M_t
+ 527:       6. Tính 4 derived KPIs (với division-by-zero → NULL guards)
+ 528:     Skip field nằm trong overridden_fields (per-field, không skip cả row).
+ 529:     """
+ 530: 
+ 531: async def preview_plan(db, unit_id, fiscal_year, annual_target,
+ 532:                        guardrails, seasonal_weights=None):
+ 533:     """
+ 534:     Dry-run: tính 12 bộ KPI KHÔNG persist.
+ 535:     Trả về cấu trúc giống GET /plans/{id} nhưng không tạo record.
+ 536:     Frontend gọi endpoint này (debounced) khi admin kéo thanh weights.
+ 537:     ⚠️ KHÔNG có db.flush() — pure computation, read-only.
+ 538:     """
+ 539: 
+ 540: async def recalibrate_factors(db, plan_id, up_to_month):
+ 541:     """
+ 542:     Auto-calibration: dùng actual data 3 tháng gần nhất → update k_t, L_t, C_t.
+ 543:     Damping: ±15% max change (±30% cho lần đầu từ default).
+ 544:     Fallback: < 3 tháng data → simple average thay vì EMA.
+ 545:     Chỉ update tháng future, không sửa tháng đã qua.
+ 546: 
+ 547:     Phát hiện is_first_calibration:
+ 548:       Truy vấn: có tồn tại kpi_plan_month nào thuộc plan scope (cùng unit/officer)
+ 549:       có actual_enrollments IS NOT NULL không?
+ 550:       - Nếu KHÔNG → is_first_calibration = True → damping ±30%
+ 551:       - Nếu CÓ → is_first_calibration = False → damping ±15%
+ 552:     """
+ 553: 
+ 554: async def update_plan(db, plan_id, annual_target=None, weights=None,
+ 555:                       guardrails=None, user_id=None):
+ 556:     """
+ 557:     Sửa plan metadata.
+ 558:     Nếu sửa annual_target giữa năm:
+ 559:       - Redistribute cho tháng current + future (giữ nguyên actual tháng đã qua)
+ 560:       - remaining = new_target - sum(actual_enrollments tháng đã qua)
+ 561:       - Phân bổ remaining theo weights (re-normalize weights cho tháng còn lại)
+ 562:     Nếu sửa weights hoặc guardrails:
+ 563:       - Regenerate derived KPIs cho tháng future (skip overridden_fields)
+ 564:     """
+ 565: 
+ 566: async def override_month_kpi(db, plan_month_id, overrides: dict, reason, user_id):
+ 567:     """
+ 568:     Admin override 1+ KPI cho tháng cụ thể.
+ 569:     overrides = {"consultations_daily": 16, "win_rate": 40.0}
+ 570:     Merge vào overridden_fields, lưu reason + who + when.
+ 571:     """
+ 572: 
+ 573: async def reset_month_override(db, plan_month_id, fields: list[str] | None, user_id):
+ 574:     """
+ 575:     Reset override.
+ 576:     fields = None → reset tất cả → clear overridden_fields → recalculate toàn bộ.
+ 577:     fields = ["consultations_daily"] → chỉ xóa field đó, giữ các override khác.
+ 578:     """
+ 579: 
+ 580: async def sync_plan_to_kpi_config(db, plan_id, month):
+ 581:     """
+ 582:     Lấy effective target cho tháng (Officer plan > Unit plan > ...).
+ 583:     Upsert vào KpiConfig records (xem section 8.3 mapping chi tiết).
+ 584:     Ghi effective_month/year + source_plan_id vào KpiConfig.
+ 585:     Skip upsert khi derived KPI = NULL (WD_t=0, M_t=0, etc.)
+ 586:     Dashboard đọc từ KpiConfig như bình thường.
+ 587:     """
+ 588: 
+ 589: async def deactivate_plan(db, plan_id, user_id):
+ 590:     """
+ 591:     Soft delete: set is_active = FALSE.
+ 592:     Cleanup: xóa KpiConfig records được tạo bởi plan này cho tháng future.
+ 593:     Tháng đã qua giữ nguyên (data lịch sử).
+ 594:     """
+ 595: 
+ 596: async def fill_month_actuals(db, plan_id, month):
+ 597:     """
+ 598:     Cuối tháng: điền tất cả actual fields:
+ 599:       - actual_enrollments
+ 600:       - actual_consultations_avg
+ 601:       - actual_conversion_rate
+ 602:       - actual_win_rate
+ 603:       - actual_consultation_effectiveness
+ 604:       - actual_sla_compliance_rate
+ 605:     Từ repository queries.
+ 606:     """
+ 607: ```
+ 608: 
+ 609: ### 5.2 `calendar_service.py` — Working days
+ 610: 
+ 611: ```python
+ 612: async def count_working_days(db, year: int, month: int) -> int:
+ 613:     """
+ 614:     Đếm ngày T2-T7 trong tháng, trừ ngày lễ từ holiday_calendar.
+ 615:     Bao gồm cả ngày lễ is_recurring=TRUE (match theo tháng/ngày)
+ 616:     và is_recurring=FALSE (match theo date chính xác).
+ 617:     """
+ 618: 
+ 619: async def get_working_days_override(db, plan_month_id) -> int | None:
+ 620:     """
+ 621:     Nếu admin override WD → trả về override value.
+ 622:     """
+ 623: ```
+ 624: 
+ 625: ### 5.3 `historical_metrics_service.py` — Tính k_t/L_t/C_t từ data
+ 626: 
+ 627: ```python
+ 628: async def get_historical_k_factor(db, officer_id, unit_id, months_back=3):
+ 629:     """
+ 630:     k_t = total_consultations / total_enrollments trong N tháng gần nhất.
+ 631:     Guard: nếu total_enrollments = 0 → return default (7).
+ 632:     Dùng EMA: 0.5 × month[-1] + 0.3 × month[-2] + 0.2 × month[-3]
+ 633:     Fallback < 3 tháng: xem section 2.3.
+ 634:     """
+ 635: 
+ 636: async def get_historical_lead_count(db, officer_id, unit_id, target_month):
+ 637:     """
+ 638:     L_t = avg leads mới/tháng trong 3 tháng cùng kỳ hoặc 3 tháng gần nhất.
+ 639:     Guard: nếu không có data → return 6 × M_t (default).
+ 640:     """
+ 641: 
+ 642: async def get_historical_close_count(db, officer_id, unit_id, target_month):
+ 643:     """
+ 644:     C_t = avg leads đóng/tháng (won + lost).
+ 645:     Guard: nếu không có data → return 3 × M_t (default).
+ 646:     """
+ 647: ```
+ 648: 
+ 649: ---
+ 650: 
+ 651: ## 6. Celery Jobs
+ 652: 
+ 653: ### Job 1: `sync_kpi_plan_monthly` — Ngày 1 mỗi tháng, 02:00 AM
+ 654: 
+ 655: > **Lịch chạy**: 02:00 AM ngày 1 (KHÔNG 00:00/00:01). Lý do: đảm bảo mọi transaction
+ 656: > của tháng trước đã kết thúc (CRM webhook, late-night operations, timezone offset).
+ 657: > Celery Beat config: `crontab(hour=2, minute=0, day_of_month=1)`
+ 658: 
+ 659: ```python
+ 660: @celery_app.task
+ 661: def sync_kpi_plan_monthly():
+ 662:     """
+ 663:     ⚠️ Celery task — tự quản session, ĐƯỢC PHÉP commit().
+ 664: 
+ 665:     1. Tìm tất cả KpiPlan WHERE is_active = TRUE AND fiscal_year = current year
+ 666:     2. Với mỗi plan:
+ 667:        a. fill_month_actuals(prev_month) — điền actual tháng trước
+ 668:        b. recalibrate_factors(current_month) — hiệu chỉnh k/L/C nếu có data
+ 669:        c. generate_monthly_kpis() — regenerate future months (skip overridden_fields)
+ 670:        d. sync_plan_to_kpi_config(current_month) — push targets vào KpiConfig
+ 671:     3. Lưu ý: plan có is_active = FALSE → skip hoàn toàn
+ 672:     4. Commit sau mỗi plan (isolate failures — 1 plan lỗi không ảnh hưởng plan khác)
+ 673:     """
+ 674: ```
+ 675: 
+ 676: ### Job 2: `sync_kpi_plan_actuals_daily` — Hàng ngày (bổ sung job YTD hiện có)
+ 677: 
+ 678: ```python
+ 679: @celery_app.task
+ 680: def sync_kpi_plan_actuals_daily():
+ 681:     """
+ 682:     Update actual_enrollments MTD cho tháng hiện tại.
+ 683:     Cho phép dashboard hiện progress vs monthly target real-time.
+ 684:     """
+ 685: ```
+ 686: 
+ 687: ---
+ 688: 
+ 689: ## 7. API Endpoints
+ 690: 
+ 691: > **Thin Client Doctrine**: Frontend KHÔNG BAO GIỜ tự tính KPI (Largest Remainder,
+ 692: > `ceil(M_t × k_t / WD_t)`, conversion rates). Mọi tính toán 100% server-side.
+ 693: > Khi admin kéo slider weights → frontend gọi `POST /plans/preview` (debounced 300ms)
+ 694: > → backend trả về 12 bộ KPI → frontend chỉ render.
+ 695: 
+ 696: ### Planning CRUD (`/api/admin/kpi-planning`)
+ 697: 
+ 698: | Method | Endpoint | Mô tả | Auth | IDOR |
+ 699: |--------|----------|-------|------|------|
+ 700: | `POST` | `/plans` | Tạo plan mới (annual target + weights + guardrails) | Admin | - |
+ 701: | `GET` | `/plans` | List plans (filter by unit, year, pagination) | Admin/Manager | Manager: chỉ unit mình |
+ 702: | `GET` | `/plans/{id}` | Chi tiết plan + 12 months | Admin/Manager | Manager: chỉ unit mình |
+ 703: | `PUT` | `/plans/{id}` | Sửa annual target / weights / guardrails (xem section 5.1 `update_plan`) | Admin | - |
+ 704: | `DELETE` | `/plans/{id}` | Soft delete + cleanup KpiConfig future (xem section 5.1 `deactivate_plan`) | Admin | - |
+ 705: | `POST` | `/plans/{id}/regenerate` | Force recalculate derived KPIs KHÔNG thay đổi input (skip overridden_fields) | Admin | - |
+ 706: | `POST` | `/plans/preview` | Preview KPIs dry-run (body = annual_target + weights + guardrails, không persist). Frontend gọi debounced khi admin kéo slider | Admin/Manager | - |
+ 707: | `POST` | `/plans/{id}/clone` | Clone plan sang fiscal_year mới (copy weights + guardrails, reset actuals) | Admin | - |
+ 708: 
+ 709: ### Monthly Override (`/api/admin/kpi-planning/months`)
+ 710: 
+ 711: | Method | Endpoint | Mô tả | Auth | IDOR |
+ 712: |--------|----------|-------|------|------|
+ 713: | `PUT` | `/months/{id}/override` | Override 1+ KPI fields cho 1 tháng (+ reason) | Admin/Manager | Manager: chỉ unit mình |
+ 714: | `POST` | `/months/{id}/reset` | Reset override (all hoặc specific fields) → recalculate | Admin/Manager | Manager: chỉ unit mình |
+ 715: | `PUT` | `/months/{id}/working-days` | Override working days | Admin | - |
+ 716: | `PUT` | `/months/batch-override` | Override cùng fields cho nhiều tháng (VD: T6-T9) | Admin | - |
+ 717: 
+ 718: ### Holiday Calendar (`/api/admin/calendar`)
+ 719: 
+ 720: | Method | Endpoint | Mô tả | Auth |
+ 721: |--------|----------|-------|------|
+ 722: | `GET` | `/holidays` | List holidays (filter by year, pagination) | Admin/Manager |
+ 723: | `GET` | `/holidays/status/{year}` | Kiểm tra năm đã có đủ lịch lễ chưa (xem bên dưới) | Admin/Manager |
+ 724: | `POST` | `/holidays` | Thêm ngày lễ | Admin |
+ 725: | `PUT` | `/holidays/{id}` | Sửa ngày lễ | Admin |
+ 726: | `DELETE` | `/holidays/{id}` | Xóa ngày lễ | Admin |
+ 727: | `POST` | `/holidays/seed/{year}` | Seed ngày lễ recurring cho năm mới (copy từ is_recurring=TRUE) | Admin |
+ 728: 
+ 729: #### Holiday Calendar Warning (rủi ro vận hành)
+ 730: 
+ 731: > **Vấn đề**: Ngày lễ âm lịch (Tết Nguyên Đán, Giỗ Tổ Hùng Vương) thay đổi mỗi năm.
+ 732: > Nếu admin quên seed ngày lễ cho năm mới, `count_working_days()` sẽ trả WD_t sai
+ 733: > (thiếu trừ ngày lễ) → KPI targets sai.
+ 734: 
+ 735: **Giải pháp**: Endpoint `GET /holidays/status/{year}` + Celery warning.
+ 736: 
+ 737: ```python
+ 738: # GET /holidays/status/2027 → Response:
+ 739: {
+ 740:     "year": 2027,
+ 741:     "total_holidays": 3,           # Chỉ có 3 ngày recurring (1/1, 30/4, 1/5)
+ 742:     "has_lunar_holidays": false,    # Thiếu Tết, Giỗ Tổ
+ 743:     "is_complete": false,
+ 744:     "warning": "Chưa cấu hình ngày nghỉ Tết Nguyên Đán và Giỗ Tổ Hùng Vương cho năm 2027"
+ 745: }
+ 746: 
+ 747: # Celery check (chạy 1/11 hàng năm — 2 tháng trước năm mới):
+ 748: @celery_app.task
+ 749: def check_next_year_holidays():
+ 750:     """
+ 751:     Kiểm tra holiday_calendar cho năm kế tiếp.
+ 752:     Nếu < 8 ngày lễ (threshold) → tạo notification cho Admin.
+ 753:     """
+ 754: ```
+ 755: 
+ 756: > **Admin Dashboard**: Hiển thị banner warning nếu `is_complete = false` cho năm hiện tại hoặc năm kế tiếp.
+ 757: 
+ 758: ---
+ 759: 
+ 760: ## 8. Integration với hệ thống hiện có
+ 761: 
+ 762: ### 8.1 Canonical KPI code mapping
+ 763: 
+ 764: > **Vấn đề hiện tại**: Codebase dùng lẫn lộn nhiều mã KPI legacy.
+ 765: > Cần chuẩn hóa toàn bộ trước khi planning sync bắt đầu ghi dữ liệu.
+ 766: 
+ 767: ```python
+ 768: # CANONICAL KPI CODES — single source of truth
+ 769: KPI_CODES = {
+ 770:     "consultations_daily":        {"period_type": "daily",   "table": "KpiConfig"},
+ 771:     "conversion_rate":            {"period_type": "monthly", "table": "KpiConfig"},
+ 772:     "win_rate":                   {"period_type": "monthly", "table": "KpiConfig"},
+ 773:     "consultation_effectiveness": {"period_type": "monthly", "table": "KpiConfig"},
+ 774:     "enrollments_monthly":        {"period_type": "monthly", "table": "KpiConfig"},
+ 775:     "sla_compliance_rate":        {"period_type": "monthly", "table": "KpiConfig"},
+ 776:     "response_time_hours":        {"period_type": "daily",   "table": "KpiConfig"},
+ 777:     "enrollments_annual":         {"period_type": "annual",  "table": "KpiTarget"},
+ 778: }
+ 779: ```
+ 780: 
+ 781: #### Legacy codes cần khử (Phase A0)
+ 782: 
+ 783: | Legacy code | Canonical code | File(s) cần sửa |
+ 784: |-------------|---------------|-----------------|
+ 785: | `"enrollments"` | `"enrollments_annual"` | `kpi_service.py:112,288`, `officer_service.py:823` |
+ 786: | `"response_time"` | `"response_time_hours"` | `frontend/admin/kpi-config/page.tsx:121` |
+ 787: | `"enrollments"` (KpiTarget DB) | `"enrollments_annual"` | Data migration SQL |
+ 788: | `"enrollments"` (admin UI default) | `"enrollments_annual"` | `frontend/admin/kpi-config/page.tsx:118,223,309,392,640` |
+ 789: 
+ 790: ```sql
+ 791: -- Data migration (Phase A0)
+ 792: UPDATE kpi_target SET kpi_code = 'enrollments_annual' WHERE kpi_code = 'enrollments';
+ 793: UPDATE kpi_config SET kpi_code = 'response_time_hours' WHERE kpi_code = 'response_time';
+ 794: ```
+ 795: 
+ 796: #### Admin KPI Config UI — transition strategy (Phase A0 → Phase C)
+ 797: 
+ 798: > **Vấn đề**: `admin/kpi-config/page.tsx` hiện cho phép admin CRUD KPI targets thủ công.
+ 799: > Sau khi Planning Engine (Phase A) đi vào hoạt động, UI này sẽ conflict với sync job
+ 800: > (admin set thủ công → sync job ghi đè, hoặc ngược lại).
+ 801: 
+ 802: | Giai đoạn | `admin/kpi-config` | `admin/kpi-planning` (mới) |
+ 803: |-----------|--------------------|-----------------------------|
+ 804: | **A0** | Sửa legacy codes, thêm disclaimer "Sẽ được thay thế bởi KPI Planning" | Chưa có |
+ 805: | **Phase A** | **Read-only** — chỉ xem KpiConfig hiện tại, không cho create/edit | Bắt đầu dùng — tạo plan, preview |
+ 806: | **Phase C** | **Ẩn khỏi menu** (giữ code, không xóa) | UI chính cho quản lý KPI |
+ 807: 
+ 808: ```typescript
+ 809: // Phase A: admin/kpi-config/page.tsx
+ 810: // Thêm banner + disable mutation buttons
+ 811: const isLegacy = true; // Set true khi planning engine active
+ 812: // <Alert>KPI targets hiện được quản lý tự động qua KPI Planning. Trang này chỉ hiển thị.</Alert>
+ 813: ```
+ 814: 
+ 815: ### 8.2 Flow tổng thể
+ 816: 
+ 817: ```
+ 818: ┌─────────────────────────────────────────────────────────────┐
+ 819: │  ADMIN UI: KPI Planning                                     │
+ 820: │  Input: annual_target=300, weights, guardrails               │
+ 821: └───────────────────┬─────────────────────────────────────────┘
+ 822:                     ↓
+ 823: ┌─────────────────────────────────────────────────────────────┐
+ 824: │  KpiPlan + KpiPlanMonth (12 records)                        │
+ 825: │  Derived: consultations_daily, conversion_rate, win_rate... │
+ 826: └───────────────────┬─────────────────────────────────────────┘
+ 827:                     ↓  Celery sync (ngày 1 mỗi tháng)
+ 828: ┌─────────────────────────────────────────────────────────────┐
+ 829: │  KpiConfig (existing) — target_value: NUMERIC(12,2)         │
+ 830: │  Upsert: kpi_code + target_value + unit_id/officer_id       │
+ 831: │  + source_plan_id (FK → kpi_plan, nullable)                 │
+ 832: │  ← Dashboard reads from here via get_kpi_target()           │
+ 833: │  ← Soft-delete cleanup dùng source_plan_id để xác định      │
+ 834: └───────────────────┬─────────────────────────────────────────┘
+ 835:                     ↓
+ 836: ┌─────────────────────────────────────────────────────────────┐
+ 837: │  Officer Dashboard                                          │
+ 838: │  - KPI cards dùng target từ KpiConfig                       │
+ 839: │  - Recommendation engine dùng KpiConfig-driven thresholds   │
+ 840: │  - Annual progress dùng KpiTarget (kpi_code=enrollments_annual) │
+ 841: └─────────────────────────────────────────────────────────────┘
+ 842: ```
+ 843: 
+ 844: ### 8.3 Sync mapping chi tiết
+ 845: 
+ 846: | KPI code | Source field | Target table | period_type | NULL handling |
+ 847: |----------|-------------|-------------|-------------|---------------|
+ 848: | `consultations_daily` | `kpi_plan_month.consultations_daily` | `KpiConfig` | `daily` | NULL → skip upsert |
+ 849: | `conversion_rate` | `kpi_plan_month.conversion_rate` | `KpiConfig` | `monthly` | NULL → skip upsert |
+ 850: | `win_rate` | `kpi_plan_month.win_rate` | `KpiConfig` | `monthly` | NULL → skip upsert |
+ 851: | `consultation_effectiveness` | `kpi_plan_month.consultation_effectiveness` | `KpiConfig` | `monthly` | NULL → skip upsert |
+ 852: | `enrollments_monthly` | `kpi_plan_month.enrollment_target` | `KpiConfig` | `monthly` | Always present |
+ 853: | `sla_compliance_rate` | `kpi_plan.sla_target` | `KpiConfig` | `monthly` | Always present |
+ 854: | `response_time_hours` | `kpi_plan.response_time_target` | `KpiConfig` | `daily` | Always present |
+ 855: | `enrollments_annual` | `kpi_plan.annual_enrollment_target` | `KpiTarget` | `annual` | Always present |
+ 856: 
+ 857: ### 8.4 Historical target resolution
+ 858: 
+ 859: > **Vấn đề**: `get_kpi_target()` không có `effective_date`. Khi dashboard xem kỳ quá khứ
+ 860: > (VD: xem performance tháng 3), nó lấy target tháng hiện tại (tháng 6) — sai.
+ 861: 
+ 862: **Giải pháp**: Thêm `effective_month` vào KpiConfig + resolver.
+ 863: 
+ 864: ```sql
+ 865: -- ⚠️ Tất cả nằm trong CÙNG 1 migration A0 (trước khi tạo bảng kpi_plan ở A1).
+ 866: -- source_plan_id FK → kpi_plan sẽ thêm SAU ở A1 migration (ALTER TABLE ADD CONSTRAINT).
+ 867: -- Hoặc tạo column nullable không có FK ở A0, thêm FK ở A1.
+ 868: 
+ 869: -- Bước 1: Thêm columns
+ 870: ALTER TABLE kpi_config ADD COLUMN effective_month INTEGER;  -- NULL = evergreen (legacy)
+ 871: ALTER TABLE kpi_config ADD COLUMN effective_year INTEGER;   -- NULL = evergreen (legacy)
+ 872: ALTER TABLE kpi_config ADD COLUMN source_plan_id INTEGER;   -- FK thêm ở A1 sau khi tạo bảng kpi_plan
+ 873: 
+ 874: -- ⚠️ UNIQUE CONSTRAINT: Index cũ `uq_kpi_config_scope` trên
+ 875: -- (unit_id, officer_id, kpi_code, period_type) KHÔNG cho phép nhiều record
+ 876: -- cùng kpi_code cho các tháng khác nhau. PHẢI thay thế:
+ 877: 
+ 878: DROP INDEX IF EXISTS uq_kpi_config_scope;
+ 879: DROP INDEX IF EXISTS ix_kpi_config_unique_combo;  -- từ perf migration, cũng chặn multi-month
+ 880: 
+ 881: -- Unique mới: cho phép 1 record per kpi_code per scope PER THÁNG
+ 882: -- Evergreen (legacy, effective_month=NULL): tách index riêng
+ 883: CREATE UNIQUE INDEX uq_kpi_config_scope_evergreen
+ 884: ON kpi_config (unit_id, officer_id, kpi_code, period_type)
+ 885: WHERE is_active = TRUE AND effective_month IS NULL;
+ 886: 
+ 887: -- Monthly (from planning sync): 1 record per month
+ 888: CREATE UNIQUE INDEX uq_kpi_config_scope_monthly
+ 889: ON kpi_config (unit_id, officer_id, kpi_code, period_type, effective_year, effective_month)
+ 890: WHERE is_active = TRUE AND effective_month IS NOT NULL;
+ 891: 
+ 892: -- ⚠️ PERFORMANCE: KpiConfig sẽ phình to khi lưu per-month thay vì evergreen.
+ 893: -- Mỗi plan sync tạo ~7 records/tháng/officer. 50 officers × 12 tháng = 4200 records/năm.
+ 894: -- Composite index bắt buộc để get_kpi_target() không full-scan:
+ 895: CREATE INDEX idx_kpi_config_effective_lookup
+ 896: ON kpi_config (kpi_code, unit_id, officer_id, effective_year, effective_month)
+ 897: WHERE is_active = TRUE;
+ 898: 
+ 899: -- Sync job ghi: effective_month=3, effective_year=2026, source_plan_id=42
+ 900: -- Legacy records (admin tạo thủ công): effective_month=NULL → evergreen
+ 901: 
+ 902: -- get_kpi_target() resolution order:
+ 903: -- 1. Monthly record (effective_month/year match) → ưu tiên cao nhất
+ 904: -- 2. Evergreen record (effective_month IS NULL) → fallback
+ 905: -- 3. DEFAULT_KPIS → hardcoded
+ 906: ```
+ 907: 
+ 908: ```python
+ 909: async def get_kpi_target(
+ 910:     db: AsyncSession,
+ 911:     kpi_code: str,
+ 912:     officer_id: Optional[int] = None,
+ 913:     unit_id: Optional[int] = None,
+ 914:     period_type: str = "daily",
+ 915:     effective_date: Optional[date] = None,  # NEW: default=today
+ 916: ) -> float:
+ 917:     """
+ 918:     Inheritance + temporal resolution:
+ 919:     1. Tìm record có effective_month/year match → dùng target tháng đó
+ 920:     2. Nếu không có → tìm evergreen record (effective_month=NULL)
+ 921:     3. Nếu không có → fallback DEFAULT_KPIS
+ 922: 
+ 923:     Khi effective_date=None (mặc định): dùng tháng hiện tại.
+ 924:     Khi xem dashboard kỳ quá khứ: truyền effective_date=date(2026, 3, 15).
+ 925:     """
+ 926: ```
+ 927: 
+ 928: > **Backward compatible**: Gọi `get_kpi_target()` không truyền `effective_date` → hoạt động
+ 929: > như cũ (dùng tháng hiện tại). Code hiện tại không cần sửa ngay.
+ 930: 
+ 931: ### 8.5 Recommendation engine — config-driven thresholds
+ 932: 
+ 933: > **Vấn đề**: `recommendation_engine.py` hardcode `THRESHOLDS` dict (line 52).
+ 934: > Khi planning engine thay đổi target theo mùa, threshold cố định sẽ không phù hợp.
+ 935: 
+ 936: **Giải pháp**: Phase P3 — chuyển threshold sang đọc từ KpiConfig scope.
+ 937: 
+ 938: ```python
+ 939: # HIỆN TẠI (hardcoded):
+ 940: THRESHOLDS = {
+ 941:     "consultations_gap_critical": 0.5,   # < 50% of target
+ 942:     "conversion_rate_low": 10,           # < 10%
+ 943:     ...
+ 944: }
+ 945: 
+ 946: # SAU (config-driven, Phase P3):
+ 947: async def get_recommendation_thresholds(
+ 948:     db: AsyncSession,
+ 949:     officer_id: int,
+ 950:     unit_id: int,
+ 951: ) -> dict:
+ 952:     """
+ 953:     Đọc threshold từ KpiConfig hoặc system config.
+ 954:     Fallback về THRESHOLDS hardcoded nếu chưa có config.
+ 955:     """
+ 956:     # Ưu tiên: officer config → unit config → global config → hardcoded
+ 957:     thresholds = dict(DEFAULT_THRESHOLDS)  # copy hardcoded as base
+ 958:     # Override với config nếu có...
+ 959:     return thresholds
+ 960: ```
+ 961: 
+ 962: > **Lưu ý**: Phase A-B KHÔNG cần sửa recommendation. Vẫn hoạt động vì threshold hardcoded
+ 963: > là tỷ lệ tương đối (50% of target), không phải absolute value.
+ 964: > Chỉ sửa ở Phase P3 khi có đủ data để tune thresholds per scope.
+ 965: 
+ 966: ### 8.6 Type safety: int → float migration
+ 967: 
+ 968: > **Rủi ro**: `KpiConfig.target_value` chuyển từ `INTEGER` → `NUMERIC(12,2)`.
+ 969: > Backend Python tự xử lý (Decimal/float tương thích), nhưng Frontend TypeScript
+ 970: > có thể bị ảnh hưởng nếu code cũ dùng integer arithmetic (VD: `Math.floor`, `%`).
+ 971: 
+ 972: **Checklist Phase A0 — kiểm tra trước khi deploy migration:**
+ 973: 
+ 974: ```typescript
+ 975: // Frontend: tìm tất cả code dùng target_value hoặc consultations_target
+ 976: // grep -r "target_value\|consultations_target\|kpi.*target" src/
+ 977: 
+ 978: // TRƯỚC (có thể expect int):
+ 979: const progress = (actual / target) * 100;  // OK — float chia float vẫn đúng
+ 980: 
+ 981: // CẦN KIỂM TRA (nếu có):
+ 982: if (target % 10 === 0) { ... }  // ❌ Modulo trên float có thể sai
+ 983: const remaining = target - actual;  // OK — float trừ vẫn đúng
+ 984: 
+ 985: // Pydantic serialization: NUMERIC(12,2) → Python Decimal → JSON float
+ 986: // Response: {"target_value": 16.7} thay vì {"target_value": 16}
+ 987: // TypeScript: number type xử lý cả int lẫn float → an toàn
+ 988: ```
+ 989: 
+ 990: > **Kết luận**: Rủi ro thấp vì TypeScript `number` = float64. Chỉ cần audit
+ 991: > code frontend tìm integer-specific operations (`%`, `parseInt`, bitwise).
+ 992: > Backend `KPIStats` schema giữ `float` type → không ảnh hưởng.
+ 993: 
+ 994: ### 8.7 Backward compatible — tổng hợp
+ 995: 
+ 996: | Component | Thay đổi? | Phase | Chi tiết |
+ 997: |-----------|-----------|-------|----------|
+ 998: | `KpiConfig.target_value` | ✅ **Integer → NUMERIC(12,2)** | **A0** | Prerequisite migration |
+ 999: | `KpiConfig` schema/API | ✅ `target_value: int → float` | **A0** | Pydantic + router |
+1000: | `KpiTarget.kpi_code` | ✅ `enrollments → enrollments_annual` | **A0** | Data migration + code refs |
+1001: | `KpiTarget` column types | ❌ **Giữ INTEGER** | - | Enrollment counts luôn nguyên |
+1002: | `KpiMonthlySnapshot` types | ❌ **Giữ INTEGER** | - | Snapshot enrollment counts |
+1003: | `KpiConfig` + columns | ✅ Thêm `effective_month/year`, `source_plan_id` + composite index | **A1** | Migration + performance index |
+1004: | `get_kpi_target()` return | ✅ `int → float` | **A0** | Type hint change |
+1005: | `get_kpi_target()` + effective_date | ✅ Thêm param (optional) | **B8** | Historical resolution |
+1006: | `DEFAULT_KPIS` | ✅ Thêm `win_rate: 33` | **A0** | Thiếu trong codebase |
+1007: | `officer_service.py:823` | ✅ `kpi_code="enrollments"` → `"enrollments_annual"` | **A0** | Code ref update |
+1008: | `KPIStats` (officer schema) | ❌ **Không đổi** | - | Non-null float, dashboard contract giữ nguyên |
+1009: | `recommendation_engine.py` | ❌ Không đổi (Phase A-B) | **P3** | Config-driven sau |
+1010: | Dashboard frontend | ⚠️ **Audit int ops** | **A0** | Tìm `%`, `parseInt`, bitwise trên target values |
+1011: | Holiday calendar | ⚠️ **Warning mechanism** | **A1** | `GET /holidays/status/{year}` + Celery check |
+1012: 
+1013: ---
+1014: 
+1015: ## 9. Seasonal Weights mặc định
+1016: 
+1017: ```python
+1018: DEFAULT_ENROLLMENT_WEIGHTS = {
+1019:     1:  0.040,   # T1:  12/300 — sau Tết
+1020:     2:  0.033,   # T2:  10/300 — Tết
+1021:     3:  0.050,   # T3:  15/300 — bắt đầu tăng
+1022:     4:  0.060,   # T4:  18/300
+1023:     5:  0.073,   # T5:  22/300 — trước cao điểm
+1024:     6:  0.127,   # T6:  38/300 — CAO ĐIỂM
+1025:     7:  0.153,   # T7:  46/300 — CAO ĐIỂM ĐỈNH
+1026:     8:  0.160,   # T8:  48/300 — CAO ĐIỂM ĐỈNH
+1027:     9:  0.133,   # T9:  40/300 — CAO ĐIỂM
+1028:     10: 0.093,   # T10: 28/300 — cao điểm cuối
+1029:     11: 0.043,   # T11: 13/300 — giảm
+1030:     12: 0.033,   # T12: 10/300 — thấp nhất
+1031: }
+1032: # Sum = 0.998 → Largest Remainder reconciliation phân bổ diff cho tháng có remainder cao nhất
+1033: ```
+1034: 
+1035: ### Ví dụ output cho 300 nhập học/năm
+1036: 
+1037: | Tháng | M_t | WD_t | k_t | consultations_daily | conversion_rate | win_rate |
+1038: |-------|-----|------|-----|--------------------:|----------------:|---------:|
+1039: | T1 | 12 | 21 | 7 | 4 | 16.7% | 33.3% |
+1040: | T2 | 10 | 18 | 7 | 4 | 16.7% | 33.3% |
+1041: | T3 | 15 | 23 | 7 | 5 | 16.7% | 33.3% |
+1042: | T4 | 18 | 22 | 7 | 6 | 16.7% | 33.3% |
+1043: | T5 | 22 | 21 | 7 | 8 | 16.7% | 33.3% |
+1044: | T6 | 38 | 22 | 7 | 13 | 16.7% | 33.3% |
+1045: | **T7** | **46** | **26** | **7** | **13** | **16.7%** | **33.3%** |
+1046: | **T8** | **48** | **23** | **7** | **15** | **16.7%** | **33.3%** |
+1047: | T9 | 40 | 22 | 7 | 13 | 16.7% | 33.3% |
+1048: | T10 | 28 | 22 | 7 | 9 | 16.7% | 33.3% |
+1049: | T11 | 13 | 21 | 7 | 5 | 16.7% | 33.3% |
+1050: | T12 | 10 | 23 | 7 | 4 | 16.7% | 33.3% |
+1051: 
+1052: > Năm đầu conversion_rate/win_rate đồng nhất vì dùng default L_t/C_t. Từ tháng 4+ sẽ tự phân hóa theo data thực.
+1053: 
+1054: ---
+1055: 
+1056: ## 10. Edge Cases & Business Rules
+1057: 
+1058: ### 10.1 Sửa annual_target giữa năm
+1059: 
+1060: ```
+1061: Ví dụ: T6, admin đổi target 300 → 350
+1062: 
+1063: Tháng 1-5: đã có actuals, KHÔNG đổi enrollment_target
+1064:   actual_sum = sum(actual_enrollments cho T1-T5) = 84
+1065: 
+1066: remaining = 350 - 84 = 266
+1067: 
+1068: Phân bổ remaining cho T6-T12:
+1069:   sub_weights = normalize(weights[6:12])  # Re-normalize cho 7 tháng còn lại
+1070:   M_t = round(266 × sub_weight_t) + reconciliation
+1071: 
+1072: Derived KPIs cho T6-T12 recalculate theo M_t mới.
+1073: ```
+1074: 
+1075: ### 10.2 Soft-delete plan giữa năm
+1076: 
+1077: ```
+1078: 1. Set kpi_plan.is_active = FALSE
+1079: 2. Cleanup KpiConfig: soft-delete records cho tháng current + future
+1080:    (WHERE source_plan_id = plan_id
+1081:       AND effective_year = fiscal_year
+1082:       AND effective_month >= current_month)
+1083:    → SET is_active = FALSE
+1084: 3. Tháng đã qua (effective_month < current_month): giữ nguyên (data lịch sử)
+1085: 4. Officer dashboard: fallback về evergreen KpiConfig hoặc DEFAULT_KPIS
+1086: ```
+1087: 
+1088: ### 10.3 Nhiều officer plans trong cùng unit — phân bổ linh hoạt
+1089: 
+1090: #### Mô hình: Unit plan = baseline, Officer plan = override cá nhân
+1091: 
+1092: ```
+1093: Unit plan: annual_target = 1200 → baseline cho officers chưa có plan riêng
+1094: Officer A plan: annual_target = 300 → override cá nhân
+1095: Officer B plan: annual_target = 300 → override cá nhân
+1096: Officer C: không có plan riêng → dùng unit plan (baseline = 1200)
+1097: Officer D: không có plan riêng → dùng unit plan (baseline = 1200)
+1098: ```
+1099: 
+1100: #### Quy tắc phân bổ
+1101: 
+1102: > **Thiết kế chốt**: Unit plan target KHÔNG tự động chia đều cho officers.
+1103: > Unit plan là **target chung** (baseline) — mỗi officer không có plan riêng sẽ dùng
+1104: > nguyên target unit plan. Officer plan là **target cá nhân** hoàn toàn độc lập.
+1105: 
+1106: | Scenario | Hành vi |
+1107: |----------|---------|
+1108: | Officer có plan riêng | Dùng officer plan, bỏ qua unit plan hoàn toàn |
+1109: | Officer KHÔNG có plan riêng | Dùng unit plan target nguyên (không chia) |
+1110: | Tổng officer plans > unit plan | **Cho phép** — admin chịu trách nhiệm. Không validate |
+1111: | Tổng officer plans < unit plan | **Cho phép** — phần còn lại chưa giao cho ai cụ thể |
+1112: 
+1113: #### Tại sao không auto-distribute?
+1114: 
+1115: 1. **Complexity**: Chia 1200 cho 5 officers cần biết capacity/seniority mỗi người → quá phức tạp cho MVP
+1116: 2. **Flexibility**: Admin muốn giao khác nhau (senior 300, junior 100)
+1117: 3. **Hiện thực**: Các trường thường giao KPI cá nhân qua Excel, không chia đều
+1118: 
+1119: #### Validation/Warning (UI, không block)
+1120: 
+1121: ```python
+1122: # Admin Planning UI hiện warning (không block save):
+1123: total_officer_targets = sum(officer_plan.annual_enrollment_target for active officer plans)
+1124: if total_officer_targets > unit_plan.annual_enrollment_target:
+1125:     warning = f"Tổng chỉ tiêu officer ({total_officer_targets}) vượt chỉ tiêu unit ({unit_plan.annual_enrollment_target})"
+1126: if total_officer_targets < unit_plan.annual_enrollment_target:
+1127:     remaining = unit_plan.annual_enrollment_target - total_officer_targets
+1128:     info = f"Còn {remaining} chỉ tiêu chưa giao cho officer cụ thể"
+1129: ```
+1130: 
+1131: #### Sync job behavior
+1132: 
+1133: ```
+1134: Sync job xử lý từng officer active trong unit:
+1135:   1. Tìm officer plan (WHERE officer_id = X AND is_active = TRUE)
+1136:   2. Nếu có → dùng officer plan targets
+1137:   3. Nếu không → dùng unit plan targets (nguyên, không chia)
+1138:   4. Upsert vào KpiConfig cho officer đó
+1139: ```
+1140: 
+1141: ### 10.4 Officer mới vào giữa năm (join-date skip)
+1142: 
+1143: > **Vấn đề**: Officer được thêm vào unit ở tháng 6. Unit plan có target 300/năm.
+1144: > Nếu sync dùng nguyên target unit plan → officer mới bị giao target cho cả T1-T5
+1145: > (trước khi có mặt).
+1146: 
+1147: **Quy tắc**: Không phải proration (không tự scale annual target). Chỉ skip tháng trước ngày vào.
+1148: 
+1149: ```python
+1150: # Source date: UserUnitAssignment.assigned_at (không dùng User.created_at vì có thể
+1151: # user tồn tại nhưng chưa được giao unit)
+1152: 
+1153: # Skip logic trong sync_plan_to_kpi_config():
+1154: start_month = assignment.assigned_at.month  # VD: 6 (tháng 6)
+1155: 
+1156: # Tháng trước start_month: KHÔNG upsert KpiConfig cho officer
+1157: # → Officer chưa có mặt → không có target → dashboard hiện DEFAULT_KPIS (chấp nhận)
+1158: 
+1159: # Tháng từ start_month trở đi: dùng unit plan monthly target M_t bình thường
+1160: # → KHÔNG chia lại annual target — officer dùng M_t theo mùa nguyên bản
+1161: # → Annual progress (KpiTarget): tạo với achieved_ytd=0, tính từ start_month
+1162: 
+1163: # Ví dụ: Unit plan T6 có M_t = 38. Officer mới nhận target M_t = 38 cho T6.
+1164: # Officer không bị gánh target T1-T5 (đã không có mặt).
+1165: ```
+1166: 
+1167: > **Nếu cần proration thật** (scale target theo thời gian còn lại): Admin tạo officer plan
+1168: > riêng với annual_target đã tính sẵn (VD: 150 thay vì 300). Planning engine phân bổ 150
+1169: > cho T6-T12 theo weights re-normalized. Hệ thống không auto-prorate — admin quyết định.
+1170: 
+1171: ### 10.5 Division-by-zero / NULL KPIs
+1172: 
+1173: Xem section 1 "Division-by-zero & NULL semantics" cho quy tắc chi tiết.
+1174: 
+1175: Tóm tắt: `WD_t=0`, `M_t=0`, `L_t=0`, `C_t=0` → derived KPI = NULL → sync skip → dashboard fallback.
+1176: 
+1177: ---
+1178: 
+1179: ## 11. Instrumentation: Assignment Decision Log (v2.1 prep)
+1180: 
+1181: > **Mục đích**: Chuẩn bị dữ liệu cho fairness allocation v2.1.
+1182: > Auto-assign hiện có eligible pool ở runtime nhưng không lưu lại.
+1183: > Thêm logging ngay Phase A (không đổi logic assign) để sau có data phân tích.
+1184: 
+1185: ```sql
+1186: CREATE TABLE assignment_decision_log (
+1187:     id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+1188:     lead_id             INTEGER NOT NULL REFERENCES lead(id) ON DELETE CASCADE,
+1189:     assigned_officer_id INTEGER REFERENCES "user"(id),       -- NULL nếu không assign được
+1190:     decision_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+1191: 
+1192:     -- Context snapshot tại thời điểm quyết định
+1193:     eligible_officer_ids   INTEGER[] NOT NULL,    -- pool trước khi chọn
+1194:     channel                VARCHAR(50),           -- "auto", "manual", "round_robin"
+1195:     unit_id                INTEGER REFERENCES organization_unit(id),
+1196: 
+1197:     -- Scoring factors (snapshot, không FK)
+1198:     scores_snapshot        JSONB,                 -- {"officer_1": 85, "officer_2": 72, ...}
+1199:     capacity_snapshot      JSONB,                 -- {"officer_1": {"current": 12, "max": 20}, ...}
+1200: 
+1201:     -- Result
+1202:     reason                 VARCHAR(200)           -- "lowest_workload", "round_robin", "manual_override"
+1203: );
+1204: 
+1205: CREATE INDEX idx_assignment_log_lead ON assignment_decision_log(lead_id);
+1206: CREATE INDEX idx_assignment_log_officer ON assignment_decision_log(assigned_officer_id);
+1207: CREATE INDEX idx_assignment_log_time ON assignment_decision_log(decision_at);
+1208: ```
+1209: 
+1210: > **Phase A**: Thêm bảng + ghi log trong `assignment_service.py` (1 dòng `await log_decision(...)` sau assign).
+1211: > **Phase P2** (sau 1-2 tháng data): Dùng log để tính fairness metrics, redistribute workload.
+1212: 
+1213: ---
+1214: 
+1215: ## 12. Implementation Phases
+1216: 
+1217: ### Phase A0: Data Foundation (prerequisite — chạy trước mọi thứ khác)
+1218: 
+1219: | Task | Files | Effort |
+1220: |------|-------|--------|
+1221: | A0-1. Migration: `KpiConfig.target_value` Integer → NUMERIC(12,2) | `alembic/versions/` | S |
+1222: | A0-2. Migration: `KpiTarget.kpi_code` `enrollments` → `enrollments_annual`, `KpiConfig.kpi_code` `response_time` → `response_time_hours` | `alembic/versions/` (cùng file) | S |
+1223: | A0-3. Migration: Thêm columns `effective_month/effective_year/source_plan_id` vào `kpi_config` + drop 2 unique indexes cũ (`uq_kpi_config_scope`, `ix_kpi_config_unique_combo`) + tạo 3 indexes mới (evergreen, monthly, lookup) | `alembic/versions/` (cùng file) | M |
+1224: | A0-4. Schema: `KpiConfigCreate/Response.target_value: int → float` | `app/routers/kpi_config.py` | S |
+1225: | A0-5. `get_kpi_target()` return type `int → float` | `app/services/kpi_service.py` | S |
+1226: | A0-6. `get_annual_target_progress(kpi_code="enrollments_annual")` | `app/services/kpi_service.py`, `officer_service.py` | S |
+1227: | A0-7. Thêm `win_rate: 33` vào `DEFAULT_KPIS` | `app/services/kpi_service.py` | XS |
+1228: | A0-8. Frontend: sửa legacy codes trong `admin/kpi-config/page.tsx` (`"response_time"` → `"response_time_hours"`, `"enrollments"` → `"enrollments_annual"`) | `frontend/src/app/(dashboard)/admin/kpi-config/page.tsx` | S |
+1229: | A0-9. Frontend: audit int-specific operations trên target values (`%`, `parseInt`, bitwise) | `frontend/src/` | S |
+1230: | A0-10. IDOR: thêm unit scope filter cho existing KPI config endpoints (Manager) | `app/routers/kpi_config.py`, `app/core/deps.py` | S |
+1231: 
+1232: > **LƯU Ý**: `KpiTarget` và `KpiMonthlySnapshot` GIỮ INTEGER — chỉ đếm enrollment counts.
+1233: > Chỉ `KpiConfig.target_value` cần NUMERIC vì chứa cả tỷ lệ (%) lẫn đếm.
+1234: 
+1235: ### Phase A: Core Engine (MVP)
+1236: 
+1237: | Task | Files | Effort |
+1238: |------|-------|--------|
+1239: | A1. Migration: tạo 4 bảng (kpi_plan, kpi_plan_month, holiday_calendar, assignment_decision_log) + seed holidays. KpiConfig columns/indexes đã chuyển lên A0-3 | `alembic/versions/` | M |
+1240: | A2. Models: KpiPlan, KpiPlanMonth, HolidayCalendar, AssignmentDecisionLog | `app/models/config.py`, `app/models/lead.py` | S |
+1241: | A3. Calendar service: count_working_days | `app/services/calendar_service.py` | S |
+1242: | A4. Planning service: create_plan, generate_monthly_kpis (Largest Remainder + NULL guards) | `app/services/kpi_planning_service.py` | M |
+1243: | A5. Planning repository | `app/repositories/kpi_planning_repository.py` | M |
+1244: | A6. API endpoints: CRUD plans + preview + IDOR dependencies (section 2.6) | `app/routers/kpi_planning.py`, `app/core/deps.py` | M |
+1245: | A7. Sync job: sync_plan_to_kpi_config (với effective_month/year + source_plan_id) | `app/tasks/cache_tasks.py` | M |
+1246: | A8. Assignment decision logging: 1-line log trong assignment_service.py | `app/services/assignment_service.py` | XS |
+1247: | A9. Holiday status endpoint + Celery yearly check (1/11) | `app/routers/kpi_planning.py`, `app/tasks/cache_tasks.py` | S |
+1248: 
+1249: ### Phase B: Override & Calibration
+1250: 
+1251: | Task | Files | Effort |
+1252: |------|-------|--------|
+1253: | B1. Override API: per-field override + batch override + reset | `app/routers/kpi_planning.py` | M |
+1254: | B2. Historical metrics service: k_t, L_t, C_t from actual data | `app/services/historical_metrics_service.py` | M |
+1255: | B3. Auto-calibration: recalibrate_factors with EMA + damping (30%/15%) + fallback | `app/services/kpi_planning_service.py` | M |
+1256: | B4. Month-end actuals: fill_month_actuals (6 actual fields) | `app/services/kpi_planning_service.py` | S |
+1257: | B5. Enhanced sync job: actuals + recalibrate + sync | `app/tasks/cache_tasks.py` | S |
+1258: | B6. Mid-year target change: update_plan with redistribute | `app/services/kpi_planning_service.py` | M |
+1259: | B7. Soft-delete cleanup: deactivate_plan (dùng source_plan_id xóa KpiConfig) | `app/services/kpi_planning_service.py` | S |
+1260: | B8. `get_kpi_target()` + effective_date param cho historical resolution | `app/services/kpi_service.py`, `app/repositories/kpi_repository.py` | M |
+1261: 
+1262: ### Phase C: Admin UI
+1263: 
+1264: | Task | Files | Effort |
+1265: |------|-------|--------|
+1266: | C1. Plan creation form (annual target + weights slider + guardrails) | `frontend/src/app/(dashboard)/admin/kpi-planning/` | L |
+1267: | C2. Monthly grid view (12 months × 8 KPIs, editable per-field overrides) | `frontend/src/components/admin/kpi-planning/` | L |
+1268: | C3. Preview mode: gọi `POST /plans/preview` debounced (300ms), render kết quả. **KHÔNG** tính toán Largest Remainder/KPI trên frontend | Frontend | M |
+1269: | C4. Holiday calendar management UI + seed year action | Frontend | M |
+1270: | C5. Plan vs Actual comparison report | Frontend | M |
+1271: | C6. Clone plan from previous year | Frontend | S |
+1272: 
+1273: ### Phase P2: Fairness Allocation (sau 1-2 tháng có data)
+1274: 
+1275: | Task | Files | Effort |
+1276: |------|-------|--------|
+1277: | P2-1. Fairness dashboard: phân tích assignment_decision_log | `app/services/fairness_service.py` | M |
+1278: | P2-2. Weighted distribution dựa trên capacity + historical fairness | `app/services/assignment_service.py` | L |
+1279: 
+1280: ### Phase P3: Config-driven Recommendations
+1281: 
+1282: | Task | Files | Effort |
+1283: |------|-------|--------|
+1284: | P3-1. Chuyển THRESHOLDS hardcoded → đọc từ KpiConfig/system config | `app/services/recommendation_engine.py` | M |
+1285: | P3-2. Per-scope threshold customization (unit/officer level) | `app/routers/kpi_config.py` | S |
+1286: 
+1287: ---
+1288: 
+1289: ## 13. Ví dụ End-to-End
+1290: 
+1291: ```
+1292: 0. [Phase A0] Admin chạy migration: KpiConfig.target_value → NUMERIC,
+1293:    KpiTarget.kpi_code "enrollments" → "enrollments_annual"
+1294:    → Hệ thống hiện tại vẫn hoạt động bình thường (backward compatible)
+1295: 
+1296: 1. Admin vào "KPI Planning" → chọn Unit "Phòng Tuyển sinh HN"
+1297: 2. Nhập: Năm 2026, Chỉ tiêu: 300 nhập học
+1298: 3. Hệ thống auto-fill 12 tháng theo seasonal weights
+1299:    → Largest Remainder reconciliation đảm bảo sum(M_t) = 300
+1300: 4. Admin xem preview → thấy T7: 46 nhập học, 13 tư vấn/ngày
+1301: 5. Admin override T8: consultations_daily = 16 (lý do: "Chiến dịch tư vấn đặc biệt")
+1302:    → overridden_fields = {"consultations_daily": true}
+1303:    → win_rate, conversion_rate vẫn auto-recalculate
+1304: 6. Admin lưu plan → hệ thống tạo KpiPlan + 12 KpiPlanMonth
+1305: 7. Celery sync ngày 1/T1: push KPI T1 vào KpiConfig
+1306:    → KpiConfig.target_value = 16.70 (NUMERIC, conversion_rate)
+1307:    → KpiConfig.effective_month = 1, effective_year = 2026
+1308:    → KpiConfig.source_plan_id = 42
+1309:    → Officer dashboard tự động hiện target mới
+1310: 8. Cuối T3: Celery fill actuals, recalibrate k_t/L_t/C_t cho T4+
+1311:    → Chỉ 3 tháng data → EMA fallback (0.6/0.4 cho 2 tháng)
+1312:    → Damping ±30% (lần đầu từ default)
+1313:    → T4 targets tự adjust theo performance thực tế
+1314: 9. T6: Admin đổi target 300 → 350
+1315:    → remaining = 350 - actual_sum(T1-T5) = 266
+1316:    → T6-T12 redistribute 266 theo Largest Remainder
+1317: 10. T8: sync job thấy overridden_fields có consultations_daily
+1318:     → Giữ nguyên 16, recalculate các field khác bình thường
+1319: 11. T10: Manager xem dashboard tháng 3 (quá khứ)
+1320:     → get_kpi_target(effective_date=2026-03-15) → lấy target T3 chính xác
+1321:     → Không bị lấy nhầm target T10 hiện tại
+1322: 12. T12: Admin clone plan sang 2027, điều chỉnh target mới
+1323: 13. [Phase P2] Sau 2 tháng: phân tích assignment_decision_log
+1324:     → Phát hiện Officer A nhận 40% leads, Officer B chỉ 15%
+1325:     → Điều chỉnh weighted distribution cho fairness
+1326: ```
+1327: 
+1328: ---
+1329: 
+1330: ## 14. Test Plan
+1331: 
+1332: ### 14.1 Phase A0: Migration Compatibility
+1333: 
+1334: | # | Test case | Verify |
+1335: |---|-----------|--------|
+1336: | 1 | Migration up/down idempotent | `alembic upgrade head` → `downgrade -1` → `upgrade head` thành công |
+1337: | 2 | Existing KpiConfig integer values cast OK | `SELECT target_value FROM kpi_config` trả `10.00`, `85.00` (NUMERIC) |
+1338: | 3 | KpiTarget kpi_code migrated | Không còn record nào `kpi_code = 'enrollments'` hoặc `'response_time'` |
+1339: | 4 | Unique constraint evergreen vẫn hoạt động | INSERT 2 evergreen records cùng scope → conflict |
+1340: | 5 | Unique constraint monthly cho phép multi-month | INSERT (kpi_code=X, month=1) + (kpi_code=X, month=2) cùng scope → OK |
+1341: | 6 | `get_kpi_target()` trả float | Call với legacy data → trả `10.0` thay vì `10` |
+1342: | 7 | `get_annual_target_progress(kpi_code="enrollments_annual")` | Trả progress đúng với data migrated |
+1343: | 8 | Frontend admin/kpi-config loads OK | Không còn gửi `"response_time"` hoặc `"enrollments"` khi create/edit |
+1344: 
+1345: ### 14.2 Phase A: Core Engine
+1346: 
+1347: | # | Test case | Verify |
+1348: |---|-----------|--------|
+1349: | 1 | `create_plan()` basic | 300 annual → 12 KpiPlanMonth records, sum(M_t) == 300 |
+1350: | 2 | Largest Remainder reconciliation | Weights sum=0.998, annual=300: floor values sum=293, diff=+7 → cộng 1 cho 7 tháng có remainder cao nhất. Weights sum=1.002 → diff<0 → trừ 1 cho tháng remainder thấp nhất |
+1351: | 3 | `unit_id` NOT NULL enforced | `create_plan(unit_id=None)` → validation error |
+1352: | 4 | Unique index unit plan | 2 active plans cùng unit+year → DB conflict |
+1353: | 5 | Unique index officer plan | 2 active officer plans cùng scope → DB conflict |
+1354: | 6 | Unit plan uniqueness (officer_id=NULL) | `uix_kpi_plan_active_unit` chặn 2 active unit plans (officer_id IS NULL) cùng unit+year |
+1355: | 7 | Working days T2-T7 | Tháng có 5 ngày CN → WD_t = 26 (31-5=26, trừ thêm lễ) |
+1356: | 8 | WD_t = 0 → derived NULL | `consultations_daily=NULL`, `conversion_rate=NULL` |
+1357: | 9 | Sync skip NULL KPIs | KpiConfig không có record cho kpi_code khi plan month = NULL |
+1358: | 10 | `effective_month/year` ghi đúng | Sync T3 → KpiConfig record có `effective_month=3, effective_year=2026` |
+1359: | 11 | Preview endpoint stateless | `POST /plans/preview` → response 200, no DB records created |
+1360: | 12 | IDOR: Manager truy cập plan unit khác → 404 | `get_kpi_plan_for_user` raise `ResourceNotFoundError` |
+1361: | 13 | IDOR: Manager list plans → chỉ thấy unit mình | Response chỉ chứa plans của unit_id = user.unit_id |
+1362: | 14 | Router commits, service doesn't | Mock `db.commit` trong service → never called |
+1363: 
+1364: ### 14.3 Phase B: Override & Calibration
+1365: 
+1366: | # | Test case | Verify |
+1367: |---|-----------|--------|
+1368: | 1 | Per-field override | Override `consultations_daily` → `overridden_fields = {"consultations_daily": true}` |
+1369: | 2 | Override validation | Override không có `reason` (< 5 chars) → 400 |
+1370: | 3 | Sync skip overridden field | Regenerate → `consultations_daily` giữ nguyên, `win_rate` recalculate |
+1371: | 4 | Reset specific field | Reset `consultations_daily` → removed from `overridden_fields`, recalculated |
+1372: | 5 | is_first_calibration detection | Officer chưa có actuals → damping ±30%, có actuals → ±15% |
+1373: | 6 | EMA fallback < 3 months | 1 month data → direct value, 2 months → 0.6/0.4 weighted |
+1374: | 7 | Mid-year target change | Change 300→350 ở T6, remaining redistribute cho T6-T12 |
+1375: | 8 | Celery job timing | `sync_kpi_plan_monthly` scheduled `crontab(hour=2, minute=0, day_of_month=1)` |
+1376: | 9 | Job commit-per-plan isolation | Plan A fails → Plan B still syncs OK |
+1377: 
+1378: ### 14.4 Temporal & Historical Resolution
+1379: 
+1380: | # | Test case | Verify |
+1381: |---|-----------|--------|
+1382: | 1 | `get_kpi_target(effective_date=T3)` | Trả target T3, không phải T6 hiện tại |
+1383: | 2 | Evergreen fallback | Xóa monthly records → fallback về evergreen record |
+1384: | 3 | DEFAULT_KPIS fallback | Xóa tất cả KpiConfig → trả giá trị hardcoded |
+1385: | 4 | No effective_date → current month | Gọi không có param → trả target tháng hiện tại |
+1386: 
+1387: ### 14.5 Holiday Calendar
+1388: 
+1389: | # | Test case | Verify |
+1390: |---|-----------|--------|
+1391: | 1 | `GET /holidays/status/2027` incomplete | `is_complete=false`, `has_lunar_holidays=false` |
+1392: | 2 | Seed recurring holidays | `POST /holidays/seed/2027` → copy 1/1, 30/4, 1/5, 2/9 |
+1393: | 3 | Celery yearly check | Chạy 1/11 → notification khi < 8 ngày lễ cho năm kế |

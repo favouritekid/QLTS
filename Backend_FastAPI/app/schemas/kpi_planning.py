@@ -5,7 +5,7 @@ KPI Planning Schemas — Phase A6
 Request/Response models for KPI Planning CRUD + Preview endpoints.
 Follows project conventions: BaseModel + ConfigDict(from_attributes=True).
 """
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -178,7 +178,7 @@ class HolidayResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    date: str
+    date: date
     name: str
     year: int
     is_recurring: bool

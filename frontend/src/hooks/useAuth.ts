@@ -475,11 +475,8 @@ export function useAuth(options?: UseAuthOptions) {
   }, [isUserError, userError, logoutStore, queryClient, router]);
 
   useEffect(() => {
-    if (currentUser && !userFromStore) {
-      if (JSON.stringify(currentUser) !== JSON.stringify(userFromStore)) {
-        // <<< SỬA LỖI 2: setUser nhận User từ api.types >>>
-        useAuthStore.getState().setUser(currentUser); // TypeScript sẽ kiểm tra kiểu User ở đây
-      }
+    if (currentUser && JSON.stringify(currentUser) !== JSON.stringify(userFromStore)) {
+      useAuthStore.getState().setUser(currentUser);
     }
   }, [currentUser, userFromStore]);
 

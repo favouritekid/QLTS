@@ -18,7 +18,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.database import get_db
 from app.core import deps
@@ -56,7 +56,13 @@ class KpiConfigBase(BaseModel):
     period_type: str = Field(default="daily", description="daily, monthly, annual")
     unit_id: Optional[int] = Field(None, description="Unit ID for unit-level config (None = global)")
     officer_id: Optional[int] = Field(None, description="Officer ID for officer-specific config")
-    
+
+    @model_validator(mode="after")
+    def check_unit_id_required_for_officer(self) -> "KpiConfigBase":
+        if self.officer_id is not None and self.unit_id is None:
+            raise ValueError("unit_id is required when officer_id is set")
+        return self
+
 
 class KpiConfigCreate(KpiConfigBase):
     """Create KPI configuration."""
@@ -397,6 +403,12 @@ class ThresholdUpsertRequest(BaseModel):
     thresholds: dict = Field(..., description="Map of threshold_key -> value")
     unit_id: Optional[int] = None
     officer_id: Optional[int] = None
+
+    @model_validator(mode="after")
+    def check_unit_id_required_for_officer(self) -> "ThresholdUpsertRequest":
+        if self.officer_id is not None and self.unit_id is None:
+            raise ValueError("unit_id is required when officer_id is set")
+        return self
 
 
 class ThresholdResponse(BaseModel):

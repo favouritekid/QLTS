@@ -188,7 +188,7 @@ export function MfaSettingsClient() {
             <Copy className="mr-2 h-4 w-4" aria-hidden="true" />
             Sao chép
           </Button>
-          <Button onClick={() => { setSetupStep("idle"); setBackupCodes([]); }}>
+          <Button onClick={() => { setSetupStep("idle"); setBackupCodes([]); setSetupData(null); }}>
             Xong
           </Button>
         </div>

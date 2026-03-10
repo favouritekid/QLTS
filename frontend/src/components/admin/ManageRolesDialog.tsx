@@ -40,6 +40,13 @@ function capitalizeRole(role: string): string {
 export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialogProps) {
   const [selectedRole, setSelectedRole] = useState<string>("");
 
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen) {
+      setSelectedRole("");
+    }
+    onOpenChange(newOpen);
+  };
+
   const assignRoleMutation = useAdminAssignRole();
   const removeRoleMutation = useAdminRemoveRole();
 
@@ -105,7 +112,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[550px]">
         <DialogHeader>
           <DialogTitle>Quản lý vai trò</DialogTitle>
@@ -210,10 +217,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
           <Button
             type="button"
             variant="outline"
-            onClick={() => {
-              onOpenChange(false);
-              setSelectedRole("");
-            }}
+            onClick={() => handleOpenChange(false)}
             disabled={isPending}
           >
             Đóng

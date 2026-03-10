@@ -110,12 +110,12 @@ export function useAdminCreateUser() {
       return response.data;
     },
     onSuccess: () => {
-      toast.success("User created successfully!");
+      toast.success("Tạo người dùng thành công!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Failed to create user";
-      toast.error(typeof message === "string" ? message : "Failed to create user");
+      const message = error.response?.data?.detail || "Không thể tạo người dùng";
+      toast.error(typeof message === "string" ? message : "Không thể tạo người dùng");
     },
   });
 }
@@ -153,7 +153,7 @@ export function useAdminUpdateUser(userId: number) {
       return response.data;
     },
     onSuccess: (updatedUser) => {
-      toast.success("User updated successfully!");
+      toast.success("Cập nhật người dùng thành công!");
 
       // ✅ PERFORMANCE FIX (v17): Use setQueriesData for surgical cache update
       // Instead of invalidating all lists (causing refetch), update the specific user in cache
@@ -202,8 +202,8 @@ export function useAdminUpdateUser(userId: number) {
       queryClient.invalidateQueries({ queryKey: ["admin", "statistics"], refetchType: "active" });
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Failed to update user";
-      toast.error(typeof message === "string" ? message : "Failed to update user");
+      const message = error.response?.data?.detail || "Không thể cập nhật người dùng";
+      toast.error(typeof message === "string" ? message : "Không thể cập nhật người dùng");
     },
   });
 }
@@ -220,12 +220,12 @@ export function useAdminDeleteUser() {
       await api.delete(API_ENDPOINTS.ADMIN.USERS.DELETE(userId));
     },
     onSuccess: () => {
-      toast.success("User deleted successfully!");
+      toast.success("Xoá người dùng thành công!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Failed to delete user";
-      toast.error(typeof message === "string" ? message : "Failed to delete user");
+      const message = error.response?.data?.detail || "Không thể xoá người dùng";
+      toast.error(typeof message === "string" ? message : "Không thể xoá người dùng");
     },
   });
 }
@@ -240,11 +240,11 @@ export function useAdminSetPassword(userId: number) {
       await api.post(API_ENDPOINTS.ADMIN.USERS.SET_PASSWORD(userId), data);
     },
     onSuccess: () => {
-      toast.success("Password updated successfully!");
+      toast.success("Đặt mật khẩu thành công!");
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Failed to set password";
-      toast.error(typeof message === "string" ? message : "Failed to set password");
+      const message = error.response?.data?.detail || "Không thể đặt mật khẩu";
+      toast.error(typeof message === "string" ? message : "Không thể đặt mật khẩu");
     },
   });
 }
@@ -261,13 +261,13 @@ export function useAdminAssignRole() {
       await api.post(API_ENDPOINTS.ADMIN.PERMISSIONS.ASSIGN_ROLE, data);
     },
     onSuccess: (_, variables) => {
-      toast.success("Role assigned successfully!");
+      toast.success("Gán vai trò thành công!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id), refetchType: "active" });
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Failed to assign role";
-      toast.error(typeof message === "string" ? message : "Failed to assign role");
+      const message = error.response?.data?.detail || "Không thể gán vai trò";
+      toast.error(typeof message === "string" ? message : "Không thể gán vai trò");
     },
   });
 }
@@ -284,13 +284,13 @@ export function useAdminRemoveRole() {
       await api.delete(API_ENDPOINTS.ADMIN.PERMISSIONS.ASSIGN_ROLE, { data });
     },
     onSuccess: (_, variables) => {
-      toast.success("Role removed successfully!");
+      toast.success("Xoá vai trò thành công!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id), refetchType: "active" });
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Failed to remove role";
-      toast.error(typeof message === "string" ? message : "Failed to remove role");
+      const message = error.response?.data?.detail || "Không thể xoá vai trò";
+      toast.error(typeof message === "string" ? message : "Không thể xoá vai trò");
     },
   });
 }
@@ -311,12 +311,12 @@ export function useAdminBulkAction() {
       return response.data;
     },
     onSuccess: (data) => {
-      toast.success(data.detail || "Bulk action completed successfully!");
+      toast.success(data.detail || "Thao tác hàng loạt thành công!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Failed to perform bulk action";
-      toast.error(typeof message === "string" ? message : "Failed to perform bulk action");
+      const message = error.response?.data?.detail || "Không thể thực hiện thao tác hàng loạt";
+      toast.error(typeof message === "string" ? message : "Không thể thực hiện thao tác hàng loạt");
     },
   });
 }
@@ -354,10 +354,10 @@ export function useAssignUserToUnit() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
-      toast.success("User assigned to unit successfully");
+      toast.success("Gán người dùng vào đơn vị thành công");
     },
     onError: () => {
-      toast.error("Failed to assign user to unit");
+      toast.error("Không thể gán người dùng vào đơn vị");
     },
   });
 }
@@ -371,10 +371,10 @@ export function useUnassignUserFromUnit() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
-      toast.success("User unassigned from unit successfully");
+      toast.success("Gỡ người dùng khỏi đơn vị thành công");
     },
     onError: () => {
-      toast.error("Failed to unassign user from unit");
+      toast.error("Không thể gỡ người dùng khỏi đơn vị");
     },
   });
 }

@@ -67,6 +67,30 @@ VALID_THRESHOLD_KEYS = frozenset(DEFAULT_THRESHOLDS.keys())
 THRESHOLD_KPI_PREFIX = "threshold_"
 
 
+async def _get_threshold_raw(
+    repo: Any,
+    kpi_code: str,
+    officer_id: Optional[int],
+    unit_id: Optional[int],
+) -> Optional[float]:
+    """
+    Return raw threshold from KpiConfig, or None if not configured.
+
+    Distinct from get_kpi_target() which collapses None→0: here None means
+    "no record" while 0.0 means "admin explicitly set to 0".
+    """
+    if officer_id:
+        val = await repo.get_target_by_officer(kpi_code, officer_id, "threshold", unit_id=unit_id)
+        if val is not None:
+            return float(val)
+    if unit_id:
+        val = await repo.get_target_by_unit(kpi_code, unit_id, "threshold")
+        if val is not None:
+            return float(val)
+    val = await repo.get_global_target(kpi_code, "threshold")
+    return float(val) if val is not None else None
+
+
 async def get_recommendation_thresholds(
     db: AsyncSession,
     officer_id: Optional[int] = None,
@@ -84,17 +108,15 @@ async def get_recommendation_thresholds(
     resolved_source: Dict[str, str] = {}
 
     try:
+        from app.repositories import KpiRepository
+        repo = KpiRepository(db)
+
         for key in DEFAULT_THRESHOLDS:
             kpi_code = f"{THRESHOLD_KPI_PREFIX}{key}"
-            target = await kpi_service.get_kpi_target(
-                db, kpi_code=kpi_code,
-                officer_id=officer_id, unit_id=unit_id,
-                period_type="threshold",
-            )
-            # get_kpi_target returns 0 when no config exists (default=0 for unknown codes)
-            # We only override if a non-zero config was found
-            if target != 0:
-                thresholds[key] = target
+            # Use raw query so val=0.0 (admin set) is distinguished from None (not configured)
+            config_val = await _get_threshold_raw(repo, kpi_code, officer_id, unit_id)
+            if config_val is not None:
+                thresholds[key] = config_val
                 resolved_source[key] = "config"
             else:
                 resolved_source[key] = "default"

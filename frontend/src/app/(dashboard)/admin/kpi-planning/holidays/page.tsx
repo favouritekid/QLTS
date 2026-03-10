@@ -46,7 +46,7 @@ export default function HolidayManagementPage() {
   // Queries
   const { data: statusCurrent } = useHolidayStatus(currentYear);
   const { data: statusNext } = useHolidayStatus(currentYear + 1);
-  const { data: holidays, isLoading } = useHolidays(yearFilter);
+  const { data: holidays, isLoading, isError, error: holidaysError } = useHolidays(yearFilter);
 
   // Mutations
   const createMut = useCreateHoliday();
@@ -164,6 +164,10 @@ export default function HolidayManagementPage() {
                 <Skeleton key={i} className="h-10 w-full" />
               ))}
             </div>
+          ) : isError ? (
+            <p className="py-8 text-center text-destructive">
+              {holidaysError?.response?.data?.detail || "Không thể tải danh sách ngày lễ"}
+            </p>
           ) : !holidays?.items?.length ? (
             <p className="py-8 text-center text-muted-foreground">
               Chưa có ngày lễ cho năm {yearFilter}
@@ -352,3 +356,5 @@ export default function HolidayManagementPage() {
     </PageContainer>
   );
 }
+
+
