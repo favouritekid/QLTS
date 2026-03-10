@@ -48,9 +48,9 @@ class RecommendationPriority:
     LOW = "low"
 
 
-# Rule thresholds
-THRESHOLDS = {
-    "consultations_gap_critical": 0.5,  # < 50% of target
+# Default thresholds (fallback when no config exists)
+DEFAULT_THRESHOLDS = {
+    "consultations_gap_critical": 0.5,   # < 50% of target
     "consultations_gap_warning": 0.8,    # < 80% of target
     "conversion_rate_low": 10,           # < 10%
     "conversion_rate_good": 20,          # >= 20%
@@ -59,6 +59,55 @@ THRESHOLDS = {
     "hot_leads_untouched": 3,            # > 3 hot leads without recent activity
     "stale_leads_threshold": 5,          # > 5 stale leads
 }
+
+# Valid threshold keys (for validation in P3-2)
+VALID_THRESHOLD_KEYS = frozenset(DEFAULT_THRESHOLDS.keys())
+
+# KpiConfig kpi_code prefix for threshold storage
+THRESHOLD_KPI_PREFIX = "threshold_"
+
+
+async def get_recommendation_thresholds(
+    db: AsyncSession,
+    officer_id: Optional[int] = None,
+    unit_id: Optional[int] = None,
+) -> Dict[str, float]:
+    """
+    Get recommendation thresholds with config-driven resolution (Phase P3-1).
+
+    Priority: officer config -> unit config -> global config -> DEFAULT_THRESHOLDS.
+    Each threshold key is resolved independently (partial override allowed).
+
+    Reads from KpiConfig with kpi_code = "threshold_{key}", period_type = "threshold".
+    """
+    thresholds = dict(DEFAULT_THRESHOLDS)
+    resolved_source: Dict[str, str] = {}
+
+    try:
+        for key in DEFAULT_THRESHOLDS:
+            kpi_code = f"{THRESHOLD_KPI_PREFIX}{key}"
+            target = await kpi_service.get_kpi_target(
+                db, kpi_code=kpi_code,
+                officer_id=officer_id, unit_id=unit_id,
+                period_type="threshold",
+            )
+            # get_kpi_target returns 0 when no config exists (default=0 for unknown codes)
+            # We only override if a non-zero config was found
+            if target != 0:
+                thresholds[key] = target
+                resolved_source[key] = "config"
+            else:
+                resolved_source[key] = "default"
+    except Exception as e:
+        log.warning("Failed to load threshold config, using defaults", error=str(e))
+        resolved_source = {k: "default_fallback" for k in DEFAULT_THRESHOLDS}
+
+    log.debug(
+        "Thresholds resolved",
+        officer_id=officer_id, unit_id=unit_id,
+        sources=resolved_source,
+    )
+    return thresholds
 
 
 # =============================================================================
@@ -72,35 +121,38 @@ async def generate_recommendations(
 ) -> List[Dict[str, Any]]:
     """
     Generate actionable recommendations based on KPI data.
-    
-    ✅ REFACTORED: Uses repositories for data access.
-    
+
+    P3-1: Uses config-driven thresholds (officer -> unit -> global -> default).
+
     Args:
         db: Database session
         officer_id: Officer ID to generate recommendations for
         kpis: Current KPI data from dashboard
-        
+
     Returns:
         List of recommendation objects with priority, action, and impact
     """
     from app.repositories import LeadRepository, UserRepository
-    
+
     recommendations = []
-    
+
     # Get user info via repository
     user_repo = UserRepository(db)
     user = await user_repo.get_by_id(officer_id)
     if not user:
         return recommendations
-    
+
+    # P3-1: Resolve thresholds from config (officer -> unit -> global -> default)
+    t = await get_recommendation_thresholds(db, officer_id=officer_id, unit_id=user.unit_id)
+
     # Rule 1: Consultations below target
     consultations_today = kpis.get("consultations_today", 0)
     consultations_target = kpis.get("consultations_target", 10)
-    
+
     if consultations_target > 0:
         ratio = consultations_today / consultations_target
-        
-        if ratio < THRESHOLDS["consultations_gap_critical"]:
+
+        if ratio < t["consultations_gap_critical"]:
             recommendations.append({
                 "type": RecommendationType.INCREASE_ACTIVITY,
                 "priority": RecommendationPriority.CRITICAL,
@@ -111,7 +163,7 @@ async def generate_recommendations(
                 "action_link": "/leads?filter=hot",
                 "expected_impact": f"Đạt chỉ tiêu {consultations_target} tư vấn/ngày",
             })
-        elif ratio < THRESHOLDS["consultations_gap_warning"]:
+        elif ratio < t["consultations_gap_warning"]:
             recommendations.append({
                 "type": RecommendationType.INCREASE_ACTIVITY,
                 "priority": RecommendationPriority.HIGH,
@@ -126,7 +178,7 @@ async def generate_recommendations(
     # Rule 2: Low conversion rate
     conversion_rate = kpis.get("new_lead_conversion_rate", 0)
     
-    if conversion_rate < THRESHOLDS["conversion_rate_low"]:
+    if conversion_rate < t["conversion_rate_low"]:
         recommendations.append({
             "type": RecommendationType.IMPROVE_CONVERSION,
             "priority": RecommendationPriority.HIGH,
@@ -135,13 +187,13 @@ async def generate_recommendations(
                       f"Xem lại quy trình tư vấn và nghiên cứu các case thành công.",
             "action": "Xem lead đã chuyển đổi",
             "action_link": "/leads?filter=converted",
-            "expected_impact": f"Tăng tỷ lệ chuyển đổi lên {THRESHOLDS['conversion_rate_good']}%",
+            "expected_impact": f"Tăng tỷ lệ chuyển đổi lên {t['conversion_rate_good']}%",
         })
     
     # Rule 3: Slow response time
     avg_response_time = kpis.get("avg_response_time", 0)
     
-    if avg_response_time > THRESHOLDS["response_time_critical"]:
+    if avg_response_time > t["response_time_critical"]:
         recommendations.append({
             "type": RecommendationType.REDUCE_RESPONSE_TIME,
             "priority": RecommendationPriority.CRITICAL,
@@ -152,7 +204,7 @@ async def generate_recommendations(
             "action_link": "/leads?filter=new",
             "expected_impact": "Tăng tỷ lệ tiếp cận thành công 30%",
         })
-    elif avg_response_time > THRESHOLDS["response_time_warning"]:
+    elif avg_response_time > t["response_time_warning"]:
         recommendations.append({
             "type": RecommendationType.REDUCE_RESPONSE_TIME,
             "priority": RecommendationPriority.MEDIUM,
@@ -168,7 +220,7 @@ async def generate_recommendations(
     lead_repo = LeadRepository(db)
     hot_leads_count = await lead_repo.count_hot_leads_needing_attention(officer_id)
     
-    if hot_leads_count > THRESHOLDS["hot_leads_untouched"]:
+    if hot_leads_count > t["hot_leads_untouched"]:
         recommendations.append({
             "type": RecommendationType.FOCUS_HOT_LEADS,
             "priority": RecommendationPriority.CRITICAL,
@@ -183,7 +235,7 @@ async def generate_recommendations(
     # Rule 5: Too many stale leads (via repository)
     stale_leads_count = await lead_repo.count_stale_leads(officer_id)
     
-    if stale_leads_count > THRESHOLDS["stale_leads_threshold"]:
+    if stale_leads_count > t["stale_leads_threshold"]:
         recommendations.append({
             "type": RecommendationType.CLEAR_STALE_LEADS,
             "priority": RecommendationPriority.MEDIUM,
@@ -209,7 +261,7 @@ async def generate_recommendations(
         })
     
     # Rule 7: Conversion rate excellent
-    if conversion_rate >= THRESHOLDS["conversion_rate_good"]:
+    if conversion_rate >= t["conversion_rate_good"]:
         recommendations.append({
             "type": RecommendationType.MAINTAIN_MOMENTUM,
             "priority": RecommendationPriority.LOW,

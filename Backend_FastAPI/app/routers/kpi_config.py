@@ -16,6 +16,7 @@ from typing import Annotated, List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
@@ -382,7 +383,137 @@ async def sync_target_ytd(
         # For global/unit targets, sync all officers and aggregate
         # TODO: Implement aggregation for unit/global targets
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Sync only supported for officer-level targets. Unit/Global targets aggregate automatically."
         )
+
+
+# =============================================================================
+# RECOMMENDATION THRESHOLDS (Phase P3-2)
+# =============================================================================
+
+class ThresholdUpsertRequest(BaseModel):
+    """Upsert recommendation thresholds for a scope."""
+    thresholds: dict = Field(..., description="Map of threshold_key -> value")
+    unit_id: Optional[int] = None
+    officer_id: Optional[int] = None
+
+
+class ThresholdResponse(BaseModel):
+    """Resolved thresholds with source info."""
+    thresholds: dict
+    scope: str  # "officer", "unit", "global", "default"
+
+
+@router.get(
+    "/thresholds",
+    response_model=ThresholdResponse,
+    summary="Get recommendation thresholds for scope",
+)
+async def get_thresholds(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, AdminOrManagerDep],
+    unit_id: Optional[int] = None,
+    officer_id: Optional[int] = None,
+):
+    """
+    Get resolved recommendation thresholds (officer -> unit -> global -> default).
+    Manager: scoped to own unit (404 on mismatch).
+    """
+    from app.services.recommendation_engine import get_recommendation_thresholds
+    from app.utils.exceptions import ResourceNotFoundError
+
+    # IDOR: Manager can only see own unit
+    if current_user.role == "manager":
+        if not current_user.unit_id:
+            raise ResourceNotFoundError(detail="Thresholds not found")
+        if unit_id is not None and unit_id != current_user.unit_id:
+            raise ResourceNotFoundError(detail="Thresholds not found")
+        unit_id = current_user.unit_id
+
+    thresholds = await get_recommendation_thresholds(
+        db, officer_id=officer_id, unit_id=unit_id,
+    )
+
+    scope = "default"
+    if officer_id:
+        scope = "officer"
+    elif unit_id:
+        scope = "unit"
+
+    return ThresholdResponse(thresholds=thresholds, scope=scope)
+
+
+@router.put(
+    "/thresholds",
+    response_model=ThresholdResponse,
+    summary="Upsert recommendation thresholds",
+)
+async def upsert_thresholds(
+    data: ThresholdUpsertRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, AdminDep],
+):
+    """
+    Upsert recommendation thresholds for a scope. Admin only.
+    Creates/updates KpiConfig records with kpi_code = "threshold_{key}".
+    """
+    from app.services.recommendation_engine import (
+        VALID_THRESHOLD_KEYS, THRESHOLD_KPI_PREFIX, get_recommendation_thresholds,
+    )
+
+    # Validate keys
+    invalid_keys = set(data.thresholds.keys()) - VALID_THRESHOLD_KEYS
+    if invalid_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid threshold keys: {invalid_keys}. Valid: {sorted(VALID_THRESHOLD_KEYS)}",
+        )
+
+    # Validate values
+    for key, val in data.thresholds.items():
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            raise HTTPException(status_code=400, detail=f"Threshold '{key}' must be a number")
+        if val < 0:
+            raise HTTPException(status_code=400, detail=f"Threshold '{key}' must be >= 0")
+        if key.startswith("consultations_gap") and not (0 <= val <= 1):
+            raise HTTPException(status_code=400, detail=f"'{key}' must be 0..1 (ratio)")
+
+    # Upsert each threshold as a KpiConfig record
+    for key, val in data.thresholds.items():
+        kpi_code = f"{THRESHOLD_KPI_PREFIX}{key}"
+
+        # Find existing
+        existing = await db.execute(
+            select(KpiConfig).where(
+                KpiConfig.kpi_code == kpi_code,
+                KpiConfig.period_type == "threshold",
+                KpiConfig.unit_id == data.unit_id,
+                KpiConfig.officer_id == data.officer_id,
+                KpiConfig.is_active == True,
+                KpiConfig.effective_month.is_(None),
+            )
+        )
+        config = existing.scalar_one_or_none()
+
+        if config:
+            config.target_value = val
+        else:
+            db.add(KpiConfig(
+                kpi_code=kpi_code,
+                target_value=val,
+                period_type="threshold",
+                unit_id=data.unit_id,
+                officer_id=data.officer_id,
+                is_active=True,
+            ))
+
+    await db.commit()
+
+    # Return resolved thresholds
+    thresholds = await get_recommendation_thresholds(
+        db, officer_id=data.officer_id, unit_id=data.unit_id,
+    )
+    scope = "officer" if data.officer_id else ("unit" if data.unit_id else "global")
+    return ThresholdResponse(thresholds=thresholds, scope=scope)
 
