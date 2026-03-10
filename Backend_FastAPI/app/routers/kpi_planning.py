@@ -631,3 +631,41 @@ async def seed_holidays(
 
     await db.commit()
     return HolidaySeedResponse(year=year, seeded=seeded)
+
+
+# =============================================================================
+# FAIRNESS ANALYTICS (Phase P2-1)
+# =============================================================================
+
+@router.get(
+    "/fairness",
+    summary="Assignment fairness analytics",
+)
+async def fairness_analytics(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminOrManagerDep],
+    unit_id: Optional[int] = Query(None),
+    date_from: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
+):
+    """
+    Analyze assignment_decision_log for fairness metrics.
+    Admin sees all units. Manager sees only own unit (IDOR forced).
+    """
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+    from app.services.fairness_service import get_fairness_analytics
+
+    VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+    # IDOR: Manager forced to own unit
+    effective_unit = unit_id
+    if current_user.role == "manager":
+        effective_unit = current_user.unit_id
+
+    parsed_from = dt.fromisoformat(date_from).replace(tzinfo=VN_TZ) if date_from else None
+    parsed_to = dt.fromisoformat(date_to).replace(tzinfo=VN_TZ) if date_to else None
+
+    return await get_fairness_analytics(
+        db, unit_id=effective_unit, date_from=parsed_from, date_to=parsed_to,
+    )

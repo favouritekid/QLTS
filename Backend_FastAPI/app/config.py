@@ -366,6 +366,9 @@ class Settings(BaseSettings):
     ENABLE_FEE_VERIFICATION: bool = Field(
         default=False, validation_alias="ENABLE_FEE_VERIFICATION"
     )  # Block enrollment if tuition fee not paid/waived (Phase 6)
+    ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT: bool = Field(
+        default=False, validation_alias="ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT"
+    )  # Phase P2-2: Use fairness-weighted scoring instead of pure round-robin
 
     # -- VNPay Payment Gateway Settings --
     # Get credentials from VNPay merchant portal

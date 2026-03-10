@@ -292,19 +292,82 @@ async def automatically_assign_lead(
                     )
                     return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.AT_CAPACITY, "lead_id": lead_id, "unit_id": lead_unit_id}, _post_commit_callbacks
 
-                # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===
-                # ✅ REFACTORED: Thuật toán mới chống "Flooding" cho nhân viên mới
-                # Ngưỡng an toàn: 80% utilization
-                # Ưu tiên:
-                # 1. Nhóm chưa quá tải (utilization < 0.8) trước nhóm sắp quá tải (>= 0.8)
-                # 2. Trong cùng nhóm, ưu tiên người được gán lâu nhất (Round Robin công bằng)
+                # === BƯỚC 5: Sắp xếp và Chọn Officer ===
+                # P2-2: Feature flag switches between legacy and fairness-weighted scoring
+                from ..config import settings
+
                 SAFETY_THRESHOLD = 0.8
-                officer_loads.sort(
-                    key=lambda x: (
-                        x["utilization"] >= SAFETY_THRESHOLD,  # False (nhóm an toàn) < True (nhóm quá tải)
-                        x["last_assigned"],  # Sắp xếp theo datetime - người gán lâu nhất được ưu tiên
+
+                if settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT:
+                    # --- FAIRNESS-WEIGHTED SCORING (P2-2) ---
+                    # Score = utilization_weight + fairness_weight + recency_weight
+                    # Lower score = higher priority
+                    #
+                    # 1. utilization_weight (0-1): current workload / capacity
+                    # 2. fairness_weight (0-1): historical assignment share
+                    #    (officers with higher share get penalized)
+                    # 3. recency_weight: normalized last_assigned time
+                    #    (longer since last assigned = higher priority)
+                    #
+                    # Fetch historical assignment counts for this unit
+                    hist_counts: dict = {}
+                    try:
+                        from sqlalchemy import select as sel, func as fn
+                        hist_q = await db.execute(
+                            sel(
+                                models.AssignmentDecisionLog.assigned_officer_id,
+                                fn.count(models.AssignmentDecisionLog.id).label("cnt"),
+                            )
+                            .where(
+                                models.AssignmentDecisionLog.unit_id == lead_unit_id,
+                                models.AssignmentDecisionLog.assigned_officer_id.isnot(None),
+                            )
+                            .group_by(models.AssignmentDecisionLog.assigned_officer_id)
+                        )
+                        hist_counts = {r.assigned_officer_id: r.cnt for r in hist_q.all()}
+                    except Exception as e:
+                        log.warning(f"[Lead ID: {lead_id}] Fairness history query failed, falling back: {e}")
+
+                    total_hist = sum(hist_counts.values()) if hist_counts else 0
+                    has_history = total_hist >= 10  # minimum threshold
+
+                    if has_history:
+                        for entry in officer_loads:
+                            oid = entry["officer"].id
+                            # Utilization component (0-1)
+                            util_score = entry["utilization"]
+                            # Fairness component: historical share (0-1)
+                            share = hist_counts.get(oid, 0) / total_hist if total_hist > 0 else 0
+                            # Combined score: 60% utilization + 40% historical share
+                            entry["fairness_score"] = 0.6 * util_score + 0.4 * share
+
+                        officer_loads.sort(
+                            key=lambda x: (
+                                x["utilization"] >= SAFETY_THRESHOLD,
+                                x.get("fairness_score", 0),
+                                x["last_assigned"],
+                            )
+                        )
+                        log.info(f"[Lead ID: {lead_id}] Using fairness-weighted scoring (history={total_hist})")
+                    else:
+                        # Insufficient history — fall back to legacy
+                        officer_loads.sort(
+                            key=lambda x: (
+                                x["utilization"] >= SAFETY_THRESHOLD,
+                                x["last_assigned"],
+                            )
+                        )
+                        log.info(f"[Lead ID: {lead_id}] Fairness ON but insufficient data ({total_hist}), using legacy")
+                else:
+                    # --- LEGACY: HYBRID THRESHOLD ROUND ROBIN ---
+                    # 1. Nhóm chưa quá tải (utilization < 0.8) trước nhóm sắp quá tải (>= 0.8)
+                    # 2. Trong cùng nhóm, ưu tiên người được gán lâu nhất (Round Robin công bằng)
+                    officer_loads.sort(
+                        key=lambda x: (
+                            x["utilization"] >= SAFETY_THRESHOLD,
+                            x["last_assigned"],
+                        )
                     )
-                )
 
                 chosen_officer_data = officer_loads[0]
                 chosen_one = chosen_officer_data["officer"]
@@ -338,13 +401,18 @@ async def automatically_assign_lead(
                 # Thêm tất cả các thay đổi vào session
                 db.add_all([lead, chosen_one, log_entry])
 
-                # A8: Log decision — successful assignment
+                # A8/P2-2: Log decision — successful assignment
+                assign_reason = (
+                    "fairness_weighted" if (settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
+                                           and chosen_officer_data.get("fairness_score") is not None)
+                    else "lowest_workload"
+                )
                 await _log_assignment_decision(
                     db, lead_id=lead_id, assigned_officer_id=chosen_one.id,
                     eligible_officer_ids=officer_ids, unit_id=lead_unit_id,
-                    channel="auto", reason="lowest_workload",
+                    channel="auto", reason=assign_reason,
                     scores_snapshot={
-                        str(ol["officer"].id): round(ol["utilization"], 4)
+                        str(ol["officer"].id): round(ol.get("fairness_score", ol["utilization"]), 4)
                         for ol in officer_loads
                     },
                     capacity_snapshot={
