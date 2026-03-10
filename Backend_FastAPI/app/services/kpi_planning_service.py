@@ -1066,6 +1066,17 @@ async def fill_month_actuals(
     if plan is None:
         raise ResourceNotFoundError("KpiPlan", plan_id)
 
+    # Guard: only fill completed months (not current or future)
+    now_local = dt.now(VN_TZ)
+    if plan.fiscal_year == now_local.year and month >= now_local.month:
+        raise BusinessRuleViolation(
+            f"Chỉ fill actuals cho tháng đã kết thúc. Tháng {month}/{plan.fiscal_year} chưa kết thúc."
+        )
+    if plan.fiscal_year > now_local.year:
+        raise BusinessRuleViolation(
+            f"Chỉ fill actuals cho tháng đã kết thúc. Năm {plan.fiscal_year} chưa bắt đầu."
+        )
+
     pm = next((m for m in plan.months if m.month == month), None)
     if pm is None:
         raise ResourceNotFoundError("KpiPlanMonth", f"plan={plan_id}, month={month}")
@@ -1099,16 +1110,20 @@ async def fill_month_actuals(
     pm.actual_enrollments = enroll_count
 
     # --- 2. actual_consultations_avg (human consultations / working days) ---
-    consult_q = select(func.count(Consultation.id)).where(
-        Consultation.deleted_at.is_(None),
-        Consultation.method.is_distinct_from("system"),
-        Consultation.consultation_date >= month_start,
-        Consultation.consultation_date < month_end,
+    # Always join Lead to enforce unit scope (officer may have transferred units)
+    consult_q = (
+        select(func.count(Consultation.id))
+        .join(Lead, Consultation.lead_id == Lead.id)
+        .where(
+            Consultation.deleted_at.is_(None),
+            Consultation.method.is_distinct_from("system"),
+            Consultation.consultation_date >= month_start,
+            Consultation.consultation_date < month_end,
+            Lead.unit_id == unit_id,
+        )
     )
     if officer_id is not None:
         consult_q = consult_q.where(Consultation.officer_id == officer_id)
-    else:
-        consult_q = consult_q.join(Lead, Consultation.lead_id == Lead.id).where(Lead.unit_id == unit_id)
     consult_count = (await db.execute(consult_q)).scalar_one()
 
     wd = await count_working_days(db, year, month)
@@ -1162,7 +1177,8 @@ async def fill_month_actuals(
     )).scalar_one()
 
     if assigned_in_month > 0:
-        response_hours = int(float(plan.response_time_target))
+        # Keep float precision: 1.5h → 1 hour 30 min, not 1h
+        response_seconds = int(float(plan.response_time_target) * 3600)
         sla_met = (await db.execute(
             select(func.count(func.distinct(Lead.id)))
             .join(Consultation, Consultation.lead_id == Lead.id)
@@ -1172,8 +1188,10 @@ async def fill_month_actuals(
                 Lead.assigned_officer_id.isnot(None),
                 Consultation.deleted_at.is_(None),
                 Consultation.method.is_distinct_from("system"),
+                # First consultation must be AFTER assignment AND within SLA window
+                Consultation.consultation_date >= Lead.assigned_at,
                 Consultation.consultation_date <= Lead.assigned_at + func.make_interval(
-                    0, 0, 0, 0, literal_column(str(response_hours))
+                    0, 0, 0, 0, 0, 0, literal_column(str(response_seconds))
                 ),
             )
         )).scalar_one()
