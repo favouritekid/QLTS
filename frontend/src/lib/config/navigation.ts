@@ -304,10 +304,10 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin", "manager"],
         },
         {
-          label: "KPI Configuration",
-          href: "/admin/kpi-config",
+          label: "KPI Planning",
+          href: "/admin/kpi-planning",
           icon: TrendingUp,
-          roles: ["admin"],  // Admin only
+          roles: ["admin", "manager"],
         },
       ],
     },
