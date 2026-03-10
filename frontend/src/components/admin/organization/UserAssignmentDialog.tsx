@@ -1,7 +1,7 @@
 // src/components/admin/organization/UserAssignmentDialog.tsx
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import {
   ResponsiveDialog,
   ResponsiveDialogContent,
@@ -25,11 +25,12 @@ import {
   Users as UsersIcon,
   CheckCircle2,
 } from "lucide-react";
-import { useAdminUsersList, useAssignUserToUnit, useUnassignUserFromUnit } from "@/hooks/useAdminUsers";
-// API_ENDPOINTS removed as it is internal to masterDataApi now
+import { useAdminUsersList } from "@/hooks/useAdminUsers";
+import { masterDataApi } from "@/lib/api/master-data";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { adminUsersKeys } from "@/hooks/useAdminUsers";
+import { getAvatarUrl } from "@/lib/utils";
 import type { User } from "@/types/api.types";
 
 // =====================================================================
@@ -64,6 +65,7 @@ export function UserAssignmentDialog({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
   const [isAssigning, setIsAssigning] = useState(false);
+  const initialSyncDone = useRef(false);
 
   const queryClient = useQueryClient();
 
@@ -101,14 +103,25 @@ export function UserAssignmentDialog({
   const handleOpenChange = (newOpen: boolean) => {
     if (newOpen) {
       // Pre-select users already in this unit
-      setSelectedUserIds(new Set(currentUsers.map((u) => u.id)));
+      const currentIds = currentUsers.map((u) => u.id);
+      setSelectedUserIds(new Set(currentIds));
+      initialSyncDone.current = currentIds.length > 0;
     } else {
       // Clear selections when closing
       setSelectedUserIds(new Set());
       setSearchQuery("");
+      initialSyncDone.current = false;
     }
     onOpenChange(newOpen);
   };
+
+  // Sync pre-selection when data loads after dialog opens
+  useEffect(() => {
+    if (open && !initialSyncDone.current && currentUsers.length > 0) {
+      setSelectedUserIds(new Set(currentUsers.map((u) => u.id)));
+      initialSyncDone.current = true;
+    }
+  }, [open, currentUsers]);
 
   // Toggle user selection
   const handleToggleUser = (userId: number) => {
@@ -123,56 +136,62 @@ export function UserAssignmentDialog({
     });
   };
 
-  const { mutateAsync: assignUser } = useAssignUserToUnit();
-  const { mutateAsync: unassignUser } = useUnassignUserFromUnit();
-
   // Handle save - assign/unassign users
   const handleSave = async () => {
+    // Determine which users to assign and which to unassign
+    const currentUserIds = new Set(currentUsers.map((u) => u.id));
+    const toAssign: number[] = [];
+    const toUnassign: number[] = [];
+
+    // Check all users
+    users.forEach((user) => {
+      const isCurrentlyInUnit = currentUserIds.has(user.id);
+      const isSelected = selectedUserIds.has(user.id);
+
+      if (isSelected && !isCurrentlyInUnit) {
+        toAssign.push(user.id);
+      } else if (!isSelected && isCurrentlyInUnit) {
+        toUnassign.push(user.id);
+      }
+    });
+
+    // No-op: close silently if no changes
+    if (toAssign.length === 0 && toUnassign.length === 0) {
+      handleOpenChange(false);
+      return;
+    }
+
     setIsAssigning(true);
 
     try {
-      // Determine which users to assign and which to unassign
-      const currentUserIds = new Set(currentUsers.map((u) => u.id));
-      const toAssign: number[] = [];
-      const toUnassign: number[] = [];
-
-      // Check all users
-      users.forEach((user) => {
-        const isCurrentlyInUnit = currentUserIds.has(user.id);
-        const isSelected = selectedUserIds.has(user.id);
-
-        if (isSelected && !isCurrentlyInUnit) {
-          // User is selected but not in unit → assign
-          toAssign.push(user.id);
-        } else if (!isSelected && isCurrentlyInUnit) {
-          // User is in unit but not selected → unassign
-          toUnassign.push(user.id);
-        }
-      });
-
-      // Perform updates using hooks
+      // Call API directly (not via mutation hooks) to avoid per-item toasts
       const updatePromises: Promise<unknown>[] = [];
 
-      // Assign users to this unit
       toAssign.forEach((userId) => {
-        updatePromises.push(assignUser({ userId, unitId: unit.id }));
+        updatePromises.push(masterDataApi.assignUserToUnit(userId, unit.id));
       });
 
-      // Unassign users from this unit
       toUnassign.forEach((userId) => {
-        updatePromises.push(unassignUser({ userId, unitId: unit.id }));
+        updatePromises.push(masterDataApi.unassignUserFromUnit(userId, unit.id));
       });
 
-      await Promise.all(updatePromises);
+      const results = await Promise.allSettled(updatePromises);
+
+      // Aggregate feedback
+      const failures = results.filter((r) => r.status === "rejected").length;
+      const successes = results.length - failures;
 
       // Invalidate user queries to refresh data
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
 
-      // Show success message
-      toast.success(`Đã cập nhật ${toAssign.length + toUnassign.length} người dùng`);
-
-      // Close dialog on success
-      handleOpenChange(false);
+      if (failures === 0) {
+        toast.success(`Đã cập nhật ${successes} người dùng`);
+        handleOpenChange(false);
+      } else if (successes > 0) {
+        toast.warning(`Cập nhật ${successes}/${results.length} người dùng. ${failures} thất bại.`);
+      } else {
+        toast.error("Không thể cập nhật người dùng. Vui lòng thử lại.");
+      }
     } catch (error) {
       console.error("Failed to update user assignments:", error);
       toast.error("Không thể cập nhật người dùng. Vui lòng thử lại.");
@@ -206,13 +225,13 @@ export function UserAssignmentDialog({
           onCheckedChange={() => handleToggleUser(user.id)}
         />
         <Avatar className="h-8 w-8">
-          <AvatarImage src={user.avatar_url || undefined} />
+          <AvatarImage src={getAvatarUrl(user.avatar_url) || undefined} />
           <AvatarFallback className="text-xs">
             {getUserInitials(user.full_name)}
           </AvatarFallback>
         </Avatar>
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm truncate">{user.full_name}</div>
+          <div className="font-medium text-sm truncate">{user.full_name || user.username}</div>
           <div className="text-xs text-muted-foreground truncate">
             {user.email}
           </div>

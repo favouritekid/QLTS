@@ -24,7 +24,6 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -35,6 +34,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import { getActiveSessions } from "@/lib/api/sessions"; // architecture-allow legacy
+import { sessionKeys } from "@/hooks/useSessions";
 import type { ChangePasswordSchema } from "@/types/api.types";
 
 // Schema validation
@@ -74,14 +74,14 @@ export function ChangePasswordForm() {
 
   // Fetch active sessions count
   const { data: sessionsData, isLoading: isLoadingSessions } = useQuery({
-    queryKey: ["sessions"],
+    queryKey: sessionKeys.list(),
     queryFn: getActiveSessions,
     retry: 1,
     staleTime: 5000, // 5 seconds - refresh faster after session changes
     refetchOnWindowFocus: true, // Refetch when user switches back to this tab
   });
 
-  const activeSessionsCount = sessionsData?.total || 0;
+  const activeSessionsCount = sessionsData?.total ?? null;
 
   const form = useForm<ChangePasswordFormValues>({
     resolver: zodResolver(changePasswordSchema),
@@ -148,12 +148,12 @@ export function ChangePasswordForm() {
           </p>
           {isLoadingSessions ? (
             <Skeleton className="h-4 w-64" />
-          ) : activeSessionsCount > 1 ? (
+          ) : activeSessionsCount !== null && activeSessionsCount > 1 ? (
             <p className="mt-2 text-sm">
-              📱 Bạn đang đăng nhập trên <strong>{activeSessionsCount} thiết bị</strong>.
+              Bạn đang đăng nhập trên <strong>{activeSessionsCount} thiết bị</strong>.
             </p>
           ) : null}
-          {activeSessionsCount > 1 && (
+          {activeSessionsCount !== null && activeSessionsCount > 1 && (
             <p className="mt-2 text-sm">
               💡 Mẹo:{" "}
               <Link href="/settings/sessions" className="underline font-medium hover:text-destructive-foreground">
@@ -240,20 +240,24 @@ export function ChangePasswordForm() {
             <AlertDialogDescription>
               Bạn sẽ bị đăng xuất khỏi{" "}
               <strong>
-                {activeSessionsCount === 1 ? "thiết bị này" : `tất cả ${activeSessionsCount} thiết bị`}
+                {activeSessionsCount === null
+                  ? "tất cả thiết bị"
+                  : activeSessionsCount === 1
+                    ? "thiết bị này"
+                    : `tất cả ${activeSessionsCount} thiết bị`}
               </strong>
               . Bạn có chắc chắn muốn tiếp tục?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isChangingPassword}>Hủy</AlertDialogCancel>
-            <AlertDialogAction
+            <Button
               onClick={handleConfirmChange}
               disabled={isChangingPassword}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {isChangingPassword ? "Đang đổi…" : "Có, Đổi Mật Khẩu"}
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

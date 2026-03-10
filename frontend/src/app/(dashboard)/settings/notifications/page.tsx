@@ -47,14 +47,29 @@ function NotificationSettingsLoading() {
   );
 }
 
+async function fetchNotificationPreferences() {
+  try {
+    return await serverApi.notifications.getPreferences();
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchEventGroupPreferences() {
+  try {
+    return await serverApi.notifications.getEventGroupPreferences();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Server Component - Fetches initial notification preferences
  */
 async function NotificationSettingsPageContent() {
-  // ✅ Fetch both general preferences and event group preferences on server
   const [initialPreferences, initialEventGroups] = await Promise.all([
-    serverApi.notifications.getPreferences(),
-    serverApi.notifications.getEventGroupPreferences(),
+    fetchNotificationPreferences(),
+    fetchEventGroupPreferences(),
   ]);
 
   return (

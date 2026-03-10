@@ -34,8 +34,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
-import { API_BASE_URL } from "@/lib/api/client";
-import { getCSRFToken, CSRF_HEADER_NAME } from "@/lib/api/csrf";
+import { api } from "@/lib/api/client";
 import type {
   LoginHistoryItem,
   LoginHistoryResponse,
@@ -48,46 +47,31 @@ import type {
  * Fetch login history from API
  */
 async function fetchLoginHistory(): Promise<LoginHistoryResponse> {
-  const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SECURITY.LOGIN_HISTORY}`, {
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error("Failed to fetch login history");
-  return res.json();
+  const { data } = await api.get<LoginHistoryResponse>(API_ENDPOINTS.SECURITY.LOGIN_HISTORY);
+  return data;
 }
 
 /**
  * Confirm a login as legitimate
  */
 async function confirmLogin(data: ConfirmLoginRequest): Promise<ConfirmLoginResponse> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const csrfToken = getCSRFToken();
-  if (csrfToken) headers[CSRF_HEADER_NAME] = csrfToken;
-
-  const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SECURITY.CONFIRM_LOGIN}`, {
-    method: "POST",
-    headers,
-    credentials: "include",
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to confirm login");
-  return res.json();
+  const { data: responseData } = await api.post<ConfirmLoginResponse>(
+    API_ENDPOINTS.SECURITY.CONFIRM_LOGIN,
+    data
+  );
+  return responseData;
 }
 
 /**
  * Secure account after suspicious login
  */
 async function secureAccount(loginId: number): Promise<SecureAccountResponse> {
-  const headers: Record<string, string> = {};
-  const csrfToken = getCSRFToken();
-  if (csrfToken) headers[CSRF_HEADER_NAME] = csrfToken;
-
-  const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SECURITY.SECURE_ACCOUNT}?login_id=${loginId}`, {
-    method: "POST",
-    headers,
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error("Failed to secure account");
-  return res.json();
+  const { data } = await api.post<SecureAccountResponse>(
+    API_ENDPOINTS.SECURITY.SECURE_ACCOUNT,
+    null,
+    { params: { login_id: loginId } }
+  );
+  return data;
 }
 
 /**

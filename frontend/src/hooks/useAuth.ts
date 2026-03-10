@@ -85,19 +85,19 @@ export function useAuth(options?: UseAuthOptions) {
 
       setAuth(user);
       triggerBannerCheck(user.password_reset_required);
-      toast.success("Login successful!");
+      toast.success("Đăng nhập thành công!");
 
       if (login_notification) {
-        const locationInfo = login_notification.location || "Unknown location";
-        const deviceInfo = login_notification.device || "Unknown device";
+        const locationInfo = login_notification.location || "Không rõ vị trí";
+        const deviceInfo = login_notification.device || "Không rõ thiết bị";
 
         toast.warning(
-          `Phat hien dang nhap dang ngo\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
+          `Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
           {
             duration: 15000,
             id: `suspicious-login-${login_notification.login_id}`,
             action: {
-              label: "Xem chi tiet",
+              label: "Xem chi tiết",
               onClick: async () => {
                 if (login_notification.notification_id) {
                   try {
@@ -148,11 +148,11 @@ export function useAuth(options?: UseAuthOptions) {
 
       setAuth(user);
       triggerBannerCheck(user.password_reset_required);
-      toast.success("Login successful!");
+      toast.success("Đăng nhập thành công!");
 
       if (login_notification) {
         toast.warning(
-          `Phat hien dang nhap dang ngo\nIP: ${login_notification.ip_address}`,
+          `Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address}`,
           { duration: 15000 }
         );
       }
@@ -258,20 +258,20 @@ export function useAuth(options?: UseAuthOptions) {
       return response.data; // Trả về user đã tạo
     },
     onSuccess: (newUser) => {
-      toast.success(`Registration successful for ${newUser.username}! Please log in.`);
+      toast.success(`Đăng ký thành công cho ${newUser.username}! Vui lòng đăng nhập.`);
       // Chuyển hướng người dùng đến trang login sau khi đăng ký thành công
       router.push("/login");
     },
     onError: (error) => {
       // Hiển thị lỗi từ backend (ví dụ: username/email đã tồn tại)
       const errorDetail = error.response?.data?.detail;
-      let errorMessage = "Registration failed.";
+      let errorMessage = "Đăng ký thất bại.";
 
       if (typeof errorDetail === "string") {
         errorMessage = errorDetail;
       } else if (Array.isArray(errorDetail)) {
         // Xử lý lỗi validation nếu backend trả về mảng
-        errorMessage = errorDetail.map((e) => e.msg || "Validation error").join(", ");
+        errorMessage = errorDetail.map((e) => e.msg || "Lỗi xác thực").join(", ");
       } else if (error.response?.data?.message) {
         errorMessage = error.response.data.message;
       }
@@ -290,11 +290,11 @@ export function useAuth(options?: UseAuthOptions) {
       return response.data;
     },
     onSuccess: (data) => {
-      toast.success(data.msg || "Password reset email sent (if user exists).");
+      toast.success(data.msg || "Email đặt lại mật khẩu đã được gửi (nếu tài khoản tồn tại).");
       // Có thể thêm thông báo hướng dẫn người dùng kiểm tra email
     },
     onError: (error) => {
-      let displayMessage = "Failed to send password reset email."; // Default message
+      let displayMessage = "Không thể gửi email đặt lại mật khẩu.";
       const errorDetail = error.response?.data?.detail;
       const errorMessageFromData = error.response?.data?.message;
 
@@ -329,11 +329,11 @@ export function useAuth(options?: UseAuthOptions) {
       return response.data;
     },
     onSuccess: (user) => {
-      toast.success(`Password for ${user.username} has been reset successfully! Please log in.`);
+      toast.success(`Đặt lại mật khẩu cho ${user.username} thành công! Vui lòng đăng nhập.`);
       router.push("/login"); // Chuyển về trang login sau khi reset thành công
     },
     onError: (error) => {
-      let displayMessage = "Failed to reset password.";
+      let displayMessage = "Không thể đặt lại mật khẩu.";
       const errorDetail = error.response?.data?.detail;
 
       if (typeof errorDetail === "string") {
@@ -348,7 +348,7 @@ export function useAuth(options?: UseAuthOptions) {
       } else if (error.response?.data?.message) {
         displayMessage = error.response.data.message;
       } else if (error.response?.status === 401) {
-        displayMessage = "Invalid or expired password reset token.";
+        displayMessage = "Token đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.";
       }
 
       toast.error(displayMessage);
@@ -370,8 +370,8 @@ export function useAuth(options?: UseAuthOptions) {
     },
     // 3. Xử lý thành công
     onSuccess: async () => {
-      toast.success("Password changed successfully! Logging out...");
-
+      toast.success("Đổi mật khẩu thành công! Đang đăng xuất…");
+      setApiLoggedOut(true); // Block API requests trước khi clear
       // 4b. Dọn dẹp state client (Zustand)
       logoutStore();
       // 4c. Dọn dẹp cache (React Query)
@@ -381,11 +381,11 @@ export function useAuth(options?: UseAuthOptions) {
     },
     onError: (error) => {
       // 5. Xử lý lỗi (giữ nguyên)
-      let displayMessage = "Failed to change password.";
+      let displayMessage = "Không thể đổi mật khẩu.";
       const errorDetail = error.response?.data?.detail;
       if (typeof errorDetail === "string") {
         displayMessage = errorDetail;
-      } else if (Array.isArray(errorDetail)) {
+      } else if (Array.isArray(errorDetail) && errorDetail.length > 0) {
         displayMessage = errorDetail[0].msg;
       } else if (error.response?.data?.message) {
         displayMessage = error.response.data.message;
@@ -426,7 +426,7 @@ export function useAuth(options?: UseAuthOptions) {
       return response.data;
     },
     onSuccess: (updatedUser) => {
-      toast.success("Profile updated successfully!");
+      toast.success("Cập nhật hồ sơ thành công!");
 
       // ✅ GIẢI PHÁP (Tinh chỉnh DX 1):
       // Thay vì setQueryData, chúng ta invalidate ["auth", "me"].
@@ -445,13 +445,13 @@ export function useAuth(options?: UseAuthOptions) {
       useAuthStore.getState().setUser(updatedUser);
     },
     onError: (error) => {
-      let displayMessage = "Failed to update profile.";
+      let displayMessage = "Không thể cập nhật hồ sơ.";
       const errorDetail = error.response?.data?.detail;
 
       if (typeof errorDetail === "string") {
         displayMessage = errorDetail;
-      } else if (Array.isArray(errorDetail)) {
-        displayMessage = errorDetail[0].msg || "Validation error";
+      } else if (Array.isArray(errorDetail) && errorDetail.length > 0) {
+        displayMessage = errorDetail[0].msg || "Lỗi xác thực";
       } else if (error.response?.data?.message) {
         displayMessage = error.response.data.message;
       }
@@ -464,12 +464,12 @@ export function useAuth(options?: UseAuthOptions) {
     if (isUserError && userError) {
       console.warn("[useAuth] Failed to fetch current user:", userError.response?.status, userError.message);
       if (userError.response?.status === 401) {
-        toast.error("Your session has expired. Please log in again.");
+        toast.error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
         logoutStore();
         queryClient.clear();
         router.push("/login");
       } else {
-        toast.error("Could not fetch user data.");
+        toast.error("Không thể tải thông tin người dùng.");
       }
     }
   }, [isUserError, userError, logoutStore, queryClient, router]);

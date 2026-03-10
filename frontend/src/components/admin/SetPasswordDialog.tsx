@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -66,6 +66,16 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
     },
     mode: "onChange", // ✅ FIX: Realtime validation
   });
+
+  // Reset form state when dialog opens or user changes
+  useEffect(() => {
+    if (open) {
+      form.reset();
+      setPasswordValue("");
+      setShowPassword(false);
+      setShowConfirmPassword(false);
+    }
+  }, [open, user.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function onSubmit(values: SetPasswordFormValues) {
     try {

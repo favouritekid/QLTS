@@ -14,8 +14,8 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
     <PageContainer maxWidth="md">
       {/* 1. Tiêu đề chung của trang Cài đặt */}
       <PageHeader
-        title="Settings"
-        description="Manage your account settings, password, and active sessions."
+        title="Cài đặt"
+        description="Quản lý cài đặt tài khoản, mật khẩu và phiên đăng nhập."
       />
 
       {/* 2. Thanh điều hướng dạng Tab */}

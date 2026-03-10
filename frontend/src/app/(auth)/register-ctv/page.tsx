@@ -41,7 +41,7 @@ const ctvRegisterSchema = z.object({
   id_card_number: z.string().max(20).nullable().transform(v => v === "" ? null : v),
   address: z.string().max(500).nullable().transform(v => v === "" ? null : v),
   notes: z.string().max(1000).nullable().transform(v => v === "" ? null : v),
-  unit_id: z.number({ message: "Vui lòng nhập mã đơn vị" }),
+  unit_id: z.number({ message: "Vui lòng nhập mã đơn vị" }).int().positive("Mã đơn vị phải là số nguyên dương"),
 })
 
 type CTVRegisterFormData = z.infer<typeof ctvRegisterSchema>

@@ -81,7 +81,6 @@ import {
 import { getAvatarUrl } from "@/lib/utils";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -359,8 +358,12 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
 
   const handleDeleteUser = async () => {
     if (userToDelete) {
-      await deleteUserMutation.mutateAsync(userToDelete.id);
-      setUserToDelete(null);
+      try {
+        await deleteUserMutation.mutateAsync(userToDelete.id);
+        setUserToDelete(null); // closes dialog via open={!!userToDelete}
+      } catch {
+        // Error toast handled by mutation hook. Dialog stays open for retry.
+      }
     }
   };
 
@@ -377,13 +380,17 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       return;
     }
 
-    await bulkActionMutation.mutateAsync({
-      action: "delete",
-      user_ids: userIds,
-    });
+    try {
+      await bulkActionMutation.mutateAsync({
+        action: "delete",
+        user_ids: userIds,
+      });
 
-    setRowSelection({});
-    setBulkDeleteDialogOpen(false);
+      setRowSelection({});
+      setBulkDeleteDialogOpen(false);
+    } catch {
+      // Error toast from hook. Dialog stays open.
+    }
   };
 
   const handleOpenBulkDelete = () => {
@@ -764,12 +771,13 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Hủy</AlertDialogCancel>
-            <AlertDialogAction
+            <Button
               onClick={handleDeleteUser}
+              disabled={deleteUserMutation.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Xoá
-            </AlertDialogAction>
+              {deleteUserMutation.isPending ? "Đang xoá…" : "Xoá"}
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -789,13 +797,13 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Hủy</AlertDialogCancel>
-            <AlertDialogAction
+            <Button
               onClick={handleBulkDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={bulkActionMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {bulkActionMutation.isPending ? "Đang xoá…" : "Xoá tất cả"}
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
