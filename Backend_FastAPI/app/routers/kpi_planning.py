@@ -650,21 +650,35 @@ async def fairness_analytics(
 ):
     """
     Analyze assignment_decision_log for fairness metrics.
-    Admin sees all units. Manager sees only own unit (IDOR forced).
+    Admin sees all units. Manager sees only own unit (IDOR: 404 on mismatch).
     """
     from datetime import datetime as dt
     from zoneinfo import ZoneInfo
+    from fastapi import HTTPException
     from app.services.fairness_service import get_fairness_analytics
+    from app.utils.exceptions import ResourceNotFoundError
 
     VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
-    # IDOR: Manager forced to own unit
+    # IDOR: Manager must have unit_id and can only see own unit
     effective_unit = unit_id
     if current_user.role == "manager":
+        if not current_user.unit_id:
+            raise ResourceNotFoundError(detail="Fairness analytics not found")
+        if unit_id is not None and unit_id != current_user.unit_id:
+            raise ResourceNotFoundError(detail="Fairness analytics not found")  # 404, not 403
         effective_unit = current_user.unit_id
 
-    parsed_from = dt.fromisoformat(date_from).replace(tzinfo=VN_TZ) if date_from else None
-    parsed_to = dt.fromisoformat(date_to).replace(tzinfo=VN_TZ) if date_to else None
+    # Parse dates with error handling
+    parsed_from = None
+    parsed_to = None
+    try:
+        if date_from:
+            parsed_from = dt.fromisoformat(date_from).replace(tzinfo=VN_TZ)
+        if date_to:
+            parsed_to = dt.fromisoformat(date_to).replace(tzinfo=VN_TZ)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date_from/date_to phải đúng format YYYY-MM-DD")
 
     return await get_fairness_analytics(
         db, unit_id=effective_unit, date_from=parsed_from, date_to=parsed_to,
