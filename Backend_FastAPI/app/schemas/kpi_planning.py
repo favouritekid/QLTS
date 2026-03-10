@@ -8,7 +8,7 @@ Follows project conventions: BaseModel + ConfigDict(from_attributes=True).
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -168,21 +168,17 @@ OVERRIDABLE_FIELDS = {
 }
 
 
-class _StrictNumericOverrides(BaseModel):
-    """Shared validator: reject bool values in override dicts before Pydantic coerces them."""
-
-    @field_validator("overrides", mode="before")
-    @classmethod
-    def reject_bool_values(cls, v: dict) -> dict:
-        if not isinstance(v, dict):
-            return v
-        for key, val in v.items():
+def _reject_bool_in_overrides(data: dict) -> dict:
+    """Reject bool values in overrides before Pydantic coerces True→1.0."""
+    overrides = data.get("overrides")
+    if isinstance(overrides, dict):
+        for key, val in overrides.items():
             if isinstance(val, bool):
                 raise ValueError(f"Override value cho '{key}' phải là số, không chấp nhận boolean")
-        return v
+    return data
 
 
-class MonthOverrideRequest(_StrictNumericOverrides):
+class MonthOverrideRequest(BaseModel):
     """Override 1+ derived KPI fields for a single plan month (spec §5.1)."""
     overrides: Dict[str, float] = Field(
         ...,
@@ -190,6 +186,8 @@ class MonthOverrideRequest(_StrictNumericOverrides):
         description='Map of field name to value, e.g. {"consultations_daily": 16, "win_rate": 40.0}',
     )
     reason: str = Field(..., min_length=5, max_length=500, description="Lý do override (>= 5 ký tự)")
+
+    _check_bools = model_validator(mode="before")(_reject_bool_in_overrides)
 
 
 class MonthResetRequest(BaseModel):
@@ -207,11 +205,13 @@ class MonthResetRequest(BaseModel):
         return v
 
 
-class BatchOverrideRequest(_StrictNumericOverrides):
+class BatchOverrideRequest(BaseModel):
     """Override same fields for multiple plan months (spec §7: PUT /months/batch-override)."""
     month_ids: List[int] = Field(..., min_length=1, max_length=12)
     overrides: Dict[str, float] = Field(..., min_length=1)
     reason: str = Field(..., min_length=5, max_length=500)
+
+    _check_bools = model_validator(mode="before")(_reject_bool_in_overrides)
 
 
 class MonthOverrideResponse(BaseModel):

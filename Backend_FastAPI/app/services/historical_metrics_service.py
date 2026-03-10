@@ -123,8 +123,14 @@ async def get_historical_k_factor(
         if officer_id is not None:
             consult_filters.append(Consultation.officer_id == officer_id)
 
+        consult_query = select(func.count(Consultation.id))
+        # Unit scope: join Lead to filter by unit_id
+        if unit_id is not None and officer_id is None:
+            consult_query = consult_query.join(Lead, Consultation.lead_id == Lead.id)
+            consult_filters.append(Lead.unit_id == unit_id)
+
         consult_count = (await db.execute(
-            select(func.count(Consultation.id)).where(*consult_filters)
+            consult_query.where(*consult_filters)
         )).scalar_one()
 
         # Count enrollments (final stage + positive outcome)
