@@ -20,6 +20,7 @@ from app.repositories.config_repository import (
     SkillRuleRepository,
 )
 from app.repositories.insights_repository import InsightsRepository
+from app.repositories.kpi_planning_repository import KpiPlanningRepository
 from app.repositories.kpi_repository import KpiRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.notification_repository import NotificationRepository
@@ -44,6 +45,7 @@ __all__ = [
     "DegreeLevelRepository",
     "DocumentTypeRepository",
     "InsightsRepository",
+    "KpiPlanningRepository",
     "KpiRepository",
     "LeadRepository",
     "NotificationRepository",
