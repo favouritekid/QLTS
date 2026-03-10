@@ -284,12 +284,15 @@ def sync_kpi_plan_monthly_task(self):
         for plan in plans_to_recalibrate:
             try:
                 async with task_db_session() as session:
+                    # recalibrate_factors already regenerates derived KPIs
+                    # inline for future months. Do NOT call generate_monthly_kpis
+                    # here — it rewrites all 12 months and would overwrite
+                    # past months' enrollment_target set by B6 mid-year redistribute.
                     await kpi_planning_service.recalibrate_factors(
                         session, plan.id, current_month,
                     )
-                    await kpi_planning_service.generate_monthly_kpis(session, plan.id)
                     await session.commit()
-                    task_log.info("Plan %d: recalibrated + regenerated", plan.id)
+                    task_log.info("Plan %d: recalibrated", plan.id)
             except Exception as e:
                 failed_plan_ids.add(plan.id)
                 result["errors"] += 1

@@ -543,7 +543,14 @@ async def update_holiday(
     if data.is_recurring is not None:
         holiday.is_recurring = data.is_recurring
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            from fastapi import HTTPException
+            raise HTTPException(status_code=409, detail=f"Ngày lễ {data.date} đã tồn tại")
+        raise
     await db.refresh(holiday)
     return holiday
 

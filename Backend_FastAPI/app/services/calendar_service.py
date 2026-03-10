@@ -165,13 +165,14 @@ async def get_holiday_status(db: AsyncSession, year: int) -> dict:
     """
     from sqlalchemy import func
 
-    # Count all holidays applicable to this year:
-    # - Non-recurring: year column matches
-    # - Recurring: always apply (match by is_recurring=TRUE)
+    # Count holidays applicable to this target year:
+    # - Non-recurring: exact year match (lunar dates specific to this year)
+    # - Recurring: deduplicated by (month, day) — count each unique date once
     stmt = select(
         HolidayCalendar.name,
         HolidayCalendar.is_recurring,
         HolidayCalendar.year,
+        HolidayCalendar.date,
     ).where(
         or_(
             and_(HolidayCalendar.is_recurring == False, HolidayCalendar.year == year),  # noqa: E712
@@ -181,10 +182,20 @@ async def get_holiday_status(db: AsyncSession, year: int) -> dict:
     result = await db.execute(stmt)
     rows = result.all()
 
-    total = len(rows)
+    # Deduplicate: recurring holidays may appear in multiple years' seed data
+    # Use (month, day) as key for recurring, exact date for non-recurring
+    seen_dates: set = set()
+    unique_names: list = []
+    for name, is_rec, yr, dt in rows:
+        key = (dt.month, dt.day) if is_rec else (yr, dt.month, dt.day)
+        if key not in seen_dates:
+            seen_dates.add(key)
+            unique_names.append(name)
+
+    total = len(seen_dates)
 
     # Check for lunar holidays by keyword match
-    all_names = " ".join(r.name for r in rows)
+    all_names = " ".join(unique_names)
     has_tet = any(kw in all_names for kw in ["Tết Nguyên Đán"])
     has_hung_vuong = any(kw in all_names for kw in ["Hùng Vương"])
     has_lunar = has_tet and has_hung_vuong
