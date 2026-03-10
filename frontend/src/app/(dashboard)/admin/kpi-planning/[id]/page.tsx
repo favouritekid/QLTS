@@ -80,6 +80,7 @@ export default function PlanDetailPage() {
   const [showUpdate, setShowUpdate] = useState(false);
   const [updateTarget, setUpdateTarget] = useState<number | undefined>();
   const [updateSla, setUpdateSla] = useState<number | undefined>();
+  const [updateResponseTime, setUpdateResponseTime] = useState<number | undefined>();
 
   // Batch override
   const [batchSelected, setBatchSelected] = useState<Set<number>>(new Set());
@@ -175,7 +176,7 @@ export default function PlanDetailPage() {
 
       {/* Actions */}
       <div className="mb-4 flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={() => { setUpdateTarget(plan.annual_enrollment_target); setUpdateSla(plan.sla_target); setShowUpdate(true); }}>
+        <Button variant="outline" size="sm" onClick={() => { setUpdateTarget(plan.annual_enrollment_target); setUpdateSla(plan.sla_target); setUpdateResponseTime(plan.response_time_target); setShowUpdate(true); }}>
           <Pencil className="mr-1 h-4 w-4" />Sửa Plan
         </Button>
         <Button variant="outline" size="sm" onClick={() => regenerateMut.mutate()} disabled={regenerateMut.isPending}>
@@ -349,9 +350,10 @@ export default function PlanDetailPage() {
           <div className="grid gap-4 py-4">
             <div><label className="mb-1 block text-sm font-medium">Chỉ tiêu nhập học/năm</label><Input type="number" min={1} max={10000} value={updateTarget ?? ""} onChange={(e) => setUpdateTarget(Number(e.target.value))} /></div>
             <div><label className="mb-1 block text-sm font-medium">SLA Target (%)</label><Input type="number" min={0} max={100} step={0.1} value={updateSla ?? ""} onChange={(e) => setUpdateSla(Number(e.target.value))} /></div>
+            <div><label className="mb-1 block text-sm font-medium">Response Time (h)</label><Input type="number" min={1} max={48} step={0.5} value={updateResponseTime ?? ""} onChange={(e) => setUpdateResponseTime(Number(e.target.value))} /></div>
           </div>
           <DialogFooter>
-            <Button onClick={async () => { await updateMut.mutateAsync({ annual_enrollment_target: updateTarget, sla_target: updateSla }); setShowUpdate(false); }} disabled={updateMut.isPending}>
+            <Button onClick={async () => { await updateMut.mutateAsync({ annual_enrollment_target: updateTarget, sla_target: updateSla, response_time_target: updateResponseTime }); setShowUpdate(false); }} disabled={updateMut.isPending}>
               {updateMut.isPending ? "Đang lưu…" : "Cập nhật"}
             </Button>
           </DialogFooter>

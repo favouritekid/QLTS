@@ -68,15 +68,17 @@ export default function KpiPlanningPage() {
   const deleteMut = useDeletePlan();
   const previewMut = usePreviewPlan();
 
-  // Preview state + debounce
+  // Preview state + debounce + stale response guard
   const [previewData, setPreviewData] = useState<KpiPlanPreviewResponse | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewSeqRef = useRef(0);
 
   // Debounced preview (300ms) — triggers on any form change when unit is selected
   const triggerPreview = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       if (formData.unit_id <= 0 || !showCreate) return;
+      const seq = ++previewSeqRef.current;
       try {
         const weights = useCustomWeights ? editWeights : null;
         const result = await previewMut.mutateAsync({
@@ -87,7 +89,10 @@ export default function KpiPlanningPage() {
           response_time_target: formData.response_time_target,
           seasonal_weights: weights,
         });
-        setPreviewData(result);
+        // Discard stale response: only apply if this is still the latest request
+        if (seq === previewSeqRef.current) {
+          setPreviewData(result);
+        }
       } catch {
         // error handled by mutation
       }
