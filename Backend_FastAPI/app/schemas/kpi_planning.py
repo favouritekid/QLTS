@@ -156,6 +156,55 @@ class HolidayStatusResponse(BaseModel):
 
 
 # =============================================================================
+# HOLIDAY CRUD SCHEMAS (spec §7)
+# =============================================================================
+
+class HolidayCreate(BaseModel):
+    """Create a holiday entry."""
+    date: str = Field(..., description="Date in YYYY-MM-DD format")
+    name: str = Field(..., min_length=1, max_length=200)
+    is_recurring: bool = Field(default=False, description="TRUE = repeats yearly")
+
+
+class HolidayUpdate(BaseModel):
+    """Update a holiday entry."""
+    date: Optional[str] = Field(None, description="Date in YYYY-MM-DD format")
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    is_recurring: Optional[bool] = None
+
+
+class HolidayResponse(BaseModel):
+    """Holiday response."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    date: str
+    name: str
+    year: int
+    is_recurring: bool
+    created_by: Optional[int] = None
+    created_at: datetime
+
+
+class HolidayListResponse(BaseModel):
+    """Paginated holiday list."""
+    items: List[HolidayResponse]
+    total: int
+
+
+class HolidaySeedResponse(BaseModel):
+    """Response for seed year action."""
+    year: int
+    seeded: int
+
+
+class WorkingDaysOverrideRequest(BaseModel):
+    """Override working days for a plan month (spec §7)."""
+    working_days: int = Field(..., ge=0, le=31)
+    reason: str = Field(..., min_length=5, max_length=500)
+
+
+# =============================================================================
 # OVERRIDE / RESET SCHEMAS (Phase B1)
 # =============================================================================
 

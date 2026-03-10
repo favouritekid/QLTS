@@ -30,18 +30,21 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         self,
         kpi_code: str,
         officer_id: int,
-        period_type: str = "daily"
+        period_type: str = "daily",
+        unit_id: Optional[int] = None,
     ) -> Optional[float]:
         """Get officer-specific evergreen KPI target (effective_month IS NULL)."""
+        filters = [
+            models.KpiConfig.officer_id == officer_id,
+            models.KpiConfig.kpi_code == kpi_code,
+            models.KpiConfig.period_type == period_type,
+            models.KpiConfig.effective_month.is_(None),
+            models.KpiConfig.is_active == True,
+        ]
+        if unit_id is not None:
+            filters.append(models.KpiConfig.unit_id == unit_id)
         result = await self.db.execute(
-            select(models.KpiConfig.target_value)
-            .where(
-                models.KpiConfig.officer_id == officer_id,
-                models.KpiConfig.kpi_code == kpi_code,
-                models.KpiConfig.period_type == period_type,
-                models.KpiConfig.effective_month.is_(None),
-                models.KpiConfig.is_active == True,
-            )
+            select(models.KpiConfig.target_value).where(*filters)
         )
         return result.scalar_one_or_none()
 
@@ -116,7 +119,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
 
         # --- Evergreen fallback (original chain: officer → unit → global) ---
         if officer_id:
-            target = await self.get_target_by_officer(kpi_code, officer_id, period_type)
+            target = await self.get_target_by_officer(kpi_code, officer_id, period_type, unit_id=unit_id)
             if target is not None:
                 return target
 

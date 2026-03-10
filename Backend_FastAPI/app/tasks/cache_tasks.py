@@ -372,12 +372,36 @@ def check_next_year_holidays_task(self):
     async def _run_check() -> dict:
         from zoneinfo import ZoneInfo
         from ..services.calendar_service import get_holiday_status
+        from ..services.notification_dispatcher import dispatch
+        from ..core.events import SystemEvents
 
         VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
         next_year = datetime.now(VN_TZ).year + 1
 
         async with task_db_session() as session:
             status = await get_holiday_status(session, next_year)
+
+            # Dispatch admin notification if calendar incomplete
+            if not status["is_complete"]:
+                try:
+                    _, cb = await dispatch(
+                        db=session,
+                        event=SystemEvents.SYSTEM_ALERT,
+                        payload={
+                            "severity": "warning",
+                            "message": status.get("warning", f"Lịch lễ năm {next_year} chưa đầy đủ"),
+                            "action_url": f"/admin/kpi-planning/holidays/status/{next_year}",
+                            "actor_id": 0,
+                            "actor_name": "System",
+                        },
+                        dedupe_key=f"holiday_incomplete:{next_year}",
+                        skip_preference_check=True,
+                    )
+                    await session.commit()
+                    if cb:
+                        await cb()
+                except Exception as e:
+                    task_log.warning("Failed to dispatch holiday notification: %s", e)
 
         return status
 

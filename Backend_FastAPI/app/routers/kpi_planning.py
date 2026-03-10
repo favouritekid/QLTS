@@ -24,7 +24,12 @@ from app.repositories.kpi_planning_repository import KpiPlanningRepository
 from app.schemas.kpi_planning import (
     BatchOverrideRequest,
     BatchOverrideResponse,
+    HolidayCreate,
+    HolidayListResponse,
+    HolidayResponse,
+    HolidaySeedResponse,
     HolidayStatusResponse,
+    HolidayUpdate,
     KpiPlanCreate,
     KpiPlanListResponse,
     KpiPlanPreview,
@@ -34,6 +39,7 @@ from app.schemas.kpi_planning import (
     MonthOverrideRequest,
     MonthOverrideResponse,
     MonthResetRequest,
+    WorkingDaysOverrideRequest,
 )
 from app.services import kpi_planning_service
 from app.services.calendar_service import get_holiday_status
@@ -384,3 +390,223 @@ async def batch_override_months(
         await db.refresh(m)
 
     return BatchOverrideResponse(updated=len(updated_months), months=updated_months)
+
+
+# =============================================================================
+# WORKING DAYS OVERRIDE (spec §7)
+# =============================================================================
+
+@router.put(
+    "/months/{month_id}/working-days",
+    response_model=MonthOverrideResponse,
+    summary="Override working days for a plan month",
+)
+async def override_working_days(
+    data: WorkingDaysOverrideRequest,
+    month: Annotated[KpiPlanMonth, Depends(deps.get_kpi_plan_month_for_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """
+    Override working_days for a specific plan month and regenerate derived KPIs.
+    Admin only. IDOR enforced by dependency.
+    """
+    from datetime import datetime as dt, timezone as tz
+    from decimal import Decimal
+
+    overridden = dict(month.overridden_fields or {})
+    month.working_days = data.working_days
+    overridden["working_days"] = True
+    month.overridden_fields = overridden
+    month.override_reason = data.reason
+    month.overridden_by = current_user.id
+    month.overridden_at = dt.now(tz.utc)
+
+    # Regenerate derived KPIs with new working_days
+    derived = kpi_planning_service.compute_derived_kpis(
+        month.enrollment_target, data.working_days,
+        float(month.k_factor), month.lead_forecast, month.close_forecast,
+    )
+    for field, value in derived.items():
+        if field not in overridden:
+            setattr(month, field, value)
+
+    await db.flush()
+    await db.commit()
+    await db.refresh(month)
+    return month
+
+
+# =============================================================================
+# HOLIDAY CRUD (spec §7)
+# =============================================================================
+
+@router.get(
+    "/holidays",
+    response_model=HolidayListResponse,
+    summary="List holidays",
+)
+async def list_holidays(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminOrManagerDep],
+    year: Optional[int] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """List holidays with optional year filter. Admin/Manager."""
+    from sqlalchemy import select, func
+    from app.models.config import HolidayCalendar
+
+    query = select(HolidayCalendar)
+    count_query = select(func.count(HolidayCalendar.id))
+    if year is not None:
+        query = query.where(HolidayCalendar.year == year)
+        count_query = count_query.where(HolidayCalendar.year == year)
+
+    total = (await db.execute(count_query)).scalar_one()
+    result = await db.execute(
+        query.order_by(HolidayCalendar.date).offset(skip).limit(limit)
+    )
+    items = list(result.scalars().all())
+    return HolidayListResponse(items=items, total=total)
+
+
+@router.post(
+    "/holidays",
+    response_model=HolidayResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create holiday",
+)
+async def create_holiday(
+    data: HolidayCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """Create a new holiday entry. Admin only."""
+    from datetime import date as date_cls
+    from app.models.config import HolidayCalendar
+
+    parsed_date = date_cls.fromisoformat(data.date)
+    holiday = HolidayCalendar(
+        date=parsed_date,
+        name=data.name,
+        year=parsed_date.year,
+        is_recurring=data.is_recurring,
+        created_by=current_user.id,
+    )
+    db.add(holiday)
+    await db.commit()
+    await db.refresh(holiday)
+    return holiday
+
+
+@router.put(
+    "/holidays/{holiday_id}",
+    response_model=HolidayResponse,
+    summary="Update holiday",
+)
+async def update_holiday(
+    holiday_id: int,
+    data: HolidayUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """Update an existing holiday. Admin only."""
+    from datetime import date as date_cls
+    from app.models.config import HolidayCalendar
+    from app.utils.exceptions import ResourceNotFoundError
+
+    holiday = await db.get(HolidayCalendar, holiday_id)
+    if not holiday:
+        raise ResourceNotFoundError(detail="Holiday not found")
+
+    if data.date is not None:
+        parsed_date = date_cls.fromisoformat(data.date)
+        holiday.date = parsed_date
+        holiday.year = parsed_date.year
+    if data.name is not None:
+        holiday.name = data.name
+    if data.is_recurring is not None:
+        holiday.is_recurring = data.is_recurring
+
+    await db.commit()
+    await db.refresh(holiday)
+    return holiday
+
+
+@router.delete(
+    "/holidays/{holiday_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete holiday",
+)
+async def delete_holiday(
+    holiday_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """Delete a holiday entry. Admin only."""
+    from app.models.config import HolidayCalendar
+    from app.utils.exceptions import ResourceNotFoundError
+
+    holiday = await db.get(HolidayCalendar, holiday_id)
+    if not holiday:
+        raise ResourceNotFoundError(detail="Holiday not found")
+
+    await db.delete(holiday)
+    await db.commit()
+
+
+@router.post(
+    "/holidays/seed/{year}",
+    response_model=HolidaySeedResponse,
+    summary="Seed recurring holidays for a new year",
+)
+async def seed_holidays(
+    year: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """
+    Copy recurring holidays (is_recurring=TRUE) to create entries for the given year.
+    Skips dates that already exist. Admin only.
+    """
+    from datetime import date as date_cls
+    from sqlalchemy import select
+    from app.models.config import HolidayCalendar
+
+    # Find all recurring holidays
+    result = await db.execute(
+        select(HolidayCalendar).where(HolidayCalendar.is_recurring == True)  # noqa: E712
+    )
+    recurring = result.scalars().all()
+
+    seeded = 0
+    seen_dates = set()
+    for h in recurring:
+        try:
+            new_date = date_cls(year, h.date.month, h.date.day)
+        except ValueError:
+            continue  # e.g. Feb 29 in non-leap year
+
+        if new_date in seen_dates:
+            continue
+        seen_dates.add(new_date)
+
+        # Check if already exists
+        existing = await db.execute(
+            select(HolidayCalendar.id).where(HolidayCalendar.date == new_date)
+        )
+        if existing.scalar_one_or_none() is not None:
+            continue
+
+        db.add(HolidayCalendar(
+            date=new_date,
+            name=h.name,
+            year=year,
+            is_recurring=True,
+            created_by=current_user.id,
+        ))
+        seeded += 1
+
+    await db.commit()
+    return HolidaySeedResponse(year=year, seeded=seeded)

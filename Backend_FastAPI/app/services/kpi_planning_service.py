@@ -213,6 +213,20 @@ async def create_plan(
         weights_list = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
         weights_json = None  # NULL = use defaults
 
+    # --- Validate officer belongs to unit (if officer plan) ---
+    if officer_id is not None:
+        from sqlalchemy import select
+        from app.models.user import User
+        officer = (await db.execute(
+            select(User.unit_id).where(User.id == officer_id)
+        )).scalar_one_or_none()
+        if officer is None:
+            raise ResourceNotFoundError("User", officer_id)
+        if officer != unit_id:
+            raise BusinessRuleViolation(
+                f"Officer {officer_id} thuộc unit {officer}, không thuộc unit {unit_id}"
+            )
+
     # --- Check duplicate active plan (scope-aware, via repository) ---
     from app.repositories.kpi_planning_repository import KpiPlanningRepository
     repo = KpiPlanningRepository(db)
