@@ -386,9 +386,10 @@ def check_next_year_holidays_task(self):
                 try:
                     _, cb = await dispatch(
                         db=session,
-                        event=SystemEvents.SYSTEM_ALERT,
+                        event=SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE,
                         payload={
                             "severity": "warning",
+                            "year": next_year,
                             "message": status.get("warning", f"Lịch lễ năm {next_year} chưa đầy đủ"),
                             "action_url": f"/admin/kpi-planning/holidays/status/{next_year}",
                             "actor_id": 0,

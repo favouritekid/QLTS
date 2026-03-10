@@ -484,9 +484,15 @@ async def create_holiday(
 ):
     """Create a new holiday entry. Admin only."""
     from datetime import date as date_cls
+    from sqlalchemy.exc import IntegrityError
+    from fastapi import HTTPException
     from app.models.config import HolidayCalendar
 
-    parsed_date = date_cls.fromisoformat(data.date)
+    try:
+        parsed_date = date_cls.fromisoformat(data.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Ngày không hợp lệ: {data.date}. Dùng YYYY-MM-DD.")
+
     holiday = HolidayCalendar(
         date=parsed_date,
         name=data.name,
@@ -495,7 +501,11 @@ async def create_holiday(
         created_by=current_user.id,
     )
     db.add(holiday)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=f"Ngày lễ {data.date} đã tồn tại")
     await db.refresh(holiday)
     return holiday
 
@@ -521,7 +531,11 @@ async def update_holiday(
         raise ResourceNotFoundError(detail="Holiday not found")
 
     if data.date is not None:
-        parsed_date = date_cls.fromisoformat(data.date)
+        try:
+            parsed_date = date_cls.fromisoformat(data.date)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=f"Ngày không hợp lệ: {data.date}")
         holiday.date = parsed_date
         holiday.year = parsed_date.year
     if data.name is not None:

@@ -426,6 +426,21 @@ class SystemEvents(str, Enum):
     Recipients: All active users or specified user_ids
     """
 
+    HOLIDAY_CALENDAR_INCOMPLETE = "holiday_calendar_incomplete"
+    """
+    Holiday calendar missing lunar holidays for next year.
+
+    Payload Schema:
+        {
+            "severity": str,      # "warning"
+            "message": str,       # Warning message
+            "action_url": str,    # Link to holiday management
+            "year": int,          # The incomplete year
+        }
+
+    Recipients: Admin users only
+    """
+
     SYSTEM_ANNOUNCEMENT = "system_announcement"
     """
     System-wide announcement.

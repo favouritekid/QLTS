@@ -493,6 +493,19 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         priority=10,  # Critical system alerts
     ),
 
+    SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE: NotificationConfig(
+        group=NotificationEventGroup.SYSTEM,
+        resolver=AllAdminsResolver(),
+        template=(
+            "Lịch lễ năm ${year} chưa đầy đủ",
+            "${message}"
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.WARNING,
+        link_template="${action_url}",
+        priority=20,
+    ),
+
     SystemEvents.SYSTEM_ANNOUNCEMENT: NotificationConfig(
         group=NotificationEventGroup.SYSTEM,
         resolver=AllUsersResolver(),
