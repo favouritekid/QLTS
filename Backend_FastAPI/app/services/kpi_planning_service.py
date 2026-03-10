@@ -880,3 +880,141 @@ async def reset_month_override(
         user_id=user_id,
     )
     return plan_month, None
+
+
+# =============================================================================
+# AUTO-CALIBRATION (spec §2.3, §5.1 — Phase B3)
+# =============================================================================
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp value to [lo, hi]."""
+    return max(lo, min(hi, value))
+
+
+async def recalibrate_factors(
+    db: AsyncSession,
+    plan_id: int,
+    up_to_month: int,
+) -> Tuple[KpiPlan, Callback]:
+    """
+    Auto-calibration: use actual data from recent months to update k_t, L_t, C_t
+    for future months. Then regenerate derived KPIs for those months.
+
+    Damping (spec §2.3):
+      - First calibration (no actuals exist): ±30%
+      - Subsequent calibrations: ±15%
+
+    Only updates months > up_to_month (future). Does NOT commit.
+
+    Args:
+        plan_id: KPI plan ID
+        up_to_month: Current month (inclusive). Months after this are recalibrated.
+
+    Returns: (KpiPlan, callback)
+    """
+    from sqlalchemy import select, exists
+    from app.services.historical_metrics_service import (
+        get_historical_k_factor,
+        get_historical_lead_count,
+        get_historical_close_count,
+    )
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+
+    repo = KpiPlanningRepository(db)
+    plan = await repo.get_plan_by_id(plan_id, with_months=True)
+    if plan is None:
+        raise ResourceNotFoundError("KpiPlan", plan_id)
+
+    # --- Detect is_first_calibration (spec §2.3) ---
+    # Check if ANY plan month in this scope has actual_enrollments filled
+    has_actuals = (await db.execute(
+        select(
+            exists().where(
+                KpiPlanMonth.plan_id == plan.id,
+                KpiPlanMonth.actual_enrollments.isnot(None),
+            )
+        )
+    )).scalar()
+    is_first_calibration = not has_actuals
+
+    # Damping bounds
+    if is_first_calibration:
+        damping_lo, damping_hi = 0.70, 1.30  # ±30%
+    else:
+        damping_lo, damping_hi = 0.85, 1.15  # ±15%
+
+    # --- Get historical factors ---
+    officer_id = plan.officer_id
+    unit_id = plan.unit_id
+
+    new_k = await get_historical_k_factor(
+        db, officer_id=officer_id, unit_id=unit_id,
+        reference_year=plan.fiscal_year, reference_month=up_to_month,
+    )
+
+    calibrated_count = 0
+
+    # --- Update future months ---
+    months_by_num = {m.month: m for m in plan.months}
+    for month_num in range(up_to_month + 1, 13):
+        pm = months_by_num.get(month_num)
+        if pm is None:
+            continue
+
+        overridden = pm.overridden_fields or {}
+
+        # k_factor: always update (not in OVERRIDABLE_FIELDS, it's an input factor)
+        current_k = float(pm.k_factor)
+        damped_k = _clamp(new_k, current_k * damping_lo, current_k * damping_hi)
+        pm.k_factor = Decimal(str(round(damped_k, 2)))
+
+        # L_t: lead_forecast
+        m_t = pm.enrollment_target
+        new_l = await get_historical_lead_count(
+            db, officer_id=officer_id, unit_id=unit_id,
+            reference_year=plan.fiscal_year, reference_month=up_to_month,
+            default_m_t=m_t,
+        )
+        if new_l is not None:
+            current_l = pm.lead_forecast if pm.lead_forecast is not None else 6 * m_t
+            if current_l > 0:
+                damped_l = _clamp(new_l, current_l * damping_lo, current_l * damping_hi)
+            else:
+                damped_l = new_l
+            pm.lead_forecast = max(1, round(damped_l))
+
+        # C_t: close_forecast
+        new_c = await get_historical_close_count(
+            db, officer_id=officer_id, unit_id=unit_id,
+            reference_year=plan.fiscal_year, reference_month=up_to_month,
+            default_m_t=m_t,
+        )
+        if new_c is not None:
+            current_c = pm.close_forecast if pm.close_forecast is not None else 3 * m_t
+            if current_c > 0:
+                damped_c = _clamp(new_c, current_c * damping_lo, current_c * damping_hi)
+            else:
+                damped_c = new_c
+            pm.close_forecast = max(1, round(damped_c))
+
+        # Regenerate derived KPIs for this month (respects overridden_fields)
+        derived = compute_derived_kpis(
+            m_t, pm.working_days, float(pm.k_factor),
+            pm.lead_forecast, pm.close_forecast,
+        )
+        for field, value in derived.items():
+            if field not in overridden:
+                setattr(pm, field, value)
+
+        calibrated_count += 1
+
+    await db.flush()
+
+    log.info(
+        "recalibrate_factors completed",
+        plan_id=plan_id, up_to_month=up_to_month,
+        is_first=is_first_calibration,
+        damping=f"{damping_lo:.0%}/{damping_hi:.0%}",
+        months_calibrated=calibrated_count,
+    )
+    return plan, None
