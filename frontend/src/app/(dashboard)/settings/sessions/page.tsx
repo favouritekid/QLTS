@@ -33,13 +33,17 @@ function SessionsLoading() {
 /**
  * Server Component - Fetches initial session data
  */
-async function SessionsPageContent() {
+async function fetchInitialSessions() {
   try {
-    const initialData = await serverApi.sessions.getActiveSessions();
-    return <SessionsClient initialData={initialData} />;
+    return await serverApi.sessions.getActiveSessions();
   } catch {
-    return <SessionsClient />;
+    return undefined;
   }
+}
+
+async function SessionsPageContent() {
+  const initialData = await fetchInitialSessions();
+  return <SessionsClient initialData={initialData} />;
 }
 
 /**
