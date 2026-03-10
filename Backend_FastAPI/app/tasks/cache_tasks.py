@@ -234,31 +234,38 @@ def sync_kpi_plan_monthly_task(self):
             all_plans = list(plans_result.scalars().unique().all())
 
         current_year_plans = [p for p in all_plans if p.fiscal_year == fiscal_year]
-        prev_year_plans = [p for p in all_plans if p.fiscal_year == prev_fiscal_year] if prev_fiscal_year != fiscal_year else current_year_plans
 
-        # Separate by type for sync routing
+        # Plans that need actuals filled (prev month — from prev fiscal year)
+        plans_for_actuals = [p for p in all_plans if p.fiscal_year == prev_fiscal_year]
+
+        # Steps 2-3 (recalibrate + regenerate): ALL current-year plans (unit + officer)
+        plans_to_recalibrate = current_year_plans
+
+        # Step 4 (sync to KpiConfig): unit plans + orphan officer plans only
+        # (unit plan sync already resolves officer plans internally)
         unit_plans_current = [p for p in current_year_plans if p.officer_id is None]
         officer_plans_current = [p for p in current_year_plans if p.officer_id is not None]
         covered_unit_ids = {p.unit_id for p in unit_plans_current}
         orphan_officer_plans = [p for p in officer_plans_current if p.unit_id not in covered_unit_ids]
         plans_to_sync = unit_plans_current + orphan_officer_plans
 
-        # Plans that need actuals filled (prev month)
-        plans_for_actuals = [p for p in all_plans if p.fiscal_year == prev_fiscal_year]
-
-        result["plans"] = len(set(p.id for p in plans_for_actuals + plans_to_sync))
+        result["plans"] = len(set(
+            p.id for p in plans_for_actuals + plans_to_recalibrate + plans_to_sync
+        ))
 
         if result["plans"] == 0:
             task_log.info("No active plans found for years %s", years_to_query)
             return result
 
         task_log.info(
-            "Plans discovered: %d for actuals (year=%d, month=%d), %d for sync (year=%d, month=%d)",
+            "Plans discovered: %d actuals (year=%d, month=%d), "
+            "%d recalibrate, %d sync (year=%d, month=%d)",
             len(plans_for_actuals), prev_fiscal_year, prev_month,
-            len(plans_to_sync), fiscal_year, current_month,
+            len(plans_to_recalibrate), len(plans_to_sync),
+            fiscal_year, current_month,
         )
 
-        # --- Step 1: Fill actuals for previous month (all plans from prev fiscal year) ---
+        # --- Step 1: Fill actuals for previous month ---
         for plan in plans_for_actuals:
             try:
                 async with task_db_session() as session:
@@ -269,25 +276,27 @@ def sync_kpi_plan_monthly_task(self):
                     result["actuals_filled"] += 1
                     task_log.info("Plan %d: actuals filled for month %d", plan.id, prev_month)
             except Exception as e:
-                # Non-fatal: actuals fill failure shouldn't block sync
+                result["errors"] += 1
                 task_log.warning("Plan %d: actuals fill failed for month %d: %s", plan.id, prev_month, e)
 
-        # --- Steps 2-4: Recalibrate + regenerate + sync (current year plans) ---
-        for plan in plans_to_sync:
+        # --- Steps 2-3: Recalibrate + regenerate (ALL current-year plans) ---
+        for plan in plans_to_recalibrate:
             try:
                 async with task_db_session() as session:
-                    # Step 2: Recalibrate factors for future months
                     await kpi_planning_service.recalibrate_factors(
                         session, plan.id, current_month,
                     )
-                    task_log.info("Plan %d: factors recalibrated (up_to=%d)", plan.id, current_month)
-
-                    # Step 3: Regenerate derived KPIs
                     await kpi_planning_service.generate_monthly_kpis(session, plan.id)
-                    task_log.info("Plan %d: monthly KPIs regenerated", plan.id)
+                    await session.commit()
+                    task_log.info("Plan %d: recalibrated + regenerated", plan.id)
+            except Exception as e:
+                result["errors"] += 1
+                task_log.error("Plan %d: recalibrate/regenerate failed: %s", plan.id, e, exc_info=True)
 
-                    # Step 4: Sync to KpiConfig/KpiTarget
-                    # Re-load plan after regeneration for fresh month data
+        # --- Step 4: Sync to KpiConfig/KpiTarget (unit + orphan officer plans) ---
+        for plan in plans_to_sync:
+            try:
+                async with task_db_session() as session:
                     plan_result = await session.execute(
                         select(KpiPlan)
                         .options(selectinload(KpiPlan.months))
@@ -302,7 +311,6 @@ def sync_kpi_plan_monthly_task(self):
                         session, fresh_plan, current_month,
                         target_officer_id=target_officer,
                     )
-
                     await session.commit()
 
                     result["synced"] += 1
@@ -312,10 +320,9 @@ def sync_kpi_plan_monthly_task(self):
                         plan.id, stats.get("officers_synced", 0),
                         stats.get("configs_upserted", 0),
                     )
-
             except Exception as e:
                 result["errors"] += 1
-                task_log.error("Plan %d: pipeline failed: %s", plan.id, e, exc_info=True)
+                task_log.error("Plan %d: sync failed: %s", plan.id, e, exc_info=True)
 
         return result
 
