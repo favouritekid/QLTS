@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Eye, EyeOff } from "lucide-react";
@@ -67,7 +67,10 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
   });
 
   // Derive password value from form instead of separate state
-  const passwordValue = form.watch("new_password");
+  const passwordValue = useWatch({
+    control: form.control,
+    name: "new_password",
+  });
 
   // Reset form state when dialog opens/closes
   const handleOpenChange = (newOpen: boolean) => {
@@ -200,3 +203,4 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
     </Dialog>
   );
 }
+

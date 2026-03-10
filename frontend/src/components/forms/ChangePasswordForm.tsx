@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery } from "@tanstack/react-query";
@@ -90,7 +90,10 @@ export function ChangePasswordForm() {
   });
 
   // Watch new_password for strength indicator
-  const newPassword = form.watch("new_password");
+  const newPassword = useWatch({
+    control: form.control,
+    name: "new_password",
+  });
 
   function onSubmit(values: ChangePasswordFormValues) {
     // Show confirmation dialog instead of submitting directly
@@ -264,3 +267,4 @@ export function ChangePasswordForm() {
     </div>
   );
 }
+

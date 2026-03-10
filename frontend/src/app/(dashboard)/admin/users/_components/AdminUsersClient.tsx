@@ -335,6 +335,8 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
   );
 
   // Setup TanStack Table
+  // TanStack Table is not yet React Compiler-compatible in this component.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data: data?.users || [],
     columns,
@@ -911,3 +913,6 @@ function UserCard({ user, currentUserId, isSelected, onSelect, onEdit, onDelete,
     </BaseCard>
   );
 }
+
+
+
