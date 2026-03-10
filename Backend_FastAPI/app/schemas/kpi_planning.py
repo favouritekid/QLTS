@@ -8,7 +8,7 @@ Follows project conventions: BaseModel + ConfigDict(from_attributes=True).
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # =============================================================================
@@ -168,7 +168,21 @@ OVERRIDABLE_FIELDS = {
 }
 
 
-class MonthOverrideRequest(BaseModel):
+class _StrictNumericOverrides(BaseModel):
+    """Shared validator: reject bool values in override dicts before Pydantic coerces them."""
+
+    @field_validator("overrides", mode="before")
+    @classmethod
+    def reject_bool_values(cls, v: dict) -> dict:
+        if not isinstance(v, dict):
+            return v
+        for key, val in v.items():
+            if isinstance(val, bool):
+                raise ValueError(f"Override value cho '{key}' phải là số, không chấp nhận boolean")
+        return v
+
+
+class MonthOverrideRequest(_StrictNumericOverrides):
     """Override 1+ derived KPI fields for a single plan month (spec §5.1)."""
     overrides: Dict[str, float] = Field(
         ...,
@@ -185,8 +199,15 @@ class MonthResetRequest(BaseModel):
         description="Fields to reset. None = reset ALL overrides and recalculate.",
     )
 
+    @field_validator("fields")
+    @classmethod
+    def reject_empty_list(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is not None and len(v) == 0:
+            raise ValueError("fields không được là list rỗng — dùng null để reset tất cả")
+        return v
 
-class BatchOverrideRequest(BaseModel):
+
+class BatchOverrideRequest(_StrictNumericOverrides):
     """Override same fields for multiple plan months (spec §7: PUT /months/batch-override)."""
     month_ids: List[int] = Field(..., min_length=1, max_length=12)
     overrides: Dict[str, float] = Field(..., min_length=1)
