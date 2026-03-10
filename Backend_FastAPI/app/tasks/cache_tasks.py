@@ -280,6 +280,7 @@ def sync_kpi_plan_monthly_task(self):
                 task_log.warning("Plan %d: actuals fill failed for month %d: %s", plan.id, prev_month, e)
 
         # --- Steps 2-3: Recalibrate + regenerate (ALL current-year plans) ---
+        failed_plan_ids: set = set()
         for plan in plans_to_recalibrate:
             try:
                 async with task_db_session() as session:
@@ -290,11 +291,15 @@ def sync_kpi_plan_monthly_task(self):
                     await session.commit()
                     task_log.info("Plan %d: recalibrated + regenerated", plan.id)
             except Exception as e:
+                failed_plan_ids.add(plan.id)
                 result["errors"] += 1
                 task_log.error("Plan %d: recalibrate/regenerate failed: %s", plan.id, e, exc_info=True)
 
-        # --- Step 4: Sync to KpiConfig/KpiTarget (unit + orphan officer plans) ---
+        # --- Step 4: Sync to KpiConfig/KpiTarget (skip plans that failed steps 2-3) ---
         for plan in plans_to_sync:
+            if plan.id in failed_plan_ids:
+                task_log.warning("Plan %d: skipping sync (steps 2-3 failed)", plan.id)
+                continue
             try:
                 async with task_db_session() as session:
                     plan_result = await session.execute(
