@@ -1024,3 +1024,171 @@ async def recalibrate_factors(
         months_calibrated=calibrated_count,
     )
     return plan, None
+
+
+# =============================================================================
+# FILL MONTH ACTUALS (spec §5.1 — Phase B4)
+# =============================================================================
+
+async def fill_month_actuals(
+    db: AsyncSession,
+    plan_id: int,
+    month: int,
+) -> Tuple[KpiPlan, Callback]:
+    """
+    Fill actual performance fields for a completed month.
+
+    Populates 6 actual fields on KpiPlanMonth:
+      - actual_enrollments
+      - actual_consultations_avg  (daily avg = total / working_days)
+      - actual_conversion_rate    (enrollments / new_leads * 100)
+      - actual_win_rate           (enrollments / closed_leads * 100)
+      - actual_consultation_effectiveness (enrollments / consulted_closed * 100)
+      - actual_sla_compliance_rate (% leads with first response within SLA)
+
+    Only fills completed months. Scoped to plan's unit/officer. Does NOT commit.
+    """
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+    from sqlalchemy import select, func, literal_column
+    from app.models.lead import Consultation, Lead
+    from app.models.pipeline import ConsultationStatus, PipelineStage
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+    from app.services.calendar_service import count_working_days
+
+    if not (1 <= month <= 12):
+        raise BusinessRuleViolation(f"month phải trong 1..12, nhận {month}")
+
+    VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+    repo = KpiPlanningRepository(db)
+    plan = await repo.get_plan_by_id(plan_id, with_months=True)
+    if plan is None:
+        raise ResourceNotFoundError("KpiPlan", plan_id)
+
+    pm = next((m for m in plan.months if m.month == month), None)
+    if pm is None:
+        raise ResourceNotFoundError("KpiPlanMonth", f"plan={plan_id}, month={month}")
+
+    year = plan.fiscal_year
+    month_start = dt(year, month, 1, tzinfo=VN_TZ)
+    month_end = dt(year + 1, 1, 1, tzinfo=VN_TZ) if month == 12 else dt(year, month + 1, 1, tzinfo=VN_TZ)
+
+    officer_id = plan.officer_id
+    unit_id = plan.unit_id
+
+    def _lead_scope():
+        f = [Lead.deleted_at.is_(None), Lead.unit_id == unit_id]
+        if officer_id is not None:
+            f.append(Lead.assigned_officer_id == officer_id)
+        return f
+
+    # --- 1. actual_enrollments ---
+    enroll_count = (await db.execute(
+        select(func.count(Lead.id))
+        .join(PipelineStage, Lead.pipeline_stage_id == PipelineStage.id)
+        .join(ConsultationStatus, Lead.consultation_status_id == ConsultationStatus.id)
+        .where(
+            *_lead_scope(),
+            Lead.updated_at >= month_start, Lead.updated_at < month_end,
+            PipelineStage.is_final_stage == True,  # noqa: E712
+            ConsultationStatus.counts_for_funnel == True,  # noqa: E712
+            ConsultationStatus.outcome_type == "positive",
+        )
+    )).scalar_one()
+    pm.actual_enrollments = enroll_count
+
+    # --- 2. actual_consultations_avg (human consultations / working days) ---
+    consult_q = select(func.count(Consultation.id)).where(
+        Consultation.deleted_at.is_(None),
+        Consultation.method.is_distinct_from("system"),
+        Consultation.consultation_date >= month_start,
+        Consultation.consultation_date < month_end,
+    )
+    if officer_id is not None:
+        consult_q = consult_q.where(Consultation.officer_id == officer_id)
+    else:
+        consult_q = consult_q.join(Lead, Consultation.lead_id == Lead.id).where(Lead.unit_id == unit_id)
+    consult_count = (await db.execute(consult_q)).scalar_one()
+
+    wd = await count_working_days(db, year, month)
+    pm.actual_consultations_avg = Decimal(str(round(consult_count / wd, 2))) if wd > 0 else None
+
+    # --- 3. actual_conversion_rate (enrollments / new leads * 100) ---
+    new_leads = (await db.execute(
+        select(func.count(Lead.id)).where(
+            *_lead_scope(),
+            Lead.created_at >= month_start, Lead.created_at < month_end,
+        )
+    )).scalar_one()
+    pm.actual_conversion_rate = Decimal(str(round(enroll_count / new_leads * 100, 2))) if new_leads > 0 else None
+
+    # --- 4. actual_win_rate (enrollments / closed leads * 100) ---
+    closed_leads = (await db.execute(
+        select(func.count(Lead.id))
+        .join(PipelineStage, Lead.pipeline_stage_id == PipelineStage.id)
+        .where(
+            *_lead_scope(),
+            Lead.updated_at >= month_start, Lead.updated_at < month_end,
+            PipelineStage.is_final_stage == True,  # noqa: E712
+        )
+    )).scalar_one()
+    pm.actual_win_rate = Decimal(str(round(enroll_count / closed_leads * 100, 2))) if closed_leads > 0 else None
+
+    # --- 5. actual_consultation_effectiveness (enrollments / consulted-then-closed * 100) ---
+    consulted_closed = (await db.execute(
+        select(func.count(func.distinct(Lead.id)))
+        .join(PipelineStage, Lead.pipeline_stage_id == PipelineStage.id)
+        .join(Consultation, Consultation.lead_id == Lead.id)
+        .where(
+            *_lead_scope(),
+            Lead.updated_at >= month_start, Lead.updated_at < month_end,
+            PipelineStage.is_final_stage == True,  # noqa: E712
+            Consultation.deleted_at.is_(None),
+            Consultation.method.is_distinct_from("system"),
+        )
+    )).scalar_one()
+    pm.actual_consultation_effectiveness = (
+        Decimal(str(round(enroll_count / consulted_closed * 100, 2))) if consulted_closed > 0 else None
+    )
+
+    # --- 6. actual_sla_compliance_rate (% leads with first response within SLA) ---
+    assigned_in_month = (await db.execute(
+        select(func.count(Lead.id)).where(
+            *_lead_scope(),
+            Lead.assigned_at >= month_start, Lead.assigned_at < month_end,
+            Lead.assigned_officer_id.isnot(None),
+        )
+    )).scalar_one()
+
+    if assigned_in_month > 0:
+        response_hours = int(float(plan.response_time_target))
+        sla_met = (await db.execute(
+            select(func.count(func.distinct(Lead.id)))
+            .join(Consultation, Consultation.lead_id == Lead.id)
+            .where(
+                *_lead_scope(),
+                Lead.assigned_at >= month_start, Lead.assigned_at < month_end,
+                Lead.assigned_officer_id.isnot(None),
+                Consultation.deleted_at.is_(None),
+                Consultation.method.is_distinct_from("system"),
+                Consultation.consultation_date <= Lead.assigned_at + func.make_interval(
+                    0, 0, 0, 0, literal_column(str(response_hours))
+                ),
+            )
+        )).scalar_one()
+        pm.actual_sla_compliance_rate = Decimal(str(round(sla_met / assigned_in_month * 100, 2)))
+    else:
+        pm.actual_sla_compliance_rate = None
+
+    await db.flush()
+
+    log.info(
+        "fill_month_actuals completed",
+        plan_id=plan_id, month=month,
+        enrollments=enroll_count,
+        consult_avg=str(pm.actual_consultations_avg),
+        conv_rate=str(pm.actual_conversion_rate),
+        win_rate=str(pm.actual_win_rate),
+    )
+    return plan, None
