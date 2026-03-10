@@ -813,6 +813,7 @@ class OfficerRepository(BaseRepository[models.User]):
         today = datetime.now(timezone.utc).date()
         
         # Query 1: Consultations (range + today in one query with conditional)
+        # D5: filter method IS DISTINCT FROM 'system' (NULL-safe exclude system consultations)
         consult_query = (
             select(
                 func.count(models.Consultation.id).label("range_count"),
@@ -826,7 +827,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
                 models.Lead.deleted_at.is_(None),
-                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+                models.Consultation.deleted_at.is_(None),
+                models.Consultation.method.is_distinct_from("system"),  # D5: NULL-safe
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -2176,3 +2178,169 @@ class OfficerRepository(BaseRepository[models.User]):
             "total_final_consulted": total_final_consulted,
             "effectiveness": effectiveness,
         }
+
+
+    # =========================================================================
+    # DAILY QUALITY KPIs (Phase D — spec section 15)
+    # =========================================================================
+
+    async def count_human_consultations_daily(
+        self, officer_id: int, day_start: datetime, day_end: datetime,
+    ) -> int:
+        """D1/D5: Count human consultations for a day. Excludes method=system (NULL-safe)."""
+        r = await self.db.execute(
+            select(func.count(models.Consultation.id)).where(
+                models.Consultation.officer_id == officer_id,
+                models.Consultation.consultation_date >= day_start,
+                models.Consultation.consultation_date < day_end,
+                models.Consultation.deleted_at.is_(None),
+                models.Consultation.method.is_distinct_from("system"),
+            )
+        )
+        return r.scalar_one()
+
+    async def count_verified_consultations_daily(
+        self, officer_id: int, day_start: datetime, day_end: datetime,
+    ) -> int:
+        """D1: Verified consultations - DISTINCT lead_id with quality filters."""
+        r = await self.db.execute(
+            select(func.count(func.distinct(models.Consultation.lead_id))).where(
+                models.Consultation.officer_id == officer_id,
+                models.Consultation.consultation_date >= day_start,
+                models.Consultation.consultation_date < day_end,
+                models.Consultation.deleted_at.is_(None),
+                models.Consultation.method.is_distinct_from("system"),
+                models.Consultation.consultation_status_id.isnot(None),
+                models.Consultation.consultation_status_id.in_(
+                    select(models.ConsultationStatus.id).where(
+                        models.ConsultationStatus.counts_for_funnel == True,  # noqa: E712
+                        models.ConsultationStatus.updates_pipeline == True,  # noqa: E712
+                    )
+                ),
+                models.Consultation.lead_id.in_(
+                    select(models.LeadStatusHistory.lead_id).where(
+                        models.LeadStatusHistory.changed_at >= day_start,
+                        models.LeadStatusHistory.changed_at < day_end,
+                    )
+                ),
+            )
+        )
+        return r.scalar_one()
+
+    async def get_followup_commitment_stats(
+        self, officer_id: int, day_start: datetime, day_end: datetime,
+    ) -> Dict[str, int]:
+        """D2: Followup commitment - numerator / denominator (V_D non-final)."""
+        base = [
+            models.Consultation.officer_id == officer_id,
+            models.Consultation.consultation_date >= day_start,
+            models.Consultation.consultation_date < day_end,
+            models.Consultation.deleted_at.is_(None),
+            models.Consultation.method.is_distinct_from("system"),
+        ]
+        nf_status = select(models.ConsultationStatus.id).where(
+            models.ConsultationStatus.counts_for_funnel == True,  # noqa: E712
+            models.ConsultationStatus.updates_pipeline == True,  # noqa: E712
+            models.ConsultationStatus.is_final == False,  # noqa: E712
+        )
+        hist = select(models.LeadStatusHistory.lead_id).where(
+            models.LeadStatusHistory.changed_at >= day_start,
+            models.LeadStatusHistory.changed_at < day_end,
+        )
+        denom = (await self.db.execute(
+            select(func.count(func.distinct(models.Consultation.lead_id))).where(
+                *base, models.Consultation.consultation_status_id.in_(nf_status),
+                models.Consultation.lead_id.in_(hist),
+            )
+        )).scalar_one()
+        numer = (await self.db.execute(
+            select(func.count(func.distinct(models.Consultation.lead_id))).where(
+                *base, models.Consultation.consultation_status_id.in_(nf_status),
+                models.Consultation.lead_id.in_(hist),
+                models.Consultation.scheduled_at.isnot(None),
+                models.Consultation.scheduled_at > models.Consultation.consultation_date,
+            )
+        )).scalar_one()
+        return {"numerator": numer, "denominator": denom}
+
+    def _verified_lead_subquery(self, officer_id: int, day_start: datetime, day_end: datetime):
+        """Shared subquery: verified lead_ids for a day."""
+        return (
+            select(func.distinct(models.Consultation.lead_id))
+            .where(
+                models.Consultation.officer_id == officer_id,
+                models.Consultation.consultation_date >= day_start,
+                models.Consultation.consultation_date < day_end,
+                models.Consultation.deleted_at.is_(None),
+                models.Consultation.method.is_distinct_from("system"),
+                models.Consultation.consultation_status_id.in_(
+                    select(models.ConsultationStatus.id).where(
+                        models.ConsultationStatus.counts_for_funnel == True,  # noqa: E712
+                        models.ConsultationStatus.updates_pipeline == True,  # noqa: E712
+                    )
+                ),
+                models.Consultation.lead_id.in_(
+                    select(models.LeadStatusHistory.lead_id).where(
+                        models.LeadStatusHistory.changed_at >= day_start,
+                        models.LeadStatusHistory.changed_at < day_end,
+                    )
+                ),
+            )
+        )
+
+    async def get_progress_rate_d7(
+        self, officer_id: int, day_start: datetime, day_end: datetime,
+    ) -> Dict[str, Any]:
+        """D3: % verified leads progressed within 7 days."""
+        v_subq = self._verified_lead_subquery(officer_id, day_start, day_end)
+        total_v = (await self.db.execute(select(func.count()).select_from(v_subq.subquery()))).scalar_one()
+        if total_v == 0:
+            return {"total": 0, "progressed": 0, "rate": None}
+        d7_end = day_end + timedelta(days=7)
+        old_ps = models.PipelineStage.__table__.alias("old_ps_d7")
+        new_ps = models.PipelineStage.__table__.alias("new_ps_d7")
+        neg_st = select(models.ConsultationStatus.id).where(models.ConsultationStatus.outcome_type == "negative")
+        pos_st = select(models.ConsultationStatus.id).where(models.ConsultationStatus.outcome_type == "positive")
+        progressed = (await self.db.execute(
+            select(func.count(func.distinct(models.LeadStatusHistory.lead_id)))
+            .join(old_ps, models.LeadStatusHistory.old_pipeline_stage_id == old_ps.c.id)
+            .join(new_ps, models.LeadStatusHistory.new_pipeline_stage_id == new_ps.c.id)
+            .where(
+                models.LeadStatusHistory.lead_id.in_(v_subq),
+                models.LeadStatusHistory.changed_at > day_end,
+                models.LeadStatusHistory.changed_at <= d7_end,
+                or_(
+                    and_(new_ps.c.order > old_ps.c.order,
+                         ~models.LeadStatusHistory.new_consultation_status_id.in_(neg_st)),
+                    and_(new_ps.c.is_final_stage == True,  # noqa: E712
+                         models.LeadStatusHistory.new_consultation_status_id.in_(pos_st)),
+                ),
+            )
+        )).scalar_one()
+        return {"total": total_v, "progressed": progressed,
+                "rate": round(progressed / total_v * 100, 1)}
+
+    async def get_rollback_rate_d3(
+        self, officer_id: int, day_start: datetime, day_end: datetime,
+    ) -> Dict[str, Any]:
+        """D3: % verified leads dropped stage within 3 days. Gross rollback."""
+        v_subq = self._verified_lead_subquery(officer_id, day_start, day_end)
+        total_v = (await self.db.execute(select(func.count()).select_from(v_subq.subquery()))).scalar_one()
+        if total_v == 0:
+            return {"total": 0, "rolled_back": 0, "rate": None}
+        d3_end = day_end + timedelta(days=3)
+        old_ps = models.PipelineStage.__table__.alias("old_ps_rb")
+        new_ps = models.PipelineStage.__table__.alias("new_ps_rb")
+        rolled_back = (await self.db.execute(
+            select(func.count(func.distinct(models.LeadStatusHistory.lead_id)))
+            .join(old_ps, models.LeadStatusHistory.old_pipeline_stage_id == old_ps.c.id)
+            .join(new_ps, models.LeadStatusHistory.new_pipeline_stage_id == new_ps.c.id)
+            .where(
+                models.LeadStatusHistory.lead_id.in_(v_subq),
+                models.LeadStatusHistory.changed_at > day_end,
+                models.LeadStatusHistory.changed_at <= d3_end,
+                new_ps.c.order < old_ps.c.order,
+            )
+        )).scalar_one()
+        return {"total": total_v, "rolled_back": rolled_back,
+                "rate": round(rolled_back / total_v * 100, 1)}

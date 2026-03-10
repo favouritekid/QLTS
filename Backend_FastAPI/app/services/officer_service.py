@@ -822,7 +822,37 @@ async def get_enhanced_dashboard_stats(
     annual_progress = await kpi_service.get_annual_target_progress(
         db, officer_id, kpi_code="enrollments_annual", fiscal_year=filter_end.year
     )
-    
+
+    # === 11. DAILY QUALITY KPIs (Phase D — spec §15) ===
+    from zoneinfo import ZoneInfo
+    VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+    today_vn = datetime.now(VN_TZ)
+    day_start = today_vn.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+
+    # D5+D1: Human consultations today (already used above but recounted with system filter)
+    h_d = await repo.count_human_consultations_daily(officer_id, day_start, day_end)
+    v_d = await repo.count_verified_consultations_daily(officer_id, day_start, day_end)
+    quality_rate = round(v_d / h_d * 100, 1) if h_d > 0 else None
+
+    # D2: Followup commitment
+    followup = await repo.get_followup_commitment_stats(officer_id, day_start, day_end)
+    followup_rate = (
+        round(followup["numerator"] / followup["denominator"] * 100, 1)
+        if followup["denominator"] > 0 else None
+    )
+
+    # D3: Rolling KPIs (use data from 7/3 days ago)
+    d7_date = (today_vn - timedelta(days=7)).date()
+    d7_start = datetime(d7_date.year, d7_date.month, d7_date.day, tzinfo=VN_TZ)
+    d7_end = d7_start + timedelta(days=1)
+    progress_d7 = await repo.get_progress_rate_d7(officer_id, d7_start, d7_end)
+
+    d3_date = (today_vn - timedelta(days=3)).date()
+    d3_start = datetime(d3_date.year, d3_date.month, d3_date.day, tzinfo=VN_TZ)
+    d3_end = d3_start + timedelta(days=1)
+    rollback_d3 = await repo.get_rollback_rate_d3(officer_id, d3_start, d3_end)
+
     # Build enhanced response
     return {
         "kpis": {
@@ -845,6 +875,14 @@ async def get_enhanced_dashboard_stats(
             "consultation_effectiveness": effectiveness_stats["effectiveness"],
             "consultation_effectiveness_trend": effectiveness_trend,
             "consultations_avg_per_day": round(consultations_avg, 1),
+            # Phase D: Daily Quality KPIs
+            "verified_consultations_daily": v_d,
+            "quality_rate_daily": quality_rate,
+            "followup_commitment_rate": followup_rate,
+            "progress_rate_d7": progress_d7["rate"],
+            "progress_rate_d7_date": d7_date.isoformat(),
+            "rollback_rate_d3": rollback_d3["rate"],
+            "rollback_rate_d3_date": d3_date.isoformat(),
         },
         "status_overview": base_stats["status_overview"],
         "priority_actions": priority_actions,

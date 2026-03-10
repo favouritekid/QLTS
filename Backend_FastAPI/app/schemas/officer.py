@@ -169,6 +169,17 @@ class KPIStats(BaseModel):
     # Leads created in period that are still active (for period analysis)
     active_leads_in_period: int = 0
 
+    # Daily Quality KPIs (Phase D — spec §15.7)
+    verified_consultations_daily: int = 0
+    quality_rate_daily: Optional[float] = None  # NULL when H_D = 0
+    followup_commitment_rate: Optional[float] = None  # NULL when V_D_non_final = 0
+
+    # Rolling Quality KPIs (data has 7/3 day lag)
+    progress_rate_d7: Optional[float] = None  # NULL when insufficient data
+    progress_rate_d7_date: Optional[str] = None  # ISO date of actual D (today - 7)
+    rollback_rate_d3: Optional[float] = None
+    rollback_rate_d3_date: Optional[str] = None  # ISO date of actual D (today - 3)
+
 
 class PriorityAction(BaseModel):
     """AI-powered priority action suggestion."""

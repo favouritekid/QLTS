@@ -39,6 +39,14 @@ export interface KPIStats {
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
   consultations_avg_per_day?: number;
+  // Phase D: Daily Quality KPIs
+  verified_consultations_daily?: number;
+  quality_rate_daily?: number | null;
+  followup_commitment_rate?: number | null;
+  progress_rate_d7?: number | null;
+  progress_rate_d7_date?: string | null;
+  rollback_rate_d3?: number | null;
+  rollback_rate_d3_date?: string | null;
 }
 
 export interface StatusOverview {

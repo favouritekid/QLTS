@@ -53,6 +53,14 @@ interface KPIStats {
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
   consultations_avg_per_day?: number;
+  // Phase D: Daily Quality KPIs
+  verified_consultations_daily?: number;
+  quality_rate_daily?: number | null;
+  followup_commitment_rate?: number | null;
+  progress_rate_d7?: number | null;
+  progress_rate_d7_date?: string | null;
+  rollback_rate_d3?: number | null;
+  rollback_rate_d3_date?: string | null;
 }
 
 interface KPICardsGridProps {
@@ -277,6 +285,48 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               trend={kpis.avg_response_time_trend}
               inverseTrend={true}
               onClick={goToLeads}
+            />
+          </div>
+        </Card>
+
+        {/* Tier 3: Daily Quality KPIs (Phase D) */}
+        <Card className="border bg-card">
+          <div className="px-4 py-2 border-b">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Chất lượng tư vấn hôm nay
+            </h4>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-border">
+            <StatItem
+              icon={Target}
+              label="TV hợp lệ"
+              value={String(kpis.verified_consultations_daily ?? 0)}
+              tooltip="Số lead DISTINCT được tư vấn hợp lệ trong ngày (loại system, có pipeline update)"
+            />
+            <StatItem
+              icon={ShieldCheck}
+              label="Tỷ lệ chất lượng"
+              value={kpis.quality_rate_daily != null ? `${fmtPct(kpis.quality_rate_daily)}%` : "N/A"}
+              tooltip="TV hợp lệ / Tổng TV hôm nay × 100"
+            />
+            <StatItem
+              icon={Phone}
+              label="Cam kết follow-up"
+              value={kpis.followup_commitment_rate != null ? `${fmtPct(kpis.followup_commitment_rate)}%` : "N/A"}
+              tooltip="% tư vấn non-final có hẹn lịch follow-up"
+            />
+            <StatItem
+              icon={TrendingUp}
+              label="Tiến triển D+7"
+              value={kpis.progress_rate_d7 != null ? `${fmtPct(kpis.progress_rate_d7)}%` : "N/A"}
+              tooltip={`Tỷ lệ lead tiến triển trong 7 ngày${kpis.progress_rate_d7_date ? ` (dữ liệu ngày ${kpis.progress_rate_d7_date})` : ""}`}
+            />
+            <StatItem
+              icon={TrendingDown}
+              label="Tụt hạng D+3"
+              value={kpis.rollback_rate_d3 != null ? `${fmtPct(kpis.rollback_rate_d3)}%` : "N/A"}
+              tooltip={`Tỷ lệ lead tụt trạng thái trong 3 ngày${kpis.rollback_rate_d3_date ? ` (dữ liệu ngày ${kpis.rollback_rate_d3_date})` : ""}`}
+              inverseTrend={true}
             />
           </div>
         </Card>
