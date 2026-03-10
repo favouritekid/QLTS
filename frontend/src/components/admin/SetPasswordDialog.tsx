@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -54,7 +54,6 @@ interface SetPasswordDialogProps {
 export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialogProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [passwordValue, setPasswordValue] = useState("");
 
   const setPasswordMutation = useAdminSetPassword(user.id);
 
@@ -67,24 +66,25 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
     mode: "onChange", // ✅ FIX: Realtime validation
   });
 
-  // Reset form state when dialog opens or user changes
-  useEffect(() => {
-    if (open) {
+  // Derive password value from form instead of separate state
+  const passwordValue = form.watch("new_password");
+
+  // Reset form state when dialog opens/closes
+  const handleOpenChange = (newOpen: boolean) => {
+    if (newOpen) {
       form.reset();
-      setPasswordValue("");
       setShowPassword(false);
       setShowConfirmPassword(false);
     }
-  }, [open, user.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    onOpenChange(newOpen);
+  };
 
   async function onSubmit(values: SetPasswordFormValues) {
     try {
       await setPasswordMutation.mutateAsync({
         new_password: values.new_password,
       });
-      onOpenChange(false);
-      form.reset();
-      setPasswordValue("");
+      handleOpenChange(false);
     } catch {
       // Error handling is done in the mutation hook
     }
@@ -93,7 +93,7 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
   const isPending = setPasswordMutation.isPending;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>Đặt Mật Khẩu</DialogTitle>
@@ -118,10 +118,7 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
                         type={showPassword ? "text" : "password"}
                         placeholder="Nhập mật khẩu mới"
                         {...field}
-                        onChange={(e) => {
-                          field.onChange(e);
-                          setPasswordValue(e.target.value);
-                        }}
+                        onChange={field.onChange}
                         disabled={isPending}
                         className="pr-10"
                       />
@@ -188,11 +185,7 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => {
-                  onOpenChange(false);
-                  form.reset();
-                  setPasswordValue("");
-                }}
+                onClick={() => handleOpenChange(false)}
                 disabled={isPending}
               >
                 Hủy
