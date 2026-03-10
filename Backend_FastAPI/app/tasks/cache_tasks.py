@@ -174,14 +174,17 @@ def sync_kpi_ytd_task(self):
 )
 def sync_kpi_plan_monthly_task(self):
     """
-    Celery Beat monthly task — enhanced 4-step pipeline (Phase B5).
+    Celery Beat monthly task — 3-step pipeline (Phase B5).
 
     Runs on day 1 of each month at 02:00 AM.
     For each active KpiPlan (current fiscal year):
       Step 1: fill_month_actuals(prev_month) — populate actuals for last month
-      Step 2: recalibrate_factors(current_month) — EMA + damping for future months
-      Step 3: generate_monthly_kpis(plan_id) — regenerate derived KPIs
-      Step 4: sync_plan_to_kpi_config(current_month) — push targets to KpiConfig
+      Step 2: recalibrate_factors(current_month) — EMA + damping + derived KPI regen for future months
+      Step 3: sync_plan_to_kpi_config(current_month) — push targets to KpiConfig
+
+    Note: recalibrate_factors already regenerates derived KPIs inline for
+    future months, so a separate generate_monthly_kpis call is not needed
+    (and would overwrite past months set by B6 mid-year redistribute).
 
     Commit-per-plan isolation: 1 plan failure doesn't block others.
     January edge case: fills December actuals from previous year's plans.
@@ -216,7 +219,7 @@ def sync_kpi_plan_monthly_task(self):
         }
 
         # --- Discover plans ---
-        # Current year plans (for steps 2-4)
+        # Current year plans (for steps 2-3)
         # Previous year plans too (for step 1 January edge case)
         years_to_query = {fiscal_year}
         if prev_fiscal_year != fiscal_year:
@@ -238,10 +241,10 @@ def sync_kpi_plan_monthly_task(self):
         # Plans that need actuals filled (prev month — from prev fiscal year)
         plans_for_actuals = [p for p in all_plans if p.fiscal_year == prev_fiscal_year]
 
-        # Steps 2-3 (recalibrate + regenerate): ALL current-year plans (unit + officer)
+        # Step 2 (recalibrate + inline derived regen): ALL current-year plans
         plans_to_recalibrate = current_year_plans
 
-        # Step 4 (sync to KpiConfig): unit plans + orphan officer plans only
+        # Step 3 (sync to KpiConfig): unit plans + orphan officer plans only
         # (unit plan sync already resolves officer plans internally)
         unit_plans_current = [p for p in current_year_plans if p.officer_id is None]
         officer_plans_current = [p for p in current_year_plans if p.officer_id is not None]
@@ -279,7 +282,7 @@ def sync_kpi_plan_monthly_task(self):
                 result["errors"] += 1
                 task_log.warning("Plan %d: actuals fill failed for month %d: %s", plan.id, prev_month, e)
 
-        # --- Steps 2-3: Recalibrate + regenerate (ALL current-year plans) ---
+        # --- Step 2: Recalibrate factors + inline derived regen (ALL current-year plans) ---
         failed_plan_ids: set = set()
         for plan in plans_to_recalibrate:
             try:
@@ -298,10 +301,10 @@ def sync_kpi_plan_monthly_task(self):
                 result["errors"] += 1
                 task_log.error("Plan %d: recalibrate/regenerate failed: %s", plan.id, e, exc_info=True)
 
-        # --- Step 4: Sync to KpiConfig/KpiTarget (skip plans that failed steps 2-3) ---
+        # --- Step 3: Sync to KpiConfig/KpiTarget (skip plans that failed step 2) ---
         for plan in plans_to_sync:
             if plan.id in failed_plan_ids:
-                task_log.warning("Plan %d: skipping sync (steps 2-3 failed)", plan.id)
+                task_log.warning("Plan %d: skipping sync (step 2 failed)", plan.id)
                 continue
             try:
                 async with task_db_session() as session:
