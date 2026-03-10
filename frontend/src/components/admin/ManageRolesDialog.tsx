@@ -108,34 +108,31 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[550px]">
         <DialogHeader>
-          <DialogTitle>Manage Casbin Roles</DialogTitle>
+          <DialogTitle>Quản lý vai trò</DialogTitle>
           <DialogDescription>
-            Manage additional Casbin roles for <span className="font-semibold">{user.username}</span>.
-            The primary role is set in the user profile.
+            Quản lý vai trò bổ sung cho <span className="font-semibold">{user.username}</span>. Vai trò chính được đặt trong hồ sơ người dùng.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 py-4">
           {/* Primary Role (Read-only) */}
           <div>
-            <h4 className="text-sm font-medium mb-3">Primary Role</h4>
+            <h4 className="text-sm font-medium mb-3">Vai trò chính</h4>
             <div className="flex items-center gap-2">
               <Badge variant="default" className="text-sm">
                 {user.role.toUpperCase()} {/* architecture-allow presentation */}
               </Badge>
-              <span className="text-xs text-muted-foreground">
-                (Set in user profile, maps to {primaryRole})
-              </span>
+              <span className="text-xs text-muted-foreground">(Được đặt trong hồ sơ người dùng)</span>
             </div>
           </div>
 
           {/* Additional Roles */}
           <div>
-            <h4 className="text-sm font-medium mb-3">Additional Casbin Roles</h4>
+            <h4 className="text-sm font-medium mb-3">Vai trò bổ sung</h4>
 
             {rolesError ? (
               <div className="text-sm text-destructive mb-4 p-3 rounded-lg border border-destructive/50 bg-destructive/10">
-                Failed to load user roles. Please try again.
+                Không thể tải vai trò người dùng. Vui lòng thử lại.
               </div>
             ) : isLoading ? (
               <div className="flex items-center justify-center py-4">
@@ -153,7 +150,6 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
                       <div className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-success-600" />
                         <span className="text-sm font-medium">{roleLabel}</span>
-                        <span className="text-xs text-muted-foreground">({role})</span>
                       </div>
                       <Button
                         size="sm"
@@ -169,7 +165,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
               </div>
             ) : (
               <p className="text-sm text-muted-foreground mb-4">
-                No additional roles assigned. Add roles below.
+                Chưa có vai trò bổ sung. Thêm vai trò bên dưới.
               </p>
             )}
 
@@ -179,12 +175,12 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
                 <div className="flex gap-2">
                   <Select value={selectedRole} onValueChange={setSelectedRole}>
                     <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Select a role to assign" />
+                      <SelectValue placeholder="Chọn vai trò để gán" />
                     </SelectTrigger>
                     <SelectContent>
                       {assignableRoles.map((role) => (
                         <SelectItem key={role.value} value={role.value}>
-                          {role.label} ({role.value})
+                          {role.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -205,8 +201,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
           {/* Info Box */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <p className="text-xs text-muted-foreground">
-              <strong>Note:</strong> Casbin uses role-based access control. Additional roles give
-              users extra permissions beyond their primary role. Changes take effect immediately.
+              <strong>Lưu ý:</strong> Vai trò bổ sung cung cấp thêm quyền ngoài vai trò chính. Thay đổi có hiệu lực ngay.
             </p>
           </div>
         </div>
@@ -221,7 +216,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
             }}
             disabled={isPending}
           >
-            Close
+            Đóng
           </Button>
         </DialogFooter>
       </DialogContent>

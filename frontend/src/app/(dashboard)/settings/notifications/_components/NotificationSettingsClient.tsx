@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Bell, Save, Volume2, Mail, Monitor } from "lucide-react";
+import { Bell, Save, Volume2, Smartphone, Mail, Monitor } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -90,9 +90,9 @@ export function NotificationSettingsClient({
 
     try {
       await updatePreferences.mutateAsync(updateData);
-      toast.success("General settings updated successfully!");
+      toast.success("Cập nhật cài đặt thành công!");
     } catch {
-      toast.error("Failed to update general settings");
+      toast.error("Lỗi khi cập nhật cài đặt");
     }
   };
 
@@ -109,7 +109,7 @@ export function NotificationSettingsClient({
       });
       // No toast for individual toggles - they update instantly
     } catch {
-      toast.error(`Failed to update ${group} ${channel} preference`);
+      toast.error("Lỗi khi cập nhật tuỳ chọn thông báo");
     }
   };
 
@@ -122,9 +122,9 @@ export function NotificationSettingsClient({
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Bell className="h-5 w-5" />
-                General Settings
+                Cài đặt chung
               </CardTitle>
-              <CardDescription>Choose how you want to receive notifications</CardDescription>
+              <CardDescription>Chọn cách bạn muốn nhận thông báo</CardDescription>
             </div>
             <Button
               onClick={handleSaveGeneralSettings}
@@ -132,7 +132,7 @@ export function NotificationSettingsClient({
               size="sm"
             >
               <Save className="mr-2 h-4 w-4" />
-              Save
+              Lưu
             </Button>
           </div>
         </CardHeader>
@@ -142,10 +142,10 @@ export function NotificationSettingsClient({
             <div className="space-y-0.5">
               <Label htmlFor="email-enabled" className="text-base flex items-center gap-2">
                 <Mail className="h-4 w-4" />
-                Email Notifications
+                Thông báo qua Email
               </Label>
               <p className="text-sm text-muted-foreground">
-                Receive notifications via email
+                Nhận thông báo qua email
               </p>
             </div>
             <Switch
@@ -160,10 +160,10 @@ export function NotificationSettingsClient({
             <div className="flex items-center justify-between pl-4 border-l-2">
               <div className="space-y-0.5">
                 <Label htmlFor="email-digest" className="text-base">
-                  Email Digest Frequency
+                  Tần suất tổng hợp Email
                 </Label>
                 <p className="text-sm text-muted-foreground">
-                  How often to send email notifications
+                  Tần suất gửi thông báo email
                 </p>
               </div>
               <Select
@@ -174,10 +174,10 @@ export function NotificationSettingsClient({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="instant">Instant</SelectItem>
-                  <SelectItem value="daily">Daily Digest</SelectItem>
-                  <SelectItem value="weekly">Weekly Digest</SelectItem>
-                  <SelectItem value="disabled">Disabled</SelectItem>
+                  <SelectItem value="instant">Ngay lập tức</SelectItem>
+                  <SelectItem value="daily">Tổng hợp hàng ngày</SelectItem>
+                  <SelectItem value="weekly">Tổng hợp hàng tuần</SelectItem>
+                  <SelectItem value="disabled">Tắt</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -190,10 +190,10 @@ export function NotificationSettingsClient({
             <div className="space-y-0.5">
               <Label htmlFor="browser-enabled" className="text-base flex items-center gap-2">
                 <Monitor className="h-4 w-4" />
-                Browser Notifications
+                Thông báo trình duyệt
               </Label>
               <p className="text-sm text-muted-foreground">
-                Show in-app notifications
+                Hiện thông báo trong ứng dụng
               </p>
             </div>
             <Switch
@@ -210,10 +210,10 @@ export function NotificationSettingsClient({
             <div className="space-y-0.5">
               <Label htmlFor="sound-enabled" className="text-base flex items-center gap-2">
                 <Volume2 className="h-4 w-4" />
-                Sound Notifications
+                Thông báo âm thanh
               </Label>
               <p className="text-sm text-muted-foreground">
-                Play sound when notifications arrive
+                Phát âm thanh khi có thông báo
               </p>
             </div>
             <Switch
@@ -228,19 +228,19 @@ export function NotificationSettingsClient({
       {/* Quiet Hours */}
       <Card className="max-w-4xl">
         <CardHeader>
-          <CardTitle>Quiet Hours (Do Not Disturb)</CardTitle>
+          <CardTitle>Giờ yên tĩnh (Không làm phiền)</CardTitle>
           <CardDescription>
-            Mute notifications during specific hours
+            Tắt tiếng thông báo trong khoảng thời gian nhất định
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="quiet-hours-enabled" className="text-base">
-                Enable Quiet Hours
+                Bật giờ yên tĩnh
               </Label>
               <p className="text-sm text-muted-foreground">
-                Notifications will be silent during these hours
+                Thông báo sẽ bị tắt tiếng trong khoảng thời gian này
               </p>
             </div>
             <Switch
@@ -253,7 +253,7 @@ export function NotificationSettingsClient({
           {quietHoursEnabled && (
             <div className="grid gap-4 md:grid-cols-2 pl-4 border-l-2">
               <div className="space-y-2">
-                <Label htmlFor="quiet-hours-start">Start Time</Label>
+                <Label htmlFor="quiet-hours-start">Giờ bắt đầu</Label>
                 <input
                   id="quiet-hours-start"
                   type="time"
@@ -263,7 +263,7 @@ export function NotificationSettingsClient({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="quiet-hours-end">End Time</Label>
+                <Label htmlFor="quiet-hours-end">Giờ kết thúc</Label>
                 <input
                   id="quiet-hours-end"
                   type="time"
@@ -280,26 +280,26 @@ export function NotificationSettingsClient({
       {/* Event Group Preferences (NEW) */}
       <Card className="max-w-4xl">
         <CardHeader>
-          <CardTitle>Notification Categories</CardTitle>
+          <CardTitle>Danh mục thông báo</CardTitle>
           <CardDescription>
-            Customize notifications for each category. Changes are saved automatically.
+            Tuỳ chỉnh thông báo cho từng danh mục. Thay đổi được lưu tự động.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Header */}
           <div className="grid grid-cols-4 gap-4 px-4 text-sm font-medium text-muted-foreground">
-            <div>Category</div>
+            <div>Danh mục</div>
             <div className="text-center flex items-center justify-center gap-1">
               <Monitor className="h-4 w-4" />
-              Browser
+              Trình duyệt
             </div>
             <div className="text-center flex items-center justify-center gap-1">
               <Mail className="h-4 w-4" />
               Email
             </div>
             <div className="text-center flex items-center justify-center gap-1">
-              <Volume2 className="h-4 w-4" />
-              Sound
+              <Smartphone className="h-4 w-4" />
+              SMS
             </div>
           </div>
 
@@ -320,15 +320,15 @@ export function NotificationSettingsClient({
               >
                 <div>
                   <div className="font-medium flex items-center gap-2">
-                    {group.name_en}
+                    {group.name_vi || group.name_en}
                     {group.id === "system" && (
                       <Badge variant="secondary" className="text-xs">
-                        Important
+                        Quan trọng
                       </Badge>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {group.description_en}
+                    {group.description_vi || group.description_en}
                   </p>
                 </div>
                 <div className="flex justify-center">
@@ -365,8 +365,7 @@ export function NotificationSettingsClient({
           {/* Legend */}
           <div className="pt-4 border-t">
             <p className="text-xs text-muted-foreground">
-              * Browser notifications appear in the notification bell. Email notifications are sent to your registered email.
-              SMS notifications are coming soon.
+              * Thông báo trình duyệt hiển thị ở biểu tượng chuông. Thông báo Email được gửi đến email đã đăng ký. Tính năng SMS sắp ra mắt.
             </p>
           </div>
         </CardContent>

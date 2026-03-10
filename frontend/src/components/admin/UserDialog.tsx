@@ -427,7 +427,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   <FormLabel>Vai trò *</FormLabel>
                   <Select
                     onValueChange={field.onChange}
-                    defaultValue={field.value}
+                    value={field.value}
                     disabled={isPending || rolesLoading}
                   >
                     <FormControl>
@@ -473,7 +473,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   <FormLabel>Trạng thái *</FormLabel>
                   <Select
                     onValueChange={field.onChange}
-                    defaultValue={field.value}
+                    value={field.value}
                     disabled={isPending}
                   >
                     <FormControl>

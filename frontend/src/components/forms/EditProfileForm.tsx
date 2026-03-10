@@ -1,7 +1,7 @@
 // src/components/forms/EditProfileForm.tsx
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -56,6 +56,19 @@ export function EditProfileForm() {
       email: user?.email || "",
     },
   });
+
+  // FIX 8: Sync form when user data changes (e.g., after refetch)
+  const { reset } = form;
+
+  useEffect(() => {
+    if (user) {
+      reset({
+        full_name: user.full_name || "",
+        phone_number: user.phone_number || "",
+        email: user.email || "",
+      });
+    }
+  }, [user?.id, user?.full_name, user?.phone_number, user?.email, reset]);
 
   // Handle avatar file selection
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {

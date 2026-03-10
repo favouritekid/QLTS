@@ -13,11 +13,10 @@
  * Server Component (parent) fetches initial data, this handles all interactivity.
  */
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import Link from "next/link";
 import {
   Plus,
-  Search,
   Download,
   Trash2,
   MoreVertical,
@@ -42,8 +41,8 @@ import {
 } from "@tanstack/react-table";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SearchInput } from "@/components/common/form/SearchInput";
 import {
   Table,
   TableBody,
@@ -91,6 +90,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+import { useAuth } from "@/hooks/useAuth";
 import { useAdminUsersList, useAdminDeleteUser, useAdminBulkAction } from "@/hooks/useAdminUsers";
 import { UserDialog } from "@/components/admin/UserDialog";
 import { SetPasswordDialog } from "@/components/admin/SetPasswordDialog";
@@ -109,6 +109,7 @@ interface AdminUsersClientProps {
 }
 
 export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
+  const { user: currentUser } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
@@ -125,6 +126,17 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
   const [manageRolesDialogOpen, setManageRolesDialogOpen] = useState(false);
   const [manageRolesUser, setManageRolesUser] = useState<User | null>(null);
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+
+  // FIX 3: Reset row selection when filters/page change
+  useEffect(() => {
+    setRowSelection({});
+  }, [page, search, roleFilter, statusFilter]);
+
+  // FIX 2: Debounced search handler
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    setPage(1);
+  }, []);
 
   // ✅ Fetch users with filters and sorting (with initialData)
   const { data, isLoading, error } = useAdminUsersList(
@@ -304,6 +316,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                 <DropdownMenuItem
                   className="text-destructive focus:text-destructive"
                   onClick={() => setUserToDelete(user)}
+                  disabled={user.id === currentUser?.id}
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Xoá người dùng
@@ -314,7 +327,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         },
       },
     ],
-    [getSortIcon, handleSort]
+    [getSortIcon, handleSort, currentUser?.id]
   );
 
   // Setup TanStack Table
@@ -354,9 +367,16 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
 
   const handleBulkDelete = async () => {
     const selectedRows = table.getFilteredSelectedRowModel().rows;
-    const userIds = selectedRows.map((row) => row.original.id);
+    // FIX 7: Filter out self from bulk delete
+    const userIds = selectedRows
+      .map((row) => row.original.id)
+      .filter((id) => id !== currentUser?.id);
 
-    if (userIds.length === 0) return;
+    if (userIds.length === 0) {
+      toast.info("Không có người dùng nào để xoá.");
+      setBulkDeleteDialogOpen(false);
+      return;
+    }
 
     await bulkActionMutation.mutateAsync({
       action: "delete",
@@ -376,9 +396,17 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
 
   const handleBulkChangeStatus = async (newStatus: "active" | "pending" | "banned") => {
     const selectedRows = table.getFilteredSelectedRowModel().rows;
-    const userIds = selectedRows.map((row) => row.original.id);
+    let userIds = selectedRows.map((row) => row.original.id);
 
-    if (userIds.length === 0) return;
+    // FIX 7: Filter out self for dangerous statuses
+    if ((newStatus === "banned" || newStatus === "pending") && currentUser?.id) {
+      userIds = userIds.filter((id) => id !== currentUser.id);
+    }
+
+    if (userIds.length === 0) {
+      toast.info("Không có người dùng nào để thay đổi trạng thái.");
+      return;
+    }
 
     await bulkActionMutation.mutateAsync({
       action: "change_status",
@@ -521,15 +549,13 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-4 md:flex-row">
-            <div className="relative flex-1">
-              <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
-              <Input
-                placeholder="Tìm theo tên hoặc email..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
-              />
-            </div>
+            <SearchInput
+              value={search}
+              onChange={handleSearchChange}
+              debounceMs={300}
+              placeholder="Tìm theo tên hoặc email..."
+              containerClassName="flex-1"
+            />
             <Select value={roleFilter} onValueChange={setRoleFilter}>
               <SelectTrigger className="w-full md:w-[180px]">
                 <SelectValue placeholder="Tất cả vai trò" />
@@ -644,6 +670,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
               <UserCard
                 key={user.id}
                 user={user}
+                currentUserId={currentUser?.id}
                 isSelected={rowSelection[String(user.id)] ?? false}
                 onSelect={(checked) => {
                   setRowSelection((prev) => ({
@@ -753,6 +780,11 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
             <AlertDialogTitle>Xoá nhiều người dùng?</AlertDialogTitle>
             <AlertDialogDescription>
               Thao tác này sẽ xoá vĩnh viễn <strong>{selectedCount} người dùng</strong>. Không thể hoàn tác.
+              {currentUser?.id && rowSelection[String(currentUser.id)] && (
+                <span className="block mt-2 text-warning-500 font-medium">
+                  Hệ thống sẽ bỏ qua tài khoản của bạn.
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -777,6 +809,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
 
 interface UserCardProps {
   user: User;
+  currentUserId?: number;
   isSelected: boolean;
   onSelect: (checked: boolean) => void;
   onEdit: () => void;
@@ -785,7 +818,7 @@ interface UserCardProps {
   onManageRoles: () => void;
 }
 
-function UserCard({ user, isSelected, onSelect, onEdit, onDelete, onSetPassword, onManageRoles }: UserCardProps) {
+function UserCard({ user, currentUserId, isSelected, onSelect, onEdit, onDelete, onSetPassword, onManageRoles }: UserCardProps) {
   const roleVariant = user.role === "admin" ? "default" : user.role === "manager" ? "secondary" : "outline";
   const statusVariant = user.status === "active" ? "default" : user.status === "pending" ? "secondary" : "destructive";
 
@@ -856,7 +889,11 @@ function UserCard({ user, isSelected, onSelect, onEdit, onDelete, onSetPassword,
               Quản lý vai trò
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onDelete}>
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={onDelete}
+              disabled={user.id === currentUserId}
+            >
               <Trash2 className="mr-2 h-4 w-4" />
               Xoá người dùng
             </DropdownMenuItem>
