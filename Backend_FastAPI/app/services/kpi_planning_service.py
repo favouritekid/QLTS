@@ -439,7 +439,7 @@ async def preview_plan(
 
 
 # =============================================================================
-# UPDATE PLAN — basic metadata update (spec §5.1, Phase A6 wiring)
+# UPDATE PLAN — mid-year target change (spec §5.1, §10.1 — Phase B6)
 # =============================================================================
 
 async def update_plan(
@@ -451,17 +451,35 @@ async def update_plan(
     seasonal_weights: Optional[List[float]] = None,
 ) -> Tuple[KpiPlan, Callback]:
     """
-    Update plan metadata and regenerate derived KPIs.
+    Update plan metadata with mid-year redistribute support.
 
-    Note: Full mid-year redistribute logic is Phase B6.
-    This A6 implementation updates fields and regenerates all 12 months.
+    If annual_target changes mid-year (spec §10.1):
+      - Past months (with actuals): enrollment_target unchanged
+      - remaining = new_target - sum(actual_enrollments of past months)
+      - Redistribute remaining across current+future months via Largest Remainder
+      - Re-normalize weights for remaining months only
+
+    If only weights/guardrails change:
+      - Regenerate current+future months, keep past months unchanged
+
+    Respects overridden_fields when regenerating derived KPIs.
+    Does NOT commit.
     """
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+    now_local = dt.now(VN_TZ)
+
     changed = False
+    target_changed = False
 
     if annual_target is not None:
         validate_annual_target(annual_target)
-        plan.annual_enrollment_target = annual_target
-        changed = True
+        if annual_target != plan.annual_enrollment_target:
+            plan.annual_enrollment_target = annual_target
+            changed = True
+            target_changed = True
 
     if sla_target is not None:
         if not (0 <= sla_target <= 100):
@@ -485,15 +503,104 @@ async def update_plan(
 
     await db.flush()
 
-    # Regenerate derived KPIs with updated inputs
-    plan, _ = await generate_monthly_kpis(db, plan.id)
+    # Determine current month boundary for mid-year logic
+    if plan.fiscal_year == now_local.year:
+        current_month = now_local.month
+    elif plan.fiscal_year < now_local.year:
+        current_month = 13  # All months are "past"
+    else:
+        current_month = 1  # All months are "future"
 
-    log.info("KPI plan updated", plan_id=plan.id)
-    return plan, None
+    # Load plan months
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+    repo = KpiPlanningRepository(db)
+    refreshed = await repo.get_plan_by_id(plan.id, with_months=True)
+    months_by_num = {m.month: m for m in refreshed.months}
+
+    weights_list: List[float]
+    if plan.seasonal_weights:
+        weights_list = plan.seasonal_weights
+    else:
+        weights_list = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+
+    if target_changed and current_month <= 12:
+        # --- Mid-year target change (spec §10.1) ---
+        # Sum actuals from past months (< current_month)
+        actual_sum = 0
+        for m_num in range(1, current_month):
+            pm = months_by_num.get(m_num)
+            if pm is not None:
+                actual_sum += pm.actual_enrollments or 0
+
+        remaining = plan.annual_enrollment_target - actual_sum
+
+        # Redistribute remaining across current+future months
+        future_indices = list(range(current_month - 1, 12))  # 0-indexed
+        if future_indices:
+            sub_weights = [weights_list[i] for i in future_indices]
+            sub_total = sum(sub_weights)
+            if sub_total > 0:
+                normalized = [w / sub_total for w in sub_weights]
+            else:
+                normalized = [1.0 / len(future_indices)] * len(future_indices)
+
+            future_targets = distribute_by_largest_remainder(
+                max(0, remaining), normalized
+            )
+
+            for idx, month_idx in enumerate(future_indices):
+                pm = months_by_num.get(month_idx + 1)
+                if pm is not None:
+                    pm.enrollment_target = future_targets[idx]
+                    pm.weight = Decimal(str(normalized[idx]))
+
+        log.info(
+            "Mid-year redistribute",
+            plan_id=plan.id, actual_sum=actual_sum,
+            remaining=remaining, future_months=len(future_indices),
+        )
+
+    # Regenerate derived KPIs for current+future months only
+    for month_num in range(max(1, current_month), 13):
+        pm = months_by_num.get(month_num)
+        if pm is None:
+            continue
+
+        overridden = pm.overridden_fields or {}
+
+        # If target didn't change, still update enrollment_target from weights
+        if not target_changed:
+            full_targets = distribute_by_largest_remainder(
+                plan.annual_enrollment_target, weights_list
+            )
+            pm.enrollment_target = full_targets[month_num - 1]
+            pm.weight = Decimal(str(weights_list[month_num - 1]))
+
+        # Working days
+        override_wd = await get_working_days_override(db, pm.id)
+        if override_wd is not None:
+            wd_t = override_wd
+        else:
+            wd_t = await count_working_days(db, plan.fiscal_year, month_num)
+            pm.working_days = wd_t
+
+        # Derived KPIs
+        derived = compute_derived_kpis(
+            pm.enrollment_target, wd_t, float(pm.k_factor),
+            pm.lead_forecast, pm.close_forecast,
+        )
+        for field, value in derived.items():
+            if field not in overridden:
+                setattr(pm, field, value)
+
+    await db.flush()
+
+    log.info("KPI plan updated (B6)", plan_id=plan.id, target_changed=target_changed)
+    return refreshed, None
 
 
 # =============================================================================
-# DEACTIVATE PLAN — soft delete (spec §5.1, Phase A6 wiring)
+# DEACTIVATE PLAN — soft delete + KpiConfig cleanup (spec §10.2 — Phase B7)
 # =============================================================================
 
 async def deactivate_plan(
@@ -501,15 +608,59 @@ async def deactivate_plan(
     plan: KpiPlan,
 ) -> Tuple[KpiPlan, Callback]:
     """
-    Soft-delete: set is_active = FALSE.
+    Soft-delete plan and cleanup future KpiConfig records.
 
-    Note: Full cleanup of future KpiConfig records (using source_plan_id)
-    is Phase B7. This A6 implementation only deactivates the plan.
+    1. Set kpi_plan.is_active = FALSE
+    2. Soft-delete KpiConfig records for current+future months
+       WHERE source_plan_id = plan.id
+       AND effective_year = fiscal_year
+       AND effective_month >= current_month
+    3. Past months (effective_month < current_month) are preserved as historical data
+    4. Evergreen records (effective_month IS NULL) are never touched
+
+    Does NOT commit.
     """
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+    from sqlalchemy import update
+    from app.models.config import KpiConfig
+
+    VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+    now_local = dt.now(VN_TZ)
+
     plan.is_active = False
+
+    # Determine which months to cleanup
+    if plan.fiscal_year == now_local.year:
+        cleanup_from_month = now_local.month
+    elif plan.fiscal_year > now_local.year:
+        cleanup_from_month = 1  # Future year: cleanup all months
+    else:
+        cleanup_from_month = 13  # Past year: nothing to cleanup
+
+    cleanup_count = 0
+    if cleanup_from_month <= 12:
+        result = await db.execute(
+            update(KpiConfig)
+            .where(
+                KpiConfig.source_plan_id == plan.id,
+                KpiConfig.effective_year == plan.fiscal_year,
+                KpiConfig.effective_month >= cleanup_from_month,
+                KpiConfig.effective_month.isnot(None),  # Never touch evergreen
+                KpiConfig.is_active == True,  # noqa: E712
+            )
+            .values(is_active=False)
+        )
+        cleanup_count = result.rowcount
+
     await db.flush()
 
-    log.info("KPI plan deactivated", plan_id=plan.id)
+    log.info(
+        "KPI plan deactivated (B7)",
+        plan_id=plan.id,
+        cleanup_from=cleanup_from_month,
+        kpi_configs_disabled=cleanup_count,
+    )
     return plan, None
 
 
