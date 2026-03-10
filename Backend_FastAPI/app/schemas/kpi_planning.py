@@ -153,3 +153,62 @@ class HolidayStatusResponse(BaseModel):
     has_lunar_holidays: bool
     is_complete: bool
     warning: Optional[str] = None
+
+
+# =============================================================================
+# OVERRIDE / RESET SCHEMAS (Phase B1)
+# =============================================================================
+
+# Allowed derived fields that can be overridden per-month
+OVERRIDABLE_FIELDS = {
+    "consultations_daily",
+    "conversion_rate",
+    "win_rate",
+    "consultation_effectiveness",
+}
+
+
+class MonthOverrideRequest(BaseModel):
+    """Override 1+ derived KPI fields for a single plan month (spec §5.1)."""
+    overrides: dict = Field(
+        ...,
+        description='Map of field name to value, e.g. {"consultations_daily": 16, "win_rate": 40.0}',
+    )
+    reason: str = Field(..., min_length=5, max_length=500, description="Lý do override (>= 5 ký tự)")
+
+
+class MonthResetRequest(BaseModel):
+    """Reset overrides for a plan month (spec §5.1)."""
+    fields: Optional[List[str]] = Field(
+        None,
+        description="Fields to reset. None = reset ALL overrides and recalculate.",
+    )
+
+
+class BatchOverrideRequest(BaseModel):
+    """Override same fields for multiple plan months (spec §7: PUT /months/batch-override)."""
+    month_ids: List[int] = Field(..., min_length=1, max_length=12)
+    overrides: dict = Field(...)
+    reason: str = Field(..., min_length=5, max_length=500)
+
+
+class MonthOverrideResponse(BaseModel):
+    """Response after override/reset — returns updated month."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    month: int
+    consultations_daily: Optional[int] = None
+    conversion_rate: Optional[float] = None
+    win_rate: Optional[float] = None
+    consultation_effectiveness: Optional[float] = None
+    overridden_fields: dict = Field(default_factory=dict)
+    override_reason: Optional[str] = None
+    overridden_by: Optional[int] = None
+    overridden_at: Optional[datetime] = None
+
+
+class BatchOverrideResponse(BaseModel):
+    """Response for batch override."""
+    updated: int
+    months: List[MonthOverrideResponse]

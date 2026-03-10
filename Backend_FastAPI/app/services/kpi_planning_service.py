@@ -738,3 +738,141 @@ async def _find_annual_kpi_target(
         )
     )
     return result.scalar_one_or_none()
+
+
+# =============================================================================
+# OVERRIDE / RESET (spec §5.1 — Phase B1)
+# =============================================================================
+
+# Fields that can be overridden per-month
+OVERRIDABLE_FIELDS = frozenset({
+    "consultations_daily",
+    "conversion_rate",
+    "win_rate",
+    "consultation_effectiveness",
+})
+
+
+async def override_month_kpi(
+    db: AsyncSession,
+    plan_month: KpiPlanMonth,
+    overrides: Dict[str, Any],
+    reason: str,
+    user_id: int,
+) -> Tuple[KpiPlanMonth, Callback]:
+    """
+    Override 1+ derived KPI fields for a specific plan month.
+
+    Merges into overridden_fields (does not clobber existing overrides).
+    Records reason, who, when. Does NOT commit.
+    """
+    from datetime import datetime, timezone
+
+    # Validate field names
+    invalid = set(overrides.keys()) - OVERRIDABLE_FIELDS
+    if invalid:
+        raise BusinessRuleViolation(
+            f"Không thể override field: {invalid}. Chỉ cho phép: {sorted(OVERRIDABLE_FIELDS)}"
+        )
+
+    # Validate values
+    for field, value in overrides.items():
+        if value is None:
+            raise BusinessRuleViolation(f"Override value cho '{field}' không được NULL. Dùng reset thay vì override.")
+        if field == "consultations_daily":
+            if not isinstance(value, int) or value < 0:
+                raise BusinessRuleViolation(f"consultations_daily phải là integer >= 0, nhận {value}")
+        else:
+            # conversion_rate, win_rate, consultation_effectiveness: float 0..100
+            try:
+                fval = float(value)
+            except (TypeError, ValueError):
+                raise BusinessRuleViolation(f"'{field}' phải là số, nhận {value}")
+            if not (0 <= fval <= 100):
+                raise BusinessRuleViolation(f"'{field}' phải trong 0..100, nhận {fval}")
+
+    # Merge overrides
+    existing_overridden = dict(plan_month.overridden_fields or {})
+    for field, value in overrides.items():
+        if field == "consultations_daily":
+            setattr(plan_month, field, value)
+        else:
+            setattr(plan_month, field, Decimal(str(value)))
+        existing_overridden[field] = True
+
+    plan_month.overridden_fields = existing_overridden
+    plan_month.override_reason = reason
+    plan_month.overridden_by = user_id
+    plan_month.overridden_at = datetime.now(timezone.utc)
+
+    await db.flush()
+
+    log.info(
+        "Month KPI overridden",
+        month_id=plan_month.id, fields=list(overrides.keys()),
+        reason=reason, user_id=user_id,
+    )
+    return plan_month, None
+
+
+async def reset_month_override(
+    db: AsyncSession,
+    plan_month: KpiPlanMonth,
+    fields: Optional[List[str]],
+    user_id: int,
+) -> Tuple[KpiPlanMonth, Callback]:
+    """
+    Reset overrides and recalculate derived KPIs.
+
+    fields=None → clear ALL overrides, recalculate all derived fields.
+    fields=["consultations_daily"] → remove only that field, recalculate it.
+    Does NOT commit.
+    """
+    existing_overridden = dict(plan_month.overridden_fields or {})
+
+    if fields is None:
+        # Reset all
+        fields_to_reset = set(existing_overridden.keys())
+        plan_month.overridden_fields = {}
+        plan_month.override_reason = None
+        plan_month.overridden_by = None
+        plan_month.overridden_at = None
+    else:
+        # Validate field names
+        invalid = set(fields) - OVERRIDABLE_FIELDS
+        if invalid:
+            raise BusinessRuleViolation(
+                f"Không thể reset field: {invalid}. Chỉ cho phép: {sorted(OVERRIDABLE_FIELDS)}"
+            )
+        fields_to_reset = set(fields) & set(existing_overridden.keys())
+        for f in fields_to_reset:
+            existing_overridden.pop(f, None)
+        plan_month.overridden_fields = existing_overridden
+        # Keep reason/by/at if still has other overrides, clear if empty
+        if not existing_overridden:
+            plan_month.override_reason = None
+            plan_month.overridden_by = None
+            plan_month.overridden_at = None
+
+    # Recalculate only the reset fields
+    if fields_to_reset:
+        m_t = plan_month.enrollment_target
+        wd_t = plan_month.working_days
+        k_t = float(plan_month.k_factor)
+        l_t = plan_month.lead_forecast
+        c_t = plan_month.close_forecast
+
+        derived = compute_derived_kpis(m_t, wd_t, k_t, l_t, c_t)
+        for field in fields_to_reset:
+            if field in derived:
+                setattr(plan_month, field, derived[field])
+
+    await db.flush()
+
+    log.info(
+        "Month override reset",
+        month_id=plan_month.id,
+        reset_fields=list(fields_to_reset) if fields_to_reset else "all",
+        user_id=user_id,
+    )
+    return plan_month, None

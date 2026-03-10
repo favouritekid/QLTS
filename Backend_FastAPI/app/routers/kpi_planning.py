@@ -22,6 +22,8 @@ from app.models import User
 from app.models.config import KpiPlan, KpiPlanMonth
 from app.repositories.kpi_planning_repository import KpiPlanningRepository
 from app.schemas.kpi_planning import (
+    BatchOverrideRequest,
+    BatchOverrideResponse,
     HolidayStatusResponse,
     KpiPlanCreate,
     KpiPlanListResponse,
@@ -29,6 +31,9 @@ from app.schemas.kpi_planning import (
     KpiPlanPreviewResponse,
     KpiPlanResponse,
     KpiPlanUpdate,
+    MonthOverrideRequest,
+    MonthOverrideResponse,
+    MonthResetRequest,
 )
 from app.services import kpi_planning_service
 from app.services.calendar_service import get_holiday_status
@@ -279,3 +284,103 @@ async def holiday_status(
     a banner when holidays need to be configured for the next year.
     """
     return await get_holiday_status(db, year)
+
+
+# =============================================================================
+# MONTHLY OVERRIDE (Phase B1)
+# =============================================================================
+
+@router.put(
+    "/months/{month_id}/override",
+    response_model=MonthOverrideResponse,
+    summary="Override derived KPI fields for a plan month",
+)
+async def override_month(
+    data: MonthOverrideRequest,
+    month: Annotated[KpiPlanMonth, Depends(deps.get_kpi_plan_month_for_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminOrManagerDep],
+):
+    """
+    Override 1+ derived KPI fields for a specific plan month.
+
+    Merges into overridden_fields — existing overrides on other fields are kept.
+    Requires reason (>= 5 chars). IDOR enforced by dependency.
+    """
+    result, callback = await kpi_planning_service.override_month_kpi(
+        db, plan_month=month, overrides=data.overrides,
+        reason=data.reason, user_id=current_user.id,
+    )
+    await db.commit()
+    await db.refresh(result)
+    if callback:
+        await callback()
+    return result
+
+
+@router.post(
+    "/months/{month_id}/reset",
+    response_model=MonthOverrideResponse,
+    summary="Reset override for a plan month",
+)
+async def reset_month(
+    data: MonthResetRequest,
+    month: Annotated[KpiPlanMonth, Depends(deps.get_kpi_plan_month_for_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminOrManagerDep],
+):
+    """
+    Reset overrides and recalculate derived KPIs.
+
+    fields=null → reset ALL overrides, recalculate everything.
+    fields=["consultations_daily"] → reset only that field.
+    IDOR enforced by dependency.
+    """
+    result, callback = await kpi_planning_service.reset_month_override(
+        db, plan_month=month, fields=data.fields, user_id=current_user.id,
+    )
+    await db.commit()
+    await db.refresh(result)
+    if callback:
+        await callback()
+    return result
+
+
+@router.put(
+    "/months/batch-override",
+    response_model=BatchOverrideResponse,
+    summary="Override same fields for multiple plan months",
+)
+async def batch_override_months(
+    data: BatchOverrideRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """
+    Apply the same overrides to multiple plan months (e.g. T6-T9).
+
+    Admin only. Each month_id is validated via IDOR (404 if not found or
+    plan inactive). Atomic — all succeed or none.
+    """
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+
+    repo = KpiPlanningRepository(db)
+    updated_months = []
+
+    for month_id in data.month_ids:
+        pm = await repo.get_month_with_plan(month_id)
+        if pm is None or not pm.plan.is_active:
+            from app.utils.exceptions import ResourceNotFoundError
+            raise ResourceNotFoundError(detail=f"KPI Plan Month {month_id} not found")
+
+        result, _ = await kpi_planning_service.override_month_kpi(
+            db, plan_month=pm, overrides=data.overrides,
+            reason=data.reason, user_id=current_user.id,
+        )
+        updated_months.append(result)
+
+    await db.commit()
+    for m in updated_months:
+        await db.refresh(m)
+
+    return BatchOverrideResponse(updated=len(updated_months), months=updated_months)
