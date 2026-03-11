@@ -130,13 +130,6 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     setRowSelection({});
   }, [page, search, roleFilter, statusFilter]);
 
-  // F5: Auto-navigate về trang trước khi xóa user cuối cùng ở trang N
-  useEffect(() => {
-    if (!isLoading && data && data.users.length === 0 && page > 1) {
-      setPage((p) => p - 1);
-    }
-  }, [data, isLoading, page]);
-
   // FIX 2: Debounced search handler
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
@@ -162,6 +155,13 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           : undefined,
     }
   );
+
+  // F5: Auto-navigate về trang trước khi xóa user cuối cùng ở trang N
+  useEffect(() => {
+    if (!isLoading && data && data.users.length === 0 && page > 1) {
+      setPage((p) => p - 1);
+    }
+  }, [data, isLoading, page]);
 
   const deleteUserMutation = useAdminDeleteUser();
   const bulkActionMutation = useAdminBulkAction();
