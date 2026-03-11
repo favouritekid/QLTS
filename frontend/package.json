@@ -24,8 +24,8 @@
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:mobile": "playwright test --project=Mobile_Chrome --project=Mobile_Safari",
     "test:e2e:mobile:headed": "playwright test --project=Mobile_Chrome --headed",
-    "test:e2e:workflow": "playwright test --project=e2e-workflow --reporter=list",
-    "test:e2e:workflow:headed": "playwright test --project=e2e-workflow --headed --reporter=list"
+    "test:e2e:workflow": "playwright test --project=e2e-workflow --workers=1 --reporter=list",
+    "test:e2e:workflow:headed": "playwright test --project=e2e-workflow --workers=1 --headed --reporter=list"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

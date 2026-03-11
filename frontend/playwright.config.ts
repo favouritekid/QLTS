@@ -115,6 +115,8 @@ export default defineConfig({
     },
 
     // E2E workflow — all API-level workflow tests, login inline with MFA
+    // IMPORTANT: run with --workers=1 (npm run test:e2e:workflow) to prevent concurrent admin
+    // logins from hitting rate-limiting. Serial per-file is enforced via test.describe.configure.
     {
       name: 'e2e-workflow',
       testMatch: /(lifecycle|workflow|bulk)\.spec\.ts/,
