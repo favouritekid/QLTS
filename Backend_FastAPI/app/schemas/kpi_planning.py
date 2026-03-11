@@ -41,6 +41,11 @@ class KpiPlanUpdate(BaseModel):
     )
 
 
+class KpiPlanCloneRequest(BaseModel):
+    """Clone a plan to a new fiscal year."""
+    fiscal_year: int = Field(..., ge=2020, le=2100)
+
+
 class KpiPlanPreview(BaseModel):
     """Preview KPI plan dry-run (spec §7: POST /plans/preview). No persist."""
     unit_id: int
@@ -144,6 +149,7 @@ class KpiPlanPreviewResponse(BaseModel):
     sla_target: float
     response_time_target: float
     months: List[KpiPlanPreviewMonth]
+    holiday_warning: Optional[str] = None
 
 
 class HolidayStatusResponse(BaseModel):

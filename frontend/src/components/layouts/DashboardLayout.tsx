@@ -7,9 +7,51 @@ import { AppSidebar } from "./dashboard/AppSidebar";
 import { Header } from "./dashboard/Header";
 import { Main } from "./dashboard/Main";
 import { MobileBottomNav } from "./dashboard/MobileBottomNav";
-import { CommandPalette } from "@/components/common/CommandPalette";
 import { SecurityBanner, useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "./SecurityBanner";
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
+import dynamic from "next/dynamic";
+
+const CommandPalette = dynamic(
+  () => import("@/components/common/CommandPalette").then(m => ({ default: m.CommandPalette })),
+  { ssr: false }
+);
+
+function SidebarSkeleton() {
+  return (
+    <div className="hidden lg:flex fixed inset-y-0 left-0 z-50 w-[var(--sidebar-width-collapsed)] flex-col border-r bg-background">
+      <div className="flex h-14 items-center justify-center">
+        <div className="h-8 w-8 animate-pulse rounded-md bg-primary/10" />
+      </div>
+      <div className="flex-1 space-y-2 p-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-10 w-full animate-pulse rounded-md bg-primary/10" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HeaderSkeleton() {
+  return (
+    <div className="fixed top-0 right-0 left-0 z-40 flex h-14 items-center justify-between border-b bg-background px-4 lg:left-[var(--sidebar-width-collapsed)]">
+      <div className="h-8 w-8 animate-pulse rounded-md bg-primary/10" />
+      <div className="flex items-center gap-2">
+        <div className="h-8 w-8 animate-pulse rounded-full bg-primary/10" />
+        <div className="h-8 w-8 animate-pulse rounded-full bg-primary/10" />
+      </div>
+    </div>
+  );
+}
+
+function MobileBottomNavSkeleton() {
+  return (
+    <div className="fixed bottom-0 left-0 right-0 z-50 flex h-16 items-center justify-around border-t bg-background lg:hidden">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="h-8 w-8 animate-pulse rounded-md bg-primary/10" />
+      ))}
+    </div>
+  );
+}
 
 export function DashboardLayout({
   children,
@@ -48,7 +90,9 @@ export function DashboardLayout({
 
       <div className="bg-muted/40 relative flex min-h-screen w-full overflow-hidden">
         {/* Sidebar */}
-        <AppSidebar />
+        <Suspense fallback={<SidebarSkeleton />}>
+          <AppSidebar />
+        </Suspense>
 
         {/* Mobile Overlay */}
         {!isSidebarCollapsed && (
@@ -72,7 +116,9 @@ export function DashboardLayout({
           <SecurityBanner />
 
           {/* Header */}
-          <Header />
+          <Suspense fallback={<HeaderSkeleton />}>
+            <Header />
+          </Suspense>
 
           {/* Main Content - Dynamic padding top based on header + banner */}
           {/* Added pb-20 on mobile for MobileBottomNav (64px height + safe area) */}
@@ -86,7 +132,9 @@ export function DashboardLayout({
       </div>
 
       {/* Mobile Bottom Navigation - Only visible on mobile (< lg) */}
-      <MobileBottomNav />
+      <Suspense fallback={<MobileBottomNavSkeleton />}>
+        <MobileBottomNav />
+      </Suspense>
     </>
   );
 }

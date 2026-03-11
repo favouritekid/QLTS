@@ -853,13 +853,17 @@ async def get_enhanced_dashboard_stats(
     d3_end = d3_start + timedelta(days=1)
     rollback_d3 = await repo.get_rollback_rate_d3(officer_id, d3_start, d3_end)
 
+    # P1: Get target with source info (is_unit_target flag)
+    target_info = await kpi_service.get_kpi_target_source_info(
+        db, "consultations_daily", officer_id, user.unit_id, "daily"
+    )
+
     # Build enhanced response
     return {
         "kpis": {
             "consultations_today": consultations_today,
-            "consultations_target": await kpi_service.get_kpi_target(
-                db, "consultations_daily", officer_id, user.unit_id, "daily"
-            ),
+            "consultations_target": target_info["value"],
+            "is_unit_target": target_info["is_unit_target"],
             "consultations_trend": consultations_trend,
             "active_leads": active_leads,
             "active_leads_in_period": active_leads_in_period,

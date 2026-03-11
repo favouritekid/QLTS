@@ -138,6 +138,7 @@ class KPIStats(BaseModel):
     # Today's consultations
     consultations_today: int
     consultations_target: int = 10  # Default daily target
+    is_unit_target: bool = False  # P1: True when target comes from unit plan (not officer-specific)
     consultations_trend: TrendInfo
     
     # Active leads (non-final status)

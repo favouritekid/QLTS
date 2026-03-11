@@ -79,9 +79,10 @@ class KpiConfigResponse(KpiConfigBase):
     """KPI configuration response."""
     id: int
     is_active: bool
+    source_plan_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
-    
+
     class Config:
         from_attributes = True
 

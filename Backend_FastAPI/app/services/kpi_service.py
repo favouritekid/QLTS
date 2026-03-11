@@ -99,6 +99,62 @@ async def get_kpi_target(
     return float(target)
 
 
+async def get_kpi_target_source_info(
+    db: AsyncSession,
+    kpi_code: str,
+    officer_id: Optional[int] = None,
+    unit_id: Optional[int] = None,
+    period_type: str = "daily",
+) -> Dict[str, Any]:
+    """
+    Get KPI target value with inheritance + source information.
+
+    Returns: {"value": float, "is_unit_target": bool}
+      - is_unit_target=True when the resolved KpiConfig has source_plan_id
+        pointing to a plan with officer_id IS NULL (unit plan).
+    """
+    from ..repositories import KpiRepository
+
+    repo = KpiRepository(db)
+    default = DEFAULT_KPIS.get(kpi_code, 0)
+
+    # Get current month for temporal resolution
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+    now = dt.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+
+    target = await repo.get_kpi_target_with_inheritance(
+        kpi_code=kpi_code,
+        officer_id=officer_id,
+        unit_id=unit_id,
+        period_type=period_type,
+        default=default,
+        effective_year=now.year,
+        effective_month=now.month,
+    )
+
+    # Check if resolved config comes from a unit plan (officer_id IS NULL)
+    is_unit_target = False
+    config = await repo.get_resolved_kpi_config(
+        kpi_code=kpi_code,
+        officer_id=officer_id,
+        unit_id=unit_id,
+        period_type=period_type,
+        effective_year=now.year,
+        effective_month=now.month,
+    )
+    if config is not None and config.source_plan_id is not None:
+        from sqlalchemy import select
+        from ..models.config import KpiPlan
+        plan_officer = (await db.execute(
+            select(KpiPlan.officer_id).where(KpiPlan.id == config.source_plan_id)
+        )).scalar_one_or_none()
+        if plan_officer is None:
+            is_unit_target = True
+
+    return {"value": float(target), "is_unit_target": is_unit_target}
+
+
 async def get_all_kpi_targets(
     db: AsyncSession,
     officer_id: Optional[int] = None,

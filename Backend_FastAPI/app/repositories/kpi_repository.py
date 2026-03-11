@@ -199,6 +199,73 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         )
         return result.scalar_one_or_none()
     
+    async def get_resolved_kpi_config(
+        self,
+        kpi_code: str,
+        officer_id: Optional[int] = None,
+        unit_id: Optional[int] = None,
+        period_type: str = "daily",
+        effective_year: Optional[int] = None,
+        effective_month: Optional[int] = None,
+    ) -> Optional[models.KpiConfig]:
+        """
+        Resolve the full KpiConfig record (not just target_value) using the
+        same inheritance chain as get_kpi_target_with_inheritance.
+
+        Returns the winning KpiConfig object, or None if only default applies.
+        Used by P1 to check source_plan_id for is_unit_target.
+        """
+        # 1. Try monthly records first
+        if effective_year is not None and effective_month is not None:
+            for scope_filters in self._inheritance_scopes(kpi_code, period_type, officer_id, unit_id):
+                result = await self.db.execute(
+                    select(models.KpiConfig).where(
+                        *scope_filters,
+                        models.KpiConfig.effective_year == effective_year,
+                        models.KpiConfig.effective_month == effective_month,
+                        models.KpiConfig.is_active == True,  # noqa: E712
+                    )
+                )
+                config = result.scalar_one_or_none()
+                if config is not None:
+                    return config
+
+        # 2. Evergreen fallback
+        for scope_filters in self._inheritance_scopes(kpi_code, period_type, officer_id, unit_id):
+            result = await self.db.execute(
+                select(models.KpiConfig).where(
+                    *scope_filters,
+                    models.KpiConfig.effective_month.is_(None),
+                    models.KpiConfig.is_active == True,  # noqa: E712
+                )
+            )
+            config = result.scalar_one_or_none()
+            if config is not None:
+                return config
+
+        return None
+
+    def _inheritance_scopes(self, kpi_code, period_type, officer_id, unit_id):
+        """Yield filter tuples for officer → unit → global inheritance chain."""
+        base = [
+            models.KpiConfig.kpi_code == kpi_code,
+            models.KpiConfig.period_type == period_type,
+        ]
+        if officer_id:
+            filters = base + [models.KpiConfig.officer_id == officer_id]
+            if unit_id is not None:
+                filters.append(models.KpiConfig.unit_id == unit_id)
+            yield filters
+        if unit_id:
+            yield base + [
+                models.KpiConfig.unit_id == unit_id,
+                models.KpiConfig.officer_id.is_(None),
+            ]
+        yield base + [
+            models.KpiConfig.unit_id.is_(None),
+            models.KpiConfig.officer_id.is_(None),
+        ]
+
     async def get_all_active_configs(
         self,
         officer_id: Optional[int] = None,

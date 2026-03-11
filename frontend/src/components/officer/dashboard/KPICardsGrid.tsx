@@ -39,6 +39,7 @@ interface TrendInfo {
 interface KPIStats {
   consultations_today: number;
   consultations_target: number;
+  is_unit_target?: boolean;
   consultations_trend: TrendInfo;
   active_leads: number;
   active_leads_trend: TrendInfo;
@@ -217,15 +218,22 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
       <div className="space-y-3">
         {/* Tier 1: Primary KPI Cards (compact) */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <KPICard
-            title={consultationsTitle}
-            value={consultationsValue}
-            subtitle={consultationsSubtitle}
-            tooltip={TOOLTIPS.consultations}
-            trend={kpis.consultations_trend}
-            icon={Phone}
-            onClick={goToLeads}
-          />
+          <div className="relative">
+            <KPICard
+              title={consultationsTitle}
+              value={consultationsValue}
+              subtitle={consultationsSubtitle}
+              tooltip={TOOLTIPS.consultations}
+              trend={kpis.consultations_trend}
+              icon={Phone}
+              onClick={goToLeads}
+            />
+            {kpis.is_unit_target && (
+              <span className="absolute bottom-1.5 left-3 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                Chỉ tiêu tập thể phòng
+              </span>
+            )}
+          </div>
 
           <KPICard
             title="Leads đang xử lý"

@@ -134,6 +134,13 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- KPI Plan Daily Actuals Sync (P4) ---
+    "sync-kpi-plan-actuals-daily": {
+        "task": "sync_kpi_plan_actuals_daily_task",
+        "schedule": crontab(hour=3, minute=15),  # 03:15 AM daily
+        "options": {"queue": "default"},
+    },
+
     # --- Session Maintenance (M1: Idle Session Timeout) ---
     "cleanup-idle-sessions-daily": {
         "task": "cleanup_idle_sessions_task",

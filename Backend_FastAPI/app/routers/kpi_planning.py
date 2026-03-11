@@ -30,6 +30,7 @@ from app.schemas.kpi_planning import (
     HolidaySeedResponse,
     HolidayStatusResponse,
     HolidayUpdate,
+    KpiPlanCloneRequest,
     KpiPlanCreate,
     KpiPlanListResponse,
     KpiPlanPreview,
@@ -206,6 +207,42 @@ async def delete_plan(
     await db.commit()
     if callback:
         await callback()
+
+
+# =============================================================================
+# CLONE PLAN (P5)
+# =============================================================================
+
+@router.post(
+    "/plans/{plan_id}/clone",
+    response_model=KpiPlanResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Clone KPI plan to a new fiscal year",
+)
+async def clone_plan(
+    data: KpiPlanCloneRequest,
+    plan: Annotated[KpiPlan, Depends(deps.get_kpi_plan_for_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """
+    Clone an existing KPI plan into a new fiscal year.
+
+    Copies targets, weights, and guardrails. Generates 12 new months
+    with recalculated working days for the target year.
+    Admin only. IDOR enforced by dependency.
+    """
+    new_plan, callback = await kpi_planning_service.clone_plan(
+        db,
+        source_plan=plan,
+        target_fiscal_year=data.fiscal_year,
+        created_by=current_user.id,
+    )
+    await db.commit()
+    await db.refresh(new_plan)
+    if callback:
+        await callback()
+    return new_plan
 
 
 # =============================================================================

@@ -66,6 +66,10 @@ export interface KpiPlanUpdate {
   seasonal_weights?: number[];
 }
 
+export interface KpiPlanCloneRequest {
+  fiscal_year: number;
+}
+
 export interface KpiPlanPreviewRequest {
   unit_id: number;
   fiscal_year: number;
@@ -94,6 +98,7 @@ export interface KpiPlanPreviewResponse {
   sla_target: number;
   response_time_target: number;
   months: PreviewMonth[];
+  holiday_warning?: string | null;
 }
 
 export interface MonthOverrideRequest {

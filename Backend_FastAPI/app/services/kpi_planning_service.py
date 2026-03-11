@@ -227,6 +227,15 @@ async def create_plan(
                 f"Officer {officer_id} thuộc unit {officer}, không thuộc unit {unit_id}"
             )
 
+    # --- P2: Hard-block if holiday calendar is incomplete ---
+    from app.services.calendar_service import get_holiday_status
+    holiday_status = await get_holiday_status(db, fiscal_year)
+    if not holiday_status["is_complete"]:
+        raise BusinessRuleViolation(
+            holiday_status.get("warning")
+            or f"Lịch lễ năm {fiscal_year} chưa đầy đủ. Vui lòng cấu hình ngày lễ trước khi tạo kế hoạch."
+        )
+
     # --- Check duplicate active plan (scope-aware, via repository) ---
     from app.repositories.kpi_planning_repository import KpiPlanningRepository
     repo = KpiPlanningRepository(db)
@@ -444,11 +453,17 @@ async def preview_plan(
             **derived,
         })
 
+    # P2: Check holiday status for warning (non-blocking in preview)
+    from app.services.calendar_service import get_holiday_status
+    holiday_status = await get_holiday_status(db, fiscal_year)
+    holiday_warning = holiday_status.get("warning") if not holiday_status["is_complete"] else None
+
     return {
         "annual_enrollment_target": annual_target,
         "sla_target": sla_target,
         "response_time_target": response_time_target,
         "months": months_preview,
+        "holiday_warning": holiday_warning,
     }
 
 
@@ -515,6 +530,16 @@ async def update_plan(
     if not changed:
         return plan, None
 
+    # P2: Hard-block if holiday calendar is incomplete (when target/weights change)
+    if target_changed or seasonal_weights is not None:
+        from app.services.calendar_service import get_holiday_status
+        holiday_status = await get_holiday_status(db, plan.fiscal_year)
+        if not holiday_status["is_complete"]:
+            raise BusinessRuleViolation(
+                holiday_status.get("warning")
+                or f"Lịch lễ năm {plan.fiscal_year} chưa đầy đủ."
+            )
+
     await db.flush()
 
     # Determine current month boundary for mid-year logic
@@ -545,6 +570,13 @@ async def update_plan(
             pm = months_by_num.get(m_num)
             if pm is not None:
                 actual_sum += pm.actual_enrollments or 0
+
+        # P3: Hard-block — cannot reduce target below already achieved actuals
+        if plan.annual_enrollment_target < actual_sum:
+            raise BusinessRuleViolation(
+                f"Không thể giảm chỉ tiêu xuống thấp hơn tổng thực đạt ({actual_sum}) "
+                f"của các tháng đã qua."
+            )
 
         remaining = plan.annual_enrollment_target - actual_sum
 
@@ -676,6 +708,81 @@ async def deactivate_plan(
         kpi_configs_disabled=cleanup_count,
     )
     return plan, None
+
+
+# =============================================================================
+# CLONE PLAN (P5)
+# =============================================================================
+
+async def clone_plan(
+    db: AsyncSession,
+    source_plan: KpiPlan,
+    target_fiscal_year: int,
+    created_by: int,
+) -> Tuple[KpiPlan, Callback]:
+    """
+    Clone an existing plan to a new fiscal year.
+
+    Copies: unit_id, officer_id, annual_enrollment_target, sla_target,
+    response_time_target, seasonal_weights.
+    Generates 12 new months (recalculated working days for target year).
+    Validates: no duplicate plan, holiday calendar complete.
+    Does NOT commit.
+    """
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+    from app.services.calendar_service import get_holiday_status
+
+    # Validate holiday calendar for target year
+    holiday_status = await get_holiday_status(db, target_fiscal_year)
+    if not holiday_status["is_complete"]:
+        raise BusinessRuleViolation(
+            holiday_status.get("warning")
+            or f"Lịch lễ năm {target_fiscal_year} chưa đầy đủ. Vui lòng cấu hình ngày lễ trước khi clone."
+        )
+
+    # Check duplicate
+    repo = KpiPlanningRepository(db)
+    if await repo.check_duplicate_active_plan(
+        source_plan.unit_id, target_fiscal_year, source_plan.officer_id,
+    ):
+        scope_label = (
+            f"officer plan (unit_id={source_plan.unit_id}, officer_id={source_plan.officer_id})"
+            if source_plan.officer_id else f"unit plan (unit_id={source_plan.unit_id})"
+        )
+        raise DuplicateResourceError(
+            f"Active {scope_label} already exists for fiscal_year={target_fiscal_year}"
+        )
+
+    # Resolve weights
+    if source_plan.seasonal_weights:
+        weights_list = source_plan.seasonal_weights
+        weights_json = source_plan.seasonal_weights
+    else:
+        weights_list = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+        weights_json = None
+
+    new_plan = KpiPlan(
+        unit_id=source_plan.unit_id,
+        officer_id=source_plan.officer_id,
+        fiscal_year=target_fiscal_year,
+        annual_enrollment_target=source_plan.annual_enrollment_target,
+        sla_target=source_plan.sla_target,
+        response_time_target=source_plan.response_time_target,
+        seasonal_weights=weights_json,
+        is_active=True,
+        created_by=created_by,
+    )
+    db.add(new_plan)
+    await db.flush()
+
+    await _generate_months_for_plan(db, new_plan, weights_list)
+
+    log.info(
+        "KPI plan cloned",
+        source_plan_id=source_plan.id, new_plan_id=new_plan.id,
+        target_year=target_fiscal_year,
+    )
+    return new_plan, None
 
 
 # =============================================================================
@@ -1199,6 +1306,7 @@ async def fill_month_actuals(
     db: AsyncSession,
     plan_id: int,
     month: int,
+    allow_current_month: bool = False,
 ) -> Tuple[KpiPlan, Callback]:
     """
     Fill actual performance fields for a completed month.
@@ -1232,11 +1340,13 @@ async def fill_month_actuals(
         raise ResourceNotFoundError("KpiPlan", plan_id)
 
     # Guard: only fill completed months (not current or future)
+    # P4: allow_current_month=True lets the daily sync task fill the current month
     now_local = dt.now(VN_TZ)
     if plan.fiscal_year == now_local.year and month >= now_local.month:
-        raise BusinessRuleViolation(
-            f"Chỉ fill actuals cho tháng đã kết thúc. Tháng {month}/{plan.fiscal_year} chưa kết thúc."
-        )
+        if not (allow_current_month and month == now_local.month):
+            raise BusinessRuleViolation(
+                f"Chỉ fill actuals cho tháng đã kết thúc. Tháng {month}/{plan.fiscal_year} chưa kết thúc."
+            )
     if plan.fiscal_year > now_local.year:
         raise BusinessRuleViolation(
             f"Chỉ fill actuals cho tháng đã kết thúc. Năm {plan.fiscal_year} chưa bắt đầu."

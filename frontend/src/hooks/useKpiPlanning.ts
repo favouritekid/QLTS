@@ -15,6 +15,7 @@ import type {
   HolidayStatus,
   HolidayUpdate,
   KpiPlan,
+  KpiPlanCloneRequest,
   KpiPlanCreate,
   KpiPlanListResponse,
   KpiPlanMonth,
@@ -134,6 +135,30 @@ export function useDeletePlan() {
     },
     onError: (err) => {
       toast.error(err.response?.data?.detail || "Lỗi xóa plan");
+    },
+  });
+}
+
+export function useClonePlan() {
+  const qc = useQueryClient();
+  return useMutation<
+    KpiPlan,
+    AxiosError<ApiError>,
+    { planId: number; data: KpiPlanCloneRequest }
+  >({
+    mutationFn: async ({ planId, data }) => {
+      const res = await api.post<KpiPlan>(
+        `${BASE}/plans/${planId}/clone`,
+        data,
+      );
+      return res.data;
+    },
+    onSuccess: (data) => {
+      toast.success(`Đã clone KPI Plan sang năm ${data.fiscal_year}`);
+      qc.invalidateQueries({ queryKey: kpiPlanningKeys.plans() });
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || "Lỗi clone KPI Plan");
     },
   });
 }

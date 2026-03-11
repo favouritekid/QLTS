@@ -354,6 +354,94 @@ def sync_kpi_plan_monthly_task(self):
 
 
 # ============================================================================
+# KPI Plan Daily Actuals Sync (P4 — 03:15 AM daily)
+# ============================================================================
+@celery_app.task(
+    name="sync_kpi_plan_actuals_daily_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=300,
+)
+def sync_kpi_plan_actuals_daily_task(self):
+    """
+    Celery Beat daily task — sync current month actuals for all active plans.
+
+    Runs at 03:15 AM daily. For each active KpiPlan (current fiscal year):
+      - Calls fill_month_actuals(plan_id, current_month, allow_current_month=True)
+      - Commit-per-plan isolation (1 failure doesn't block others)
+    """
+    task_name = "sync_kpi_plan_actuals_daily_task"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Starting daily KPI plan actuals sync...")
+
+    async def _run_daily_sync() -> dict:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from ..models.config import KpiPlan
+        from ..services import kpi_planning_service
+
+        from zoneinfo import ZoneInfo
+        VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+        now_local = datetime.now(VN_TZ)
+        fiscal_year = now_local.year
+        current_month = now_local.month
+
+        result = {"plans": 0, "synced": 0, "errors": 0}
+
+        # Discover active plans for current fiscal year
+        async with task_db_session() as session:
+            plans_result = await session.execute(
+                select(KpiPlan)
+                .where(
+                    KpiPlan.is_active == True,  # noqa: E712
+                    KpiPlan.fiscal_year == fiscal_year,
+                )
+            )
+            all_plans = list(plans_result.scalars().all())
+
+        result["plans"] = len(all_plans)
+
+        if result["plans"] == 0:
+            task_log.info("No active plans found for year %d", fiscal_year)
+            return result
+
+        task_log.info(
+            "Syncing actuals for %d plans (year=%d, month=%d)",
+            len(all_plans), fiscal_year, current_month,
+        )
+
+        for plan in all_plans:
+            try:
+                async with task_db_session() as session:
+                    await kpi_planning_service.fill_month_actuals(
+                        session, plan.id, current_month,
+                        allow_current_month=True,
+                    )
+                    await session.commit()
+                    result["synced"] += 1
+                    task_log.info("Plan %d: actuals synced for month %d", plan.id, current_month)
+            except Exception as e:
+                result["errors"] += 1
+                task_log.warning("Plan %d: actuals sync failed for month %d: %s", plan.id, current_month, e)
+
+        return result
+
+    result = run_async_task(
+        async_func=_run_daily_sync,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["plans", "synced", "errors"],
+    )
+
+    task_log.info(
+        "Daily actuals sync completed: plans=%d, synced=%d, errors=%d",
+        result["plans"], result["synced"], result["errors"],
+    )
+    return result
+
+
+# ============================================================================
 # Holiday Calendar Yearly Check (spec §7 — Nov 1st, Phase A9)
 # ============================================================================
 @celery_app.task(

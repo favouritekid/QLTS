@@ -5,7 +5,8 @@
  * Phase 5: Allows admins to configure KPI targets for officers and units.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -90,6 +91,7 @@ interface KpiConfig {
   period_type: string;
   unit_id: number | null;
   officer_id: number | null;
+  source_plan_id: number | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -252,6 +254,12 @@ export default function KpiConfigPage() {
     queryKey: ["kpi-configs", showInactive],
     queryFn: () => fetchKpiConfigs(!showInactive),
   });
+
+  // P6: Check if any configs come from KPI Planning
+  const hasPlanningConfigs = useMemo(
+    () => configs?.some((c) => c.source_plan_id != null) ?? false,
+    [configs],
+  );
 
   const { data: targets, isLoading: loadingTargets } = useQuery({
     queryKey: ["kpi-targets", showInactiveTargets],
@@ -500,6 +508,19 @@ export default function KpiConfigPage() {
         </AlertDescription>
       </Alert>
 
+      {hasPlanningConfigs && (
+        <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20">
+          <Info className="h-4 w-4" />
+          <AlertTitle>KPI Planning đang quản lý một số mục tiêu</AlertTitle>
+          <AlertDescription>
+            Các mục tiêu có nhãn &quot;Planning&quot; được quản lý tự động qua module KPI Planning
+            và không thể chỉnh sửa ở đây.{" "}
+            <Link href="/admin/kpi-planning" className="font-medium underline hover:text-amber-900 dark:hover:text-amber-200">
+              Quản lý tại KPI Planning →
+            </Link>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Daily/Monthly Configs */}
       <Card>
@@ -579,7 +600,11 @@ export default function KpiConfigPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        {showInactive ? (
+                        {config.source_plan_id != null ? (
+                          <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-400">
+                            Planning
+                          </Badge>
+                        ) : showInactive ? (
                           <Button
                             variant="ghost"
                             size="icon"

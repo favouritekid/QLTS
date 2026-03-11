@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Pencil, RefreshCw, RotateCcw } from "lucide-react";
+import { ArrowLeft, Copy, Pencil, RefreshCw, RotateCcw } from "lucide-react";
 
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
@@ -25,6 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 
 import {
   useBatchOverride,
+  useClonePlan,
   useKpiPlan,
   useOverrideMonth,
   useOverrideWorkingDays,
@@ -60,6 +61,7 @@ export default function PlanDetailPage() {
   const { data: plan, isLoading, error } = useKpiPlan(planId);
   const updateMut = useUpdatePlan(planId);
   const regenerateMut = useRegeneratePlan(planId);
+  const cloneMut = useClonePlan();
   const overrideMut = useOverrideMonth(planId);
   const resetMut = useResetMonthOverride(planId);
   const wdMut = useOverrideWorkingDays(planId);
@@ -81,6 +83,10 @@ export default function PlanDetailPage() {
   const [updateTarget, setUpdateTarget] = useState<number | undefined>();
   const [updateSla, setUpdateSla] = useState<number | undefined>();
   const [updateResponseTime, setUpdateResponseTime] = useState<number | undefined>();
+
+  // Clone dialog
+  const [showClone, setShowClone] = useState(false);
+  const [cloneYear, setCloneYear] = useState<number | undefined>();
 
   // Batch override
   const [batchSelected, setBatchSelected] = useState<Set<number>>(new Set());
@@ -181,6 +187,9 @@ export default function PlanDetailPage() {
         </Button>
         <Button variant="outline" size="sm" onClick={() => regenerateMut.mutate()} disabled={regenerateMut.isPending}>
           <RefreshCw className="mr-1 h-4 w-4" />Tính lại KPI
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => { setCloneYear(plan.fiscal_year + 1); setShowClone(true); }}>
+          <Copy className="mr-1 h-4 w-4" />Clone sang năm mới
         </Button>
         {batchSelected.size > 0 && (
           <Button size="sm" onClick={() => setShowBatch(true)}>
@@ -355,6 +364,37 @@ export default function PlanDetailPage() {
           <DialogFooter>
             <Button onClick={async () => { await updateMut.mutateAsync({ annual_enrollment_target: updateTarget, sla_target: updateSla, response_time_target: updateResponseTime }); setShowUpdate(false); }} disabled={updateMut.isPending}>
               {updateMut.isPending ? "Đang lưu…" : "Cập nhật"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clone Plan Dialog (P5) */}
+      <Dialog open={showClone} onOpenChange={setShowClone}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clone KPI Plan sang năm mới</DialogTitle>
+            <DialogDescription>
+              Tạo bản sao plan này cho năm tài chính khác. Chỉ tiêu, trọng số và guardrails sẽ được sao chép.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium">Năm tài chính đích</label>
+              <Input type="number" min={2020} max={2100} value={cloneYear ?? ""} onChange={(e) => setCloneYear(Number(e.target.value))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={async () => {
+                if (!cloneYear) return;
+                const newPlan = await cloneMut.mutateAsync({ planId, data: { fiscal_year: cloneYear } });
+                setShowClone(false);
+                router.push(`/admin/kpi-planning/${newPlan.id}`);
+              }}
+              disabled={cloneMut.isPending || !cloneYear}
+            >
+              {cloneMut.isPending ? "Đang clone…" : "Clone"}
             </Button>
           </DialogFooter>
         </DialogContent>
