@@ -522,7 +522,26 @@ test.describe("Lead Management Workflow", () => {
       console.log(`Created lead3 ID: ${leadId3}`);
     });
 
-    // --- Step 6: Bulk update stage ---
+    // --- Step 6: Bulk-assign lead2 + lead3 to officer ---
+    await test.step("Bulk-assign lead2 + lead3 to officer", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/bulk-assign?officer_id=${officerUserId}`,
+        {
+          headers: adminHeaders,
+          data: { lead_ids: [leadId2, leadId3] },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.total).toBe(2);
+      expect(body.successful).toBe(2);
+      expect(body.failed).toBe(0);
+      expect(body.assigned_lead_ids).toContain(leadId2);
+      expect(body.assigned_lead_ids).toContain(leadId3);
+      console.log(`Bulk-assign: total=${body.total}, successful=${body.successful}, errors=${JSON.stringify(body.errors)}`);
+    });
+
+    // --- Step 7: Bulk update stage ---
     await test.step("Bulk update stage", async () => {
       expect(pipelineStages.length).toBeGreaterThan(0);
       const stageId = pipelineStages[0].id;
