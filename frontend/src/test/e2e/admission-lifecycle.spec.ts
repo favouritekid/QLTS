@@ -634,6 +634,10 @@ test.describe("Admission Profile Lifecycle", () => {
           },
         }
       );
+      if (!resp.ok()) {
+        const errBody = await resp.text();
+        console.error(`Reject failed: ${resp.status()} ${errBody.slice(0, 300)}`);
+      }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
       expect(body.status).toBe("rejected");

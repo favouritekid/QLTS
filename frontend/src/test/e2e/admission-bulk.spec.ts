@@ -371,10 +371,12 @@ test.describe("Admission Bulk Actions + Export", () => {
 
     const resp = await page.request.post(`${API_URL}/api/admissions/bulk/approve`, {
       headers: adminHeaders,
-      data: { ids: idsToApprove, notes: "Bulk approve E2E test" },
+      data: { profile_ids: idsToApprove, notes: "Bulk approve E2E test" },
     });
+    const bulkApproveBody = await resp.text();
+    console.log(`Bulk approve response: ${resp.status()} ${bulkApproveBody.slice(0, 500)}`);
     expect(resp.ok()).toBeTruthy();
-    const body = await resp.json();
+    const body = JSON.parse(bulkApproveBody);
     expect(body.success_count).toBe(2);
     console.log(`Bulk approve: success_count=${body.success_count}, failed=${body.failed_count ?? 0}`);
 
@@ -398,7 +400,7 @@ test.describe("Admission Bulk Actions + Export", () => {
     const resp = await page.request.post(`${API_URL}/api/admissions/bulk/reject`, {
       headers: adminHeaders,
       data: {
-        ids: idsToReject,
+        profile_ids: idsToReject,
         reason: "Hồ sơ không đáp ứng điều kiện xét tuyển theo tiêu chí của đơn vị",
       },
     });
@@ -438,7 +440,7 @@ test.describe("Admission Bulk Actions + Export", () => {
 
     const resp = await page.request.post(`${API_URL}/api/admissions/bulk/assign`, {
       headers: adminHeaders,
-      data: { ids: [assignPid], officer_id: officerId },
+      data: { profile_ids: [assignPid], officer_id: officerId },
     });
     expect(resp.ok()).toBeTruthy();
     const body = await resp.json();
