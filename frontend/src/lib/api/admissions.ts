@@ -187,17 +187,12 @@ export async function dropStudent(
 /**
  * Upload admission document
  */
-export interface DocumentUploadResponse {
-  file_path: string;
-  uploaded_at: string;
-}
-
 export async function uploadAdmissionDocument(
   id: number,
   docCode: string,
   file: File,
   actualSubmissionFormat?: string
-): Promise<DocumentUploadResponse> {
+): Promise<AdmissionProfileResponse> {
     const formData = new FormData()
     formData.append("file", file)
     if (actualSubmissionFormat) {
@@ -205,7 +200,7 @@ export async function uploadAdmissionDocument(
     }
 
     // Note: No explicit Content-Type header needed, axios/browser sets it with boundary
-    const response = await api.post<DocumentUploadResponse>(
+    const response = await api.post<AdmissionProfileResponse>(
         `/api/admissions/${id}/documents/${docCode}/upload`,
         formData
     )
@@ -219,19 +214,12 @@ export async function uploadAdmissionDocument(
 /**
  * Mark document as paper submitted (officer confirms receipt)
  */
-export interface PaperSubmittedResponse {
-  code: string
-  status: string
-  paper_submitted_at: string | null
-  paper_submitted_by_id: number
-}
-
 export async function markPaperSubmitted(
   id: number,
   docCode: string,
   actualSubmissionFormat: string
-): Promise<PaperSubmittedResponse> {
-  const response = await api.post<PaperSubmittedResponse>(
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
     `/api/admissions/${id}/documents/${docCode}/paper-submitted`,
     { actual_submission_format: actualSubmissionFormat }
   )

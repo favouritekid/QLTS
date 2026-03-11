@@ -37,7 +37,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
   const methodType = profile.applied_rules?.method_type
   const isGpaOnly = methodType === "gpa_only"
   const subjectScores = profile.admission_scores?.subject_scores ?? {}
-  const totalScore = profile.admission_scores?.total_score
+  const totalScore = profile.total_score  // root-level computed field (source of truth)
   const selectedGroup = profile.admission_scores?.selected_group
 
   // ✅ THIN CLIENT: Use backend-computed score status instead of local calculation
@@ -126,7 +126,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                         : "N/A"}
                     </TableCell>
                     <TableCell className="text-right">
-                      {score !== null && score !== undefined && subjectStatus !== null ? (
+                      {score !== null && score !== undefined && subjectStatus != null ? (
                         isPassing ? (
                           <Badge className="bg-success-600">Đạt</Badge>
                         ) : (
@@ -150,7 +150,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                 </TableCell>
                 <TableCell className="text-right">
                   {/* ✅ THIN CLIENT: Use backend-computed status, NOT local calculation */}
-                  {totalScore !== null && totalScore !== undefined && scoreStatus?.total_status !== null ? (
+                  {totalScore !== null && totalScore !== undefined && scoreStatus?.total_status != null ? (
                     scoreStatus?.total_status === "passing" ? (
                       <Badge className="bg-success-600 text-base px-3 py-1">
                         Đạt chuẩn

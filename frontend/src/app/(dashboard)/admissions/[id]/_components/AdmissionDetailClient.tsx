@@ -287,6 +287,16 @@ export function AdmissionDetailClient({
       }
     })
 
+    // Transform nested nullable field: academic_history[n].graduation_type
+    if (Array.isArray(transformedData.academic_history)) {
+      transformedData.academic_history = (
+        transformedData.academic_history as Array<Record<string, unknown>>
+      ).map(record => ({
+        ...record,
+        graduation_type: record.graduation_type === "" ? null : record.graduation_type,
+      }))
+    }
+
     updateMutation.mutate(transformedData as AdmissionProfileUpdate, {
       onSuccess: () => {
         // Reset dirty state after successful save
