@@ -92,7 +92,7 @@ export function ExecutiveSummaryHeader({ profile }: ExecutiveSummaryHeaderProps)
           />
           {(profile.completion_percent ?? 0) < 100 && (
             <p className="text-xs text-muted-foreground mt-2">
-              Cần hoàn thành thêm {100 - profile.completion_percent}% để nộp hồ sơ
+              Cần hoàn thành thêm {100 - (profile.completion_percent ?? 0)}% để nộp hồ sơ
             </p>
           )}
         </div>

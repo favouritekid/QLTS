@@ -45,8 +45,8 @@ export function AcademicCard({ profile }: AcademicCardProps) {
   const isGpaOnly = methodType === "gpa_only"
 
   const gpa = profile.admission_scores?.gpa
-  const totalScore = profile.admission_scores?.total_score
-  const averageScore = profile.admission_scores?.average_score
+  const totalScore = profile.total_score   // root-level computed field (source of truth)
+  const averageScore = profile.average_score  // root-level computed field (source of truth)
   const selectedGroup = profile.admission_scores?.selected_group
 
   return (
