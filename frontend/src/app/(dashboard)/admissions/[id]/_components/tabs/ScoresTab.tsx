@@ -227,6 +227,9 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
     ? Object.values(subjectScoresData as Record<string, number | null>).filter(v => v !== null && v !== undefined).length
     : 0
   const isDataComplete = filledSubjectCount >= requiredSubjectCount
+  const maxTotalScore = (appliedRules?.max_possible_score && appliedRules.max_possible_score > 0)
+    ? appliedRules.max_possible_score
+    : requiredSubjectCount * 10
   
   // Track previous group to detect user-initiated changes (vs initial load)
   const prevGroupRef = useRef<string | null | undefined>(undefined)
@@ -593,11 +596,11 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                         </span>
                         {isDataComplete ? (
                           <span className="text-lg font-bold text-primary tabular-nums">
-                            {totalScore !== null ? `${totalScore.toFixed(1)} / 30` : "—"}
+                            {totalScore !== null ? `${totalScore.toFixed(1)} / ${maxTotalScore}` : "—"}
                           </span>
                         ) : (
                           <span className="text-lg font-bold text-amber-600 tabular-nums">
-                            — / 30
+                            — / {maxTotalScore}
                             <span className="text-xs font-normal ml-1">
                               (chưa đủ {filledSubjectCount}/{requiredSubjectCount} môn)
                             </span>

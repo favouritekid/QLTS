@@ -381,7 +381,8 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
           else setWaiveDialogOpen(open)
         }}
         feeId={feeId}
-        maxAmount={fee.remaining_amount_formatted}
+        maxAmount={fee.remaining_amount}
+        maxAmountFormatted={fee.remaining_amount_formatted}
       />
 
       <FeeCancelDialog

@@ -54,7 +54,8 @@ interface FeeWaiveDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   feeId: number
-  maxAmount: string
+  maxAmount: string          // raw string, e.g. "5000000.00"
+  maxAmountFormatted: string // display string, e.g. "5.000.000 ₫"
 }
 
 // =============================================================================
@@ -64,21 +65,13 @@ interface FeeWaiveDialogProps {
 /**
  * FeeWaiveDialog - Dialog to waive (reduce) a fee amount
  *
- * @example
- * ```tsx
- * <FeeWaiveDialog
- *   open={isOpen}
- *   onOpenChange={setIsOpen}
- *   feeId={123}
- *   maxAmount="5.000.000 ₫"
- * />
- * ```
  */
 export function FeeWaiveDialog({
   open,
   onOpenChange,
   feeId,
   maxAmount,
+  maxAmountFormatted,
 }: FeeWaiveDialogProps) {
   const waiveMutation = useWaiveFee()
 
@@ -90,12 +83,17 @@ export function FeeWaiveDialog({
     },
   })
 
-  // Parse max amount for validation hint
-  const maxAmountNum = React.useMemo(() => {
-    return parseFloat(maxAmount.replace(/[^\d]/g, "")) || 0
-  }, [maxAmount])
+  const maxAmountNum = parseFloat(maxAmount) || 0
 
   const onSubmit = async (values: WaiveFormValues) => {
+    if (values.waive_amount > maxAmountNum) {
+      form.setError("waive_amount", {
+        type: "manual",
+        message: "Số tiền miễn giảm không được vượt quá số dư còn lại",
+      })
+      return
+    }
+    form.clearErrors("waive_amount")
     try {
       await waiveMutation.mutateAsync({
         feeId,
@@ -128,7 +126,7 @@ export function FeeWaiveDialog({
             Miễn giảm học phí
           </DialogTitle>
           <DialogDescription>
-            Nhập số tiền và lý do miễn giảm. Số tiền tối đa có thể miễn giảm: {maxAmount}
+            Nhập số tiền và lý do miễn giảm. Số tiền tối đa có thể miễn giảm: {maxAmountFormatted}
           </DialogDescription>
         </DialogHeader>
 
@@ -151,7 +149,7 @@ export function FeeWaiveDialog({
                     />
                   </FormControl>
                   <FormDescription>
-                    Số tiền còn lại: {maxAmount}
+                    Số tiền còn lại: {maxAmountFormatted}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

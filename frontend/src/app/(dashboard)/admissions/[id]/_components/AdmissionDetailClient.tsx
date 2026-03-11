@@ -266,7 +266,7 @@ export function AdmissionDetailClient({
 
   const handleConfirmStepChange = useCallback(() => {
     if (pendingStep !== null) {
-      form.reset(form.getValues(), { keepValues: true })
+      form.reset()  // Revert về last saved backend state (defaultValues)
       setCurrentStep(pendingStep)
       setPendingStep(null)
     }
@@ -385,7 +385,6 @@ export function AdmissionDetailClient({
         currentStep={currentStep}
         onStepChange={handleStepChange}
         stepsStatus={stepsStatusRecord}
-        validation={{ isEligible, missingItems: [] }}
         validationErrors={validationErrors}
         validationSummary={validationSummary}
         groupedValidationErrors={groupedValidationErrors}

@@ -11,10 +11,6 @@ interface AdmissionLayoutProps {
   currentStep: number
   onStepChange: (step: number) => void
   stepsStatus: Record<number, "success" | "warning" | "error" | "locked">
-  validation: {
-    isEligible: boolean
-    missingItems: { code: string; label: string; status: "error" | "warning" }[]
-  }
   validationErrors?: string[]
   validationSummary?: {
     personal?: { has_error: boolean; count: number }
@@ -34,7 +30,6 @@ export function AdmissionLayout({
   currentStep,
   onStepChange,
   stepsStatus,
-  validation,
   validationErrors = [],
   validationSummary,
   groupedValidationErrors
@@ -43,7 +38,7 @@ export function AdmissionLayout({
     <div className="flex flex-col min-h-screen bg-muted/50">
        {/* 1. Sticky Header */}
        <div className="sticky top-0 z-30 bg-background border-b shadow-sm">
-          <AdmissionHeader profile={profile} validation={validation} />
+          <AdmissionHeader profile={profile} />
        </div>
 
        <div className="flex flex-1 container max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-6 gap-4 md:gap-8">

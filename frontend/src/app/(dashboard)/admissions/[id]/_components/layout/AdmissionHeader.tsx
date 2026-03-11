@@ -7,10 +7,6 @@ import { FeeStatusLink } from "@/components/finance"
 
 interface AdmissionHeaderProps {
   profile: AdmissionProfileResponse | null
-  validation: {
-    isEligible: boolean
-    missingItems: { code: string; label: string; status: "error" | "warning" }[]
-  }
 }
 
 export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
