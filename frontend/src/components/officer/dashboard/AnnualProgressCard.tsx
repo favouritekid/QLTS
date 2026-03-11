@@ -36,6 +36,11 @@ export interface AnnualProgressInfo {
   on_track: boolean;
   surplus?: number | null;
   last_sync_at?: string | null;
+
+  // R3: Team breakdown (manager view only)
+  officer_count?: number | null;
+  officers_at_risk?: number | null;
+  officers_overdue?: number | null;
 }
 
 // =============================================================================
@@ -244,6 +249,26 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             </div>
           </div>
         </div>
+
+        {/* R3: Team breakdown for manager view */}
+        {progress.officer_count != null && progress.officer_count > 0 && (
+          ((progress.officers_at_risk ?? 0) > 0 || (progress.officers_overdue ?? 0) > 0) && (
+            <div className="flex items-center gap-3 text-xs pt-1">
+              {(progress.officers_at_risk ?? 0) > 0 && (
+                <span className="text-warning-600 dark:text-warning-500 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  {progress.officers_at_risk} officer có nguy cơ
+                </span>
+              )}
+              {(progress.officers_overdue ?? 0) > 0 && (
+                <span className="text-error-600 dark:text-error-500 flex items-center gap-1">
+                  <TrendingDown className="h-3 w-3" />
+                  {progress.officers_overdue} officer quá hạn
+                </span>
+              )}
+            </div>
+          )
+        )}
 
         {/* Warning message for at_risk status */}
         {progress.status === "at_risk" && (

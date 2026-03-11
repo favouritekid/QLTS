@@ -231,6 +231,11 @@ class AnnualProgressInfo(BaseModel):
     surplus: Optional[float] = None  # Only if status == "completed"
     last_sync_at: Optional[datetime] = None  # Last YTD sync timestamp
 
+    # R3: Team breakdown (only present in aggregated/manager response)
+    officer_count: Optional[int] = None
+    officers_at_risk: Optional[int] = None
+    officers_overdue: Optional[int] = None
+
 
 # =============================================================================
 # PHASE 4: Leaderboard Schemas

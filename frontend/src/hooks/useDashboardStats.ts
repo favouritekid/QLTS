@@ -188,6 +188,11 @@ export interface AnnualProgressInfo {
   on_track: boolean;
   surplus?: number | null;
   last_sync_at?: string | null;
+
+  // R3: Team breakdown (manager view only)
+  officer_count?: number | null;
+  officers_at_risk?: number | null;
+  officers_overdue?: number | null;
 }
 
 export interface TeamStats {

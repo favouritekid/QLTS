@@ -208,6 +208,7 @@ async def get_annual_target_progress(
     kpi_code: str = "enrollments_annual",
     fiscal_year: Optional[int] = None,
     effective_date: Optional[Any] = None,
+    seasonal_weights: Optional[List[float]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Get annual target progress for an officer.
@@ -256,7 +257,31 @@ async def get_annual_target_progress(
     if annual <= 0:
         return None  # No meaningful target configured
 
-    ytd = target_record.achieved_ytd
+    # R2: Auto-load seasonal weights from plan if not injected
+    if seasonal_weights is None:
+        plan_found, weights = await repo.get_active_plan_weights(
+            officer_id, unit_id, fiscal_year,
+        )
+        if plan_found:
+            if weights and len(weights) == 12:
+                seasonal_weights = weights
+            else:
+                # Plan exists but seasonal_weights=NULL → use defaults
+                from .kpi_planning_service import DEFAULT_ENROLLMENT_WEIGHTS
+                seasonal_weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+        # else: No plan → seasonal_weights stays None → linear fallback
+
+    # R0.5: When effective_date is provided (historical period), count enrollments
+    # up to that date instead of using the Celery-synced snapshot.
+    if effective_date is not None:
+        # Convert datetime to date if needed
+        if hasattr(effective_date, 'date') and callable(effective_date.date):
+            _as_of = effective_date.date()
+        else:
+            _as_of = effective_date
+        ytd = await repo.count_enrollments_ytd(officer_id, fiscal_year, as_of_date=_as_of)
+    else:
+        ytd = target_record.achieved_ytd
     remaining = max(0, annual - ytd)
     
     # Calculate months remaining — account for fiscal year boundary
@@ -291,7 +316,11 @@ async def get_annual_target_progress(
         # Fix expected_ytd for fiscal year boundary
         if fiscal_year > ref_year:
             expected_ytd = 0  # Haven't started yet — always "in_progress"
+        elif seasonal_weights and len(seasonal_weights) == 12:
+            # R2: Weighted expected_ytd from plan seasonal weights
+            expected_ytd = annual * sum(seasonal_weights[:ref_month])
         else:
+            # No plan → linear fallback
             expected_ytd = (annual / 12) * ref_month
         if ytd >= expected_ytd * 0.9:
             status = "in_progress"
@@ -315,6 +344,52 @@ async def get_annual_target_progress(
         "on_track": on_track,
         "surplus": surplus if status == "completed" else None,
         "last_sync_at": target_record.last_sync_at,
+    }
+
+
+def aggregate_annual_progresses(
+    progresses: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Aggregate per-officer annual progress for manager/admin team view.
+
+    Returns None when no progresses (preserves empty-state semantics).
+    Uses worst-case status and per-officer breakdown.
+    """
+    if not progresses:
+        return None
+
+    total_annual = sum(p["annual_target"] for p in progresses)
+    total_ytd = sum(p["achieved_ytd"] for p in progresses)
+    total_remaining = max(0, total_annual - total_ytd)
+    months_left = progresses[0]["months_left"]  # Same fiscal year → same months_left
+
+    # Worst-case status
+    STATUS_PRIORITY = {"overdue": 0, "at_risk": 1, "in_progress": 2, "completed": 3}
+    worst = min(
+        (p["status"] for p in progresses),
+        key=lambda s: STATUS_PRIORITY.get(s, 2),
+    )
+    all_on_track = all(p["on_track"] for p in progresses)
+    progress_pct = round((total_ytd / total_annual * 100), 1) if total_annual > 0 else 0
+
+    return {
+        "kpi_code": "enrollments_annual",
+        "fiscal_year": progresses[0]["fiscal_year"],
+        "annual_target": total_annual,
+        "achieved_ytd": total_ytd,
+        "remaining": total_remaining,
+        "progress_pct": progress_pct,
+        "months_left": months_left,
+        "monthly_target": round(total_remaining / max(1, months_left), 1),
+        "status": worst,
+        "on_track": all_on_track,
+        "surplus": total_ytd - total_annual if worst == "completed" else None,
+        "last_sync_at": None,
+        # R1: Team breakdown for manager drill-down
+        "officer_count": len(progresses),
+        "officers_at_risk": sum(1 for p in progresses if p["status"] == "at_risk"),
+        "officers_overdue": sum(1 for p in progresses if p["status"] == "overdue"),
     }
 
 
@@ -414,6 +489,74 @@ async def sync_officer_ytd(
         log.debug("No annual target found for officer, skipping YTD sync",
                    officer_id=officer_id, fiscal_year=fiscal_year)
         return synced
+
+    # R0.4: Only update officer-scoped targets. Never overwrite shared unit/global rows.
+    if target_record.officer_id != officer_id:
+        from ..models.config import KpiTarget as KpiTargetModel
+        from sqlalchemy.exc import IntegrityError
+
+        # Step 1: Check for existing row (including inactive) at exact scope
+        existing = (await db.execute(
+            select(KpiTargetModel).where(
+                KpiTargetModel.officer_id == officer_id,
+                KpiTargetModel.unit_id == unit_id,
+                KpiTargetModel.kpi_code == "enrollments_annual",
+                KpiTargetModel.fiscal_year == fiscal_year,
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            # Reactivate/update existing row
+            existing.is_active = True
+            existing.annual_target = target_record.annual_target
+            await db.flush()
+            log.info(
+                "Reactivated existing officer-scoped KpiTarget",
+                officer_id=officer_id, fiscal_year=fiscal_year,
+                target_id=existing.id,
+            )
+            target_record = existing
+        else:
+            # Step 2: Create new row using savepoint for race safety
+            new_target = KpiTargetModel(
+                officer_id=officer_id,
+                unit_id=unit_id,
+                kpi_code="enrollments_annual",
+                fiscal_year=fiscal_year,
+                annual_target=target_record.annual_target,
+                achieved_ytd=0,
+                is_active=True,
+            )
+            try:
+                async with db.begin_nested():
+                    db.add(new_target)
+                    await db.flush()
+                log.info(
+                    "Auto-created officer-scoped KpiTarget from inherited row",
+                    officer_id=officer_id, fiscal_year=fiscal_year,
+                    inherited_target_id=target_record.id,
+                    new_target_id=new_target.id,
+                )
+                target_record = new_target
+            except IntegrityError:
+                # Race: another task created it — re-fetch (including inactive)
+                existing = (await db.execute(
+                    select(KpiTargetModel).where(
+                        KpiTargetModel.officer_id == officer_id,
+                        KpiTargetModel.unit_id == unit_id,
+                        KpiTargetModel.kpi_code == "enrollments_annual",
+                        KpiTargetModel.fiscal_year == fiscal_year,
+                    )
+                )).scalar_one_or_none()
+                if not existing:
+                    log.warning("Race: re-fetch after IntegrityError failed",
+                                officer_id=officer_id, fiscal_year=fiscal_year)
+                    return synced
+                existing.is_active = True
+                await db.flush()
+                target_record = existing
+                log.info("Race: re-fetched existing officer-scoped KpiTarget",
+                         officer_id=officer_id, target_id=target_record.id)
 
     # Count leads that reached FINAL pipeline stage with counts_for_funnel=True
     enrollments_ytd = await repo.count_enrollments_ytd(officer_id, fiscal_year)

@@ -1116,7 +1116,6 @@ async def get_aggregated_dashboard_stats(
     fiscal_year = filter_end.year
 
     total_consultations_target = 0
-    aggregate_annual_target = 0
     for oid in officer_ids:
         # Resolve officer's unit_id for correct inheritance when target_unit_id is None
         oid_unit = target_unit_id
@@ -1130,65 +1129,22 @@ async def get_aggregated_dashboard_stats(
         )
         total_consultations_target += t
 
-        # enrollments_annual: resolve via KpiTarget (NOT KpiConfig!)
-        # sync_plan_to_kpi_config writes annual targets to KpiTarget table
-        target_record = await kpi_repo.get_annual_target_with_priority(
-            officer_id=oid, kpi_code="enrollments_annual",
-            fiscal_year=fiscal_year, unit_id=oid_unit,
-        )
-        if target_record:
-            aggregate_annual_target += target_record.annual_target
-
     consultations_target = total_consultations_target
+
+    # R1: Delegate annual progress to kpi_service (single calculation path)
+    officer_progresses = []
+    for oid in officer_ids:
+        p = await kpi_service.get_annual_target_progress(
+            db, oid, "enrollments_annual",
+            fiscal_year=fiscal_year, effective_date=filter_end,
+        )
+        if p:
+            officer_progresses.append(p)
+
+    annual_progress = kpi_service.aggregate_annual_progresses(officer_progresses)
 
     # BUG 13: Get actual capacity from user records instead of hardcoded
     total_capacity = await repo.get_officers_total_capacity(officer_ids)
-
-    # Count enrolled YTD — same semantics as Celery sync (event-based, triple defense)
-    # Uses updated_at + PipelineStage.is_final_stage + counts_for_funnel + positive
-    total_enrolled_ytd = await kpi_repo.count_enrollments_ytd_batch(officer_ids, fiscal_year)
-
-    progress_pct = round((total_enrolled_ytd / aggregate_annual_target) * 100, 1) if aggregate_annual_target > 0 else 0
-    agg_remaining = max(0, aggregate_annual_target - total_enrolled_ytd)
-
-    # Months left — consistent with kpi_service.get_annual_target_progress()
-    ref_year = filter_end.year
-    ref_month = filter_end.month
-    if fiscal_year < ref_year:
-        agg_months_left = 0
-    elif fiscal_year > ref_year:
-        agg_months_left = 12
-    else:
-        agg_months_left = 12 - ref_month + 1
-
-    # Status — consistent with officer dashboard (completed → overdue → in_progress/at_risk)
-    if total_enrolled_ytd >= aggregate_annual_target and aggregate_annual_target > 0:
-        agg_status = "completed"
-    elif agg_months_left <= 0:
-        agg_status = "overdue"
-    else:
-        if fiscal_year > ref_year:
-            expected_ytd = 0
-        else:
-            expected_ytd = (aggregate_annual_target / 12) * ref_month
-        agg_status = "in_progress" if total_enrolled_ytd >= expected_ytd * 0.9 else "at_risk"
-
-    agg_on_track = agg_status in ("in_progress", "completed")
-
-    annual_progress = {
-        "kpi_code": "enrollments_annual",
-        "fiscal_year": fiscal_year,
-        "annual_target": aggregate_annual_target,
-        "achieved_ytd": total_enrolled_ytd,
-        "remaining": agg_remaining,
-        "progress_pct": progress_pct,
-        "months_left": agg_months_left,
-        "monthly_target": round(agg_remaining / max(1, agg_months_left), 1),
-        "status": agg_status,
-        "on_track": agg_on_track,
-        "surplus": total_enrolled_ytd - aggregate_annual_target if agg_status == "completed" else None,
-        "last_sync_at": None,
-    }
 
     # BUG 21: Funnel net conversion trend
     _agg_ncr_enrolled = sum(

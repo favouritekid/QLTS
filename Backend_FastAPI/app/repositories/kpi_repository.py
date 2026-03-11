@@ -503,10 +503,14 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         Returns:
             KpiTarget with highest priority or None
         """
+        # R0.6: Auto-resolve unit_id to prevent matching stale targets
+        if unit_id is None:
+            unit_id = await self.get_user_unit_id(officer_id)
+
         # Build inheritance chain: officer (scoped to unit) → unit → global
         # When unit_id is known, constrain officer branch to current unit
         # to avoid matching stale targets from a previous unit after transfer.
-        if unit_id:
+        if unit_id is not None:
             officer_clause = and_(
                 models.KpiTarget.officer_id == officer_id,
                 models.KpiTarget.unit_id == unit_id,
@@ -516,8 +520,12 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
                 models.KpiTarget.officer_id.is_(None),
             )
         else:
-            officer_clause = models.KpiTarget.officer_id == officer_id
-            unit_clause = False  # Skip unit-level when no unit_id
+            # Officer has no unit — only match global-scoped targets
+            officer_clause = and_(
+                models.KpiTarget.officer_id == officer_id,
+                models.KpiTarget.unit_id.is_(None),
+            )
+            unit_clause = False  # No unit to fallback to
 
         global_clause = and_(
             models.KpiTarget.unit_id.is_(None),
@@ -545,6 +553,7 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         self,
         officer_id: int,
         fiscal_year: int,
+        as_of_date=None,
     ) -> int:
         """
         Count leads with final pipeline stage + positive outcome for enrollment KPI.
@@ -557,11 +566,20 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         Args:
             officer_id: Officer ID
             fiscal_year: Fiscal year
+            as_of_date: Optional date upper bound for historical periods (R0.5)
 
         Returns:
             Count of qualifying enrollments
         """
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
+
+        start = datetime(fiscal_year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc)
+
+        # R0.5: When as_of_date provided, cap upper bound
+        if as_of_date is not None:
+            as_of_end = datetime(as_of_date.year, as_of_date.month, as_of_date.day, tzinfo=timezone.utc) + timedelta(days=1)
+            end = min(end, as_of_end)
 
         result = await self.db.execute(
             select(func.count(models.Lead.id))
@@ -573,8 +591,8 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
                 models.ConsultationStatus.counts_for_funnel == True,
                 models.ConsultationStatus.outcome_type == "positive",
                 models.Lead.deleted_at.is_(None),
-                models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
-                models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
+                models.Lead.updated_at >= start,
+                models.Lead.updated_at < end,
             )
         )
         return result.scalar() or 0
@@ -583,14 +601,26 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         self,
         officer_ids: List[int],
         fiscal_year: int,
+        as_of_date=None,
     ) -> int:
         """
         Count enrollments for multiple officers in a fiscal year.
 
         Same semantics as count_enrollments_ytd() but for batch aggregation.
         Uses updated_at (event-based: when enrollment happened) not created_at.
+
+        Args:
+            as_of_date: Optional date upper bound for historical periods (R0.5)
         """
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
+
+        start = datetime(fiscal_year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc)
+
+        # R0.5: When as_of_date provided, cap upper bound
+        if as_of_date is not None:
+            as_of_end = datetime(as_of_date.year, as_of_date.month, as_of_date.day, tzinfo=timezone.utc) + timedelta(days=1)
+            end = min(end, as_of_end)
 
         result = await self.db.execute(
             select(func.count(models.Lead.id))
@@ -602,8 +632,8 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
                 models.ConsultationStatus.counts_for_funnel == True,
                 models.ConsultationStatus.outcome_type == "positive",
                 models.Lead.deleted_at.is_(None),
-                models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
-                models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
+                models.Lead.updated_at >= start,
+                models.Lead.updated_at < end,
             )
         )
         return result.scalar() or 0
@@ -637,6 +667,56 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
                 last_sync_at=datetime.now(timezone.utc),
             )
         )
+
+    async def get_active_plan_weights(
+        self,
+        officer_id: int,
+        unit_id: Optional[int],
+        fiscal_year: int,
+    ) -> tuple[bool, Optional[list[float]]]:
+        """
+        Get seasonal_weights from active KpiPlan (officer → unit fallback).
+
+        Returns (plan_found, weights):
+        - (False, None): No active plan exists
+        - (True, None): Plan exists but seasonal_weights is NULL (use defaults)
+        - (True, [...]): Plan exists with explicit weights
+        """
+        from ..models.config import KpiPlan
+
+        # 1. Try officer-specific plan (scoped to unit!)
+        if unit_id is not None:
+            result = await self.db.execute(
+                select(KpiPlan.id, KpiPlan.seasonal_weights)
+                .where(
+                    KpiPlan.officer_id == officer_id,
+                    KpiPlan.unit_id == unit_id,
+                    KpiPlan.fiscal_year == fiscal_year,
+                    KpiPlan.is_active == True,
+                )
+                .limit(1)
+            )
+            row = result.first()
+            if row is not None:
+                return (True, row.seasonal_weights)
+
+        # 2. Fallback to unit plan
+        if unit_id is not None:
+            result = await self.db.execute(
+                select(KpiPlan.id, KpiPlan.seasonal_weights)
+                .where(
+                    KpiPlan.unit_id == unit_id,
+                    KpiPlan.officer_id.is_(None),
+                    KpiPlan.fiscal_year == fiscal_year,
+                    KpiPlan.is_active == True,
+                )
+                .limit(1)
+            )
+            row = result.first()
+            if row is not None:
+                return (True, row.seasonal_weights)
+
+        return (False, None)
 
     async def get_config_by_id(self, config_id: int) -> Optional[models.KpiConfig]:
         """
