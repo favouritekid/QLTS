@@ -4,7 +4,7 @@ import type { AxiosError } from "axios";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api/client";
-import type { CoverageReport } from "@/types/kpi-setup.types";
+import type { CoverageReport, KpiConfigItem, KpiConfigCreate, KpiConfigUpdate } from "@/types/kpi-setup.types";
 
 interface ApiError {
   detail: string;
@@ -27,6 +27,9 @@ interface UpdateKpiTargetInput {
 export const kpiSetupKeys = {
   all: ["kpi-setup"] as const,
   coverage: (fy: number) => [...kpiSetupKeys.all, "coverage", fy] as const,
+  configs: () => [...kpiSetupKeys.all, "configs"] as const,
+  configList: (filters: Record<string, unknown>) =>
+    [...kpiSetupKeys.configs(), "list", filters] as const,
 };
 
 export function useKpiCoverage(fiscalYear: number) {
@@ -76,6 +79,73 @@ export function useUpdateKpiTarget() {
     },
     onError: (err) => {
       toast.error(err.response?.data?.detail || "Lỗi cập nhật chỉ tiêu");
+    },
+  });
+}
+
+export function useKpiConfigs(params?: { kpi_code?: string; unit_id?: number; is_active?: boolean }) {
+  return useQuery<KpiConfigItem[], AxiosError<ApiError>>({
+    queryKey: kpiSetupKeys.configList(params || {}),
+    queryFn: async () => {
+      const res = await api.get<KpiConfigItem[]>("/api/admin/kpi-config/configs", { params });
+      return res.data;
+    },
+    staleTime: 2 * 60 * 1000,
+  });
+}
+
+export function useCreateKpiConfig() {
+  const qc = useQueryClient();
+
+  return useMutation<KpiConfigItem, AxiosError<ApiError>, KpiConfigCreate>({
+    mutationFn: async (data) => {
+      const res = await api.post("/api/admin/kpi-config/configs", data);
+      return res.data;
+    },
+    onSuccess: () => {
+      toast.success("Đã tạo cấu hình KPI");
+      qc.invalidateQueries({ queryKey: kpiSetupKeys.configs() });
+      qc.invalidateQueries({ queryKey: kpiSetupKeys.all });
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || "Lỗi tạo cấu hình KPI");
+    },
+  });
+}
+
+export function useUpdateKpiConfig() {
+  const qc = useQueryClient();
+
+  return useMutation<KpiConfigItem, AxiosError<ApiError>, { id: number; data: KpiConfigUpdate }>({
+    mutationFn: async ({ id, data }) => {
+      const res = await api.put(`/api/admin/kpi-config/configs/${id}`, data);
+      return res.data;
+    },
+    onSuccess: () => {
+      toast.success("Đã cập nhật cấu hình KPI");
+      qc.invalidateQueries({ queryKey: kpiSetupKeys.configs() });
+      qc.invalidateQueries({ queryKey: kpiSetupKeys.all });
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || "Lỗi cập nhật cấu hình KPI");
+    },
+  });
+}
+
+export function useDeleteKpiConfig() {
+  const qc = useQueryClient();
+
+  return useMutation<void, AxiosError<ApiError>, number>({
+    mutationFn: async (id) => {
+      await api.delete(`/api/admin/kpi-config/configs/${id}`);
+    },
+    onSuccess: () => {
+      toast.success("Đã xóa cấu hình KPI");
+      qc.invalidateQueries({ queryKey: kpiSetupKeys.configs() });
+      qc.invalidateQueries({ queryKey: kpiSetupKeys.all });
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || "Lỗi xóa cấu hình KPI");
     },
   });
 }

@@ -16,6 +16,7 @@ interface Props {
   report: CoverageReport;
   onTabChange?: (tab: string) => void;
   onAction?: (actionHint: string, entityId: number | null) => void;
+  isAdmin?: boolean;
 }
 
 function WarningIcon({ code }: { code: string }) {
@@ -25,14 +26,14 @@ function WarningIcon({ code }: { code: string }) {
   return <AlertTriangle aria-hidden="true" className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />;
 }
 
-function actionLabel(hint: string): string {
+function actionLabel(hint: string, admin: boolean): string {
   switch (hint) {
     case ACTION_HINTS.SEED_HOLIDAYS:
-      return "Cấu hình lịch nghỉ";
+      return admin ? "Cấu hình lịch nghỉ" : "Xem lịch nghỉ";
     case ACTION_HINTS.CREATE_PLAN:
-      return "Tạo kế hoạch";
+      return admin ? "Tạo kế hoạch" : "Xem kế hoạch";
     case ACTION_HINTS.ASSIGN_TARGET:
-      return "Gán chỉ tiêu";
+      return admin ? "Gán chỉ tiêu" : "Xem chỉ tiêu";
     case ACTION_HINTS.REVIEW_TARGETS:
       return "Xem chỉ tiêu";
     case ACTION_HINTS.SYNC_YTD:
@@ -42,7 +43,7 @@ function actionLabel(hint: string): string {
   }
 }
 
-export function ReviewSection({ report, onTabChange, onAction }: Props) {
+export function ReviewSection({ report, onTabChange, onAction, isAdmin = true }: Props) {
   const { summary, warnings } = report;
 
   const atRiskCount = report.units.reduce(
@@ -142,7 +143,7 @@ export function ReviewSection({ report, onTabChange, onAction }: Props) {
                       onClick={() => handleWarningClick(warning)}
                       className="text-xs text-primary hover:underline"
                     >
-                      {actionLabel(warning.action_hint)}
+                      {actionLabel(warning.action_hint, isAdmin)}
                     </button>
                   </div>
                   <Badge variant="outline" className="text-xs shrink-0">

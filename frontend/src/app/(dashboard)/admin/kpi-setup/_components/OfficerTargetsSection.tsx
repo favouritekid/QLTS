@@ -49,6 +49,7 @@ interface Props {
   fiscalYear: number;
   triggerAssignForOfficer?: number | null;
   onActionHandled?: () => void;
+  isAdmin?: boolean;
 }
 
 type OfficerDialogMode =
@@ -92,6 +93,7 @@ export function OfficerTargetsSection({
   fiscalYear,
   triggerAssignForOfficer = null,
   onActionHandled,
+  isAdmin = true,
 }: Props) {
   const defaultOpen = units.length <= 5 ? units.map((u) => String(u.unit_id)) : [];
   const createTargetMut = useCreateKpiTarget();
@@ -180,6 +182,8 @@ export function OfficerTargetsSection({
   const isPending = createTargetMut.isPending || updateTargetMut.isPending;
 
   const renderAction = (officer: OfficerCoverage) => {
+    if (!isAdmin) return null;
+
     if (officer.target_source === "custom" && officer.target_id != null) {
       return (
         <Button
@@ -328,16 +332,26 @@ export function OfficerTargetsSection({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2">
-            <Label htmlFor="officer-annual-target">Chỉ tiêu nhập học/năm</Label>
-            <Input
-              id="officer-annual-target"
-              type="number"
-              min={1}
-              step={1}
-              value={annualTarget || ""}
-              onChange={(e) => setAnnualTarget(Number(e.target.value))}
-            />
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Mã KPI</Label>
+              <div>
+                <Badge variant="outline" className="text-sm font-normal">Nhập học (Năm)</Badge>
+                <p className="text-xs text-muted-foreground mt-1">Chỉ tiêu tính tiến độ theo số lượng nhập học hàng năm.</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="officer-annual-target">Chỉ tiêu nhập học/năm</Label>
+              <Input
+                id="officer-annual-target"
+                type="number"
+                min={1}
+                step={1}
+                value={annualTarget || ""}
+                onChange={(e) => setAnnualTarget(Number(e.target.value))}
+              />
+            </div>
           </div>
 
           <DialogFooter>

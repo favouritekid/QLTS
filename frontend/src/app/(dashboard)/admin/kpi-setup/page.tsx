@@ -20,12 +20,14 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useKpiCoverage } from "@/hooks/useKpiSetup";
+import { useAuth } from "@/hooks/useAuth";
 import { ACTION_HINTS } from "@/types/kpi-setup.types";
 import { KpiSetupProgressBar } from "./_components/KpiSetupProgressBar";
 import { HolidaySection } from "./_components/HolidaySection";
 import { UnitPlansSection } from "./_components/UnitPlansSection";
 import { OfficerTargetsSection } from "./_components/OfficerTargetsSection";
 import { ReviewSection } from "./_components/ReviewSection";
+import { KpiConfigSection } from "./_components/KpiConfigSection";
 
 const currentYear = new Date().getFullYear();
 const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
@@ -37,22 +39,24 @@ export default function KpiSetupPage() {
   const [pendingCreateUnit, setPendingCreateUnit] = useState<number | null>(null);
   const [pendingAssignOfficer, setPendingAssignOfficer] = useState<number | null>(null);
   const { data: report, isLoading, error } = useKpiCoverage(fiscalYear);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   function handleReviewAction(actionHint: string, entityId: number | null) {
     switch (actionHint) {
       case ACTION_HINTS.SEED_HOLIDAYS:
         setActiveTab("holidays");
-        setPendingSeed(true);
+        if (isAdmin) setPendingSeed(true);
         break;
       case ACTION_HINTS.CREATE_PLAN:
         setActiveTab("units");
-        if (entityId != null) {
+        if (isAdmin && entityId != null) {
           setPendingCreateUnit(entityId);
         }
         break;
       case ACTION_HINTS.ASSIGN_TARGET:
         setActiveTab("officers");
-        if (entityId != null) {
+        if (isAdmin && entityId != null) {
           setPendingAssignOfficer(entityId);
         }
         break;
@@ -114,6 +118,7 @@ export default function KpiSetupPage() {
               <TabsTrigger value="holidays">Lịch nghỉ</TabsTrigger>
               <TabsTrigger value="units">Kế hoạch đơn vị</TabsTrigger>
               <TabsTrigger value="officers">Chỉ tiêu officer</TabsTrigger>
+              <TabsTrigger value="configs">Cấu hình KPI</TabsTrigger>
               <TabsTrigger value="review">Tổng quan</TabsTrigger>
             </TabsList>
 
@@ -132,6 +137,7 @@ export default function KpiSetupPage() {
                 fiscalYear={report.fiscal_year}
                 triggerCreateForUnit={pendingCreateUnit}
                 onActionHandled={() => setPendingCreateUnit(null)}
+                isAdmin={isAdmin}
               />
             </TabsContent>
 
@@ -141,7 +147,12 @@ export default function KpiSetupPage() {
                 fiscalYear={report.fiscal_year}
                 triggerAssignForOfficer={pendingAssignOfficer}
                 onActionHandled={() => setPendingAssignOfficer(null)}
+                isAdmin={isAdmin}
               />
+            </TabsContent>
+
+            <TabsContent value="configs" className="mt-4">
+              <KpiConfigSection fiscalYear={report.fiscal_year} isAdmin={isAdmin} />
             </TabsContent>
 
             <TabsContent value="review" className="mt-4">
@@ -149,6 +160,7 @@ export default function KpiSetupPage() {
                 report={report}
                 onTabChange={setActiveTab}
                 onAction={handleReviewAction}
+                isAdmin={isAdmin}
               />
             </TabsContent>
           </Tabs>

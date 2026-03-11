@@ -33,9 +33,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api } from "@/lib/api/client";
-import { kpiPlanningKeys, useCreatePlan } from "@/hooks/useKpiPlanning";
+import { kpiPlanningKeys, useCreatePlan, useKpiPlan } from "@/hooks/useKpiPlanning";
 import { kpiSetupKeys } from "@/hooks/useKpiSetup";
 import type { UnitCoverage } from "@/types/kpi-setup.types";
+import { DEFAULT_SEASONAL_WEIGHTS } from "@/types/kpi-planning.types";
 import { PlanDetailSheet } from "./PlanDetailSheet";
 
 interface ApiError {
@@ -47,6 +48,7 @@ interface Props {
   fiscalYear: number;
   triggerCreateForUnit?: number | null;
   onActionHandled?: () => void;
+  isAdmin?: boolean;
 }
 
 type DialogMode =
@@ -59,12 +61,18 @@ export function UnitPlansSection({
   fiscalYear,
   triggerCreateForUnit = null,
   onActionHandled,
+  isAdmin = true,
 }: Props) {
   const qc = useQueryClient();
   const createPlanMut = useCreatePlan();
 
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [annualTarget, setAnnualTarget] = useState(300);
+  const [slaTarget, setSlaTarget] = useState(85);
+  const [responseTime, setResponseTime] = useState(2);
+  const [seasonalWeights, setSeasonalWeights] = useState<number[]>(
+    DEFAULT_SEASONAL_WEIGHTS.map((w) => Math.round(w * 1000) / 10)
+  );
   const [sheetPlan, setSheetPlan] = useState<{
     planId: number;
     unitName: string;
@@ -75,11 +83,20 @@ export function UnitPlansSection({
   const updatePlanMut = useMutation<
     unknown,
     AxiosError<ApiError>,
-    { planId: number; annualTarget: number }
+    {
+      planId: number;
+      annualTarget: number;
+      slaTarget: number;
+      responseTime: number;
+      seasonalWeights: number[];
+    }
   >({
-    mutationFn: async ({ planId, annualTarget: target }) => {
+    mutationFn: async ({ planId, annualTarget: target, slaTarget: sla, responseTime: rt, seasonalWeights: weights }) => {
       const res = await api.put(`/api/admin/kpi-planning/plans/${planId}`, {
         annual_enrollment_target: target,
+        sla_target: sla,
+        response_time_target: rt,
+        seasonal_weights: weights,
       });
       return res.data;
     },
@@ -94,6 +111,24 @@ export function UnitPlansSection({
     },
   });
 
+  const editPlanId = dialogMode?.type === "edit" ? dialogMode.planId : 0;
+  const shouldFetchPlan = dialogMode?.type === "edit" && editPlanId > 0;
+  const { data: planDetail } = useKpiPlan(editPlanId, shouldFetchPlan);
+
+  // Sync fetched plan detail into form state (render-time state adjustment pattern)
+  const [populatedPlanId, setPopulatedPlanId] = useState<number | null>(null);
+  if (planDetail && dialogMode?.type === "edit" && populatedPlanId !== planDetail.id) {
+    setPopulatedPlanId(planDetail.id);
+    setAnnualTarget(planDetail.annual_enrollment_target ?? 300);
+    setSlaTarget(planDetail.sla_target ?? 85);
+    setResponseTime(planDetail.response_time_target ?? 2);
+    setSeasonalWeights(
+      (planDetail.seasonal_weights ?? DEFAULT_SEASONAL_WEIGHTS).map(
+        (w) => Math.round(w * 1000) / 10
+      )
+    );
+  }
+
   const openCreateDialog = useCallback((unit: UnitCoverage) => {
     setDialogMode({
       type: "create",
@@ -101,6 +136,9 @@ export function UnitPlansSection({
       unitName: unit.unit_name,
     });
     setAnnualTarget(unit.annual_target ?? 300);
+    setSlaTarget(85);
+    setResponseTime(2);
+    setSeasonalWeights(DEFAULT_SEASONAL_WEIGHTS.map((w) => Math.round(w * 1000) / 10));
   }, []);
 
   const openEditDialog = useCallback((unit: UnitCoverage) => {
@@ -118,6 +156,7 @@ export function UnitPlansSection({
 
   const closeDialog = useCallback(() => {
     setDialogMode(null);
+    setPopulatedPlanId(null);
   }, []);
 
   useEffect(() => {
@@ -157,15 +196,23 @@ export function UnitPlansSection({
   const handleSubmit = async () => {
     const normalizedTarget = Math.max(1, Math.floor(annualTarget || 0));
 
-    if (!dialogMode || Number.isNaN(normalizedTarget)) {
+    const totalWeights = seasonalWeights.reduce((s, v) => s + (v || 0), 0);
+    const isWeightsOk = Math.abs(totalWeights - 100) <= 0.5;
+
+    if (!dialogMode || Number.isNaN(normalizedTarget) || !isWeightsOk) {
       return;
     }
+
+    const weightsAsFractions = seasonalWeights.map((w) => w / 100);
 
     if (dialogMode.type === "create") {
       await createPlanMut.mutateAsync({
         unit_id: dialogMode.unitId,
         fiscal_year: fiscalYear,
         annual_enrollment_target: normalizedTarget,
+        sla_target: slaTarget,
+        response_time_target: responseTime,
+        seasonal_weights: weightsAsFractions,
       });
       await qc.invalidateQueries({ queryKey: kpiSetupKeys.all });
       closeDialog();
@@ -175,6 +222,9 @@ export function UnitPlansSection({
     await updatePlanMut.mutateAsync({
       planId: dialogMode.planId,
       annualTarget: normalizedTarget,
+      slaTarget,
+      responseTime,
+      seasonalWeights: weightsAsFractions,
     });
     closeDialog();
   };
@@ -233,15 +283,17 @@ export function UnitPlansSection({
                   <TableCell className="text-right">
                     {unit.plan_id != null ? (
                       <div className="flex items-center justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openEditDialog(unit)}
-                        >
-                          <Pencil aria-hidden="true" className="h-4 w-4" />
-                          Sửa
-                        </Button>
+                        {isAdmin && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => openEditDialog(unit)}
+                          >
+                            <Pencil aria-hidden="true" className="h-4 w-4" />
+                            Sửa
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="ghost"
@@ -258,7 +310,7 @@ export function UnitPlansSection({
                           Chi tiết tháng
                         </Button>
                       </div>
-                    ) : (
+                    ) : isAdmin ? (
                       <Button
                         type="button"
                         variant="outline"
@@ -268,6 +320,8 @@ export function UnitPlansSection({
                         <Plus aria-hidden="true" className="h-4 w-4" />
                         Tạo
                       </Button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
                     )}
                   </TableCell>
                 </TableRow>
@@ -278,7 +332,7 @@ export function UnitPlansSection({
       </CardContent>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && closeDialog()}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{dialogTitle}</DialogTitle>
             <DialogDescription>
@@ -286,17 +340,95 @@ export function UnitPlansSection({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2">
-            <Label htmlFor="plan-annual-target">Chỉ tiêu nhập học/năm</Label>
-            <Input
-              id="plan-annual-target"
-              type="number"
-              min={1}
-              max={10000}
-              step={1}
-              value={annualTarget || ""}
-              onChange={(e) => setAnnualTarget(Number(e.target.value))}
-            />
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="plan-annual-target">Chỉ tiêu nhập học/năm</Label>
+              <Input
+                id="plan-annual-target"
+                type="number"
+                min={1}
+                max={10000}
+                step={1}
+                value={annualTarget || ""}
+                onChange={(e) => setAnnualTarget(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="plan-sla-target">SLA Target (%)</Label>
+              <Input
+                id="plan-sla-target"
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                value={slaTarget || ""}
+                onChange={(e) => setSlaTarget(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="plan-response-time">Response Time (h)</Label>
+              <Input
+                id="plan-response-time"
+                type="number"
+                min={1}
+                max={48}
+                step={0.5}
+                value={responseTime || ""}
+                onChange={(e) => setResponseTime(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Trọng số theo tháng (%)</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto px-2 py-0.5 text-xs"
+                  onClick={() =>
+                    setSeasonalWeights(
+                      DEFAULT_SEASONAL_WEIGHTS.map(
+                        (w) => Math.round(w * 1000) / 10,
+                      ),
+                    )
+                  }
+                >
+                  Mặc định
+                </Button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {seasonalWeights.map((w, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <span className="w-7 text-xs text-muted-foreground">T{i + 1}</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.1}
+                      className="h-8 text-sm"
+                      value={w || ""}
+                      onChange={(e) => {
+                        const next = [...seasonalWeights];
+                        next[i] = Number(e.target.value);
+                        setSeasonalWeights(next);
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+              {(() => {
+                const total = seasonalWeights.reduce((s, v) => s + (v || 0), 0);
+                const isOk = Math.abs(total - 100) <= 0.5;
+                return (
+                  <p
+                    className={`mt-1 text-xs ${isOk ? "text-muted-foreground" : "text-destructive"}`}
+                  >
+                    Tổng: {total.toFixed(1)}%
+                    {isOk ? "" : " — cần bằng 100%"}
+                  </p>
+                );
+              })()}
+            </div>
           </div>
 
           <DialogFooter>
@@ -311,7 +443,7 @@ export function UnitPlansSection({
             <Button
               type="button"
               onClick={() => void handleSubmit()}
-              disabled={isPending || annualTarget < 1}
+              disabled={isPending || annualTarget < 1 || Math.abs(seasonalWeights.reduce((a, b) => a + (b || 0), 0) - 100) > 0.5}
             >
               {isPending ? "Đang lưu..." : "Lưu"}
             </Button>

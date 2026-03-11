@@ -91,3 +91,50 @@ export const TARGET_SOURCE_CONFIG: Record<
   inherited_global: { label: "Kế thừa (toàn trường)", variant: "outline", tooltip: "Từ chỉ tiêu mặc định toàn trường" },
   none: { label: "Chưa có", variant: "destructive" },
 };
+
+// =============================================================================
+// KPI CONFIG TYPES & CONSTANTS (Phase 2)
+// =============================================================================
+
+export interface KpiConfigItem {
+  id: number;
+  kpi_code: string;
+  target_value: number;
+  period_type: string;
+  unit_id: number | null;
+  officer_id: number | null;
+  source_plan_id: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KpiConfigCreate {
+  kpi_code: string;
+  target_value: number;
+  period_type: string;
+  unit_id?: number | null;
+  officer_id?: number | null;
+}
+
+export interface KpiConfigUpdate {
+  target_value?: number;
+  is_active?: boolean;
+}
+
+export const KPI_CODES = [
+  { value: "consultations_daily", label: "Tư vấn (Ngày)" },
+  { value: "enrollments_monthly", label: "Nhập học (Tháng)" },
+  { value: "enrollments_annual", label: "Nhập học (Năm)" },
+  { value: "conversion_rate", label: "TL chuyển đổi Lead mới (%)" },
+  { value: "win_rate", label: "Tỉ lệ chốt đơn (%)" },
+  { value: "response_time_hours", label: "Thời gian phản hồi (giờ)" },
+  { value: "sla_compliance_rate", label: "SLA tuân thủ (%)" },
+  { value: "consultation_effectiveness", label: "Hiệu quả tư vấn (%)" },
+];
+
+export const PERIOD_TYPES = [
+  { value: "daily", label: "Hàng ngày" },
+  { value: "monthly", label: "Hàng tháng" },
+  { value: "annual", label: "Hàng năm" },
+];
