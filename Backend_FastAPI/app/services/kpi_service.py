@@ -207,10 +207,17 @@ async def get_annual_target_progress(
     officer_id: int,
     kpi_code: str = "enrollments_annual",
     fiscal_year: Optional[int] = None,
+    effective_date: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Get annual target progress for an officer.
-    
+
+    Args:
+        effective_date: Optional date/datetime for temporal context.
+            When provided, months_left and expected_ytd are calculated
+            relative to this date instead of now(). Use filter_end when
+            viewing historical dashboard periods.
+
     Returns:
         {
             "annual_target": 80,
@@ -244,21 +251,30 @@ async def get_annual_target_progress(
     
     if not target_record:
         return None
-    
+
     annual = target_record.annual_target
+    if annual <= 0:
+        return None  # No meaningful target configured
+
     ytd = target_record.achieved_ytd
     remaining = max(0, annual - ytd)
     
     # Calculate months remaining — account for fiscal year boundary
-    now = datetime.now(timezone.utc)
-    current_month = now.month
+    # Use effective_date for temporal context (historical dashboard), fallback to now
+    if effective_date is not None:
+        ref_year = effective_date.year
+        ref_month = effective_date.month
+    else:
+        now = datetime.now(timezone.utc)
+        ref_year = now.year
+        ref_month = now.month
 
-    if fiscal_year < now.year:
+    if fiscal_year < ref_year:
         months_left = 0  # Fiscal year ended
-    elif fiscal_year > now.year:
+    elif fiscal_year > ref_year:
         months_left = 12  # All months remain
     else:
-        months_left = 12 - current_month + 1  # Include current month
+        months_left = 12 - ref_month + 1  # Include current month
 
     # Calculate monthly target
     if ytd >= annual:
@@ -273,10 +289,10 @@ async def get_annual_target_progress(
         monthly_target = remaining / months_left
         surplus = 0
         # Fix expected_ytd for fiscal year boundary
-        if fiscal_year > now.year:
+        if fiscal_year > ref_year:
             expected_ytd = 0  # Haven't started yet — always "in_progress"
         else:
-            expected_ytd = (annual / 12) * current_month
+            expected_ytd = (annual / 12) * ref_month
         if ytd >= expected_ytd * 0.9:
             status = "in_progress"
         else:

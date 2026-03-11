@@ -189,13 +189,10 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             value={Math.min(progress.progress_pct, 100)} 
             className="h-3"
           />
-          {/* Expected progress marker — derive total months dynamically instead of hardcoding 12 */}
+          {/* Expected progress marker — use backend-provided months_left for correct historical periods */}
           {progress.status !== "completed" && (() => {
-            const now = new Date();
-            const fyStart = new Date(progress.fiscal_year, 0, 1);
-            const monthsElapsed = (now.getFullYear() - fyStart.getFullYear()) * 12 + now.getMonth() - fyStart.getMonth();
-            const totalMonths = monthsElapsed + progress.months_left;
-            const expectedPct = totalMonths > 0 ? (monthsElapsed / totalMonths) * 100 : 0;
+            const monthsElapsed = 12 - progress.months_left;
+            const expectedPct = monthsElapsed > 0 ? (monthsElapsed / 12) * 100 : 0;
             return (
               <div
                 className="absolute top-0 h-3 w-0.5 bg-muted-foreground dark:bg-muted-foreground"
@@ -217,7 +214,7 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             <div className="font-medium">
               {progress.status === "completed" ? (
                 <span className="text-success-600 dark:text-success-500 tabular-nums">
-                  +{progress.surplus} vượt chỉ tiêu
+                  +{progress.surplus ?? 0} vượt chỉ tiêu
                 </span>
               ) : (
                 <span className="tabular-nums">{progress.remaining} {kpiName.toLowerCase()}</span>
