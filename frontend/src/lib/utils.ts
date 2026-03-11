@@ -106,8 +106,8 @@ export function isSafeFilePath(filePath: string): boolean {
  * @param avatarUrl - The avatar URL from backend (can be relative or absolute)
  * @returns Absolute URL pointing to backend server or empty string
  */
-export function getAvatarUrl(avatarUrl?: string | null): string {
-  if (!avatarUrl) return "";
+export function getAvatarUrl(avatarUrl?: string | null): string | undefined {
+  if (!avatarUrl) return undefined;
 
   // If already absolute URL, return as is
   if (avatarUrl.startsWith("http://") || avatarUrl.startsWith("https://")) {
