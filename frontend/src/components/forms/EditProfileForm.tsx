@@ -57,6 +57,19 @@ export function EditProfileForm() {
     },
   });
 
+  // F6: Warn user khi navigate away với form dirty (browser-level)
+  const isDirty = form.formState.isDirty;
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
+
   // FIX 8: Sync form when user data changes (e.g., after refetch)
   const { reset } = form;
 

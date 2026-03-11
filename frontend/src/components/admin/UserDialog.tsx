@@ -81,7 +81,14 @@ const createUserSchema = z.object({
 const editUserSchema = z.object({
   full_name: z.string().max(120, "Họ tên không được quá 120 ký tự").optional(),
   email: z.string().email("Địa chỉ email không hợp lệ"),
-  phone_number: z.string().max(20, "Số điện thoại không được quá 20 ký tự").optional(),
+  phone_number: z
+    .string()
+    .regex(
+      /^(0|\+?84)(3|5|7|8|9|2)\d{8,9}$/,
+      "Số điện thoại không hợp lệ (định dạng VN: 0xxxxxxxxx)"
+    )
+    .optional()
+    .or(z.literal("")),
   role: z.string().min(1, "Vai trò là bắt buộc"),
   status: z.enum(["active", "pending", "banned"]),
   avatar: z.instanceof(File).optional(),

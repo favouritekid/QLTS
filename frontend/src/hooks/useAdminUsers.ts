@@ -141,8 +141,8 @@ export function useAdminUpdateUser(userId: number) {
       if (data.skills) formData.append("skills", JSON.stringify(data.skills));
       if (data.max_capacity !== undefined)
         formData.append("max_capacity", data.max_capacity.toString());
-      if (data.unit_id !== undefined)
-        formData.append("unit_id", data.unit_id !== null ? data.unit_id.toString() : "0");
+      if (data.unit_id !== undefined && data.unit_id !== null)
+        formData.append("unit_id", data.unit_id.toString());
 
       // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
       // API client now auto-detects FormData and sets multipart/form-data headers
@@ -235,12 +235,29 @@ export function useAdminDeleteUser() {
 // ============================================
 
 export function useAdminSetPassword(userId: number) {
+  const queryClient = useQueryClient();
+
   return useMutation<void, AxiosError<ApiErrorResponse>, AdminSetPassword>({
     mutationFn: async (data) => {
       await api.post(API_ENDPOINTS.ADMIN.USERS.SET_PASSWORD(userId), data);
     },
     onSuccess: () => {
       toast.success("Đặt mật khẩu thành công!");
+      // Refresh password_reset_required flag trong detail page
+      queryClient.invalidateQueries({
+        queryKey: adminUsersKeys.detail(userId),
+        refetchType: "active",
+      });
+      // Refresh list (status badge có thể thay đổi)
+      queryClient.invalidateQueries({
+        queryKey: adminUsersKeys.lists(),
+        refetchType: "active",
+      });
+      // Nếu là current user → invalidate auth cache
+      const currentUser = queryClient.getQueryData<User>(["auth", "me"]);
+      if (currentUser && currentUser.id === userId) {
+        queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+      }
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Không thể đặt mật khẩu";
@@ -264,6 +281,11 @@ export function useAdminAssignRole() {
       toast.success("Gán vai trò thành công!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id), refetchType: "active" });
+      // Nếu role thay đổi của chính current user → cần invalidate auth cache
+      const currentUser = queryClient.getQueryData<User>(["auth", "me"]);
+      if (currentUser && currentUser.id === variables.user_id) {
+        queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+      }
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Không thể gán vai trò";
@@ -287,6 +309,11 @@ export function useAdminRemoveRole() {
       toast.success("Xoá vai trò thành công!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id), refetchType: "active" });
+      // Nếu role thay đổi của chính current user → cần invalidate auth cache
+      const currentUser = queryClient.getQueryData<User>(["auth", "me"]);
+      if (currentUser && currentUser.id === variables.user_id) {
+        queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+      }
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Không thể xoá vai trò";

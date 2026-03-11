@@ -20,6 +20,7 @@ import type {
 import React, { useEffect } from "react";
 import { AxiosError } from "axios";
 import { triggerBannerCheck } from "@/components/layouts/SecurityBanner";
+import { adminUsersKeys } from "@/hooks/useAdminUsers";
 
 /**
  * ✅ PHASE 1 - WEEK 3 - DAY 2: Added initialData support for SSR
@@ -439,6 +440,12 @@ export function useAuth(options?: UseAuthOptions) {
       // Lần tới khi admin vào trang /admin/users, họ sẽ thấy tên mới.
       queryClient.invalidateQueries({
         queryKey: ["admin", "users", "list"],
+      });
+
+      // Invalidate detail cache để admin xem /admin/users/[own-id] thấy data mới ngay
+      queryClient.invalidateQueries({
+        queryKey: adminUsersKeys.detail(updatedUser.id),
+        refetchType: "active",
       });
 
       // Cập nhật Zustand store (vẫn giữ để UI phản ứng ngay lập tức)
