@@ -58,15 +58,22 @@ async def get_coverage_report(
     unit_result = await db.execute(unit_query)
     units = list(unit_result.scalars().all())
 
-    # 3. Load ALL active unit-level plans (no pagination — coverage needs full set)
+    # 3. Load ALL active plans — both unit-level AND officer-level
+    # Unit plans: officer_id IS NULL → for inherited target calculation
+    # Officer plans: officer_id IS NOT NULL → for per-officer seasonal weights (P2 fix)
     plan_query = select(models.KpiPlan).where(
         models.KpiPlan.fiscal_year == fiscal_year,
         models.KpiPlan.is_active == True,
-        models.KpiPlan.officer_id.is_(None),  # unit plans only
     )
     plan_result = await db.execute(plan_query)
-    plans = list(plan_result.scalars().all())
-    plans_by_unit: Dict[int, models.KpiPlan] = {p.unit_id: p for p in plans}
+    all_plans = list(plan_result.scalars().all())
+    plans_by_unit: Dict[int, models.KpiPlan] = {}
+    officer_plans: Dict[int, models.KpiPlan] = {}  # officer_id -> plan
+    for p in all_plans:
+        if p.officer_id is None:
+            plans_by_unit[p.unit_id] = p
+        else:
+            officer_plans[p.officer_id] = p
 
     # 4. Load ALL active KpiTargets for enrollments_annual
     targets = await kpi_repo.list_targets(
@@ -109,6 +116,9 @@ async def get_coverage_report(
     ref_year = now.year
     ref_month = now.month
 
+    # P1 fix: Pre-compute total officers across ALL units for global target split
+    total_officers_all_units = len(all_officer_ids)
+
     # 8. Build per-unit coverage
     warnings: List[dict] = []
     unit_coverages: List[dict] = []
@@ -118,12 +128,12 @@ async def get_coverage_report(
         unit_officers = officers_by_unit.get(unit.id, [])
         officer_count = len(unit_officers)
 
-        # Seasonal weights for status computation
-        seasonal_weights = None
+        # Default seasonal weights from unit plan (fallback for inherited officers)
+        unit_seasonal_weights = None
         if plan and plan.seasonal_weights and len(plan.seasonal_weights) == 12:
-            seasonal_weights = plan.seasonal_weights
+            unit_seasonal_weights = plan.seasonal_weights
         elif plan:
-            seasonal_weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+            unit_seasonal_weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
 
         officer_rows: List[dict] = []
         for officer in unit_officers:
@@ -148,17 +158,26 @@ async def get_coverage_report(
                 target_id = None
                 annual = ut.annual_target // officer_count
                 ytd = ytd_grouped.get(officer.id, 0)
-            elif global_target and officer_count > 0:
-                # Inherit from global target
+            elif global_target and total_officers_all_units > 0:
+                # P1 fix: Inherit from global target — split by TOTAL officers org-wide
                 source = "inherited_global"
                 target_id = None
-                annual = global_target.annual_target // officer_count
+                annual = global_target.annual_target // total_officers_all_units
                 ytd = ytd_grouped.get(officer.id, 0)
             else:
                 source = "none"
                 target_id = None
                 annual = 0
                 ytd = ytd_grouped.get(officer.id, 0)
+
+            # P2 fix: Use officer-specific plan weights if available
+            officer_plan = officer_plans.get(officer.id)
+            if officer_plan and officer_plan.seasonal_weights and len(officer_plan.seasonal_weights) == 12:
+                seasonal_weights = officer_plan.seasonal_weights
+            elif officer_plan:
+                seasonal_weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+            else:
+                seasonal_weights = unit_seasonal_weights
 
             progress_pct = round((ytd / annual * 100), 1) if annual > 0 else 0.0
             status = compute_progress_status(
@@ -232,19 +251,24 @@ async def get_coverage_report(
             "entity_id": None,
         })
 
-    # Stale sync warning — check if any custom target has last_sync_at > 24h ago
+    # Stale sync warning — check officer targets with stale or missing sync
     stale_threshold = datetime.now(timezone.utc).timestamp() - 86400
+    has_stale = False
     for t in targets:
-        if t.officer_id and t.last_sync_at:
-            if t.last_sync_at.timestamp() < stale_threshold:
-                warnings.append({
-                    "reason_code": "stale_sync",
-                    "action_hint": "sync_ytd",
-                    "section": 3,
-                    "detail": "Dữ liệu YTD chưa được đồng bộ trong 24h qua.",
-                    "entity_id": None,
-                })
-                break  # One warning is enough
+        if t.officer_id is None:
+            continue
+        # P2 fix: NULL last_sync_at = never synced → also stale
+        if t.last_sync_at is None or t.last_sync_at.timestamp() < stale_threshold:
+            has_stale = True
+            break
+    if has_stale:
+        warnings.append({
+            "reason_code": "stale_sync",
+            "action_hint": "sync_ytd",
+            "section": 3,
+            "detail": "Dữ liệu YTD chưa được đồng bộ trong 24h qua.",
+            "entity_id": None,
+        })
 
     # 9. Build summary
     total_units = len(units)

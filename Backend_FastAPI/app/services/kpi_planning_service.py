@@ -81,7 +81,7 @@ def distribute_by_largest_remainder(
     weights: List[float],
 ) -> List[int]:
     """
-    Distribute annual_target across 12 months using Largest Remainder Method.
+    Distribute annual_target across N buckets using Largest Remainder Method.
 
     Guarantees: sum(result) == annual_target exactly.
     Handles both diff > 0 (weights sum < 1) and diff < 0 (weights sum > 1).
@@ -91,7 +91,8 @@ def distribute_by_largest_remainder(
 
     diff = annual_target - sum(floored)
 
-    remainders = [(i, exact[i] - floored[i]) for i in range(12)]
+    n = len(weights)
+    remainders = [(i, exact[i] - floored[i]) for i in range(n)]
     remainders.sort(key=lambda x: x[1], reverse=True)
 
     if diff > 0:

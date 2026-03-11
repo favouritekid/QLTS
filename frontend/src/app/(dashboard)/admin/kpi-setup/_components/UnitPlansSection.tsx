@@ -1,10 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
-import { ExternalLink, Pencil, Plus } from "lucide-react";
+import { Eye, Pencil, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +36,7 @@ import { api } from "@/lib/api/client";
 import { kpiPlanningKeys, useCreatePlan } from "@/hooks/useKpiPlanning";
 import { kpiSetupKeys } from "@/hooks/useKpiSetup";
 import type { UnitCoverage } from "@/types/kpi-setup.types";
+import { PlanDetailSheet } from "./PlanDetailSheet";
 
 interface ApiError {
   detail: string;
@@ -65,6 +65,10 @@ export function UnitPlansSection({
 
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [annualTarget, setAnnualTarget] = useState(300);
+  const [sheetPlan, setSheetPlan] = useState<{
+    planId: number;
+    unitName: string;
+  } | null>(null);
 
   const isDialogOpen = dialogMode !== null;
 
@@ -238,13 +242,21 @@ export function UnitPlansSection({
                           <Pencil aria-hidden="true" className="h-4 w-4" />
                           Sửa
                         </Button>
-                        <Link
-                          href={`/admin/kpi-planning/${unit.plan_id}`}
-                          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs text-muted-foreground"
+                          onClick={() =>
+                            setSheetPlan({
+                              planId: unit.plan_id!,
+                              unitName: unit.unit_name,
+                            })
+                          }
                         >
+                          <Eye aria-hidden="true" className="h-3.5 w-3.5" />
                           Chi tiết tháng
-                          <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
-                        </Link>
+                        </Button>
                       </div>
                     ) : (
                       <Button
@@ -306,6 +318,14 @@ export function UnitPlansSection({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PlanDetailSheet
+        planId={sheetPlan?.planId ?? null}
+        unitName={sheetPlan?.unitName}
+        onOpenChange={(open) => {
+          if (!open) setSheetPlan(null);
+        }}
+      />
     </Card>
   );
 }

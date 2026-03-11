@@ -162,6 +162,12 @@ export const MONTH_LABELS: Record<number, string> = {
   7: "T7", 8: "T8", 9: "T9", 10: "T10", 11: "T11", 12: "T12",
 };
 
+// Default seasonal weights (mirrors backend DEFAULT_ENROLLMENT_WEIGHTS)
+export const DEFAULT_SEASONAL_WEIGHTS: readonly number[] = [
+  0.040, 0.033, 0.050, 0.060, 0.073, 0.127,
+  0.153, 0.160, 0.133, 0.093, 0.043, 0.033,
+];
+
 // Overridable derived fields
 export const OVERRIDABLE_FIELDS = [
   "consultations_daily",

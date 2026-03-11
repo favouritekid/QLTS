@@ -34,7 +34,11 @@ import {
   useUpdatePlan,
 } from "@/hooks/useKpiPlanning";
 import type { KpiPlanMonth } from "@/types/kpi-planning.types";
-import { MONTH_LABELS, OVERRIDABLE_FIELDS } from "@/types/kpi-planning.types";
+import {
+  DEFAULT_SEASONAL_WEIGHTS,
+  MONTH_LABELS,
+  OVERRIDABLE_FIELDS,
+} from "@/types/kpi-planning.types";
 
 function fmtVal(val: number | null, d = 2, suf = ""): string {
   if (val == null) return "N/A";
@@ -83,6 +87,7 @@ export default function PlanDetailPage() {
   const [updateTarget, setUpdateTarget] = useState<number | undefined>();
   const [updateSla, setUpdateSla] = useState<number | undefined>();
   const [updateResponseTime, setUpdateResponseTime] = useState<number | undefined>();
+  const [updateWeights, setUpdateWeights] = useState<number[]>([]);
 
   // Clone dialog
   const [showClone, setShowClone] = useState(false);
@@ -182,7 +187,7 @@ export default function PlanDetailPage() {
 
       {/* Actions */}
       <div className="mb-4 flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={() => { setUpdateTarget(plan.annual_enrollment_target); setUpdateSla(plan.sla_target); setUpdateResponseTime(plan.response_time_target); setShowUpdate(true); }}>
+        <Button variant="outline" size="sm" onClick={() => { setUpdateTarget(plan.annual_enrollment_target); setUpdateSla(plan.sla_target); setUpdateResponseTime(plan.response_time_target); setUpdateWeights((plan.seasonal_weights ?? [...DEFAULT_SEASONAL_WEIGHTS]).map(w => Math.round(w * 1000) / 10)); setShowUpdate(true); }}>
           <Pencil className="mr-1 h-4 w-4" />Sửa Plan
         </Button>
         <Button variant="outline" size="sm" onClick={() => regenerateMut.mutate()} disabled={regenerateMut.isPending}>
@@ -357,7 +362,7 @@ export default function PlanDetailPage() {
 
       {/* Update Plan Dialog */}
       <Dialog open={showUpdate} onOpenChange={setShowUpdate}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Sửa KPI Plan</DialogTitle>
             <DialogDescription>Thay đổi chỉ tiêu giữa năm sẽ redistribute cho các tháng còn lại.</DialogDescription>
@@ -366,9 +371,26 @@ export default function PlanDetailPage() {
             <div><label className="mb-1 block text-sm font-medium">Chỉ tiêu nhập học/năm</label><Input type="number" min={1} max={10000} value={updateTarget ?? ""} onChange={(e) => setUpdateTarget(Number(e.target.value))} /></div>
             <div><label className="mb-1 block text-sm font-medium">SLA Target (%)</label><Input type="number" min={0} max={100} step={0.1} value={updateSla ?? ""} onChange={(e) => setUpdateSla(Number(e.target.value))} /></div>
             <div><label className="mb-1 block text-sm font-medium">Response Time (h)</label><Input type="number" min={1} max={48} step={0.5} value={updateResponseTime ?? ""} onChange={(e) => setUpdateResponseTime(Number(e.target.value))} /></div>
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <label className="block text-sm font-medium">Trọng số theo tháng (%)</label>
+                <Button type="button" variant="ghost" size="sm" className="h-auto px-2 py-0.5 text-xs" onClick={() => setUpdateWeights(DEFAULT_SEASONAL_WEIGHTS.map(w => Math.round(w * 1000) / 10))}>
+                  Mặc định
+                </Button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {updateWeights.map((w, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <span className="w-7 text-xs text-muted-foreground">T{i + 1}</span>
+                    <Input type="number" min={0} max={100} step={0.1} className="h-8 text-sm" value={w || ""} onChange={(e) => { const next = [...updateWeights]; next[i] = Number(e.target.value); setUpdateWeights(next); }} />
+                  </div>
+                ))}
+              </div>
+              {(() => { const total = updateWeights.reduce((s, v) => s + (v || 0), 0); const isOk = Math.abs(total - 100) <= 0.5; return <p className={`mt-1 text-xs ${isOk ? "text-muted-foreground" : "text-destructive"}`}>Tổng: {total.toFixed(1)}%{isOk ? "" : " — cần bằng 100%"}</p>; })()}
+            </div>
           </div>
           <DialogFooter>
-            <Button onClick={async () => { await updateMut.mutateAsync({ annual_enrollment_target: updateTarget, sla_target: updateSla, response_time_target: updateResponseTime }); setShowUpdate(false); }} disabled={updateMut.isPending}>
+            <Button onClick={async () => { await updateMut.mutateAsync({ annual_enrollment_target: updateTarget, sla_target: updateSla, response_time_target: updateResponseTime, seasonal_weights: updateWeights.map(w => w / 100) }); setShowUpdate(false); }} disabled={updateMut.isPending}>
               {updateMut.isPending ? "Đang lưu…" : "Cập nhật"}
             </Button>
           </DialogFooter>
