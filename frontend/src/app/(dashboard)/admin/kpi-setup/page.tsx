@@ -20,6 +20,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useKpiCoverage } from "@/hooks/useKpiSetup";
+import { ACTION_HINTS } from "@/types/kpi-setup.types";
 import { KpiSetupProgressBar } from "./_components/KpiSetupProgressBar";
 import { HolidaySection } from "./_components/HolidaySection";
 import { UnitPlansSection } from "./_components/UnitPlansSection";
@@ -32,7 +33,40 @@ const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
 export default function KpiSetupPage() {
   const [fiscalYear, setFiscalYear] = useState(currentYear);
   const [activeTab, setActiveTab] = useState("holidays");
+  const [pendingSeed, setPendingSeed] = useState(false);
+  const [pendingCreateUnit, setPendingCreateUnit] = useState<number | null>(null);
+  const [pendingAssignOfficer, setPendingAssignOfficer] = useState<number | null>(null);
   const { data: report, isLoading, error } = useKpiCoverage(fiscalYear);
+
+  function handleReviewAction(actionHint: string, entityId: number | null) {
+    switch (actionHint) {
+      case ACTION_HINTS.SEED_HOLIDAYS:
+        setActiveTab("holidays");
+        setPendingSeed(true);
+        break;
+      case ACTION_HINTS.CREATE_PLAN:
+        setActiveTab("units");
+        if (entityId != null) {
+          setPendingCreateUnit(entityId);
+        }
+        break;
+      case ACTION_HINTS.ASSIGN_TARGET:
+        setActiveTab("officers");
+        if (entityId != null) {
+          setPendingAssignOfficer(entityId);
+        }
+        break;
+      case ACTION_HINTS.REVIEW_TARGETS:
+        setActiveTab("officers");
+        break;
+      case ACTION_HINTS.SYNC_YTD:
+        setActiveTab("review");
+        break;
+      default:
+        setActiveTab("review");
+        break;
+    }
+  }
 
   return (
     <PageContainer maxWidth="full">
@@ -87,6 +121,8 @@ export default function KpiSetupPage() {
               <HolidaySection
                 holiday={report.holiday_status}
                 fiscalYear={report.fiscal_year}
+                triggerSeed={pendingSeed}
+                onSeedHandled={() => setPendingSeed(false)}
               />
             </TabsContent>
 
@@ -94,17 +130,25 @@ export default function KpiSetupPage() {
               <UnitPlansSection
                 units={report.units}
                 fiscalYear={report.fiscal_year}
+                triggerCreateForUnit={pendingCreateUnit}
+                onActionHandled={() => setPendingCreateUnit(null)}
               />
             </TabsContent>
 
             <TabsContent value="officers" className="mt-4">
-              <OfficerTargetsSection units={report.units} />
+              <OfficerTargetsSection
+                units={report.units}
+                fiscalYear={report.fiscal_year}
+                triggerAssignForOfficer={pendingAssignOfficer}
+                onActionHandled={() => setPendingAssignOfficer(null)}
+              />
             </TabsContent>
 
             <TabsContent value="review" className="mt-4">
               <ReviewSection
                 report={report}
                 onTabChange={setActiveTab}
+                onAction={handleReviewAction}
               />
             </TabsContent>
           </Tabs>

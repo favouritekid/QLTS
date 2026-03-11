@@ -1,6 +1,10 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+import { Pencil, Plus } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -18,11 +22,22 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useCreateKpiTarget, useUpdateKpiTarget } from "@/hooks/useKpiSetup";
 import type { OfficerCoverage, UnitCoverage } from "@/types/kpi-setup.types";
 import {
   STATUS_CONFIG,
@@ -31,7 +46,15 @@ import {
 
 interface Props {
   units: UnitCoverage[];
+  fiscalYear: number;
+  triggerAssignForOfficer?: number | null;
+  onActionHandled?: () => void;
 }
+
+type OfficerDialogMode =
+  | { type: "assign"; officerId: number; officerName: string }
+  | { type: "edit"; targetId: number; officerName: string }
+  | null;
 
 function TargetSourceBadge({ source }: { source: OfficerCoverage["target_source"] }) {
   const config = TARGET_SOURCE_CONFIG[source];
@@ -64,8 +87,146 @@ function StatusBadge({ status }: { status: OfficerCoverage["status"] }) {
   );
 }
 
-export function OfficerTargetsSection({ units }: Props) {
+export function OfficerTargetsSection({
+  units,
+  fiscalYear,
+  triggerAssignForOfficer = null,
+  onActionHandled,
+}: Props) {
   const defaultOpen = units.length <= 5 ? units.map((u) => String(u.unit_id)) : [];
+  const createTargetMut = useCreateKpiTarget();
+  const updateTargetMut = useUpdateKpiTarget();
+
+  const [dialogMode, setDialogMode] = useState<OfficerDialogMode>(null);
+  const [annualTarget, setAnnualTarget] = useState(0);
+
+  const openAssignDialog = useCallback((officer: OfficerCoverage) => {
+    setDialogMode({
+      type: "assign",
+      officerId: officer.officer_id,
+      officerName: officer.officer_name,
+    });
+    setAnnualTarget(officer.annual_target > 0 ? officer.annual_target : 100);
+  }, []);
+
+  const openEditDialog = useCallback((officer: OfficerCoverage) => {
+    if (officer.target_id == null) {
+      return;
+    }
+
+    setDialogMode({
+      type: "edit",
+      targetId: officer.target_id,
+      officerName: officer.officer_name,
+    });
+    setAnnualTarget(officer.annual_target);
+  }, []);
+
+  useEffect(() => {
+    if (triggerAssignForOfficer == null) {
+      return;
+    }
+
+    let matchedOfficer: OfficerCoverage | null = null;
+    for (const unit of units) {
+      const officer = unit.officers.find((o) => o.officer_id === triggerAssignForOfficer);
+      if (officer) {
+        matchedOfficer = officer;
+        break;
+      }
+    }
+
+    const officerToAssign = matchedOfficer;
+    const timer = officerToAssign
+      ? setTimeout(() => {
+        openAssignDialog(officerToAssign);
+      }, 0)
+      : null;
+
+    onActionHandled?.();
+
+    return () => {
+      if (timer != null) {
+        clearTimeout(timer);
+      }
+    };
+  }, [onActionHandled, openAssignDialog, triggerAssignForOfficer, units]);
+
+  const handleSubmit = async () => {
+    if (!dialogMode) {
+      return;
+    }
+
+    const normalizedTarget = Math.max(1, Math.floor(annualTarget || 0));
+
+    if (dialogMode.type === "assign") {
+      await createTargetMut.mutateAsync({
+        kpi_code: "enrollments_annual",
+        annual_target: normalizedTarget,
+        fiscal_year: fiscalYear,
+        officer_id: dialogMode.officerId,
+      });
+      setDialogMode(null);
+      return;
+    }
+
+    await updateTargetMut.mutateAsync({
+      id: dialogMode.targetId,
+      data: { annual_target: normalizedTarget },
+    });
+    setDialogMode(null);
+  };
+
+  const isPending = createTargetMut.isPending || updateTargetMut.isPending;
+
+  const renderAction = (officer: OfficerCoverage) => {
+    if (officer.target_source === "custom" && officer.target_id != null) {
+      return (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => openEditDialog(officer)}
+        >
+          <Pencil aria-hidden="true" className="h-4 w-4" />
+          Sửa
+        </Button>
+      );
+    }
+
+    if (officer.target_source === "none") {
+      return (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => openAssignDialog(officer)}
+        >
+          <Plus aria-hidden="true" className="h-4 w-4" />
+          Gán
+        </Button>
+      );
+    }
+
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => openAssignDialog(officer)}
+          >
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            Ghi đè
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>Kế thừa từ cấp trên. Tạo chỉ tiêu riêng để ghi đè.</p>
+        </TooltipContent>
+      </Tooltip>
+    );
+  };
 
   return (
     <TooltipProvider>
@@ -108,6 +269,7 @@ export function OfficerTargetsSection({ units }: Props) {
                             <TableHead className="text-right">Đã đạt</TableHead>
                             <TableHead className="w-[120px]">Tiến độ</TableHead>
                             <TableHead>Trạng thái</TableHead>
+                            <TableHead className="text-right">Thao tác</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -139,6 +301,9 @@ export function OfficerTargetsSection({ units }: Props) {
                               <TableCell>
                                 <StatusBadge status={officer.status} />
                               </TableCell>
+                              <TableCell className="text-right">
+                                {renderAction(officer)}
+                              </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -151,6 +316,49 @@ export function OfficerTargetsSection({ units }: Props) {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={dialogMode != null} onOpenChange={(open) => !open && setDialogMode(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {dialogMode?.type === "edit" ? "Sửa chỉ tiêu" : "Gán chỉ tiêu"}
+            </DialogTitle>
+            <DialogDescription>
+              {dialogMode?.officerName ? `Cán bộ: ${dialogMode.officerName}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="officer-annual-target">Chỉ tiêu nhập học/năm</Label>
+            <Input
+              id="officer-annual-target"
+              type="number"
+              min={1}
+              step={1}
+              value={annualTarget || ""}
+              onChange={(e) => setAnnualTarget(Number(e.target.value))}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDialogMode(null)}
+              disabled={isPending}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={isPending || annualTarget < 1}
+            >
+              {isPending ? "Đang lưu..." : "Lưu"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 }

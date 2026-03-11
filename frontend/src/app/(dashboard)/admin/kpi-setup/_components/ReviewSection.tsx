@@ -15,6 +15,7 @@ import { ACTION_HINTS, REASON_CODES } from "@/types/kpi-setup.types";
 interface Props {
   report: CoverageReport;
   onTabChange?: (tab: string) => void;
+  onAction?: (actionHint: string, entityId: number | null) => void;
 }
 
 function WarningIcon({ code }: { code: string }) {
@@ -41,7 +42,7 @@ function actionLabel(hint: string): string {
   }
 }
 
-export function ReviewSection({ report, onTabChange }: Props) {
+export function ReviewSection({ report, onTabChange, onAction }: Props) {
   const { summary, warnings } = report;
 
   const atRiskCount = report.units.reduce(
@@ -75,7 +76,11 @@ export function ReviewSection({ report, onTabChange }: Props) {
   ];
 
   const handleWarningClick = (warning: CoverageWarning) => {
-    // Navigate to the relevant section tab
+    if (onAction) {
+      onAction(warning.action_hint, warning.entity_id);
+      return;
+    }
+
     const sectionMap: Record<number, string> = {
       0: "holidays",
       1: "units",
@@ -90,7 +95,6 @@ export function ReviewSection({ report, onTabChange }: Props) {
 
   return (
     <div className="space-y-4">
-      {/* Summary cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {summaryCards.map((card) => (
           <Card key={card.title}>
@@ -114,7 +118,6 @@ export function ReviewSection({ report, onTabChange }: Props) {
         ))}
       </div>
 
-      {/* Warnings */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Cảnh báo</CardTitle>
