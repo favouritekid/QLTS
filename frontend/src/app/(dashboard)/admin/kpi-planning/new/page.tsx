@@ -149,23 +149,7 @@ export default function KpiPlanningCreatePage() {
   const weightsSumPercent = weightsSum * 100;
   const weightsValid = weightsSum >= 0.99 && weightsSum <= 1.01;
 
-  const previewMonths = (() => {
-    if (Array.isArray(previewData?.months)) {
-      return previewData.months;
-    }
-
-    const wrappedMonths = (previewData as { data?: { months?: unknown } } | null)?.data?.months;
-    if (Array.isArray(wrappedMonths)) {
-      return wrappedMonths as KpiPlanPreviewResponse["months"];
-    }
-
-    const legacyPlanMonths = (previewData as { plan_months?: unknown } | null)?.plan_months;
-    if (Array.isArray(legacyPlanMonths)) {
-      return legacyPlanMonths as KpiPlanPreviewResponse["months"];
-    }
-
-    return [] as KpiPlanPreviewResponse["months"];
-  })();
+  const previewMonths = previewData?.months ?? ([] as KpiPlanPreviewResponse["months"]);
 
   const previewAnnualTarget =
     typeof previewData?.annual_enrollment_target === "number"
@@ -303,6 +287,8 @@ export default function KpiPlanningCreatePage() {
                 <label className="mb-1 block text-sm font-medium">Năm tài chính</label>
                 <Input
                   type="number"
+                  min={2020}
+                  max={2100}
                   value={formData.fiscal_year}
                   onChange={(e) => setFormData((prev) => ({
                     ...prev,

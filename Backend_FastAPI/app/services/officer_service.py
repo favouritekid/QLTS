@@ -724,7 +724,8 @@ async def get_enhanced_dashboard_stats(
 
     # === 5. SLA COMPLIANCE RATE ===
     sla_hours = await kpi_service.get_kpi_target(
-        db, "response_time_hours", officer_id, user.unit_id, "daily"
+        db, "response_time_hours", officer_id, user.unit_id, "daily",
+        effective_date=filter_end,
     )
     sla_stats = await repo.get_sla_compliance_stats(officer_id, filter_start, filter_end, sla_hours)
     prev_sla_stats = await repo.get_sla_compliance_stats(officer_id, prev_filter_start, prev_filter_end, sla_hours)
@@ -855,7 +856,8 @@ async def get_enhanced_dashboard_stats(
 
     # P1: Get target with source info (is_unit_target flag)
     target_info = await kpi_service.get_kpi_target_source_info(
-        db, "consultations_daily", officer_id, user.unit_id, "daily"
+        db, "consultations_daily", officer_id, user.unit_id, "daily",
+        effective_date=filter_end,
     )
 
     # Build enhanced response
@@ -1009,7 +1011,9 @@ async def get_aggregated_dashboard_stats(
     win_rate_data = await repo.get_aggregated_win_rate_stats(officer_ids, filter_start, filter_end)
 
     # Aggregated SLA Compliance
-    sla_hours = await kpi_service.get_kpi_target(db, "response_time_hours")
+    sla_hours = await kpi_service.get_kpi_target(
+        db, "response_time_hours", effective_date=filter_end,
+    )
     agg_sla_stats = await repo.get_aggregated_sla_compliance_stats(officer_ids, filter_start, filter_end, sla_hours)
 
     # Aggregated Consultation Effectiveness
@@ -1105,20 +1109,39 @@ async def get_aggregated_dashboard_stats(
     else:
         response_time_trend = {"value": 0, "direction": "neutral", "comparison": "Chưa có dữ liệu"}
 
-    # BUG 12: Get consultations target from KPI config instead of hardcoded
-    unit_consultations_target = await kpi_service.get_kpi_target(
-        db, "consultations_daily", unit_id=target_unit_id
-    )
-    consultations_target = officer_count * unit_consultations_target
+    # BUG 12+M2: Sum per-officer targets (respecting inheritance: officer → unit → global)
+    from ..repositories import KpiRepository
+    kpi_repo = KpiRepository(db)
+    fiscal_year = filter_end.year
+
+    total_consultations_target = 0
+    aggregate_annual_target = 0
+    for oid in officer_ids:
+        # Resolve officer's unit_id for correct inheritance when target_unit_id is None
+        oid_unit = target_unit_id
+        if oid_unit is None:
+            oid_unit = await kpi_repo.get_user_unit_id(oid)
+
+        # consultations_daily: resolve via KpiConfig inheritance
+        t = await kpi_service.get_kpi_target(
+            db, "consultations_daily", oid, oid_unit, "daily",
+            effective_date=filter_end,
+        )
+        total_consultations_target += t
+
+        # enrollments_annual: resolve via KpiTarget (NOT KpiConfig!)
+        # sync_plan_to_kpi_config writes annual targets to KpiTarget table
+        target_record = await kpi_repo.get_annual_target_with_priority(
+            officer_id=oid, kpi_code="enrollments_annual",
+            fiscal_year=fiscal_year, unit_id=oid_unit,
+        )
+        if target_record:
+            aggregate_annual_target += target_record.annual_target
+
+    consultations_target = total_consultations_target
 
     # BUG 13: Get actual capacity from user records instead of hardcoded
     total_capacity = await repo.get_officers_total_capacity(officer_ids)
-
-    # BUG 21: Annual progress for aggregated view
-    annual_target_per_officer = await kpi_service.get_kpi_target(
-        db, "enrollments_annual", unit_id=target_unit_id
-    )
-    aggregate_annual_target = officer_count * annual_target_per_officer
 
     # Count enrolled YTD - use existing funnel data (positive outcomes at final stages)
     fiscal_year = filter_end.year

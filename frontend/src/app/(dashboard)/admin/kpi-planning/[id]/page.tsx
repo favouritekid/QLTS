@@ -296,7 +296,13 @@ export default function PlanDetailPage() {
           <div className="grid gap-4 py-4">
             <div>
               <label className="mb-1 block text-sm font-medium">Field: {overrideField}</label>
-              <Input type="number" step="any" value={overrideValue} onChange={(e) => setOverrideValue(e.target.value)} />
+              <Input
+                type="number"
+                min={0}
+                {...(overrideField === "consultations_daily" ? { step: 1 } : { max: 100, step: 0.01 })}
+                value={overrideValue}
+                onChange={(e) => setOverrideValue(e.target.value)}
+              />
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium">Lý do <span className="text-destructive">*</span></label>
@@ -338,7 +344,7 @@ export default function PlanDetailPage() {
                 {OVERRIDABLE_FIELDS.map((f) => <option key={f} value={f}>{f}</option>)}
               </select>
             </div>
-            <div><label className="mb-1 block text-sm font-medium">Giá trị</label><Input type="number" step="any" value={batchValue} onChange={(e) => setBatchValue(e.target.value)} /></div>
+            <div><label className="mb-1 block text-sm font-medium">Giá trị</label><Input type="number" min={0} {...(batchField === "consultations_daily" ? { step: 1 } : { max: 100, step: 0.01 })} value={batchValue} onChange={(e) => setBatchValue(e.target.value)} /></div>
             <div><label className="mb-1 block text-sm font-medium">Lý do <span className="text-destructive">*</span></label><Textarea value={batchReason} onChange={(e) => setBatchReason(e.target.value)} placeholder="Tối thiểu 5 ký tự" /></div>
           </div>
           <DialogFooter>
@@ -382,6 +388,9 @@ export default function PlanDetailPage() {
             <div>
               <label className="mb-1 block text-sm font-medium">Năm tài chính đích</label>
               <Input type="number" min={2020} max={2100} value={cloneYear ?? ""} onChange={(e) => setCloneYear(Number(e.target.value))} />
+              {cloneYear === plan?.fiscal_year && (
+                <p className="mt-1 text-sm text-destructive">Năm tài chính đích phải khác năm hiện tại ({plan?.fiscal_year}).</p>
+              )}
             </div>
           </div>
           <DialogFooter>
@@ -392,7 +401,7 @@ export default function PlanDetailPage() {
                 setShowClone(false);
                 router.push(`/admin/kpi-planning/${newPlan.id}`);
               }}
-              disabled={cloneMut.isPending || !cloneYear}
+              disabled={cloneMut.isPending || !cloneYear || cloneYear === plan?.fiscal_year}
             >
               {cloneMut.isPending ? "Đang clone…" : "Clone"}
             </Button>
