@@ -127,29 +127,28 @@ export function AdmissionActions({
             </AlertDialog>
           )}
 
-          {/* Step 1-6: Step Navigation Actions */}
+          {/* Back Button - always available for steps 2-6, independent of save permission */}
+          {currentStep > 1 && currentStep < 7 && (
+            <Button variant="outline" onClick={() => onStepChange(currentStep - 1)}>
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Quay lại
+            </Button>
+          )}
+
+          {/* Save Changes - only when profile is editable */}
           {currentStep < 7 && can('save') && (
-            <>
-              {/* Back Button - only show if not on step 1 */}
-              {currentStep > 1 && (
-                <Button variant="outline" onClick={() => onStepChange(currentStep - 1)}>
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Quay lại
-                </Button>
-              )}
+            <Button variant="outline" onClick={onSave} disabled={isSaving}>
+              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              Lưu thay đổi
+            </Button>
+          )}
 
-              {/* Save Changes */}
-              <Button variant="outline" onClick={onSave} disabled={isSaving}>
-                {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                Lưu thay đổi
-              </Button>
-
-              {/* Next Step Button */}
-              <Button onClick={() => onStepChange(currentStep + 1)}>
-                Tiếp tục
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
-            </>
+          {/* Next Step Button - always available for steps 1-6, independent of save permission */}
+          {currentStep < 7 && (
+            <Button onClick={() => onStepChange(currentStep + 1)}>
+              Tiếp tục
+              <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
           )}
 
           {/* Step 7 Only: Submit Actions */}

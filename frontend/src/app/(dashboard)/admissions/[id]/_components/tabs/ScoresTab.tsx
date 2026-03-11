@@ -513,10 +513,6 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
             {/* Step 3B: Subject Score Inputs (for methods with subject_groups) */}
             {selectedCriterion && supportsSubjectScoring && (selectedGroup || isBestNMode) && (
               <div className="space-y-4">
-                <p className="text-sm font-medium text-muted-foreground">
-                  Nhập điểm các môn trong tổ hợp {selectedGroup}:
-                </p>
-                
                 {/* Loading state */}
                 {isLoadingGroups && (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

@@ -152,9 +152,14 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
   const uploadConfig = profile.applied_rules.upload_config
   const allowedTypes = uploadConfig?.allowed_types || []
   const maxFileSize = uploadConfig?.max_file_size || 0
-  const allowedExtensionsDisplay = uploadConfig?.allowed_extensions 
+  const maxFileSizeMB = maxFileSize > 0 ? Math.round(maxFileSize / (1024 * 1024)) : 10
+  const allowedExtensionsDisplay = uploadConfig?.allowed_extensions?.length
     ? uploadConfig.allowed_extensions.map(ext => `.${ext}`).join(", ")
     : "N/A"
+  // Separate accept value — never use display fallback "N/A" for the file input
+  const acceptAttr = uploadConfig?.allowed_extensions?.length
+    ? uploadConfig.allowed_extensions.map(ext => `.${ext}`).join(",")
+    : ""
 
   const handleUploadClick = (code: string, label: string, requiredFormat?: string) => {
     setSelectedDocCode(code)
@@ -175,12 +180,12 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
   }
 
   const validateFile = (file: File): string | null => {
-    if (!allowedTypes.includes(file.type)) {
+    if (allowedTypes.length > 0 && !allowedTypes.includes(file.type)) {
       return `Loại file không hợp lệ. Chỉ chấp nhận: ${allowedExtensionsDisplay}`
     }
-    if (file.size > maxFileSize) {
+    if (maxFileSize > 0 && file.size > maxFileSize) {
       const sizeMB = (file.size / (1024 * 1024)).toFixed(1)
-      return `File quá lớn (${sizeMB}MB). Tối đa 10MB.`
+      return `File quá lớn (${sizeMB}MB). Tối đa ${maxFileSizeMB}MB.`
     }
     return null
   }
@@ -320,7 +325,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
           </div>
           
           <p className="text-xs text-muted-foreground mt-2">
-            Định dạng: {allowedExtensionsDisplay} • Tối đa {Math.round(maxFileSize / (1024 * 1024))}MB
+            Định dạng: {allowedExtensionsDisplay} • Tối đa {maxFileSizeMB}MB
           </p>
         </CardHeader>
         
@@ -517,7 +522,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
           ref={fileInputRef} 
           className="hidden" 
           onChange={handleFileChange}
-          accept={allowedExtensionsDisplay}
+          accept={acceptAttr}
         />
       </Card>
       

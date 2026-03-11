@@ -106,7 +106,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         max={2100}
                                         disabled={!isEditable}
                                         className="bg-background"
-                                        onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                                        onChange={(e) => field.onChange(parseInt(e.target.value) || undefined)}
                                     />
                                     </FormControl>
                                     <FormMessage />
@@ -128,7 +128,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         max={2100}
                                         disabled={!isEditable}
                                         className="bg-background"
-                                        onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                                        onChange={(e) => field.onChange(parseInt(e.target.value) || undefined)}
                                     />
                                     </FormControl>
                                     <FormMessage />

@@ -586,6 +586,11 @@ export const admissionProfileResponseSchema = z.object({
   is_qualified: z.boolean().nullable().optional().describe("Whether profile meets admission criteria. Computed by backend."),
 
   // =========================================================================
+  // Best N mode: selected subjects for highlighting (computed by backend)
+  snapshot_score: z.object({
+    selected_subjects: z.array(z.string()).optional(),
+  }).nullable().optional(),
+
   // Ticket #5: Score Snapshot Status (Thin Client Compliance)
   // Backend computes pass/fail status, Frontend ONLY renders
   // =========================================================================
