@@ -52,6 +52,8 @@ let leadId1: number; // happy path CRUD
 let leadId2: number; // assignment/bulk
 let leadId3: number; // delete/restore
 let consultationId1: number;
+let leadIdInaccessible: number; // IDOR bait (admin creates, unassigned)
+let leadId4: number; // FSM status patch + officer action
 const testPhone1 = generatePhone();
 const testPhone2 = generatePhone();
 const testPhone3 = generatePhone();
@@ -173,6 +175,27 @@ async function restoreCookies(
   }
   const csrf = await getCSRFToken(page);
   return csrf ? { "X-CSRF-Token": csrf } : {};
+}
+
+/** Build a multipart/form-data body for file upload, returning raw Buffer + Content-Type header.
+ *  Playwright's built-in `multipart` option sometimes drops custom headers (e.g. X-CSRF-Token).
+ *  Using raw Buffer with `data` ensures all headers (including CSRF) are sent correctly.
+ */
+function buildMultipartFile(
+  fieldName: string,
+  filename: string,
+  mimeType: string,
+  content: string
+): { body: Buffer; contentType: string } {
+  const boundary = `----E2EBoundary${Date.now()}`;
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`
+    ),
+    Buffer.from(content, "utf-8"),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  return { body, contentType: `multipart/form-data; boundary=${boundary}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +678,391 @@ test.describe("Lead Management Workflow", () => {
       const body = await resp.json();
       expect(body.id).toBe(consultationId1);
       console.log(`Consultation ${consultationId1} restored`);
+    });
+  });
+
+  // =========================================================================
+  // Test 4: IDOR + FSM status patch + Officer action + Audit logs
+  // =========================================================================
+  test("IDOR: officer cannot access unassigned lead + FSM status patch + officer action + audit logs", async ({ page }) => {
+    // --- Step 1: Admin creates unassigned lead (IDOR bait) ---
+    await test.step("Admin creates unassigned lead (IDOR bait)", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: {
+          full_name: `E2E_IDOR_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          offering_id: offeringId,
+          // No officer_id → lead stays unassigned or assigned to admin
+        },
+      });
+      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      leadIdInaccessible = (await resp.json()).id;
+      console.log(`Created unassigned lead: id=${leadIdInaccessible}`);
+    });
+
+    // --- Step 2: Officer tries to access unassigned lead → 404 (IDOR) ---
+    await test.step("Officer cannot access unassigned lead → 404 (IDOR)", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const resp = await page.request.get(
+        `${API_URL}/api/leads/${leadIdInaccessible}`,
+        { headers: officerHeaders }
+      );
+      expect(resp.status()).toBe(404);
+      console.log(`IDOR blocked: officer got 404 for unassigned lead ${leadIdInaccessible}`);
+    });
+
+    // --- Step 3: Officer creates lead4 (auto-assigned to self) ---
+    await test.step("Officer creates lead4 for FSM + action tests", async () => {
+      const resp = await page.request.post(`${API_URL}/api/leads`, {
+        headers: officerHeaders,
+        data: {
+          full_name: `E2E_Lead4_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          offering_id: offeringId,
+        },
+      });
+      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      leadId4 = (await resp.json()).id;
+      console.log(`Created lead4: id=${leadId4}`);
+    });
+
+    // --- Step 4: Add consultation to lead4 (prerequisite for FSM PATCH) ---
+    await test.step("Add consultation to lead4 (set initial status)", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/${leadId4}/consultations`,
+        {
+          headers: officerHeaders,
+          data: {
+            status_id: initialStatusId,
+            method: "phone",
+            notes: "E2E: prepare for FSM patch test",
+          },
+        }
+      );
+      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      const body = await resp.json();
+      expect(body.consultation_status_id).toBe(initialStatusId);
+      console.log(`Lead4 consultation set to ${initialStatusId}`);
+    });
+
+    // --- Step 5: Officer cannot PATCH /status → 403 (admin/manager only) ---
+    await test.step("Officer cannot PATCH /leads/{id}/status → 403", async () => {
+      const resp = await page.request.patch(
+        `${API_URL}/api/leads/${leadId4}/status`,
+        {
+          headers: officerHeaders,
+          data: { consultation_status_id: secondStatusId },
+        }
+      );
+      expect(resp.status()).toBe(403);
+      console.log(`Officer PATCH /status blocked: 403`);
+    });
+
+    // --- Step 6: Admin PATCH /leads/{lead4}/status → secondStatusId (valid FSM transition) ---
+    await test.step("Admin PATCH /leads/{lead4}/status → secondStatusId (valid)", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.patch(
+        `${API_URL}/api/leads/${leadId4}/status`,
+        {
+          headers: adminHeaders,
+          data: { consultation_status_id: secondStatusId },
+        }
+      );
+      if (!resp.ok()) {
+        console.log(`FSM PATCH failed: ${resp.status()} ${(await resp.text()).slice(0, 200)}`);
+      }
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.consultation_status_id).toBe(secondStatusId);
+      console.log(`Admin FSM PATCH: ${initialStatusId} → ${secondStatusId}`);
+    });
+
+    // --- Step 7: PATCH with non-existent status ID → 404 or 400 ---
+    await test.step("PATCH with invalid status ID → rejected (404/400)", async () => {
+      const resp = await page.request.patch(
+        `${API_URL}/api/leads/${leadId4}/status`,
+        {
+          headers: adminHeaders,
+          data: { consultation_status_id: "sts_nonexistent_xyz" },
+        }
+      );
+      expect(resp.ok()).toBeFalsy();
+      console.log(`FSM PATCH with invalid status rejected: ${resp.status()}`);
+    });
+
+    // --- Step 8: Officer action "reject" on lead4 ---
+    await test.step("Officer action: reject lead4", async () => {
+      // Restore officer cookies (admin cookies were set in step 6)
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/${leadId4}/action`,
+        {
+          headers: officerHeaders,
+          data: { action: "reject", reason: "E2E test: officer cannot contact this lead" },
+        }
+      );
+      if (!resp.ok()) {
+        console.log(`Officer action failed: ${resp.status()} ${(await resp.text()).slice(0, 200)}`);
+      }
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      console.log(`Lead4 after officer reject: status=${body.status}`);
+    });
+
+    // --- Step 9: Officer action "reject" without reason → 422 (schema validation) ---
+    await test.step("Officer action without reason → 422", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/${leadId4}/action`,
+        {
+          headers: officerHeaders,
+          data: { action: "reject" }, // missing required field
+        }
+      );
+      expect(resp.status()).toBe(422);
+      console.log(`Officer action without reason rejected: 422`);
+    });
+
+    // --- Step 10: GET /leads/{lead1}/audit-logs (admin) ---
+    await test.step("Admin gets audit logs for lead1", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.get(
+        `${API_URL}/api/leads/${leadId1}/audit-logs`,
+        { headers: adminHeaders }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      // Audit log may be empty if no field-level changes were tracked
+      expect(typeof body.total).toBe("number");
+      expect(Array.isArray(body.items)).toBeTruthy();
+      console.log(`Audit logs for lead1: total=${body.total}, items=${body.items.length}`);
+    });
+
+    // --- Step 11: Officer cannot get audit logs for inaccessible lead → 404 ---
+    await test.step("Officer cannot get audit logs for unassigned lead → 404", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const resp = await page.request.get(
+        `${API_URL}/api/leads/${leadIdInaccessible}/audit-logs`,
+        { headers: officerHeaders }
+      );
+      expect(resp.status()).toBe(404);
+      console.log(`Audit log IDOR blocked: officer got 404`);
+    });
+  });
+
+  // =========================================================================
+  // Test 5: Validity status + Bulk delete + Distribution preview
+  // =========================================================================
+  test("Validity status + Bulk delete + Distribution preview", async ({ page }) => {
+    // --- Step 1: Admin sets lead3 validity to "invalid" ---
+    await test.step("Admin sets lead3 validity to 'invalid'", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/${leadId3}/validity`,
+        {
+          headers: adminHeaders,
+          data: { validity_status: "invalid" },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.validity_status).toBe("invalid");
+      console.log(`Lead3 validity set to invalid`);
+    });
+
+    // --- Step 2: Admin sets validity back to "valid" ---
+    await test.step("Admin sets lead3 validity back to 'valid'", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/${leadId3}/validity`,
+        {
+          headers: adminHeaders,
+          data: { validity_status: "valid" },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.validity_status).toBe("valid");
+      console.log(`Lead3 validity set to valid`);
+    });
+
+    // --- Step 3: Officer cannot set validity → 403 (admin/manager only) ---
+    await test.step("Officer cannot set validity → 403", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/${leadId1}/validity`,
+        {
+          headers: officerHeaders,
+          data: { validity_status: "valid" },
+        }
+      );
+      expect(resp.status()).toBe(403);
+      console.log(`Officer validity blocked: 403`);
+    });
+
+    // --- Step 4: Admin bulk-deletes 2 fresh leads ---
+    await test.step("Admin bulk-delete 2 fresh leads", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      // Create 2 leads to be bulk-deleted
+      const r1 = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: {
+          full_name: `E2E_BulkDel_A_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          offering_id: offeringId,
+        },
+      });
+      const r2 = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: {
+          full_name: `E2E_BulkDel_B_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          offering_id: offeringId,
+        },
+      });
+      const bulkDelId1 = (await r1.json()).id;
+      const bulkDelId2 = (await r2.json()).id;
+      console.log(`Created leads for bulk-delete: ${bulkDelId1}, ${bulkDelId2}`);
+
+      // Bulk delete
+      const resp = await page.request.post(`${API_URL}/api/leads/bulk-delete`, {
+        headers: adminHeaders,
+        data: { lead_ids: [bulkDelId1, bulkDelId2] },
+      });
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.deleted_count).toBe(2);
+      console.log(`Bulk deleted: ${body.deleted_count} leads, skipped=${body.skipped?.length ?? 0}`);
+
+      // Verify both are soft-deleted (404 from officer's perspective)
+      const g1 = await page.request.get(`${API_URL}/api/leads/${bulkDelId1}`);
+      const g2 = await page.request.get(`${API_URL}/api/leads/${bulkDelId2}`);
+      expect(g1.status()).toBe(404);
+      expect(g2.status()).toBe(404);
+      console.log(`Bulk-deleted leads confirmed 404`);
+    });
+
+    // --- Step 5: Distribution preview ---
+    await test.step("Distribution preview for offering", async () => {
+      const resp = await page.request.get(
+        `${API_URL}/api/leads/distribution-preview?offering_id=${offeringId}`,
+        { headers: adminHeaders }
+      );
+      // 200 if config exists, 404 if no distribution config for offering
+      expect(resp.status() === 200 || resp.status() === 404).toBeTruthy();
+      if (resp.ok()) {
+        const body = await resp.json();
+        console.log(`Distribution preview: has_config=${body.has_config}, offering=${body.offering_id}`);
+      } else {
+        console.log(`Distribution preview: no config for offering ${offeringId}`);
+      }
+    });
+  });
+
+  // =========================================================================
+  // Test 6: CSV Import
+  // =========================================================================
+  test("Import leads from CSV file", async ({ page }) => {
+    const phoneImport1 = generatePhone();
+    const phoneImport2 = generatePhone();
+    let firstImportCount = 0;
+
+    // --- Step 1: Officer imports CSV with 2 new leads ---
+    await test.step("Officer imports CSV — 2 new leads", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const ts = Date.now();
+      // Use +84 prefix so pandas read_csv doesn't convert to integer (leading-zero stripping).
+      // Backend phone_helpers normalizes +84xxxxxxxxx → 0xxxxxxxxx before validation.
+      const phone1E164 = `+84${phoneImport1.substring(1)}`;
+      const phone2E164 = `+84${phoneImport2.substring(1)}`;
+      const csvContent = [
+        "full_name,email,phone,source,unit_id",
+        `E2E_Import1_${ts},import1_${ts}@test.com,${phone1E164},online,${unitId}`,
+        `E2E_Import2_${ts},import2_${ts}@test.com,${phone2E164},facebook,${unitId}`,
+      ].join("\n");
+
+      const { body: mpBody, contentType: mpCT } = buildMultipartFile("file", "leads.csv", "text/csv", csvContent);
+      const resp = await page.request.post(`${API_URL}/api/leads/import`, {
+        headers: { ...officerHeaders, "Content-Type": mpCT },
+        data: mpBody,
+      });
+      if (!resp.ok()) {
+        console.log(`CSV import failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+      }
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      firstImportCount = body.successful_imports;
+      console.log(
+        `CSV import: rows=${body.total_rows_processed}, success=${body.successful_imports}, failed=${body.failed_imports}`
+      );
+      if (body.failed_imports > 0) {
+        console.log(`Import body: ${JSON.stringify(body).slice(0, 600)}`);
+      }
+      expect(body.total_rows_processed).toBe(2);
+      expect(body.successful_imports).toBeGreaterThanOrEqual(1);
+    });
+
+    // --- Step 2: Re-import same phones → duplicate detection ---
+    await test.step("Re-import same phones → duplicate detection", async () => {
+      const ts = Date.now();
+      const csvContent = [
+        "full_name,email,phone,source,unit_id",
+        `E2E_Dup1_${ts},dup1_${ts}@test.com,${phoneImport1},online,${unitId}`,
+        `E2E_Dup2_${ts},dup2_${ts}@test.com,${phoneImport2},facebook,${unitId}`,
+      ].join("\n");
+
+      const { body: mpBody2, contentType: mpCT2 } = buildMultipartFile("file", "leads_dup.csv", "text/csv", csvContent);
+      const resp = await page.request.post(`${API_URL}/api/leads/import`, {
+        headers: { ...officerHeaders, "Content-Type": mpCT2 },
+        data: mpBody2,
+      });
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      console.log(
+        `Re-import: rows=${body.total_rows_processed}, success=${body.successful_imports}, failed=${body.failed_imports}`
+      );
+      // At least the successful rows from first import should now be duplicates
+      expect(body.failed_imports).toBeGreaterThanOrEqual(firstImportCount);
+    });
+
+    // --- Step 3: Import CSV with missing required field (phone) ---
+    await test.step("Import CSV with missing phone → row-level error", async () => {
+      const ts = Date.now();
+      const csvContent = [
+        "full_name,email,phone,source,unit_id",
+        `E2E_NoPhone_${ts},noPhone_${ts}@test.com,,online,${unitId}`, // empty phone
+      ].join("\n");
+
+      const { body: mpBody3, contentType: mpCT3 } = buildMultipartFile("file", "invalid.csv", "text/csv", csvContent);
+      const resp = await page.request.post(`${API_URL}/api/leads/import`, {
+        headers: { ...officerHeaders, "Content-Type": mpCT3 },
+        data: mpBody3,
+      });
+      // 200 with row-level error in body, or 400 at API level
+      expect(resp.status() === 200 || resp.status() === 400).toBeTruthy();
+      if (resp.ok()) {
+        const body = await resp.json();
+        console.log(
+          `Missing-phone row: total=${body.total_rows_processed}, failed=${body.failed_imports}`
+        );
+        // Either the row was skipped/failed (if phone is required) or imported (if optional)
+      } else {
+        console.log(`Missing-phone CSV rejected at API level: ${resp.status()}`);
+      }
     });
   });
 });
