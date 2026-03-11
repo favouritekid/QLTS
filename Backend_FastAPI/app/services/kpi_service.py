@@ -49,6 +49,42 @@ KPI_PERIOD_MAP = {
 
 
 # =============================================================================
+# PROGRESS STATUS — Pure function (no DB calls)
+# =============================================================================
+
+def compute_progress_status(
+    ytd: int,
+    annual: int,
+    fiscal_year: int,
+    ref_year: int,
+    ref_month: int,
+    seasonal_weights: Optional[List[float]] = None,
+) -> str:
+    """
+    Pure function: determine KPI progress status from progress data.
+
+    Used by both get_annual_target_progress() and kpi_setup_service coverage
+    to ensure a single calculation path (no divergence).
+
+    Returns: "completed" | "overdue" | "in_progress" | "at_risk" | "not_started"
+    """
+    if annual <= 0:
+        return "not_started"
+    if ytd >= annual:
+        return "completed"
+    months_left = 12 - ref_month + 1 if fiscal_year == ref_year else (12 if fiscal_year > ref_year else 0)
+    if months_left <= 0:
+        return "overdue"
+    if fiscal_year > ref_year:
+        return "in_progress"  # Haven't started yet
+    if seasonal_weights and len(seasonal_weights) == 12:
+        expected_ytd = annual * sum(seasonal_weights[:ref_month])
+    else:
+        expected_ytd = (annual / 12) * ref_month
+    return "in_progress" if ytd >= expected_ytd * 0.9 else "at_risk"
+
+
+# =============================================================================
 # KPI CONFIG RETRIEVAL (with inheritance)
 # =============================================================================
 
@@ -301,31 +337,21 @@ async def get_annual_target_progress(
     else:
         months_left = 12 - ref_month + 1  # Include current month
 
-    # Calculate monthly target
-    if ytd >= annual:
-        status = "completed"
+    # Calculate monthly target + status (uses shared pure function)
+    status = compute_progress_status(
+        ytd=ytd, annual=annual,
+        fiscal_year=fiscal_year, ref_year=ref_year, ref_month=ref_month,
+        seasonal_weights=seasonal_weights,
+    )
+    if status == "completed":
         monthly_target = 0
         surplus = ytd - annual
-    elif months_left <= 0:
-        status = "overdue"
+    elif status == "overdue":
         monthly_target = remaining
         surplus = 0
     else:
         monthly_target = remaining / months_left
         surplus = 0
-        # Fix expected_ytd for fiscal year boundary
-        if fiscal_year > ref_year:
-            expected_ytd = 0  # Haven't started yet — always "in_progress"
-        elif seasonal_weights and len(seasonal_weights) == 12:
-            # R2: Weighted expected_ytd from plan seasonal weights
-            expected_ytd = annual * sum(seasonal_weights[:ref_month])
-        else:
-            # No plan → linear fallback
-            expected_ytd = (annual / 12) * ref_month
-        if ytd >= expected_ytd * 0.9:
-            status = "in_progress"
-        else:
-            status = "at_risk"
 
     progress_pct = (ytd / annual * 100) if annual > 0 else 0
     # "overdue" should NOT be on_track

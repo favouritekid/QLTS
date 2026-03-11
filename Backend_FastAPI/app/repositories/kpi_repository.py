@@ -638,6 +638,48 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         )
         return result.scalar() or 0
 
+    async def count_enrollments_ytd_grouped(
+        self,
+        officer_ids: List[int],
+        fiscal_year: int,
+    ) -> Dict[int, int]:
+        """
+        Count enrollments per officer, returning {officer_id: count}.
+
+        Same triple-check join as count_enrollments_ytd but with GROUP BY.
+        Returns dict with entry for each officer_id in input (0 if no enrollments).
+        """
+        from datetime import datetime, timezone
+
+        if not officer_ids:
+            return {}
+
+        start = datetime(fiscal_year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc)
+
+        result = await self.db.execute(
+            select(
+                models.Lead.assigned_officer_id,
+                func.count(models.Lead.id),
+            )
+            .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+            .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.PipelineStage.is_final_stage == True,
+                models.ConsultationStatus.counts_for_funnel == True,
+                models.ConsultationStatus.outcome_type == "positive",
+                models.Lead.deleted_at.is_(None),
+                models.Lead.updated_at >= start,
+                models.Lead.updated_at < end,
+            )
+            .group_by(models.Lead.assigned_officer_id)
+        )
+        rows = result.all()
+        counts = {oid: cnt for oid, cnt in rows}
+        # Ensure every officer_id in input has an entry
+        return {oid: counts.get(oid, 0) for oid in officer_ids}
+
     async def update_achieved_ytd(
         self,
         target_id: int,
