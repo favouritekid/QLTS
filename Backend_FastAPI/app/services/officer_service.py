@@ -1151,18 +1151,44 @@ async def get_aggregated_dashboard_stats(
     total_enrolled_ytd = ytd_kpi_data["converted_count"]
 
     progress_pct = round((total_enrolled_ytd / aggregate_annual_target) * 100, 1) if aggregate_annual_target > 0 else 0
+    agg_remaining = max(0, aggregate_annual_target - total_enrolled_ytd)
+
+    # Months left — consistent with kpi_service.get_annual_target_progress()
+    ref_year = filter_end.year
+    ref_month = filter_end.month
+    if fiscal_year < ref_year:
+        agg_months_left = 0
+    elif fiscal_year > ref_year:
+        agg_months_left = 12
+    else:
+        agg_months_left = 12 - ref_month + 1
+
+    # Status — consistent with officer dashboard (completed → overdue → in_progress/at_risk)
+    if total_enrolled_ytd >= aggregate_annual_target and aggregate_annual_target > 0:
+        agg_status = "completed"
+    elif agg_months_left <= 0:
+        agg_status = "overdue"
+    else:
+        if fiscal_year > ref_year:
+            expected_ytd = 0
+        else:
+            expected_ytd = (aggregate_annual_target / 12) * ref_month
+        agg_status = "in_progress" if total_enrolled_ytd >= expected_ytd * 0.9 else "at_risk"
+
+    agg_on_track = agg_status in ("in_progress", "completed")
+
     annual_progress = {
         "kpi_code": "enrollments_annual",
         "fiscal_year": fiscal_year,
         "annual_target": aggregate_annual_target,
         "achieved_ytd": total_enrolled_ytd,
-        "remaining": max(0, aggregate_annual_target - total_enrolled_ytd),
+        "remaining": agg_remaining,
         "progress_pct": progress_pct,
-        "months_left": 12 - filter_end.month + 1,
-        "monthly_target": round(max(0, aggregate_annual_target - total_enrolled_ytd) / max(1, 12 - filter_end.month + 1), 1),
-        "status": "completed" if progress_pct >= 100 else "in_progress" if progress_pct >= (filter_end.month / 12 * 100 * 0.9) else "at_risk",
-        "on_track": progress_pct >= (filter_end.month / 12 * 100 * 0.9),
-        "surplus": total_enrolled_ytd - aggregate_annual_target if total_enrolled_ytd >= aggregate_annual_target else None,
+        "months_left": agg_months_left,
+        "monthly_target": round(agg_remaining / max(1, agg_months_left), 1),
+        "status": agg_status,
+        "on_track": agg_on_track,
+        "surplus": total_enrolled_ytd - aggregate_annual_target if agg_status == "completed" else None,
         "last_sync_at": None,
     }
 
