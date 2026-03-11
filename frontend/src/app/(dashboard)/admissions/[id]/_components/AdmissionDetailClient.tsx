@@ -300,7 +300,7 @@ export function AdmissionDetailClient({
   }
 
   const handleResubmit = () => {
-    resubmitMutation.mutate()
+    resubmitMutation.mutate(undefined)
   }
 
   const handleEnroll = () => {
