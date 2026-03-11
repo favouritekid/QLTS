@@ -398,27 +398,41 @@ async def sync_officer_ytd(
     
     synced = {}
     repo = KpiRepository(db)
-    
-    # Sync enrollments YTD via repository
+
+    # Resolve officer's unit for correct target lookup
+    unit_id = await repo.get_user_unit_id(officer_id)
+
+    # Find the specific KpiTarget to update (officer → unit → global inheritance)
+    target_record = await repo.get_annual_target_with_priority(
+        officer_id=officer_id,
+        kpi_code="enrollments_annual",
+        fiscal_year=fiscal_year,
+        unit_id=unit_id,
+    )
+
+    if not target_record:
+        log.debug("No annual target found for officer, skipping YTD sync",
+                   officer_id=officer_id, fiscal_year=fiscal_year)
+        return synced
+
     # Count leads that reached FINAL pipeline stage with counts_for_funnel=True
     enrollments_ytd = await repo.count_enrollments_ytd(officer_id, fiscal_year)
     synced["enrollments_annual"] = enrollments_ytd
 
-    # Update kpi_target record via repository
+    # Update by target PK — avoids ambiguous multi-row updates
     await repo.update_achieved_ytd(
-        officer_id=officer_id,
-        kpi_code="enrollments_annual",
-        fiscal_year=fiscal_year,
+        target_id=target_record.id,
         ytd_value=enrollments_ytd,
     )
-    
+
     log.info(
         "Synced officer YTD",
         officer_id=officer_id,
         fiscal_year=fiscal_year,
+        target_id=target_record.id,
         synced=synced,
     )
-    
+
     return synced
 
 

@@ -503,20 +503,31 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         Returns:
             KpiTarget with highest priority or None
         """
+        # Build inheritance chain: officer (scoped to unit) → unit → global
+        # When unit_id is known, constrain officer branch to current unit
+        # to avoid matching stale targets from a previous unit after transfer.
+        if unit_id:
+            officer_clause = and_(
+                models.KpiTarget.officer_id == officer_id,
+                models.KpiTarget.unit_id == unit_id,
+            )
+            unit_clause = and_(
+                models.KpiTarget.unit_id == unit_id,
+                models.KpiTarget.officer_id.is_(None),
+            )
+        else:
+            officer_clause = models.KpiTarget.officer_id == officer_id
+            unit_clause = False  # Skip unit-level when no unit_id
+
+        global_clause = and_(
+            models.KpiTarget.unit_id.is_(None),
+            models.KpiTarget.officer_id.is_(None),
+        )
+
         result = await self.db.execute(
             select(models.KpiTarget)
             .where(
-                or_(
-                    models.KpiTarget.officer_id == officer_id,
-                    and_(
-                        models.KpiTarget.unit_id == unit_id,
-                        models.KpiTarget.officer_id.is_(None)
-                    ) if unit_id else False,
-                    and_(
-                        models.KpiTarget.unit_id.is_(None),
-                        models.KpiTarget.officer_id.is_(None)
-                    )
-                ),
+                or_(officer_clause, unit_clause, global_clause),
                 models.KpiTarget.kpi_code == kpi_code,
                 models.KpiTarget.fiscal_year == fiscal_year,
                 models.KpiTarget.is_active == True,
@@ -568,31 +579,58 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         )
         return result.scalar() or 0
 
+    async def count_enrollments_ytd_batch(
+        self,
+        officer_ids: List[int],
+        fiscal_year: int,
+    ) -> int:
+        """
+        Count enrollments for multiple officers in a fiscal year.
+
+        Same semantics as count_enrollments_ytd() but for batch aggregation.
+        Uses updated_at (event-based: when enrollment happened) not created_at.
+        """
+        from datetime import datetime, timezone
+
+        result = await self.db.execute(
+            select(func.count(models.Lead.id))
+            .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+            .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.PipelineStage.is_final_stage == True,
+                models.ConsultationStatus.counts_for_funnel == True,
+                models.ConsultationStatus.outcome_type == "positive",
+                models.Lead.deleted_at.is_(None),
+                models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
+                models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+        return result.scalar() or 0
+
     async def update_achieved_ytd(
         self,
-        officer_id: int,
-        kpi_code: str,
-        fiscal_year: int,
+        target_id: int,
         ytd_value: int,
     ) -> None:
         """
-        Update achieved_ytd and last_sync_at for officer's target.
-        
+        Update achieved_ytd and last_sync_at for a specific KpiTarget by PK.
+
+        Uses target_id (primary key) to avoid ambiguous multi-row updates
+        when an officer has multiple target records across units.
+
         Args:
-            officer_id: Officer ID
-            kpi_code: KPI code
-            fiscal_year: Fiscal year
+            target_id: KpiTarget primary key
             ytd_value: New YTD value
         """
         from datetime import datetime, timezone
         from sqlalchemy import update
-        
+
         await self.db.execute(
             update(models.KpiTarget)
             .where(
-                models.KpiTarget.officer_id == officer_id,
-                models.KpiTarget.kpi_code == kpi_code,
-                models.KpiTarget.fiscal_year == fiscal_year,
+                models.KpiTarget.id == target_id,
+                models.KpiTarget.is_active == True,
             )
             .values(
                 achieved_ytd=ytd_value,

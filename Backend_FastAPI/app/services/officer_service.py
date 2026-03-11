@@ -1144,11 +1144,9 @@ async def get_aggregated_dashboard_stats(
     # BUG 13: Get actual capacity from user records instead of hardcoded
     total_capacity = await repo.get_officers_total_capacity(officer_ids)
 
-    # Count enrolled YTD - use existing funnel data (positive outcomes at final stages)
-    fiscal_year = filter_end.year
-    year_start = date(fiscal_year, 1, 1)
-    ytd_kpi_data = await repo.get_aggregated_kpis(officer_ids, year_start, filter_end)
-    total_enrolled_ytd = ytd_kpi_data["converted_count"]
+    # Count enrolled YTD — same semantics as Celery sync (event-based, triple defense)
+    # Uses updated_at + PipelineStage.is_final_stage + counts_for_funnel + positive
+    total_enrolled_ytd = await kpi_repo.count_enrollments_ytd_batch(officer_ids, fiscal_year)
 
     progress_pct = round((total_enrolled_ytd / aggregate_annual_target) * 100, 1) if aggregate_annual_target > 0 else 0
     agg_remaining = max(0, aggregate_annual_target - total_enrolled_ytd)
