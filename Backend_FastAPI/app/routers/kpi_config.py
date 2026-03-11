@@ -97,7 +97,10 @@ class KpiTargetBase(BaseModel):
 
 
 class KpiTargetCreate(KpiTargetBase):
-    """Create annual KPI target."""
+    """Create annual KPI target.
+    Note: unit_id is auto-resolved from officer's user record when officer_id
+    is set but unit_id is omitted (handled in router).
+    """
     pass
 
 
@@ -264,14 +267,22 @@ async def create_kpi_target(
     data: KpiTargetCreate,
 ):
     """Create an annual KPI target for tracking YTD progress. Admin only."""
-    
+
+    # Auto-resolve unit_id from officer's user record when officer_id is set
+    unit_id = data.unit_id
+    if data.officer_id is not None and unit_id is None:
+        officer_user = await db.get(models.User, data.officer_id)
+        if not officer_user:
+            raise HTTPException(status_code=404, detail=f"Officer #{data.officer_id} not found")
+        unit_id = officer_user.unit_id
+
     try:
         target, callback = await kpi_service.create_kpi_target(
             db,
             kpi_code=data.kpi_code,
             annual_target=data.annual_target,
             fiscal_year=data.fiscal_year,
-            unit_id=data.unit_id,
+            unit_id=unit_id,
             officer_id=data.officer_id,
             created_by=current_user,
         )

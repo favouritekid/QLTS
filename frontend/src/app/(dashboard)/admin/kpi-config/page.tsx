@@ -971,9 +971,15 @@ export default function KpiConfigPage() {
                 <Label>Chọn Cán bộ</Label>
                 <Select
                   value={formData.officer_id?.toString() || ""}
-                  onValueChange={(v) =>
-                    setFormData({ ...formData, officer_id: parseInt(v) })
-                  }
+                  onValueChange={(v) => {
+                    const oid = parseInt(v);
+                    const officer = officers.find((o) => o.id === oid);
+                    setFormData({
+                      ...formData,
+                      officer_id: oid,
+                      unit_id: officer?.unit_id ?? null,
+                    });
+                  }}
                   disabled={!!editingConfig}
                 >
                   <SelectTrigger><SelectValue placeholder="Chọn cán bộ..." /></SelectTrigger>
@@ -1124,9 +1130,15 @@ export default function KpiConfigPage() {
                 <Label>Chọn Cán bộ</Label>
                 <Select
                   value={targetFormData.officer_id?.toString() || ""}
-                  onValueChange={(v) =>
-                    setTargetFormData({ ...targetFormData, officer_id: parseInt(v) })
-                  }
+                  onValueChange={(v) => {
+                    const oid = parseInt(v);
+                    const officer = officers.find((o) => o.id === oid);
+                    setTargetFormData({
+                      ...targetFormData,
+                      officer_id: oid,
+                      unit_id: officer?.unit_id ?? null,
+                    });
+                  }}
                   disabled={!!editingTarget}
                 >
                   <SelectTrigger><SelectValue placeholder="Chọn cán bộ..." /></SelectTrigger>
