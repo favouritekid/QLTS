@@ -29,6 +29,10 @@ const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "@Matkhau123!";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 
+const MANAGER_USERNAME = process.env.E2E_MANAGER_USERNAME || "";
+const MANAGER_PASSWORD = process.env.E2E_MANAGER_PASSWORD || "";
+const MANAGER_TOTP_SECRET = process.env.E2E_MANAGER_TOTP_SECRET || "";
+
 // ---------------------------------------------------------------------------
 // Shared state across tests (serial execution within describe)
 // ---------------------------------------------------------------------------
@@ -57,6 +61,24 @@ let leadId4: number; // FSM status patch + officer action
 const testPhone1 = generatePhone();
 const testPhone2 = generatePhone();
 const testPhone3 = generatePhone();
+
+// Test 8: Business rule validations
+let leadIdForLocking: number;
+let leadIdForTerminal: number;
+let finalNegativeStatusId: string | null = null;
+let enrolledFinalStatusId: string | null = null;
+
+// Test 9: Quota exhaustion
+let quotaOfficerUsername: string;
+let quotaOfficerHeaders: Record<string, string> = {};
+let quotaOfficerCookies: Cookie[] = [];
+let quotaOfficerUserId: number;
+const quotaLeadIds: number[] = [];
+
+// Test 10: Manager IDOR
+let managerHeaders: Record<string, string> = {};
+let managerCookies: Cookie[] = [];
+let unitBId: number;
 
 // ---------------------------------------------------------------------------
 // Helpers (self-contained, no cross-file imports)
@@ -1121,6 +1143,609 @@ test.describe("Lead Management Workflow", () => {
       } else {
         console.log(`Missing-phone CSV rejected at API level: ${resp.status()}`);
       }
+    });
+  });
+
+  // =========================================================================
+  // Test 7: GET /api/leads — List, Filters, Pagination, Role-based visibility
+  // =========================================================================
+  test("List leads — filters, pagination, role-based visibility", async ({ page }) => {
+    // --- Step 1: Admin list (no filter) — verify shape + positive control ---
+    await test.step("Admin list — shape + positive control", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      // Shape check: default page
+      const resp = await page.request.get(`${API_URL}/api/leads`, { headers: adminHeaders });
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(typeof body.total_count).toBe("number");
+      expect(Array.isArray(body.leads)).toBeTruthy();
+      expect(body.total_count).toBeGreaterThanOrEqual(1);
+
+      // Positive control: search for the specific lead (seed data may push it off page 1)
+      const resp2 = await page.request.get(`${API_URL}/api/leads?search=${testPhone1}`, { headers: adminHeaders });
+      expect(resp2.ok()).toBeTruthy();
+      const body2 = await resp2.json();
+      expect(body2.leads.some((l: { id: number }) => l.id === leadId1)).toBeTruthy();
+      console.log(`Admin list: total_count=${body.total_count}, lead1 found via search`);
+    });
+
+    // --- Step 2: Filter by source=walk_in ---
+    await test.step("Filter by source=walk_in", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.get(`${API_URL}/api/leads?source=walk_in`, { headers: adminHeaders });
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      if (body.leads.length > 0) {
+        expect(body.leads.every((l: { source: string }) => l.source === "walk_in")).toBeTruthy();
+      }
+      console.log(`Filter source=walk_in: returned ${body.leads.length} leads`);
+    });
+
+    // --- Step 3: Search by testPhone1 ---
+    await test.step("Search by testPhone1 — lead1 found", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.get(`${API_URL}/api/leads?search=${testPhone1}`, { headers: adminHeaders });
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.leads.some((l: { id: number }) => l.id === leadId1)).toBeTruthy();
+      console.log(`Search by phone: found=${body.leads.length} leads`);
+    });
+
+    // --- Step 4: Filter by pipeline_stage_id ---
+    await test.step("Filter by pipeline_stage_id", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const stageIdForFilter = pipelineStages[0].id;
+      const resp = await page.request.get(
+        `${API_URL}/api/leads?pipeline_stage_id=${stageIdForFilter}`,
+        { headers: adminHeaders }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      if (body.leads.length > 0) {
+        expect(
+          body.leads.every(
+            (l: { pipeline_stage_id: string }) => l.pipeline_stage_id === stageIdForFilter
+          )
+        ).toBeTruthy();
+      }
+      console.log(`Filter stage_id=${stageIdForFilter}: returned ${body.leads.length} leads`);
+    });
+
+    // --- Step 5: Pagination — page_size=1 ---
+    await test.step("Pagination page_size=1", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.get(`${API_URL}/api/leads?page=1&page_size=1`, { headers: adminHeaders });
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.leads.length).toBeLessThanOrEqual(1);
+      expect(body.total_count).toBeGreaterThanOrEqual(1);
+      console.log(`Pagination page_size=1: leads.length=${body.leads.length}, total_count=${body.total_count}`);
+    });
+
+    // --- Step 6: Filter by assigned_officer_id ---
+    await test.step("Filter by assigned_officer_id", async () => {
+      if (!officerUserId) {
+        console.log("officerUserId not set, skip step 6");
+        return;
+      }
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.get(
+        `${API_URL}/api/leads?assigned_officer_id=${officerUserId}&page_size=100`,
+        { headers: adminHeaders }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.leads.some((l: { id: number }) => l.id === leadId1)).toBeTruthy();
+      if (body.leads.length > 0) {
+        expect(
+          body.leads.every(
+            (l: { assigned_officer_id: number }) => l.assigned_officer_id === officerUserId
+          )
+        ).toBeTruthy();
+      }
+      console.log(`Filter officer_id=${officerUserId}: returned ${body.leads.length} leads`);
+    });
+
+    // --- Step 7: Date range — broad range covering all test data ---
+    await test.step("Date range filter — broad range", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.get(
+        `${API_URL}/api/leads?date_from=2020-01-01T00%3A00%3A00&date_to=2099-12-31T23%3A59%3A59`,
+        { headers: adminHeaders }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.total_count).toBeGreaterThanOrEqual(1);
+      console.log(`Date range filter: total_count=${body.total_count}`);
+    });
+
+    // --- Step 8: Score range filter ---
+    await test.step("Score range filter score_min=0&score_max=100", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const resp = await page.request.get(
+        `${API_URL}/api/leads?score_min=0&score_max=100`,
+        { headers: adminHeaders }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.total_count).toBeGreaterThanOrEqual(1);
+      console.log(`Score range filter: total_count=${body.total_count}`);
+    });
+
+    // --- Step 9: Officer role-based filter — chỉ thấy leads của mình ---
+    await test.step("Officer list — role-scoped visibility", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const resp = await page.request.get(`${API_URL}/api/leads?page_size=100`, { headers: officerHeaders });
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      // Positive: officer phải thấy lead1 (assigned trong Test 1)
+      expect(body.leads.some((l: { id: number }) => l.id === leadId1)).toBeTruthy();
+      // Negative: không thấy leadIdInaccessible (unassigned, tạo trong Test 4)
+      expect(body.leads.find((l: { id: number }) => l.id === leadIdInaccessible)).toBeFalsy();
+      // Role enforcement: mọi lead trả về phải của officer này
+      if (body.leads.length > 0 && officerUserId) {
+        expect(
+          body.leads.every(
+            (l: { assigned_officer_id: number }) => l.assigned_officer_id === officerUserId
+          )
+        ).toBeTruthy();
+      }
+      console.log(`Officer list: total_count=${body.total_count}, visible leads=${body.leads.length}`);
+    });
+  });
+
+  // =========================================================================
+  // Test 8: Business Rule Validations — optimistic locking, loss reason, terminal block
+  // =========================================================================
+  test("Business rule validations — optimistic locking, loss reason, terminal block", async ({ page }) => {
+    // --- Preamble: Re-fetch pipeline với full metadata + tạo leads mới ---
+    await test.step("Re-fetch pipeline metadata + create fresh leads", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      // Re-fetch để lấy is_final, phase, outcome_type
+      const pr = await page.request.get(`${API_URL}/api/pipeline/all`, { headers: adminHeaders });
+      expect(pr.ok()).toBeTruthy();
+      const fullPipeline = await pr.json();
+      type FullStatus = { id: string; name: string; phase: string; is_final: boolean; outcome_type: string };
+      const allFullStatuses: FullStatus[] = fullPipeline.statuses;
+
+      finalNegativeStatusId = allFullStatuses.find(
+        (s) => s.is_final && s.outcome_type === "negative" && s.phase === "consultation"
+      )?.id ?? null;
+      enrolledFinalStatusId = allFullStatuses.find(
+        (s) => s.is_final && s.phase === "enrolled"
+      )?.id ?? null;
+      console.log(`finalNegativeStatusId=${finalNegativeStatusId}, enrolledFinalStatusId=${enrolledFinalStatusId}`);
+
+      // Create 2 fresh leads
+      const r1 = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: { full_name: `E2E_Lock_${Date.now()}`, phone: generatePhone(), source: "walk_in", offering_id: offeringId },
+      });
+      expect(r1.ok() || r1.status() === 201).toBeTruthy();
+      leadIdForLocking = (await r1.json()).id;
+
+      const r2 = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: { full_name: `E2E_Terminal_${Date.now()}`, phone: generatePhone(), source: "walk_in", offering_id: offeringId },
+      });
+      expect(r2.ok() || r2.status() === 201).toBeTruthy();
+      leadIdForTerminal = (await r2.json()).id;
+      console.log(`Created leads for Test 8: locking=${leadIdForLocking}, terminal=${leadIdForTerminal}`);
+    });
+
+    // --- Sub-test A: Optimistic Locking (version mismatch → 409) ---
+    await test.step("A1: GET lead — capture version", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const detail = await (
+        await page.request.get(`${API_URL}/api/leads/${leadIdForLocking}`, { headers: adminHeaders })
+      ).json();
+      const currentVersion: number = detail.version;
+      console.log(`Lead version: ${currentVersion}`);
+
+      // A2: PUT với version sai → 409
+      const staleResp = await page.request.put(`${API_URL}/api/leads/${leadIdForLocking}`, {
+        headers: adminHeaders,
+        data: { full_name: "E2E_Stale", version: currentVersion + 999 },
+      });
+      expect(staleResp.status()).toBe(409);
+      const staleErr = await staleResp.json();
+      expect(staleErr.detail).toMatch(/cập nhật|conflict/i);
+      console.log(`Stale version rejected: 409 — ${String(staleErr.detail).slice(0, 100)}`);
+
+      // A3: PUT với version đúng → 200, version tăng
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const okResp = await page.request.put(`${API_URL}/api/leads/${leadIdForLocking}`, {
+        headers: adminHeaders,
+        data: { full_name: "E2E_Lock_Updated", version: currentVersion },
+      });
+      expect(okResp.ok()).toBeTruthy();
+      const updated = await okResp.json();
+      expect(updated.version).toBe(currentVersion + 1);
+      expect(updated.full_name).toBe("E2E_Lock_Updated");
+      console.log(`Correct version accepted: version now=${updated.version}`);
+    });
+
+    // --- Sub-test B: Loss Reason Validation ---
+    await test.step("B: Loss reason required for negative final status", async () => {
+      if (!finalNegativeStatusId) {
+        console.log("Skip sub-test B: no status with is_final=true AND outcome_type=negative");
+        return;
+      }
+
+      // B1: Assign leadIdForLocking to officer
+      adminHeaders = await restoreCookies(page, adminCookies);
+      if (officerUserId) {
+        const assignResp = await page.request.post(`${API_URL}/api/leads/${leadIdForLocking}/assign`, {
+          headers: adminHeaders,
+          data: { officer_id: officerUserId },
+        });
+        expect(assignResp.ok()).toBeTruthy();
+        console.log(`Lead assigned to officer ${officerUserId}`);
+      }
+
+      // B2: POST consultation to final+negative WITHOUT loss_reason_code → 400
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const noReasonResp = await page.request.post(
+        `${API_URL}/api/leads/${leadIdForLocking}/consultations`,
+        {
+          headers: adminHeaders,
+          data: { status_id: finalNegativeStatusId, method: "phone", notes: "E2E: missing loss_reason" },
+        }
+      );
+      expect(noReasonResp.status()).toBe(400);
+      const noReasonErr = await noReasonResp.json();
+      expect(noReasonErr.detail).toMatch(/loss_reason|lý do/i);
+      console.log(`Missing loss_reason rejected: 400 — ${String(noReasonErr.detail).slice(0, 100)}`);
+
+      // B3: POST WITH loss_reason_code → 201
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const withReasonResp = await page.request.post(
+        `${API_URL}/api/leads/${leadIdForLocking}/consultations`,
+        {
+          headers: adminHeaders,
+          data: {
+            status_id: finalNegativeStatusId,
+            method: "phone",
+            notes: "E2E: with loss reason",
+            loss_reason_code: "NO_CONTACT",
+            loss_reason_note: "Lead không nghe máy sau 5 lần gọi",
+          },
+        }
+      );
+      expect(withReasonResp.ok() || withReasonResp.status() === 201).toBeTruthy();
+      const created = await withReasonResp.json();
+      const statusField = created.consultation_status_id ?? created.status_id;
+      expect(statusField).toBe(finalNegativeStatusId);
+      console.log(`Loss reason accepted: consultation status=${statusField}`);
+    });
+
+    // --- Sub-test C: Terminal Status Hard Block (phase=enrolled) ---
+    await test.step("C: Terminal enrolled lead → consultation blocked", async () => {
+      if (!enrolledFinalStatusId) {
+        console.log("Skip sub-test C: no status with is_final=true AND phase=enrolled");
+        return;
+      }
+
+      // C1: Admin PATCH leadIdForTerminal → enrolled final status
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const patchResp = await page.request.patch(
+        `${API_URL}/api/leads/${leadIdForTerminal}/status`,
+        { headers: adminHeaders, data: { consultation_status_id: enrolledFinalStatusId } }
+      );
+      if (!patchResp.ok()) {
+        console.log(`Cannot PATCH to enrolled status (FSM may block): ${patchResp.status()} — skip sub-test C`);
+        return;
+      }
+      const patched = await patchResp.json();
+      expect(patched.consultation_status_id).toBe(enrolledFinalStatusId);
+      console.log(`Lead patched to enrolled status: ${enrolledFinalStatusId}`);
+
+      // C2: POST consultation to enrolled+final lead → 400 hard block
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const hardBlockResp = await page.request.post(
+        `${API_URL}/api/leads/${leadIdForTerminal}/consultations`,
+        {
+          headers: adminHeaders,
+          data: { status_id: initialStatusId, method: "phone", notes: "E2E: should be hard blocked" },
+        }
+      );
+      expect(hardBlockResp.status()).toBe(400);
+      const blockErr = await hardBlockResp.json();
+      expect(blockErr.detail).toMatch(/nhập học|enrolled|hoàn tất|hard.block/i);
+      console.log(`Hard block confirmed: 400 — ${String(blockErr.detail).slice(0, 100)}`);
+    });
+  });
+
+  // =========================================================================
+  // Test 9: Reassign Quota Exhaustion — officer capped at 5/week, admin uncapped
+  // =========================================================================
+  test("Reassign quota exhaustion — officer capped at 5/week, admin uncapped", async ({ page }) => {
+    const ts = Date.now();
+
+    // --- Step 1: Admin creates fresh officer (quota=0) ---
+    await test.step("Create fresh quota officer", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      quotaOfficerUsername = `e2e_quota_${ts}`;
+      const createResp = await page.request.post(`${API_URL}/api/admin/users`, {
+        headers: adminHeaders,
+        form: {
+          username: quotaOfficerUsername,
+          email: `e2e_quota_${ts}@test.example`,
+          password: "E2eQuota@12345",
+          full_name: "E2E Quota Officer",
+          role: "officer",
+          status: "active",
+        },
+      });
+      expect(createResp.status()).toBe(201);
+      quotaOfficerUserId = (await createResp.json()).id;
+      console.log(`Created quota officer: id=${quotaOfficerUserId}, username=${quotaOfficerUsername}`);
+    });
+
+    // --- Step 2: Assign quota officer to unitId ---
+    await test.step("Assign quota officer to unit", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const assignUnitResp = await page.request.put(
+        `${API_URL}/api/admin/users/${quotaOfficerUserId}`,
+        { headers: adminHeaders, form: { unit_id: String(unitId) } }
+      );
+      expect(assignUnitResp.ok()).toBeTruthy();
+      console.log(`Quota officer assigned to unit ${unitId}`);
+    });
+
+    // --- Step 3: Quota officer login ---
+    await test.step("Quota officer login", async () => {
+      quotaOfficerHeaders = await loginViaAPI(page, quotaOfficerUsername, "E2eQuota@12345");
+      quotaOfficerCookies = await page.context().cookies();
+      console.log("Quota officer logged in");
+    });
+
+    // --- Step 4: Initial quota = 5 ---
+    await test.step("Verify initial quota = 5", async () => {
+      quotaOfficerHeaders = await restoreCookies(page, quotaOfficerCookies);
+
+      const q0 = await (
+        await page.request.get(`${API_URL}/api/leads/my/reassign-quota`, { headers: quotaOfficerHeaders })
+      ).json();
+      expect(q0.remaining).toBe(5);
+      expect(q0.limit).toBe(5);
+      expect(q0.allowed).toBe(true);
+      console.log(`Initial quota: remaining=${q0.remaining}, limit=${q0.limit}`);
+    });
+
+    // --- Step 5: Admin creates 6 leads and assigns all to quota officer ---
+    await test.step("Create and assign 6 leads to quota officer", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      for (let i = 0; i < 6; i++) {
+        const lr = await page.request.post(`${API_URL}/api/leads`, {
+          headers: adminHeaders,
+          data: {
+            full_name: `E2E_Quota_Lead_${i}_${ts}`,
+            phone: generatePhone(),
+            source: "walk_in",
+            offering_id: offeringId,
+          },
+        });
+        expect(lr.ok() || lr.status() === 201).toBeTruthy();
+        const lid = (await lr.json()).id;
+        await page.request.post(`${API_URL}/api/leads/${lid}/assign`, {
+          headers: adminHeaders,
+          data: { officer_id: quotaOfficerUserId },
+        });
+        quotaLeadIds.push(lid);
+      }
+      expect(quotaLeadIds).toHaveLength(6);
+      console.log(`Created and assigned 6 leads: ${quotaLeadIds}`);
+    });
+
+    // --- Step 6: Quota officer reassigns 5 leads — each succeeds, quota decrements ---
+    await test.step("Quota officer reassigns 5 leads — all succeed", async () => {
+      for (let i = 0; i < 5; i++) {
+        quotaOfficerHeaders = await restoreCookies(page, quotaOfficerCookies);
+        const actionResp = await page.request.post(
+          `${API_URL}/api/leads/${quotaLeadIds[i]}/action`,
+          {
+            headers: quotaOfficerHeaders,
+            data: { action: "reassign", reason: `E2E quota test attempt ${i + 1}` },
+          }
+        );
+        expect(actionResp.ok()).toBeTruthy();
+
+        // Verify quota after each reassign
+        quotaOfficerHeaders = await restoreCookies(page, quotaOfficerCookies);
+        const qi = await (
+          await page.request.get(`${API_URL}/api/leads/my/reassign-quota`, { headers: quotaOfficerHeaders })
+        ).json();
+        expect(qi.used).toBe(i + 1);
+        expect(qi.remaining).toBe(4 - i);
+        console.log(`Reassign ${i + 1}/5: used=${qi.used}, remaining=${qi.remaining}`);
+      }
+    });
+
+    // --- Step 7: 6th reassign → 400 quota exceeded ---
+    await test.step("6th reassign → 400 quota exceeded", async () => {
+      quotaOfficerHeaders = await restoreCookies(page, quotaOfficerCookies);
+
+      const failResp = await page.request.post(
+        `${API_URL}/api/leads/${quotaLeadIds[5]}/action`,
+        {
+          headers: quotaOfficerHeaders,
+          data: { action: "reassign", reason: "E2E quota test: should fail" },
+        }
+      );
+      expect(failResp.status()).toBe(400);
+      const failErr = await failResp.json();
+      expect(failErr.detail).toMatch(/quota|lượt|hết/i);
+      console.log(`Quota exceeded: 400 — ${String(failErr.detail).slice(0, 100)}`);
+    });
+
+    // --- Step 8: Final quota state — remaining=0, allowed=false ---
+    await test.step("Final quota: remaining=0, allowed=false", async () => {
+      quotaOfficerHeaders = await restoreCookies(page, quotaOfficerCookies);
+
+      const qFinal = await (
+        await page.request.get(`${API_URL}/api/leads/my/reassign-quota`, { headers: quotaOfficerHeaders })
+      ).json();
+      expect(qFinal.remaining).toBe(0);
+      expect(qFinal.allowed).toBe(false);
+      expect(qFinal.used).toBe(5);
+      console.log(`Final quota: remaining=${qFinal.remaining}, allowed=${qFinal.allowed}`);
+    });
+
+    // --- Step 9: Admin reassigns 6th lead → succeeds (no quota for admin) ---
+    await test.step("Admin reassign — not subject to quota", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const adminReassign = await page.request.post(
+        `${API_URL}/api/leads/${quotaLeadIds[5]}/action`,
+        {
+          headers: adminHeaders,
+          data: { action: "reassign", reason: "Admin has no quota limit" },
+        }
+      );
+      expect(adminReassign.ok()).toBeTruthy();
+      console.log("Admin reassign succeeded (uncapped)");
+    });
+  });
+
+  // =========================================================================
+  // Test 10: Manager IDOR List Scope — unit-scoped visibility
+  // =========================================================================
+  test("Manager IDOR list scope — unit-scoped visibility", async ({ page }) => {
+    // --- Step 1: Skip if no manager credentials ---
+    await test.step("Guard: manager credentials + units check", async () => {
+      if (!MANAGER_USERNAME || !MANAGER_PASSWORD) {
+        test.skip(true, "E2E_MANAGER_USERNAME/PASSWORD not set — skip manager IDOR test");
+        return;
+      }
+
+      // Check ≥2 units
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const unitsResp = await page.request.get(`${API_URL}/api/organization-units`, { headers: adminHeaders });
+      const allUnits = await unitsResp.json();
+      if (allUnits.length < 2) {
+        test.skip(true, "Need ≥2 organization units for manager IDOR cross-unit test");
+        return;
+      }
+      unitBId = allUnits.find((u: { id: number }) => u.id !== unitId)!.id;
+      console.log(`unitId=${unitId}, unitBId=${unitBId}`);
+    });
+
+    // Early return if skipped
+    if (!MANAGER_USERNAME || !MANAGER_PASSWORD) return;
+
+    // --- Step 2: Admin creates lead in unitB ---
+    let unitBLeadId: number;
+    await test.step("Admin creates lead in unitB", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const unitBLeadResp = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: {
+          full_name: `E2E_UnitB_Lead_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          unit_id: unitBId,
+        },
+      });
+      expect(unitBLeadResp.ok() || unitBLeadResp.status() === 201).toBeTruthy();
+      unitBLeadId = (await unitBLeadResp.json()).id;
+      console.log(`Created unitB lead: id=${unitBLeadId}`);
+    });
+
+    // --- Step 3: Manager login (with optional TOTP) ---
+    await test.step("Manager login", async () => {
+      managerHeaders = await loginViaAPI(
+        page,
+        MANAGER_USERNAME,
+        MANAGER_PASSWORD,
+        MANAGER_TOTP_SECRET ? { totpSecret: MANAGER_TOTP_SECRET } : undefined
+      );
+      managerCookies = await page.context().cookies();
+      console.log("Manager logged in");
+    });
+
+    // --- Step 4: Probe — check MFA enforcement ---
+    await test.step("Probe manager API access (MFA check)", async () => {
+      managerHeaders = await restoreCookies(page, managerCookies);
+
+      const probeResp = await page.request.get(`${API_URL}/api/leads`, { headers: managerHeaders });
+      if (probeResp.status() === 403) {
+        const probeErr = await probeResp.json();
+        console.log(`Manager probe failed 403: ${JSON.stringify(probeErr).slice(0, 200)}`);
+        if (/mfa|multi.factor/i.test(JSON.stringify(probeErr))) {
+          test.skip(
+            true,
+            "Manager MFA enforcement active but mfa_enabled=False — set E2E_MANAGER_TOTP_SECRET or enable MFA"
+          );
+          return;
+        }
+      }
+      expect(probeResp.ok()).toBeTruthy();
+      console.log("Manager probe succeeded");
+    });
+
+    // --- Step 5: Manager list → only sees unitA leads ---
+    await test.step("Manager list — sees unitA, not unitB", async () => {
+      managerHeaders = await restoreCookies(page, managerCookies);
+
+      const mgrListResp = await page.request.get(`${API_URL}/api/leads`, { headers: managerHeaders });
+      expect(mgrListResp.ok()).toBeTruthy();
+      const mgrBody = await mgrListResp.json();
+
+      // Positive: manager sees lead1 (unitA)
+      expect(mgrBody.leads.some((l: { id: number }) => l.id === leadId1)).toBeTruthy();
+      // Negative: manager does NOT see unitB lead
+      expect(mgrBody.leads.find((l: { id: number }) => l.id === unitBLeadId)).toBeFalsy();
+      // Role enforcement: all returned leads belong to unitA
+      if (mgrBody.leads.length > 0) {
+        expect(
+          mgrBody.leads.every((l: { unit_id: number }) => l.unit_id === unitId)
+        ).toBeTruthy();
+      }
+      console.log(`Manager list: total_count=${mgrBody.total_count}, unitB lead hidden`);
+    });
+
+    // --- Step 6: Manager filter with unit_id=unitB → server override (no unitB results) ---
+    await test.step("Manager filter unit_id=unitB → server scope override", async () => {
+      managerHeaders = await restoreCookies(page, managerCookies);
+
+      const overrideResp = await page.request.get(
+        `${API_URL}/api/leads?unit_id=${unitBId}`,
+        { headers: managerHeaders }
+      );
+      expect(overrideResp.ok()).toBeTruthy();
+      const overrideBody = await overrideResp.json();
+      expect(overrideBody.leads.find((l: { id: number }) => l.id === unitBLeadId)).toBeFalsy();
+      console.log(`Manager unit_id=unitB override: unitB lead still hidden`);
+    });
+
+    // --- Step 7: Admin sees unitB lead with unit_id=unitB filter ---
+    await test.step("Admin sees unitB lead — positive control", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const adminUnitBResp = await page.request.get(
+        `${API_URL}/api/leads?unit_id=${unitBId}`,
+        { headers: adminHeaders }
+      );
+      expect(adminUnitBResp.ok()).toBeTruthy();
+      const adminUnitBBody = await adminUnitBResp.json();
+      expect(adminUnitBBody.leads.some((l: { id: number }) => l.id === unitBLeadId)).toBeTruthy();
+      console.log(`Admin sees unitB lead ${unitBLeadId}: confirmed`);
     });
   });
 });

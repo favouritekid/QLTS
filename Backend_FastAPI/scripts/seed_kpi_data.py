@@ -174,7 +174,7 @@ async def seed(count: int, officer_id: int, year: int, dry_run: bool, sync: bool
             lead = models.Lead(
                 full_name=name,
                 phone=gen_phone(),
-                email=f"seed{year}_{i}@test.local",
+                email=f"seed{year}_{i}@test.example",
                 source=random.choice(SOURCES),
                 status="converted" if label == "enrolled" else "contacted",
                 unit_id=unit_id,
