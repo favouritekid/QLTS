@@ -849,7 +849,46 @@ test.describe("Lead Management Workflow", () => {
       console.log(`Officer action without reason rejected: 422`);
     });
 
-    // --- Step 10: GET /leads/{lead1}/audit-logs (admin) ---
+    // --- Step 10: Officer "reassign" action → clears assignment, reassign_pending ---
+    await test.step("Officer reassign action → assigned_officer_id cleared + assignment_status=reassign_pending", async () => {
+      // Admin creates a fresh lead and assigns it to the officer for this test
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const freshLeadResp = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: {
+          full_name: `E2E_Reassign_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          offering_id: offeringId,
+        },
+      });
+      expect(freshLeadResp.ok() || freshLeadResp.status() === 201).toBeTruthy();
+      const freshLeadId = (await freshLeadResp.json()).id;
+
+      await page.request.post(`${API_URL}/api/leads/${freshLeadId}/assign`, {
+        headers: adminHeaders,
+        data: { officer_id: officerUserId },
+      });
+
+      // Officer reassigns the lead (self-reassign: gives up ownership)
+      officerHeaders = await restoreCookies(page, officerCookies);
+      const resp = await page.request.post(
+        `${API_URL}/api/leads/${freshLeadId}/action`,
+        {
+          headers: officerHeaders,
+          data: { action: "reassign", reason: "Lead không phù hợp, cần chuyển cho nhóm khác" },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.assigned_officer_id).toBeNull();
+      expect(body.assignment_status).toBe("reassign_pending");
+      console.log(
+        `Officer reassign: assigned_officer_id=${body.assigned_officer_id}, assignment_status=${body.assignment_status}`
+      );
+    });
+
+    // --- Step 11: GET /leads/{lead1}/audit-logs (admin) ---
     await test.step("Admin gets audit logs for lead1", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
