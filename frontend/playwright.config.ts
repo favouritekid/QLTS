@@ -46,15 +46,16 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
-    // Authentication setup - runs first and saves state
+    // Auth setup — officer account (no MFA), runs first
     {
       name: 'setup',
       testMatch: /auth\.setup\.ts/,
     },
 
-    // Desktop browsers (depend on auth setup)
+    // Desktop chromium — smoke + responsive + ui-smoke
     {
       name: 'chromium',
+      testMatch: /smoke-all-pages\.spec\.ts|(responsive|ui-smoke)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         storageState: authFile,
@@ -62,8 +63,10 @@ export default defineConfig({
       dependencies: ['setup'],
     },
 
+    // Desktop firefox — smoke only (full matrix nightly with @nightly tag)
     {
       name: 'firefox',
+      testMatch: /smoke-all-pages\.spec\.ts/,
       use: {
         ...devices['Desktop Firefox'],
         storageState: authFile,
@@ -71,8 +74,10 @@ export default defineConfig({
       dependencies: ['setup'],
     },
 
+    // Desktop webkit — smoke only
     {
       name: 'webkit',
+      testMatch: /smoke-all-pages\.spec\.ts/,
       use: {
         ...devices['Desktop Safari'],
         storageState: authFile,
@@ -80,9 +85,10 @@ export default defineConfig({
       dependencies: ['setup'],
     },
 
-    // Mobile viewports (depend on auth setup)
+    // Mobile officer suite — officer storageState, no /admin/* routes
     {
       name: 'Mobile_Chrome',
+      testMatch: /mobile_checks(|_part2|_final)\.spec\.ts/,
       use: {
         ...devices['Pixel 5'],
         storageState: authFile,
@@ -91,6 +97,7 @@ export default defineConfig({
     },
     {
       name: 'Mobile_Safari',
+      testMatch: /mobile_checks(|_part2|_final)\.spec\.ts/,
       use: {
         ...devices['iPhone 12'],
         storageState: authFile,
@@ -98,23 +105,23 @@ export default defineConfig({
       dependencies: ['setup'],
     },
 
-    // E2E workflow tests (no shared auth - tests login inline)
+    // Mobile admin suite — API login with TOTP (no storageState, no setup dependency)
+    {
+      name: 'Mobile_Admin',
+      testMatch: /mobile_checks_admin\.spec\.ts/,
+      use: {
+        ...devices['Pixel 5'],
+      },
+    },
+
+    // E2E workflow — all API-level workflow tests, login inline with MFA
     {
       name: 'e2e-workflow',
+      testMatch: /(lifecycle|workflow|bulk)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
       },
     },
-
-    /* Test against branded browsers. */
-    // {
-    //   name: 'Microsoft Edge',
-    //   use: { ...devices['Desktop Edge'], channel: 'msedge' },
-    // },
-    // {
-    //   name: 'Google Chrome',
-    //   use: { ...devices['Desktop Chrome'], channel: 'chrome' },
-    // },
   ],
 
   /* Run your local dev server before starting the tests */

@@ -66,6 +66,27 @@ let confirmToken: string;
 let leadId4: number;
 let profileId4: number;
 
+let hasPaperDoc = false;
+
+// Test 5: request-revision
+let leadId5: number;
+let profileId5: number;
+
+// Test 6: auth boundaries + IDOR + locking
+let leadId6: number;
+let profileId6: number;
+
+// Test 7A: drop via override path
+let leadId7A: number;
+let profileId7A: number;
+let profileVersion7A: number;
+
+// Test 7B: drop via magic link path
+let leadId7B: number;
+let profileId7B: number;
+let citizenId7B: string;
+let profileVersion7B: number;
+
 // ---------------------------------------------------------------------------
 // Helpers (self-contained, no cross-file imports)
 // ---------------------------------------------------------------------------
@@ -310,6 +331,44 @@ async function createLeadAndProfile(
   return { leadId, profileId, citizenId, version: updatedProfile.version };
 }
 
+/**
+ * Create a lead + admission profile with minimal data (no personal info, no docs uploaded).
+ * Returns a profile in draft state ready for validation-error testing.
+ */
+async function createMinimalDraftProfile(
+  page: Page,
+  headers: Record<string, string>,
+  opts: { offeringId: number; admissionMethodId: number; initialStatusId: string }
+): Promise<{ leadId: number; profileId: number }> {
+  const phone = generatePhone();
+
+  // Create lead
+  const leadResp = await page.request.post(`${API_URL}/api/leads`, {
+    headers,
+    data: {
+      full_name: `E2E_MinDraft_${Date.now()}`,
+      phone,
+      source: "walk_in",
+      offering_id: opts.offeringId,
+    },
+  });
+  const leadId = (await leadResp.json()).id;
+
+  // Consultation required before admission
+  await page.request.post(`${API_URL}/api/leads/${leadId}/consultations`, {
+    headers,
+    data: { status_id: opts.initialStatusId, method: "phone", notes: "minimal" },
+  });
+
+  // Create profile — intentionally do NOT fill personal info or upload docs
+  const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
+    headers,
+    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
+  });
+  const profileId = (await profileResp.json()).id;
+  return { leadId, profileId };
+}
+
 // ---------------------------------------------------------------------------
 // Test Suite
 // ---------------------------------------------------------------------------
@@ -354,9 +413,15 @@ test.describe("Admission Profile Lifecycle", () => {
       expect(methodsResp.ok()).toBeTruthy();
       const methodsBody = await methodsResp.json();
       const methods = methodsBody.methods || methodsBody;
-      admissionMethodId = methods[0].id;
+      // Prefer method with paper-only doc for Test 9 (mark paper submitted)
+      const methodWithPaperDoc = methods.find(
+        (m: { id: number; documents?: Array<{ requires_upload: boolean }> }) =>
+          m.documents?.some((d: { requires_upload: boolean }) => d.requires_upload === false)
+      );
+      admissionMethodId = methodWithPaperDoc?.id || methods[0].id;
+      hasPaperDoc = !!methodWithPaperDoc;
 
-      console.log(`Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}`);
+      console.log(`Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}, hasPaperDoc=${hasPaperDoc}`);
     });
 
     // --- Step 2: Officer login ---
@@ -773,6 +838,105 @@ test.describe("Admission Profile Lifecycle", () => {
       expect(["enrolled", "confirmed"]).toContain(profile.status);
       console.log(`Final status: ${profile.status}`);
     });
+
+    // --- Step 8: Reuse already-confirmed token → 400 ---
+    await test.step("Reuse already-confirmed token fails", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/confirm/${confirmToken}`,
+        { data: { last_digits_citizen_id: citizenId3.slice(-4) } }
+      );
+      expect(resp.status()).toBe(400);
+      const body = await resp.json();
+      expect(body.detail).toBeTruthy();
+      console.log(`Reuse token rejected: ${resp.status()} - ${body.detail}`);
+    });
+
+    // --- Step 9: Exhaust 5 wrong CCCD attempts → token locked ---
+    await test.step("Exhausting CCCD attempts locks token", async () => {
+      // Create a fresh profile for this edge case
+      officerHeaders = await restoreCookies(page, officerCookies);
+      const exhaustCitizenId = generateCitizenId();
+      const exhaustResult = await createLeadAndProfile(page, officerHeaders, {
+        offeringId,
+        admissionMethodId,
+        initialStatusId,
+        citizenId: exhaustCitizenId,
+      });
+      const exhaustProfileId = exhaustResult.profileId;
+
+      // Submit
+      const submitResp = await page.request.post(
+        `${API_URL}/api/admissions/${exhaustProfileId}/submit`,
+        { headers: officerHeaders }
+      );
+      expect((await submitResp.json()).status).toBe("submitted");
+
+      // Admin approve
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const approveProf = await (
+        await page.request.get(`${API_URL}/api/admissions/${exhaustProfileId}`)
+      ).json();
+      const approveResp = await page.request.post(
+        `${API_URL}/api/admissions/${exhaustProfileId}/approve`,
+        {
+          headers: adminHeaders,
+          data: { notes: "Edge case exhaust test", version: approveProf.version },
+        }
+      );
+      expect((await approveResp.json()).status).toBe("approved");
+
+      // Send confirmation
+      const sendResp = await page.request.post(
+        `${API_URL}/api/admissions/${exhaustProfileId}/send-confirmation`,
+        { headers: adminHeaders }
+      );
+      expect(sendResp.ok()).toBeTruthy();
+      const exhaustToken = (await sendResp.json()).token_value;
+      expect(exhaustToken).toBeTruthy();
+      console.log(`Exhaust token: ${exhaustToken.slice(0, 8)}...`);
+
+      // Verify initial attempts
+      const infoInit = await page.request.get(
+        `${API_URL}/api/admissions/confirm/${exhaustToken}`
+      );
+      expect(infoInit.ok()).toBeTruthy();
+      const initData = await infoInit.json();
+      expect(initData.attempts_remaining).toBe(5);
+
+      // Wrong CCCD 5 times — verify attempts_remaining decreases
+      for (let i = 0; i < 5; i++) {
+        const wrongResp = await page.request.post(
+          `${API_URL}/api/admissions/confirm/${exhaustToken}`,
+          { data: { last_digits_citizen_id: "0000" } }
+        );
+        expect(wrongResp.status()).toBe(400);
+        const wrongBody = await wrongResp.json();
+        console.log(`Attempt ${i + 1}/5: ${wrongBody.detail}`);
+
+        // Check remaining attempts via info endpoint (may not work when locked)
+        if (i < 4) {
+          const infoResp = await page.request.get(
+            `${API_URL}/api/admissions/confirm/${exhaustToken}`
+          );
+          if (infoResp.ok()) {
+            const info = await infoResp.json();
+            const expectedRemaining = 5 - (i + 1);
+            expect(info.attempts_remaining).toBe(expectedRemaining);
+            console.log(`  attempts_remaining: ${info.attempts_remaining}`);
+          }
+        }
+      }
+
+      // After 5 failures, token should be locked — any further attempt also fails
+      const lockedResp = await page.request.post(
+        `${API_URL}/api/admissions/confirm/${exhaustToken}`,
+        { data: { last_digits_citizen_id: "0000" } }
+      );
+      expect(lockedResp.status()).toBe(400);
+      const lockedBody = await lockedResp.json();
+      expect(lockedBody.detail).toBeTruthy();
+      console.log(`Token after exhaustion: ${lockedBody.detail}`);
+    });
   });
 
   // =========================================================================
@@ -867,7 +1031,36 @@ test.describe("Admission Profile Lifecycle", () => {
       console.log(`Document ${testDocCode} re-uploaded`);
     });
 
-    // --- Step 7: Delete draft profile ---
+    // --- Step 7: Mark paper-only doc as submitted (Test 9 from plan) ---
+    await test.step("Mark paper-only doc as submitted", async () => {
+      if (!hasPaperDoc) {
+        console.log("Admission method has no paper-only doc — skipping paper-submitted step");
+        return;
+      }
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId4}`)
+      ).json();
+      const paperDoc = (profile.documents_checklist || []).find(
+        (d: { requires_upload: boolean; code: string }) => d.requires_upload === false
+      );
+      expect(paperDoc).toBeTruthy();
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId4}/documents/${paperDoc!.code}/paper-submitted`,
+        {
+          headers: officerHeaders,
+          data: { actual_submission_format: "original" },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.id).toBe(profileId4);
+      console.log(`Paper doc ${paperDoc!.code} marked as submitted`);
+    });
+
+    // --- Step 8: Delete draft profile ---
     await test.step("Delete draft profile", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
@@ -886,6 +1079,489 @@ test.describe("Admission Profile Lifecycle", () => {
         console.log(`Profile4 delete returned ${resp.status()} (backend constraint — acceptable for draft)`);
         expect([204, 400, 409, 500]).toContain(resp.status());
       }
+    });
+  });
+
+  // =========================================================================
+  // Test 5: request-revision path
+  // =========================================================================
+  test("Request-revision: draft → submitted → revision_requested → resubmitted → approved", async ({
+    page,
+  }) => {
+    // --- Step 1: Officer creates + submits ---
+    await test.step("Officer creates + submits profile", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const result = await createLeadAndProfile(page, officerHeaders, {
+        offeringId,
+        admissionMethodId,
+        initialStatusId,
+      });
+      leadId5 = result.leadId;
+      profileId5 = result.profileId;
+
+      const submitResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId5}/submit`,
+        { headers: officerHeaders }
+      );
+      const submitBody = await submitResp.json();
+      expect(submitBody.status).toBe("submitted");
+      console.log(`Profile5 submitted: lead=${leadId5}, profile=${profileId5}`);
+    });
+
+    // --- Step 2: Admin requests revision ---
+    await test.step("Admin requests revision", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId5}`)
+      ).json();
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId5}/request-revision`,
+        {
+          headers: adminHeaders,
+          data: {
+            reason: "Cần bổ sung thêm giấy tờ học vấn và ảnh chân dung rõ nét",
+            version: profile.version,
+          },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.status).toBe("revision_requested");
+      console.log(`Revision requested! version=${body.version}`);
+    });
+
+    // --- Step 3: Officer resubmits after revision ---
+    await test.step("Officer resubmits after revision", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId5}/resubmit`,
+        {
+          headers: officerHeaders,
+          data: { notes: "Đã bổ sung đầy đủ hồ sơ theo yêu cầu" },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.status).toBe("resubmitted");
+      console.log(`Resubmitted after revision! version=${body.version}`);
+    });
+
+    // --- Step 4: Admin approves resubmitted ---
+    await test.step("Admin approves after revision resubmit", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId5}`)
+      ).json();
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId5}/approve`,
+        {
+          headers: adminHeaders,
+          data: {
+            notes: "Hồ sơ đã hoàn chỉnh sau revision",
+            version: profile.version,
+          },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.status).toBe("approved");
+      console.log(`Approved after revision path! version=${body.version}`);
+    });
+  });
+
+  // =========================================================================
+  // Test 6: Authorization boundaries + IDOR + optimistic locking
+  // =========================================================================
+  test("Auth boundaries: officer cannot approve, IDOR → 404, stale version → 409", async ({
+    page,
+  }) => {
+    // --- Step 1: Officer creates + submits a fresh profile ---
+    await test.step("Officer creates + submits profile for auth tests", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const result = await createLeadAndProfile(page, officerHeaders, {
+        offeringId,
+        admissionMethodId,
+        initialStatusId,
+      });
+      leadId6 = result.leadId;
+      profileId6 = result.profileId;
+
+      const submitResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId6}/submit`,
+        { headers: officerHeaders }
+      );
+      expect((await submitResp.json()).status).toBe("submitted");
+      console.log(`Profile6 submitted: lead=${leadId6}, profile=${profileId6}`);
+    });
+
+    // --- Step 2: Officer tries to approve → 403 ---
+    await test.step("Officer approve → 403 Forbidden", async () => {
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId6}`)
+      ).json();
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId6}/approve`,
+        {
+          headers: officerHeaders,
+          data: { notes: "unauthorized approve attempt", version: profile.version },
+        }
+      );
+      expect(resp.status()).toBe(403);
+      console.log(`Officer approve blocked: ${resp.status()}`);
+    });
+
+    // --- Step 3: IDOR — officer accesses profile from another unit → 404 ---
+    await test.step("Officer accesses out-of-scope profile → 404", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      // Get all units and find one different from unitId (officer's unit)
+      const allUnitsResp = await page.request.get(`${API_URL}/api/organization-units`, {
+        headers: adminHeaders,
+      });
+      const allUnits = await allUnitsResp.json();
+      const otherUnit = allUnits.find((u: { id: number }) => u.id !== unitId);
+
+      if (!otherUnit) {
+        console.log("Only one organizational unit in system — skipping IDOR sub-test");
+        return;
+      }
+
+      // Admin creates lead+profile in the other unit
+      const otherPhone = generatePhone();
+      const otherLeadResp = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: {
+          full_name: `IDOR_Test_${Date.now()}`,
+          phone: otherPhone,
+          source: "walk_in",
+          offering_id: offeringId,
+          unit_id: otherUnit.id,
+        },
+      });
+      const otherLeadId = (await otherLeadResp.json()).id;
+
+      await page.request.post(`${API_URL}/api/leads/${otherLeadId}/consultations`, {
+        headers: adminHeaders,
+        data: { status_id: initialStatusId, method: "phone", notes: "IDOR test" },
+      });
+
+      const otherProfileResp = await page.request.post(`${API_URL}/api/admissions`, {
+        headers: adminHeaders,
+        data: { lead_id: otherLeadId, admission_method_id: admissionMethodId },
+      });
+      const otherProfileId = (await otherProfileResp.json()).id;
+      console.log(`Created out-of-scope profile: id=${otherProfileId}, unit=${otherUnit.id}`);
+
+      // Officer tries to access — should get 404 (not 403, to avoid leaking existence)
+      officerHeaders = await restoreCookies(page, officerCookies);
+      const iddorResp = await page.request.get(
+        `${API_URL}/api/admissions/${otherProfileId}`,
+        { headers: officerHeaders }
+      );
+      expect(iddorResp.status()).toBe(404);
+      console.log(`IDOR blocked: officer got ${iddorResp.status()} for out-of-scope profile`);
+    });
+
+    // --- Step 4: Admin approve with stale version → 409 ---
+    await test.step("Approve with stale version → 409 optimistic locking", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId6}`)
+      ).json();
+
+      const staleResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId6}/approve`,
+        {
+          headers: adminHeaders,
+          data: { notes: "stale version test", version: profile.version - 1 },
+        }
+      );
+      expect(staleResp.status()).toBe(409);
+      console.log(`Stale version rejected: ${staleResp.status()}`);
+    });
+
+    // --- Step 5: Admin approve with correct version → 200 ---
+    await test.step("Approve with correct version → 200", async () => {
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId6}`)
+      ).json();
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId6}/approve`,
+        {
+          headers: adminHeaders,
+          data: { notes: "correct version approve", version: profile.version },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.status).toBe("approved");
+      console.log(`Approved with correct version! version=${body.version}`);
+    });
+  });
+
+  // =========================================================================
+  // Test 7A: Drop student — override path
+  // =========================================================================
+  test("Drop student (override path): draft → submitted → approved → overridden → enrolled → dropped", async ({
+    page,
+  }) => {
+    // --- Step 1: Officer creates + submits ---
+    await test.step("Officer creates + submits profile", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const result = await createLeadAndProfile(page, officerHeaders, {
+        offeringId,
+        admissionMethodId,
+        initialStatusId,
+      });
+      leadId7A = result.leadId;
+      profileId7A = result.profileId;
+
+      const submitResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7A}/submit`,
+        { headers: officerHeaders }
+      );
+      expect((await submitResp.json()).status).toBe("submitted");
+      console.log(`Profile7A submitted: lead=${leadId7A}, profile=${profileId7A}`);
+    });
+
+    // --- Step 2: Admin approves ---
+    await test.step("Admin approves", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId7A}`)
+      ).json();
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7A}/approve`,
+        {
+          headers: adminHeaders,
+          data: { notes: "Drop test 7A", version: profile.version },
+        }
+      );
+      expect((await resp.json()).status).toBe("approved");
+      console.log("Approved 7A");
+    });
+
+    // --- Step 3: Admin overrides ---
+    await test.step("Admin overrides profile", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7A}/override`,
+        {
+          headers: adminHeaders,
+          data: { reason: "Override for drop test 7A — bypass confirmation" },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      expect((await resp.json()).status).toBe("overridden");
+      console.log("Overridden 7A");
+    });
+
+    // --- Step 4: Admin enrolls ---
+    await test.step("Admin enrolls profile", async () => {
+      const enrollResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7A}/enroll`,
+        { headers: adminHeaders }
+      );
+      if (enrollResp.ok() || enrollResp.status() === 201) {
+        console.log(`Enrolled 7A: student_code=${(await enrollResp.json()).student_code}`);
+      } else {
+        const finalizeResp = await page.request.post(
+          `${API_URL}/api/admissions/${profileId7A}/finalize`,
+          { headers: adminHeaders, data: {} }
+        );
+        expect(finalizeResp.ok()).toBeTruthy();
+        console.log(`Finalized 7A: ${(await finalizeResp.json()).status}`);
+      }
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId7A}`)
+      ).json();
+      // Must be enrolled before we can drop
+      expect(profile.status).toBe("enrolled");
+      profileVersion7A = profile.version;
+      console.log(`Profile7A enrolled, version=${profileVersion7A}`);
+    });
+
+    // --- Step 5: Admin drops enrolled student ---
+    await test.step("Admin drops enrolled student", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7A}/drop`,
+        {
+          headers: adminHeaders,
+          data: {
+            reason: "Sinh viên tự nguyện rút hồ sơ nhập học do hoàn cảnh gia đình",
+            version: profileVersion7A,
+          },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.is_dropped).toBe(true);
+      // Status remains "enrolled" after drop
+      expect(body.status).toBe("enrolled");
+      console.log(`Dropped 7A! is_dropped=${body.is_dropped}, status=${body.status}`);
+    });
+  });
+
+  // =========================================================================
+  // Test 7B: Drop student — magic link path
+  // =========================================================================
+  test("Drop student (magic link path): approved → confirmed → enrolled → dropped", async ({
+    page,
+  }) => {
+    // --- Step 1: Officer creates + submits ---
+    await test.step("Officer creates + submits profile", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      citizenId7B = generateCitizenId();
+      const result = await createLeadAndProfile(page, officerHeaders, {
+        offeringId,
+        admissionMethodId,
+        initialStatusId,
+        citizenId: citizenId7B,
+      });
+      leadId7B = result.leadId;
+      profileId7B = result.profileId;
+
+      const submitResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7B}/submit`,
+        { headers: officerHeaders }
+      );
+      expect((await submitResp.json()).status).toBe("submitted");
+      console.log(`Profile7B submitted: lead=${leadId7B}, profile=${profileId7B}`);
+    });
+
+    // --- Step 2: Admin approves ---
+    await test.step("Admin approves", async () => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId7B}`)
+      ).json();
+
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7B}/approve`,
+        {
+          headers: adminHeaders,
+          data: { notes: "Drop test 7B", version: profile.version },
+        }
+      );
+      expect((await resp.json()).status).toBe("approved");
+      console.log("Approved 7B");
+    });
+
+    // --- Step 3: Admin sends confirmation link ---
+    await test.step("Admin sends confirmation link", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7B}/send-confirmation`,
+        { headers: adminHeaders }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      const token7B = body.token_value;
+      expect(token7B).toBeTruthy();
+      console.log(`Token7B: ${token7B.slice(0, 8)}...`);
+
+      // --- Step 4: Confirm with correct CCCD ---
+      const confirmResp = await page.request.post(
+        `${API_URL}/api/admissions/confirm/${token7B}`,
+        { data: { last_digits_citizen_id: citizenId7B.slice(-4) } }
+      );
+      expect(confirmResp.ok()).toBeTruthy();
+      expect((await confirmResp.json()).status).toBe("confirmed");
+      console.log("Confirmed 7B via magic link");
+    });
+
+    // --- Step 5: Admin enrolls ---
+    await test.step("Admin enrolls confirmed profile", async () => {
+      const enrollResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7B}/enroll`,
+        { headers: adminHeaders }
+      );
+      if (enrollResp.ok() || enrollResp.status() === 201) {
+        console.log(`Enrolled 7B: student_code=${(await enrollResp.json()).student_code}`);
+      } else {
+        const finalizeResp = await page.request.post(
+          `${API_URL}/api/admissions/${profileId7B}/finalize`,
+          { headers: adminHeaders, data: {} }
+        );
+        expect(finalizeResp.ok()).toBeTruthy();
+        console.log(`Finalized 7B: ${(await finalizeResp.json()).status}`);
+      }
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId7B}`)
+      ).json();
+      expect(profile.status).toBe("enrolled");
+      profileVersion7B = profile.version;
+      console.log(`Profile7B enrolled, version=${profileVersion7B}`);
+    });
+
+    // --- Step 6: Admin drops enrolled student ---
+    await test.step("Admin drops enrolled student", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId7B}/drop`,
+        {
+          headers: adminHeaders,
+          data: {
+            reason: "Sinh viên xin rút hồ sơ sau khi đã xác nhận nhập học",
+            version: profileVersion7B,
+          },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const body = await resp.json();
+      expect(body.is_dropped).toBe(true);
+      expect(body.status).toBe("enrolled");
+      console.log(`Dropped 7B! is_dropped=${body.is_dropped}, status=${body.status}`);
+    });
+  });
+
+  // =========================================================================
+  // Test 8: Submit with missing data → validation errors (not 400)
+  // =========================================================================
+  test("Submit incomplete profile → 200 draft with validation_errors", async ({
+    page,
+  }) => {
+    // --- Step 1: Create minimal draft (no personal info, no docs) ---
+    await test.step("Create minimal draft profile", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
+      const { profileId } = await createMinimalDraftProfile(page, officerHeaders, {
+        offeringId,
+        admissionMethodId,
+        initialStatusId,
+      });
+
+      console.log(`Minimal draft created: profileId=${profileId}`);
+
+      // --- Step 2: Submit → expect 200 with status=draft + validation_errors ---
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId}/submit`,
+        { headers: officerHeaders }
+      );
+      // Backend returns 200 (not 400) with status=draft and validation_errors list
+      expect(resp.status()).toBe(200);
+      const body = await resp.json();
+      expect(body.status).toBe("draft");
+      expect(Array.isArray(body.validation_errors)).toBe(true);
+      expect(body.validation_errors.length).toBeGreaterThan(0);
+      console.log(
+        `Validation blocked submit: status=${body.status}, errors=${body.validation_errors.length}`
+      );
+      console.log(`First error: ${JSON.stringify(body.validation_errors[0])}`);
     });
   });
 });
