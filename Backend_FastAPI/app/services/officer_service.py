@@ -1426,29 +1426,33 @@ async def get_weekly_leaderboard(
     prev_ranks = {officer.id: rank for rank, officer in enumerate(prev_officers, 1)}
     
     # Build leaderboard with ranks
+    # Separate concepts: is_current_user = actual logged-in user,
+    # is_focus_officer = drill-down target (may differ when manager/admin drills)
+    requesting_user_id = requesting_user.id if requesting_user else officer_id
     leaderboard = []
     current_user_rank = None
     current_user_stats = None
-    
+
     for rank, officer in enumerate(all_officers, 1):
         prev_rank = prev_ranks.get(officer.id)
         # Calculate rank change: positive = improved, negative = dropped
         rank_change = (prev_rank - rank) if prev_rank else None
-        
+
         entry = {
             "rank": rank,
             "user_id": officer.id,
             "username": officer.username,
             "full_name": officer.full_name or officer.username,
             "consultations": officer.consultations or 0,
-            "is_current_user": officer.id == officer_id,
+            "is_current_user": officer.id == requesting_user_id,
+            "is_focus_officer": officer.id == officer_id,
             "rank_change": rank_change,  # +2 = up 2 spots, -1 = down 1 spot, None = new
         }
-        
+
         if officer.id == officer_id:
             current_user_rank = rank
             current_user_stats = entry
-        
+
         if rank <= limit:
             leaderboard.append(entry)
     
@@ -1456,7 +1460,7 @@ async def get_weekly_leaderboard(
     if current_user_rank and current_user_rank > limit and current_user_stats:
         leaderboard.append(current_user_stats)
     
-    # If current user has no consultations this week, add with 0 (officers only)
+    # If drill-down target has no consultations this week, add with 0 (officers only)
     if current_user_rank is None and requesting_user and requesting_user.role == "officer":
         user = await repo.get_officer_with_capacity(officer_id)
         if user:
@@ -1467,7 +1471,8 @@ async def get_weekly_leaderboard(
                 "username": user.username,
                 "full_name": user.full_name or user.username,
                 "consultations": 0,
-                "is_current_user": True,
+                "is_current_user": officer_id == requesting_user_id,
+                "is_focus_officer": True,
                 "rank_change": (prev_rank - (len(all_officers) + 1)) if prev_rank else None,
             })
             current_user_rank = len(all_officers) + 1

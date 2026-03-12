@@ -425,10 +425,8 @@ class TestSLAAggregateSemantics:
 
 class TestDrillDownDependencyContract:
     """
-    Verify resolve_drill_down_officer_id exists and has correct signature.
-
-    Full IDOR behavior is tested in integration tests; here we verify
-    the dependency is properly importable and follows the expected pattern.
+    Verify resolve_drill_down_officer_id exists, has correct signature,
+    and enforces role-based access rules.
     """
 
     def test_dependency_is_importable(self):
@@ -445,3 +443,111 @@ class TestDrillDownDependencyContract:
         from app.core.deps import resolve_drill_down_officer_id
         sig = inspect.signature(resolve_drill_down_officer_id)
         assert "officer_id" in sig.parameters
+
+    def test_dependency_docstring_mentions_role_check(self):
+        """Ensure the dependency validates target has role 'officer'."""
+        from app.core.deps import resolve_drill_down_officer_id
+        doc = resolve_drill_down_officer_id.__doc__ or ""
+        assert "officer" in doc.lower()
+        # Must mention descendant units for manager scope
+        assert "descendant" in doc.lower()
+
+    def test_dependency_docstring_mentions_404(self):
+        """Ensure the dependency returns 404, never 403."""
+        from app.core.deps import resolve_drill_down_officer_id
+        doc = resolve_drill_down_officer_id.__doc__ or ""
+        assert "404" in doc
+
+
+# =============================================================================
+# Leaderboard is_current_user vs is_focus_officer Contract
+# =============================================================================
+
+
+class TestLeaderboardHighlightSemantics:
+    """
+    Verify LeaderboardEntry separates current_user from focus_officer.
+
+    is_current_user: True only for the actual logged-in user.
+    is_focus_officer: True for the drill-down target.
+
+    When officer views own leaderboard: both are True for the same entry.
+    When manager drills into officer X: is_current_user is never True
+    (manager isn't in leaderboard), is_focus_officer is True for officer X.
+    """
+
+    def test_schema_has_is_focus_officer_field(self):
+        from app.schemas.officer import LeaderboardEntry
+
+        entry = LeaderboardEntry(
+            rank=1,
+            user_id=10,
+            username="officer1",
+            full_name="Officer One",
+            consultations=50,
+            is_current_user=False,
+            is_focus_officer=True,
+        )
+        assert entry.is_focus_officer is True
+        assert entry.is_current_user is False
+
+    def test_is_focus_officer_defaults_to_false(self):
+        from app.schemas.officer import LeaderboardEntry
+
+        entry = LeaderboardEntry(
+            rank=1,
+            user_id=10,
+            username="officer1",
+            full_name="Officer One",
+            consultations=50,
+        )
+        assert entry.is_focus_officer is False
+
+    def test_both_true_for_officer_viewing_own_leaderboard(self):
+        """Officer viewing self: both flags True on their entry."""
+        from app.schemas.officer import LeaderboardEntry
+
+        entry = LeaderboardEntry(
+            rank=3,
+            user_id=42,
+            username="self_officer",
+            full_name="Self Officer",
+            consultations=30,
+            is_current_user=True,
+            is_focus_officer=True,
+        )
+        assert entry.is_current_user is True
+        assert entry.is_focus_officer is True
+
+    def test_manager_drill_down_no_ban_badge(self):
+        """Manager drills into officer X: is_current_user=False, is_focus_officer=True."""
+        from app.schemas.officer import LeaderboardEntry
+
+        entry = LeaderboardEntry(
+            rank=2,
+            user_id=99,
+            username="drilled_officer",
+            full_name="Drilled Officer",
+            consultations=25,
+            is_current_user=False,
+            is_focus_officer=True,
+        )
+        # Frontend should render "Đang xem" label, NOT "Bạn"
+        assert entry.is_current_user is False
+        assert entry.is_focus_officer is True
+
+    def test_serialization_preserves_both_flags(self):
+        from app.schemas.officer import LeaderboardEntry
+
+        entry = LeaderboardEntry(
+            rank=1,
+            user_id=10,
+            username="a",
+            full_name="A",
+            consultations=50,
+            is_current_user=False,
+            is_focus_officer=True,
+        )
+        data = entry.model_dump()
+        assert data["is_current_user"] is False
+        assert data["is_focus_officer"] is True

@@ -250,7 +250,8 @@ class LeaderboardEntry(BaseModel):
     username: str
     full_name: str
     consultations: int
-    is_current_user: bool = False
+    is_current_user: bool = False  # True only for the actual logged-in user
+    is_focus_officer: bool = False  # True for the drill-down target (may differ from current user)
     rank_change: Optional[int] = None  # +2 = up 2 spots, -1 = down 1, None = new
 
 

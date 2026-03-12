@@ -633,10 +633,18 @@ async def get_officer_dashboard_scope(
                 detail="Managers cannot view data from other units"
             )
         
-        # If filtering by officer, validate officer belongs to manager's unit
+        # If filtering by officer, validate officer belongs to manager's unit hierarchy
         if officer_id is not None:
             target_officer = await db.get(models.User, officer_id)
-            if not target_officer or target_officer.unit_id != current_user.unit_id:
+            if not target_officer:
+                raise PermissionDeniedError(
+                    detail="Officer not found in your unit"
+                )
+            # Support descendant units (consistent with SmartHeader include_children=true)
+            from ..repositories.organization_repository import OrganizationRepository
+            org_repo = OrganizationRepository(db)
+            allowed_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+            if target_officer.unit_id not in allowed_unit_ids:
                 raise PermissionDeniedError(
                     detail="Officer not found in your unit"
                 )
@@ -676,8 +684,10 @@ async def resolve_drill_down_officer_id(
 
     Rules:
     - Officer: can only view own data. Any other officer_id → 404.
-    - Manager: can view own + officers in their unit. Out-of-scope → 404.
+    - Manager: can view own + officers in their unit (including descendant units,
+      matching SmartHeader UI which uses include_children=true). Out-of-scope → 404.
     - Admin: can view any existing officer. Non-existent → 404.
+    - Target must have role "officer" (prevents drilling into admin/manager accounts).
     - Other roles: denied (fail-closed).
 
     Returns 404 (not 403) per AUTHORIZATION_GUIDELINES — never leak resource existence.
@@ -690,21 +700,29 @@ async def resolve_drill_down_officer_id(
 
     # === OFFICER: Self only ===
     if user_role == UserRole.OFFICER:
-        # Return 404 instead of 403 to avoid leaking existence
         raise ResourceNotFoundError(detail="Officer not found")
 
-    # === MANAGER: Own unit only ===
+    # === Shared: load target and validate role ===
+    target_user = await db.get(models.User, officer_id)
+    if not target_user or target_user.role != UserRole.OFFICER:
+        raise ResourceNotFoundError(detail="Officer not found")
+
+    # === MANAGER: Own unit + descendant units ===
     if user_role == UserRole.MANAGER:
-        target_officer = await db.get(models.User, officer_id)
-        if not target_officer or target_officer.unit_id != current_user.unit_id:
+        if current_user.unit_id is None:
+            raise ResourceNotFoundError(detail="Officer not found")
+
+        # Check if target officer is in manager's unit hierarchy
+        from ..repositories.organization_repository import OrganizationRepository
+        org_repo = OrganizationRepository(db)
+        allowed_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+
+        if target_user.unit_id not in allowed_unit_ids:
             raise ResourceNotFoundError(detail="Officer not found")
         return officer_id
 
-    # === ADMIN: Any existing officer ===
+    # === ADMIN: Any existing officer (role already validated above) ===
     if user_role == UserRole.ADMIN:
-        target_officer = await db.get(models.User, officer_id)
-        if not target_officer:
-            raise ResourceNotFoundError(detail="Officer not found")
         return officer_id
 
     # === Fail-closed for unknown roles ===

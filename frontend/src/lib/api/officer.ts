@@ -7,6 +7,7 @@ export interface LeaderboardEntry {
   full_name: string;
   consultations: number;
   is_current_user: boolean;
+  is_focus_officer?: boolean;
   rank_change?: number | null;
 }
 
