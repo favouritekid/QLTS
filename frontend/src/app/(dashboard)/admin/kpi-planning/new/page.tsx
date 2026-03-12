@@ -175,7 +175,7 @@ export default function KpiPlanningCreatePage() {
           setPreviewData(response);
         }
       } catch {
-        // mutation handles errors via toast/global handler
+        setPreviewData(null);
       }
     }, 300);
 

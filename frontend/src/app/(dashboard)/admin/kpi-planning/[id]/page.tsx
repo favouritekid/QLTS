@@ -88,6 +88,8 @@ export default function PlanDetailPage() {
   const [updateSla, setUpdateSla] = useState<number | undefined>();
   const [updateResponseTime, setUpdateResponseTime] = useState<number | undefined>();
   const [updateWeights, setUpdateWeights] = useState<number[]>([]);
+  const updateWeightsTotal = updateWeights.reduce((s, v) => s + (v || 0), 0);
+  const isUpdateWeightsOk = Math.abs(updateWeightsTotal - 100) <= 1;
 
   // Clone dialog
   const [showClone, setShowClone] = useState(false);
@@ -386,11 +388,11 @@ export default function PlanDetailPage() {
                   </div>
                 ))}
               </div>
-              {(() => { const total = updateWeights.reduce((s, v) => s + (v || 0), 0); const isOk = Math.abs(total - 100) <= 0.5; return <p className={`mt-1 text-xs ${isOk ? "text-muted-foreground" : "text-destructive"}`}>Tổng: {total.toFixed(1)}%{isOk ? "" : " — cần bằng 100%"}</p>; })()}
+              <p className={`mt-1 text-xs ${isUpdateWeightsOk ? "text-muted-foreground" : "text-destructive"}`}>Tổng: {updateWeightsTotal.toFixed(1)}%{isUpdateWeightsOk ? "" : " — cần bằng 100%"}</p>
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={async () => { await updateMut.mutateAsync({ annual_enrollment_target: updateTarget, sla_target: updateSla, response_time_target: updateResponseTime, seasonal_weights: updateWeights.map(w => w / 100) }); setShowUpdate(false); }} disabled={updateMut.isPending}>
+            <Button onClick={async () => { await updateMut.mutateAsync({ annual_enrollment_target: updateTarget, sla_target: updateSla, response_time_target: updateResponseTime, seasonal_weights: updateWeights.map(w => w / 100) }); setShowUpdate(false); }} disabled={updateMut.isPending || !isUpdateWeightsOk}>
               {updateMut.isPending ? "Đang lưu…" : "Cập nhật"}
             </Button>
           </DialogFooter>

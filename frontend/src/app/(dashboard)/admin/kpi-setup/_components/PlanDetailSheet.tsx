@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { Copy, Pencil, RefreshCw, RotateCcw } from "lucide-react";
 
@@ -140,6 +141,7 @@ function OverrideCell({
 /* ------------------------------------------------------------------ */
 
 function PlanDetailInner({ planId }: { planId: number }) {
+  const router = useRouter();
   const { data: plan, isLoading, error } = useKpiPlan(planId);
 
   const updateMut = useUpdatePlan(planId);
@@ -279,6 +281,8 @@ function PlanDetailInner({ planId }: { planId: number }) {
   );
 
   const isOfficerPlan = plan.officer_id != null;
+  const updateWeightsTotal = updateWeights.reduce((s, v) => s + (v || 0), 0);
+  const isUpdateWeightsOk = Math.abs(updateWeightsTotal - 100) <= 1;
 
   return (
     <div className="space-y-4">
@@ -760,18 +764,12 @@ function PlanDetailInner({ planId }: { planId: number }) {
                       </div>
                     ))}
                   </div>
-                  {(() => {
-                    const total = updateWeights.reduce((s, v) => s + (v || 0), 0);
-                    const isOk = Math.abs(total - 100) <= 0.5;
-                    return (
-                      <p
-                        className={`mt-1 text-xs ${isOk ? "text-muted-foreground" : "text-destructive"}`}
-                      >
-                        Tổng: {total.toFixed(1)}%
-                        {isOk ? "" : " — cần bằng 100%"}
-                      </p>
-                    );
-                  })()}
+                  <p
+                    className={`mt-1 text-xs ${isUpdateWeightsOk ? "text-muted-foreground" : "text-destructive"}`}
+                  >
+                    Tổng: {updateWeightsTotal.toFixed(1)}%
+                    {isUpdateWeightsOk ? "" : " — cần bằng 100%"}
+                  </p>
                 </div>
               </>
             )}
@@ -794,7 +792,7 @@ function PlanDetailInner({ planId }: { planId: number }) {
                 }
                 setShowUpdate(false);
               }}
-              disabled={updateMut.isPending}
+              disabled={updateMut.isPending || (!isOfficerPlan && !isUpdateWeightsOk)}
             >
               {updateMut.isPending ? "Đang lưu…" : "Cập nhật"}
             </Button>
@@ -834,11 +832,12 @@ function PlanDetailInner({ planId }: { planId: number }) {
             <Button
               onClick={async () => {
                 if (!cloneYear) return;
-                await cloneMut.mutateAsync({
+                const newPlan = await cloneMut.mutateAsync({
                   planId,
                   data: { fiscal_year: cloneYear },
                 });
                 setShowClone(false);
+                router.push(`/admin/kpi-planning/${newPlan.id}`);
               }}
               disabled={
                 cloneMut.isPending ||
