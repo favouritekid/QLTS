@@ -282,6 +282,17 @@ def aggregate_annual_progresses(
     all_on_track = all(p["on_track"] for p in progresses)
     progress_pct = round((total_ytd / total_annual * 100), 1) if total_annual > 0 else 0
 
+    # resolution_kind: if ANY member is inherited_estimate, aggregate is too
+    has_estimate = any(
+        p.get("resolution_kind") == "inherited_estimate" for p in progresses
+    )
+    all_assigned = all(
+        p.get("resolution_kind") == "assigned" for p in progresses
+    )
+    aggregate_kind = "assigned" if all_assigned else (
+        "inherited_estimate" if has_estimate else None
+    )
+
     return {
         "kpi_code": "enrollments_annual",
         "fiscal_year": progresses[0]["fiscal_year"],
@@ -295,6 +306,7 @@ def aggregate_annual_progresses(
         "on_track": all_on_track,
         "surplus": total_ytd - total_annual if worst == "completed" else None,
         "last_sync_at": None,
+        "resolution_kind": aggregate_kind,
         # R1: Team breakdown for manager drill-down
         "officer_count": len(progresses),
         "officers_at_risk": sum(1 for p in progresses if p["status"] == "at_risk"),
