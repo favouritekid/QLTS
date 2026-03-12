@@ -103,6 +103,7 @@ async def create_plan(
 @router.post(
     "/plans/assign-officer-quota",
     status_code=status.HTTP_201_CREATED,
+    response_model=AssignOfficerQuotaResponse,
     summary="Assign quota to officer — auto-create KPI plan + target",
 )
 async def assign_officer_quota(
@@ -330,6 +331,7 @@ async def preview_plan(
         response_time_target=data.response_time_target,
         seasonal_weights=data.seasonal_weights,
         start_month=data.start_month,
+        auto_mid_year=data.auto_mid_year,
     )
     return result
 

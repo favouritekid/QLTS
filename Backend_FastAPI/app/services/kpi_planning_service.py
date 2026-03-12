@@ -391,6 +391,7 @@ async def assign_officer_quota(
             pm = months_by_num.get(m_num)
             if pm is not None:
                 pm.enrollment_target = 0
+                pm.weight = 0
                 pm.consultations_daily = None
                 pm.conversion_rate = None
                 pm.win_rate = None
@@ -403,6 +404,7 @@ async def assign_officer_quota(
             pm = months_by_num.get(m_num)
             if pm is not None and idx < len(future_targets):
                 pm.enrollment_target = future_targets[idx]
+                pm.weight = normalized_fw[idx] if idx < len(normalized_fw) else 0
                 # Regenerate derived KPIs for new target
                 derived = compute_derived_kpis(
                     future_targets[idx], pm.working_days,
@@ -592,6 +594,7 @@ async def preview_plan(
     response_time_target: float = 2.0,
     seasonal_weights: Optional[List[float]] = None,
     start_month: Optional[int] = None,
+    auto_mid_year: bool = False,
 ) -> Dict[str, Any]:
     """
     Dry-run: compute 12 monthly KPIs WITHOUT persisting.
@@ -615,12 +618,17 @@ async def preview_plan(
 
     # V2: Mid-year preview — past months = 0, redistribute to future months
     effective_start = 1
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+    now_vn = dt.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+
     if start_month is not None and start_month > 1:
-        from datetime import datetime as dt
-        from zoneinfo import ZoneInfo
-        current_year = dt.now(ZoneInfo("Asia/Ho_Chi_Minh")).year
-        if fiscal_year == current_year:
+        # Explicit start_month — chỉ apply khi fiscal_year == current_year
+        if fiscal_year == now_vn.year:
             effective_start = start_month
+    elif auto_mid_year and fiscal_year == now_vn.year and now_vn.month > 1:
+        # Opt-in auto-detect từ server timezone
+        effective_start = now_vn.month
 
     if effective_start > 1:
         future_weights = weights_list[effective_start - 1:]
@@ -654,11 +662,19 @@ async def preview_plan(
             if isinstance(val, Decimal):
                 derived[key] = float(val)
 
+        # Re-normalized weight for mid-year preview
+        if effective_start > 1 and month_num < effective_start:
+            month_weight = 0
+        elif effective_start > 1:
+            month_weight = normalized_fw[month_num - effective_start] if (month_num - effective_start) < len(normalized_fw) else 0
+        else:
+            month_weight = weights_list[month_idx]
+
         months_preview.append({
             "month": month_num,
             "enrollment_target": m_t,
             "working_days": wd_t,
-            "weight": weights_list[month_idx],
+            "weight": month_weight,
             "k_factor": k_t,
             "lead_forecast": None,
             "close_forecast": None,
@@ -1570,6 +1586,13 @@ async def rebalance_enrollment_targets(
     plan = await repo.get_plan_by_id(plan_id, with_months=True)
     if plan is None:
         raise ResourceNotFoundError("KpiPlan", plan_id)
+
+    # Hard-guard — chỉ officer plans
+    if plan.officer_id is None:
+        raise BusinessRuleViolation(
+            f"Rebalance chỉ áp dụng cho officer plans. "
+            f"Plan {plan_id} là unit plan (officer_id=NULL)."
+        )
 
     months_by_num = {m.month: m for m in plan.months}
 

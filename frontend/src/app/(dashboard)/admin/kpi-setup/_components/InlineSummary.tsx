@@ -14,8 +14,6 @@ import { ACTION_HINTS, REASON_CODES } from "@/types/kpi-setup.types";
 
 interface Props {
   report: CoverageReport;
-  onTabChange?: (tab: string) => void;
-  onAction?: (actionHint: string, entityId: number | null) => void;
   isAdmin?: boolean;
 }
 
@@ -43,7 +41,34 @@ function actionLabel(hint: string, admin: boolean): string {
   }
 }
 
-export function ReviewSection({ report, onTabChange, onAction, isAdmin = true }: Props) {
+function scrollToElement(warning: CoverageWarning) {
+  let targetId: string | null = null;
+
+  switch (warning.action_hint) {
+    case ACTION_HINTS.SEED_HOLIDAYS:
+      targetId = "holiday-section";
+      break;
+    case ACTION_HINTS.CREATE_PLAN:
+      if (warning.entity_id != null) {
+        targetId = `unit-${warning.entity_id}`;
+      }
+      break;
+    case ACTION_HINTS.ASSIGN_TARGET:
+    case ACTION_HINTS.REVIEW_TARGETS:
+      if (warning.entity_id != null) {
+        targetId = `unit-${warning.entity_id}`;
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (targetId) {
+    document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+export function InlineSummary({ report, isAdmin = false }: Props) {
   const { summary, warnings } = report;
 
   const atRiskCount = report.units.reduce(
@@ -76,24 +101,6 @@ export function ReviewSection({ report, onTabChange, onAction, isAdmin = true }:
     },
   ];
 
-  const handleWarningClick = (warning: CoverageWarning) => {
-    if (onAction) {
-      onAction(warning.action_hint, warning.entity_id);
-      return;
-    }
-
-    const sectionMap: Record<number, string> = {
-      0: "holidays",
-      1: "units",
-      2: "officers",
-      3: "review",
-    };
-    const tab = sectionMap[warning.section];
-    if (tab && onTabChange) {
-      onTabChange(tab);
-    }
-  };
-
   return (
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -119,16 +126,12 @@ export function ReviewSection({ report, onTabChange, onAction, isAdmin = true }:
         ))}
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Cảnh báo</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {warnings.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Không có cảnh báo nào. Thiết lập KPI đã hoàn tất.
-            </p>
-          ) : (
+      {warnings.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Cảnh báo</CardTitle>
+          </CardHeader>
+          <CardContent>
             <div className="space-y-3">
               {warnings.map((warning, idx) => (
                 <div
@@ -140,7 +143,7 @@ export function ReviewSection({ report, onTabChange, onAction, isAdmin = true }:
                     <p className="text-sm">{warning.detail}</p>
                     <button
                       type="button"
-                      onClick={() => handleWarningClick(warning)}
+                      onClick={() => scrollToElement(warning)}
                       className="text-xs text-primary hover:underline"
                     >
                       {actionLabel(warning.action_hint, isAdmin)}
@@ -152,9 +155,9 @@ export function ReviewSection({ report, onTabChange, onAction, isAdmin = true }:
                 </div>
               ))}
             </div>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

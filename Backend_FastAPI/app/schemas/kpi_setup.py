@@ -31,6 +31,7 @@ class UnitCoverage(BaseModel):
     plan_id: Optional[int] = None
     plan_status: Optional[str] = None  # "active" | None
     annual_target: Optional[int] = None
+    seasonal_weights: Optional[List[float]] = None  # 12 floats from unit plan, for preview
     officers: List[OfficerCoverage]
     total_officer_target: int
     target_gap: int  # plan target - sum(officer targets)

@@ -57,6 +57,7 @@ class KpiPlanPreview(BaseModel):
         None, min_length=12, max_length=12,
     )
     start_month: Optional[int] = Field(None, ge=1, le=12, description="Start month for mid-year preview")
+    auto_mid_year: bool = Field(False, description="When True + start_month=None, BE auto-detects mid-year from server timezone")
 
 
 # =============================================================================

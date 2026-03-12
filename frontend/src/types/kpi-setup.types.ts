@@ -25,6 +25,7 @@ export interface UnitCoverage {
   plan_id: number | null;
   plan_status: string | null; // "active" | null
   annual_target: number | null;
+  seasonal_weights: number[] | null; // 12 floats from unit plan, for preview
   officers: OfficerCoverage[];
   total_officer_target: number;
   target_gap: number;

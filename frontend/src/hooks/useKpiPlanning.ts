@@ -118,6 +118,7 @@ export function useUpdatePlan(planId: number) {
       toast.success("Đã cập nhật KPI Plan");
       qc.invalidateQueries({ queryKey: kpiPlanningKeys.planDetail(planId) });
       qc.invalidateQueries({ queryKey: kpiPlanningKeys.plans() });
+      qc.invalidateQueries({ queryKey: ["kpi-setup"] });
     },
     onError: (err) => {
       toast.error(err.response?.data?.detail || "Lỗi cập nhật");

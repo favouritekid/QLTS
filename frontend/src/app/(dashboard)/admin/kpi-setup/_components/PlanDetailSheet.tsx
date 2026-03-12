@@ -278,10 +278,15 @@ function PlanDetailInner({ planId }: { planId: number }) {
     (a, b) => a.month - b.month,
   );
 
+  const isOfficerPlan = plan.officer_id != null;
+
   return (
     <div className="space-y-4">
       {/* Plan header info */}
       <div className="flex flex-wrap items-center gap-3 text-sm">
+        <Badge variant={isOfficerPlan ? "secondary" : "outline"}>
+          {isOfficerPlan ? "Officer Plan" : "Unit Plan"}
+        </Badge>
         <Badge variant="outline">
           Chỉ tiêu: {plan.annual_enrollment_target}
         </Badge>
@@ -307,7 +312,7 @@ function PlanDetailInner({ planId }: { planId: number }) {
           }}
         >
           <Pencil aria-hidden="true" className="h-4 w-4" />
-          Sửa Plan
+          {isOfficerPlan ? "Sửa chỉ tiêu" : "Sửa Plan"}
         </Button>
         <Button
           variant="outline"
@@ -318,17 +323,19 @@ function PlanDetailInner({ planId }: { planId: number }) {
           <RefreshCw aria-hidden="true" className="h-4 w-4" />
           Tính lại KPI
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setCloneYear(plan.fiscal_year + 1);
-            setShowClone(true);
-          }}
-        >
-          <Copy aria-hidden="true" className="h-4 w-4" />
-          Clone sang năm mới
-        </Button>
+        {!isOfficerPlan && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setCloneYear(plan.fiscal_year + 1);
+              setShowClone(true);
+            }}
+          >
+            <Copy aria-hidden="true" className="h-4 w-4" />
+            Clone sang năm mới
+          </Button>
+        )}
         {batchSelected.size > 0 && (
           <Button size="sm" onClick={() => setShowBatch(true)}>
             Batch Override ({batchSelected.size} tháng)
@@ -385,7 +392,7 @@ function PlanDetailInner({ planId }: { planId: number }) {
                       />
                     </TableCell>
                     <TableCell className="sticky left-0 z-10 bg-background font-medium">
-                      {MONTH_LABELS[m.month]}
+                      {MONTH_LABELS[m.month] ?? `T${m.month}`}
                     </TableCell>
                     <TableCell className="text-right font-semibold">
                       {m.enrollment_target}
@@ -565,7 +572,7 @@ function PlanDetailInner({ planId }: { planId: number }) {
           <DialogHeader>
             <DialogTitle>
               Override KPI —{" "}
-              {overrideMonth && MONTH_LABELS[overrideMonth.month]}
+              {overrideMonth && (MONTH_LABELS[overrideMonth.month] ?? `T${overrideMonth.month}`)}
             </DialogTitle>
             <DialogDescription>
               Nhập giá trị mới cho {overrideField}.
@@ -617,7 +624,7 @@ function PlanDetailInner({ planId }: { planId: number }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Sửa ngày làm việc — {wdMonth && MONTH_LABELS[wdMonth.month]}
+              Sửa ngày làm việc — {wdMonth && (MONTH_LABELS[wdMonth.month] ?? `T${wdMonth.month}`)}
             </DialogTitle>
             <DialogDescription>
               Thay đổi số ngày làm việc cho tháng này.
@@ -660,11 +667,13 @@ function PlanDetailInner({ planId }: { planId: number }) {
 
       {/* Update Plan Dialog */}
       <Dialog open={showUpdate} onOpenChange={setShowUpdate}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className={isOfficerPlan ? "" : "sm:max-w-xl"}>
           <DialogHeader>
-            <DialogTitle>Sửa KPI Plan</DialogTitle>
+            <DialogTitle>{isOfficerPlan ? "Sửa chỉ tiêu officer" : "Sửa KPI Plan"}</DialogTitle>
             <DialogDescription>
-              Thay đổi chỉ tiêu giữa năm sẽ redistribute cho các tháng còn lại.
+              {isOfficerPlan
+                ? "Thay đổi chỉ tiêu năm. SLA và trọng số kế thừa từ plan đơn vị."
+                : "Thay đổi chỉ tiêu giữa năm sẽ redistribute cho các tháng còn lại."}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
@@ -680,99 +689,109 @@ function PlanDetailInner({ planId }: { planId: number }) {
                 onChange={(e) => setUpdateTarget(Number(e.target.value))}
               />
             </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium">
-                SLA Target (%)
-              </label>
-              <Input
-                type="number"
-                min={0}
-                max={100}
-                step={0.1}
-                value={updateSla ?? ""}
-                onChange={(e) => setUpdateSla(Number(e.target.value))}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium">
-                Response Time (h)
-              </label>
-              <Input
-                type="number"
-                min={1}
-                max={48}
-                step={0.5}
-                value={updateResponseTime ?? ""}
-                onChange={(e) => setUpdateResponseTime(Number(e.target.value))}
-              />
-            </div>
-            <div>
-              <div className="mb-1 flex items-center justify-between">
-                <label className="block text-sm font-medium">
-                  Trọng số theo tháng (%)
-                </label>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-auto px-2 py-0.5 text-xs"
-                  onClick={() =>
-                    setUpdateWeights(
-                      DEFAULT_SEASONAL_WEIGHTS.map(
-                        (w) => Math.round(w * 1000) / 10,
-                      ),
-                    )
-                  }
-                >
-                  Mặc định
-                </Button>
-              </div>
-              <div className="grid grid-cols-4 gap-2">
-                {updateWeights.map((w, i) => (
-                  <div key={i} className="flex items-center gap-1">
-                    <span className="w-7 text-xs text-muted-foreground">
-                      T{i + 1}
-                    </span>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={0.1}
-                      className="h-8 text-sm"
-                      value={w || ""}
-                      onChange={(e) => {
-                        const next = [...updateWeights];
-                        next[i] = Number(e.target.value);
-                        setUpdateWeights(next);
-                      }}
-                    />
+            {!isOfficerPlan && (
+              <>
+                <div>
+                  <label className="mb-1 block text-sm font-medium">
+                    SLA Target (%)
+                  </label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    value={updateSla ?? ""}
+                    onChange={(e) => setUpdateSla(Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium">
+                    Response Time (h)
+                  </label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={48}
+                    step={0.5}
+                    value={updateResponseTime ?? ""}
+                    onChange={(e) => setUpdateResponseTime(Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="block text-sm font-medium">
+                      Trọng số theo tháng (%)
+                    </label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto px-2 py-0.5 text-xs"
+                      onClick={() =>
+                        setUpdateWeights(
+                          DEFAULT_SEASONAL_WEIGHTS.map(
+                            (w) => Math.round(w * 1000) / 10,
+                          ),
+                        )
+                      }
+                    >
+                      Mặc định
+                    </Button>
                   </div>
-                ))}
-              </div>
-              {(() => {
-                const total = updateWeights.reduce((s, v) => s + (v || 0), 0);
-                const isOk = Math.abs(total - 100) <= 0.5;
-                return (
-                  <p
-                    className={`mt-1 text-xs ${isOk ? "text-muted-foreground" : "text-destructive"}`}
-                  >
-                    Tổng: {total.toFixed(1)}%
-                    {isOk ? "" : " — cần bằng 100%"}
-                  </p>
-                );
-              })()}
-            </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {updateWeights.map((w, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <span className="w-7 text-xs text-muted-foreground">
+                          T{i + 1}
+                        </span>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={0.1}
+                          className="h-8 text-sm"
+                          value={w || ""}
+                          onChange={(e) => {
+                            const next = [...updateWeights];
+                            next[i] = Number(e.target.value);
+                            setUpdateWeights(next);
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {(() => {
+                    const total = updateWeights.reduce((s, v) => s + (v || 0), 0);
+                    const isOk = Math.abs(total - 100) <= 0.5;
+                    return (
+                      <p
+                        className={`mt-1 text-xs ${isOk ? "text-muted-foreground" : "text-destructive"}`}
+                      >
+                        Tổng: {total.toFixed(1)}%
+                        {isOk ? "" : " — cần bằng 100%"}
+                      </p>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button
               onClick={async () => {
-                const weightsAsFractions = updateWeights.map((w) => w / 100);
-                await updateMut.mutateAsync({
-                  annual_enrollment_target: updateTarget,
-                  sla_target: updateSla,
-                  response_time_target: updateResponseTime,
-                  seasonal_weights: weightsAsFractions,
-                });
+                if (isOfficerPlan) {
+                  await updateMut.mutateAsync({
+                    annual_enrollment_target: updateTarget,
+                  });
+                } else {
+                  const weightsAsFractions = updateWeights.map((w) => w / 100);
+                  await updateMut.mutateAsync({
+                    annual_enrollment_target: updateTarget,
+                    sla_target: updateSla,
+                    response_time_target: updateResponseTime,
+                    seasonal_weights: weightsAsFractions,
+                  });
+                }
                 setShowUpdate(false);
               }}
               disabled={updateMut.isPending}

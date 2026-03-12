@@ -78,6 +78,7 @@ export interface KpiPlanPreviewRequest {
   response_time_target?: number;
   seasonal_weights?: number[] | null;
   start_month?: number | null;
+  auto_mid_year?: boolean;
 }
 
 export interface PreviewMonth {

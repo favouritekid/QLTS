@@ -213,7 +213,7 @@ async def get_coverage_report(
                     "action_hint": "assign_target",
                     "section": 2,
                     "detail": f"Cán bộ {officer_rows[-1]['officer_name']} chưa có chỉ tiêu KPI.",
-                    "entity_id": officer.id,
+                    "entity_id": unit.id,
                 })
 
         total_officer_target = sum(o["annual_target"] for o in officer_rows)
@@ -225,6 +225,7 @@ async def get_coverage_report(
             "plan_id": plan.id if plan else None,
             "plan_status": "active" if plan else None,
             "annual_target": plan.annual_enrollment_target if plan else None,
+            "seasonal_weights": list(plan.seasonal_weights) if plan and plan.seasonal_weights else None,
             "officers": officer_rows,
             "total_officer_target": total_officer_target,
             "target_gap": target_gap,
