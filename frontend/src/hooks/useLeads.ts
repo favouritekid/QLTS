@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
 import { leadsApi } from "@/lib/api/leads";
+import { workflowContextKeys } from "@/hooks/useWorkflowContext";
 import type { ApiErrorResponse } from "@/types/api.types";
 import type {
   Lead,
@@ -260,11 +261,8 @@ export function useCreateLead() {
         description: newLead.full_name,
       });
 
-      // Force immediate refetch of lead lists (not just invalidate)
-      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
-
-      // Also invalidate pipeline queries as new lead affects pipeline stats
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      await queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
@@ -405,9 +403,8 @@ export function useDeleteLead() {
         queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(context.deletedLeadId) });
         queryClient.invalidateQueries({ queryKey: leadsKeys.insights(context.deletedLeadId) });
       }
-      // Force immediate refetch of lists
-      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      await queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -562,9 +559,8 @@ export function useBulkUpdateLeadsStage() {
     },
 
     onSuccess: async () => {
-      // Force refetch leads list queries immediately (matches useLeads queryKey)
-      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      await queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -606,9 +602,8 @@ export function useBulkDeleteLeads() {
     },
 
     onSuccess: async () => {
-      // Force refetch leads list queries immediately (matches useLeads queryKey)
-      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      await queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -672,6 +667,12 @@ export function usePerformLeadAction() {
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // ✅ FIX BUG-17: Invalidate workflow context so current_phase/allowed_statuses refresh
+      queryClient.invalidateQueries({
+        queryKey: workflowContextKeys.byLead(updatedLead.id),
+        exact: true,
+      });
     },
 
     onError: (error, variables) => {
@@ -752,6 +753,13 @@ export function useAddConsultation() {
         queryKey: ["pipeline", "allowedNextStatuses"],
         refetchType: 'active'
       });
+
+      // ✅ FIX BUG-17: Invalidate workflow context so current_phase/allowed_statuses refresh
+      queryClient.invalidateQueries({
+        queryKey: workflowContextKeys.byLead(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
     },
 
     onError: (error) => {
@@ -813,6 +821,13 @@ export function useUpdateConsultation() {
       if (statusChanged) {
         queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
         queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
+
+        // ✅ FIX BUG-17: Invalidate workflow context when status changes
+        queryClient.invalidateQueries({
+          queryKey: workflowContextKeys.byLead(leadId),
+          exact: true,
+          refetchType: 'active'
+        });
       }
     },
 
@@ -870,6 +885,13 @@ export function useDeleteConsultation() {
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
 
+      // ✅ FIX BUG-17: Invalidate workflow context (delete may change workflow state)
+      queryClient.invalidateQueries({
+        queryKey: workflowContextKeys.byLead(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
+
       // ✅ UNDO TOAST: Show toast with undo button for 10 seconds
       toast.success("Đã xóa ghi nhận tư vấn", {
         description: "Bấm Hoàn tác để khôi phục",
@@ -889,6 +911,7 @@ export function useDeleteConsultation() {
               queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId), exact: true, refetchType: 'active' });
               queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
               queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
+              queryClient.invalidateQueries({ queryKey: workflowContextKeys.byLead(leadId), exact: true, refetchType: 'active' });
             } catch {
               toast.error("Không thể khôi phục", {
                 description: "Vui lòng thử lại hoặc liên hệ admin",
@@ -946,6 +969,13 @@ export function useRestoreConsultation() {
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId), exact: true, refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
+
+      // ✅ FIX BUG-17: Invalidate workflow context (restore may change workflow state)
+      queryClient.invalidateQueries({
+        queryKey: workflowContextKeys.byLead(leadId),
+        exact: true,
+        refetchType: 'active'
+      });
     },
 
     onError: (error) => {
