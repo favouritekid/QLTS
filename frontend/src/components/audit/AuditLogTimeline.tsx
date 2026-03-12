@@ -8,8 +8,9 @@
 
 "use client";
 
-import React from "react";
-import { format } from "date-fns";
+import React, { useState } from "react";
+import { format, parseISO } from "date-fns";
+import type { AxiosError } from "axios";
 import { vi } from "date-fns/locale";
 import {
   Clock,
@@ -24,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useEntityAuditHistory } from "@/hooks/useAuditLogs";
 import type { AuditLogEntry } from "@/lib/api/audit-logs";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -230,7 +232,7 @@ function AuditLogItem({ entry }: { entry: AuditLogEntry }) {
           )}
 
           <span className="text-xs text-muted-foreground">
-            {format(new Date(entry.created_at), "dd/MM/yyyy HH:mm:ss", {
+            {format(parseISO(entry.created_at), "dd/MM/yyyy HH:mm:ss", {
               locale: vi,
             })}
           </span>
@@ -253,7 +255,7 @@ function AuditLogItem({ entry }: { entry: AuditLogEntry }) {
             <p className="text-sm font-medium text-muted-foreground mb-1">
               Giá trị ban đầu:
             </p>
-            <pre className="text-xs whitespace-pre-wrap">
+            <pre className="text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">
               {String(JSON.stringify(entry.new_value, null, 2))}
             </pre>
           </div>
@@ -263,7 +265,7 @@ function AuditLogItem({ entry }: { entry: AuditLogEntry }) {
         {(entry.action === "deleted" || entry.action === "restored") &&
           (entry.old_value !== null || entry.new_value !== null) ? (
             <div className="mt-2 rounded-md bg-muted/50 p-2">
-              <pre className="text-xs whitespace-pre-wrap">
+              <pre className="text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">
                 {String(JSON.stringify(entry.old_value ?? entry.new_value, null, 2))}
               </pre>
             </div>
@@ -318,33 +320,38 @@ function ErrorState({ message }: { message: string }) {
 // MAIN COMPONENT
 // ============================================================================
 
+const PAGE_SIZE = 50;
+
 export function AuditLogTimeline({
   entityType,
   entityId,
   className,
 }: AuditLogTimelineProps) {
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+
   const {
     data,
     isLoading,
+    isFetching,
     isError,
     error,
-  } = useEntityAuditHistory(entityType, entityId, { page_size: 50 });
+  } = useEntityAuditHistory(entityType, entityId, { page_size: pageSize });
 
   if (isLoading) {
     return <LoadingSkeleton />;
   }
 
   if (isError) {
-    return (
-      <ErrorState
-        message={error instanceof Error ? error.message : "Không thể tải lịch sử"}
-      />
-    );
+    const msg = (error as AxiosError<{ detail?: string }>)?.response?.data?.detail
+      || "Không thể tải lịch sử thay đổi";
+    return <ErrorState message={msg} />;
   }
 
   if (!data?.items || data.items.length === 0) {
     return <EmptyState />;
   }
+
+  const remaining = data.total - data.items.length;
 
   return (
     <div className={cn("space-y-2", className)}>
@@ -355,9 +362,16 @@ export function AuditLogTimeline({
         <AuditLogItem key={entry.id} entry={entry} />
       ))}
       {data.has_more && (
-        <p className="text-sm text-muted-foreground text-center py-2">
-          Còn {data.total - data.items.length} thay đổi khác...
-        </p>
+        <div className="text-center py-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={isFetching}
+            onClick={() => setPageSize((prev) => prev + PAGE_SIZE)}
+          >
+            {isFetching ? "Đang tải…" : `Tải thêm (còn ${remaining})`}
+          </Button>
+        </div>
       )}
     </div>
   );

@@ -432,10 +432,6 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                 // ✅ TECHNICAL DEBT FIX: Use typed event data instead of `as any`
                 const eventData = event.data || {};
 
-                // Type guard helpers for typed data access
-                const getConsultationData = () => eventData as import("@/types/lead.types").ConsultationEventData;
-                const getAssignmentData = () => eventData as import("@/types/lead.types").AssignmentEventData;
-
                 // ✅ FIX: Match actual backend event types ("consultation", "assignment")
                 // Backend sends: type: "consultation" | "assignment"
                 // NOT "consultation_added", "consultation_updated", or "assigned"

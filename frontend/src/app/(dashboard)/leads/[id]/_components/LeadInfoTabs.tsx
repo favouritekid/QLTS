@@ -9,7 +9,7 @@
  */
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { SwipeableTabs } from "@/components/common/SwipeableContainer";
 import {
   Phone,
@@ -176,9 +176,9 @@ export function LeadInfoTabs({
   const [activeTab, setActiveTab] = useState<TabId>("overview");
 
   // Sort by timestamp descending (newest first) before slicing
-  const recentTimeline = timeline
+  const recentTimeline = useMemo(() => timeline
     ? [...timeline].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 5)
-    : [];
+    : [], [timeline]);
 
   // Get current tab index for swipe navigation
   const activeIndex = tabs.findIndex((t) => t.id === activeTab);

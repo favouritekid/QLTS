@@ -20,8 +20,8 @@ export const auditLogKeys = {
   lists: () => [...auditLogKeys.all, "list"] as const,
   list: (filters: AuditLogFilters) =>
     [...auditLogKeys.lists(), filters] as const,
-  entity: (entityType: string, entityId: number) =>
-    [...auditLogKeys.all, "entity", entityType, entityId] as const,
+  entity: (entityType: string, entityId: number, opts?: { page?: number; page_size?: number }) =>
+    [...auditLogKeys.all, "entity", entityType, entityId, opts] as const,
   summary: (options?: { from_date?: string; to_date?: string }) =>
     [...auditLogKeys.all, "summary", options] as const,
 };
@@ -52,7 +52,7 @@ export function useEntityAuditHistory(
   const { enabled = true, ...queryOptions } = options;
 
   return useQuery({
-    queryKey: auditLogKeys.entity(entityType, entityId),
+    queryKey: auditLogKeys.entity(entityType, entityId, queryOptions),
     queryFn: () => getEntityAuditHistory(entityType, entityId, queryOptions),
     enabled: enabled && !!entityType && !!entityId,
     staleTime: 30 * 1000, // 30 seconds
