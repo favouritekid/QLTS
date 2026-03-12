@@ -131,7 +131,7 @@ function InfoRow({
 }
 
 export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: LeadSidebarProps) {
-  const stageColor = lead.pipeline_stage?.color_code || STAGE_COLORS[lead.pipeline_stage?.id || 0];
+  const stageColor = lead.pipeline_stage?.color_code || STAGE_COLORS[lead.pipeline_stage?.id ?? ""];
 
   // L2: Avoid hydration mismatch — computed client-side only via ref to skip cascading renders
   const daysInPipelineRef = useRef<number | null>(null);

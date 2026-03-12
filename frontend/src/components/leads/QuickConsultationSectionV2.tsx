@@ -3,6 +3,7 @@
 "use client";
 
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { format, addMinutes, addHours, addDays, set } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
@@ -265,7 +266,10 @@ export function QuickConsultationSectionV2({
 
   const commitSave = async (status: ConsultationStatus) => {
     if (isSavingRef.current) return;
-    if (requiresLossReason(status) && !lossReasonCode) return;
+    if (requiresLossReason(status) && !lossReasonCode) {
+      toast.error("Vui lòng chọn lý do mất lead trước khi lưu");
+      return;
+    }
 
     isSavingRef.current = true;
     if (countdownRef.current) clearInterval(countdownRef.current);

@@ -371,7 +371,7 @@ export function LeadInfoTabs({
           <div className="space-y-2">
             {recentTimeline.length > 0 ? (
               recentTimeline.map((item, index) => {
-                const isConsultation = item.type === "consultation" || item.type === "consultation_added" || item.type === "consultation_updated" || item.event_type === "consultation";
+                const isConsultation = item.type === "consultation";
                 const consultData = isConsultation ? (item.data as {
                   method?: string;
                   notes?: string;
@@ -392,7 +392,7 @@ export function LeadInfoTabs({
 
                 return (
                   <div
-                    key={`${item.id}-${index}`}
+                    key={`${item.type}-${item.timestamp}-${(item.data as { id?: number })?.id ?? index}`}
                     className={cn(
                       "p-3 rounded-xl border transition-colors",
                       index === 0

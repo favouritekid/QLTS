@@ -856,7 +856,7 @@ export function LeadFilterBar({
         if (dateFrom || dateTo) {
           allPills.push({
             key: "date",
-            label: `${dateField === "created_at" ? "Tạo" : "TĐ"}: ${dateFrom || "..."} → ${dateTo || "..."}`,
+            label: `${dateField === "created_at" ? "Tạo" : "TĐ"}: ${dateFrom && dateTo ? `${dateFrom} → ${dateTo}` : dateFrom ? `từ ${dateFrom}` : `đến ${dateTo}`}`,
             onRemove: () => { onDateFromChange(""); onDateToChange(""); },
           });
         }
