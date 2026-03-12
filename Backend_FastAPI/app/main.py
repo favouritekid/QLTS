@@ -54,6 +54,7 @@ from .routers import (
     kpi_planning,  # ✅ PHASE A6: KPI Planning Engine
     kpi_setup,  # ✅ KPI Setup: Coverage Dashboard
     leads,
+    meta,  # ✅ Public metadata (KPI catalog)
     monitoring,
     notification_preferences,
     notification_rules,  # ✅ PHASE 2.2: Notification Rules CRUD
@@ -725,6 +726,7 @@ fastapi_app.include_router(officer.router, prefix="/api")
 fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration Admin
 fastapi_app.include_router(kpi_planning.router)  # ✅ PHASE A6: KPI Planning Engine
 fastapi_app.include_router(kpi_setup.router)  # ✅ KPI Setup: Coverage Dashboard
+fastapi_app.include_router(meta.router)  # ✅ Public metadata (KPI catalog, no auth)
 fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api")
 # ✅ FINANCE MODULE: Phase 4 - API Layer

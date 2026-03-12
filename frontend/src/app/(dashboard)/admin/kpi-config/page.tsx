@@ -114,16 +114,8 @@ interface KpiTarget {
 // KPI CODE OPTIONS
 // =============================================================================
 
-const KPI_CODES = [
-  { value: "consultations_daily", label: "Tư vấn (Ngày)" },
-  { value: "enrollments_monthly", label: "Nhập học (Tháng)" },
-  { value: "enrollments_annual", label: "Nhập học (Năm)" },
-  { value: "conversion_rate", label: "TL chuyển đổi Lead mới (%)" },
-  { value: "win_rate", label: "Tỉ lệ chốt đơn (%)" },
-  { value: "response_time_hours", label: "Thời gian phản hồi (giờ)" },
-  { value: "sla_compliance_rate", label: "SLA tuân thủ (%)" },
-  { value: "consultation_effectiveness", label: "Hiệu quả tư vấn (%)" },
-];
+// KPI codes sourced from canonical catalog (single source of truth)
+import { KPI_OPTIONS as KPI_CODES } from "@/lib/hooks/use-kpi-catalog";
 
 const PERIOD_TYPES = [
   { value: "daily", label: "Hàng ngày" },

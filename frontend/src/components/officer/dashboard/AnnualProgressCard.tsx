@@ -18,6 +18,13 @@ import {
   Calendar
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getStaticDisplayName } from "@/lib/hooks/use-kpi-catalog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // =============================================================================
 // TYPES
@@ -36,6 +43,7 @@ export interface AnnualProgressInfo {
   on_track: boolean;
   surplus?: number | null;
   last_sync_at?: string | null;
+  resolution_kind?: "assigned" | "inherited_estimate" | null;
 
   // R3: Team breakdown (manager view only)
   officer_count?: number | null;
@@ -79,39 +87,11 @@ const statusConfig = {
 };
 
 /**
- * KPI code to display name mapping
- * Synced with Backend_FastAPI/app/services/kpi_service.py DEFAULT_KPIS
- */
-const KPI_NAME_LABELS: Record<string, string> = {
-  // Enrollment KPIs
-  enrollments: "Nhập học",
-  enrollments_monthly: "Nhập học tháng",
-  enrollments_annual: "Nhập học năm",
-
-  // Consultation KPIs
-  consultations_daily: "Tư vấn ngày",
-  consultations_monthly: "Tư vấn tháng",
-  consultations: "Tư vấn",
-
-  // Performance KPIs
-  conversion_rate: "TL chuyển đổi Lead mới",
-  win_rate: "Tỉ lệ chốt đơn",
-  response_time_hours: "Thời gian phản hồi",
-  sla_compliance_rate: "SLA tuân thủ",
-  consultation_effectiveness: "Hiệu quả tư vấn",
-
-  // Lead KPIs
-  leads_assigned: "Lead được giao",
-  leads_contacted: "Lead đã liên hệ",
-  leads_converted: "Lead chuyển đổi",
-};
-
-/**
- * Get display name for KPI code
- * Falls back to code if not found
+ * Get display name for KPI code from canonical catalog.
+ * Falls back to code if not found.
  */
 function getKpiDisplayName(kpiCode: string): string {
-  return KPI_NAME_LABELS[kpiCode] ?? kpiCode;
+  return getStaticDisplayName(kpiCode, "annual_progress");
 }
 
 // =============================================================================
@@ -155,6 +135,7 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
 
   const config = statusConfig[progress.status] || statusConfig.in_progress;
   const StatusIcon = config.icon;
+  const isEstimate = progress.resolution_kind === "inherited_estimate";
 
   // Format KPI name for display
   const kpiName = getKpiDisplayName(progress.kpi_code);
@@ -166,6 +147,18 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <Target className="h-4 w-4 text-primary" />
             Chỉ tiêu năm {progress.fiscal_year}
+            {isEstimate && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="text-xs text-muted-foreground font-normal">(ước tính)</span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Chỉ tiêu ước tính từ đơn vị, chưa được giao chính thức</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
           </CardTitle>
           <Badge 
             variant="secondary" 
@@ -180,10 +173,10 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
         {/* Main stats */}
         <div className="flex items-baseline justify-between">
           <div>
-            <span className="text-3xl font-bold tabular-nums">{progress.achieved_ytd}</span>
+            <span className={cn("text-3xl tabular-nums", isEstimate ? "font-medium text-muted-foreground" : "font-bold")}>{progress.achieved_ytd}</span>
             <span className="text-lg text-muted-foreground ml-1 tabular-nums">/ {progress.annual_target}</span>
           </div>
-          <div className={cn("text-2xl font-semibold tabular-nums", config.color)}>
+          <div className={cn("text-2xl font-semibold tabular-nums", isEstimate ? "text-muted-foreground" : config.color)}>
             {progress.progress_pct.toFixed(1)}%
           </div>
         </div>

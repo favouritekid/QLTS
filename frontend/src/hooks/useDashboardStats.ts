@@ -188,6 +188,7 @@ export interface AnnualProgressInfo {
   on_track: boolean;
   surplus?: number | null;
   last_sync_at?: string | null;
+  resolution_kind?: "assigned" | "inherited_estimate" | null;
 
   // R3: Team breakdown (manager view only)
   officer_count?: number | null;

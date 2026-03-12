@@ -124,16 +124,8 @@ export interface KpiConfigUpdate {
   is_active?: boolean;
 }
 
-export const KPI_CODES = [
-  { value: "consultations_daily", label: "Tư vấn (Ngày)" },
-  { value: "enrollments_monthly", label: "Nhập học (Tháng)" },
-  { value: "enrollments_annual", label: "Nhập học (Năm)" },
-  { value: "conversion_rate", label: "TL chuyển đổi Lead mới (%)" },
-  { value: "win_rate", label: "Tỉ lệ chốt đơn (%)" },
-  { value: "response_time_hours", label: "Thời gian phản hồi (giờ)" },
-  { value: "sla_compliance_rate", label: "SLA tuân thủ (%)" },
-  { value: "consultation_effectiveness", label: "Hiệu quả tư vấn (%)" },
-];
+// KPI_CODES has been moved to kpi_catalog (canonical source of truth).
+// Import from: import { KPI_OPTIONS } from "@/lib/hooks/use-kpi-catalog";
 
 export const PERIOD_TYPES = [
   { value: "daily", label: "Hàng ngày" },

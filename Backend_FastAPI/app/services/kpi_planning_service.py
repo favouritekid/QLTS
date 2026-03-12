@@ -1037,16 +1037,9 @@ async def clone_plan(
 # =============================================================================
 
 # Mapping: kpi_plan_month fields → KpiConfig records
-# source="month" reads from KpiPlanMonth, source="plan" reads from KpiPlan
-KPI_SYNC_MAPPING = [
-    {"kpi_code": "consultations_daily",        "period_type": "daily",   "source": "month", "field": "consultations_daily"},
-    {"kpi_code": "conversion_rate",            "period_type": "monthly", "source": "month", "field": "conversion_rate"},
-    {"kpi_code": "win_rate",                   "period_type": "monthly", "source": "month", "field": "win_rate"},
-    {"kpi_code": "consultation_effectiveness", "period_type": "monthly", "source": "month", "field": "consultation_effectiveness"},
-    {"kpi_code": "enrollments_monthly",        "period_type": "monthly", "source": "month", "field": "enrollment_target"},
-    {"kpi_code": "sla_compliance_rate",        "period_type": "monthly", "source": "plan",  "field": "sla_target"},
-    {"kpi_code": "response_time_hours",        "period_type": "daily",   "source": "plan",  "field": "response_time_target"},
-]
+# Sourced from canonical catalog (kpi_catalog.py) — single source of truth
+from .kpi_catalog import get_sync_mapping
+KPI_SYNC_MAPPING = get_sync_mapping()
 
 
 async def sync_plan_to_kpi_config(

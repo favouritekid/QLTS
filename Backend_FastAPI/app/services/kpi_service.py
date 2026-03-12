@@ -21,31 +21,14 @@ log = structlog.get_logger(__name__)
 
 
 # =============================================================================
-# DEFAULT KPI VALUES (fallback if no config exists)
+# KPI DEFAULTS & PERIOD MAP — sourced from canonical catalog
 # =============================================================================
 
-DEFAULT_KPIS = {
-    "consultations_daily": 10,
-    "conversion_rate": 15,  # percentage
-    "win_rate": 33,  # 33% — consistent with C_t = 3 × M_t
-    "response_time_hours": 2,
-    "enrollments_monthly": 7,
-    "enrollments_annual": 80,
-    "sla_compliance_rate": 80,  # 80% target
-    "consultation_effectiveness": 50,  # 50% target
-}
+from .kpi_catalog import get_default_kpis, get_period_map, get_default, get_period_type
 
-# Explicit period type mapping — avoids fragile substring matching
-KPI_PERIOD_MAP = {
-    "consultations_daily": "daily",
-    "response_time_hours": "daily",
-    "conversion_rate": "monthly",
-    "win_rate": "monthly",
-    "sla_compliance_rate": "monthly",
-    "consultation_effectiveness": "monthly",
-    "enrollments_monthly": "monthly",
-    "enrollments_annual": "annual",
-}
+# Backward-compatible module-level dicts (used by calculate_monthly_target etc.)
+DEFAULT_KPIS = get_default_kpis()
+KPI_PERIOD_MAP = get_period_map()
 
 
 # =============================================================================
@@ -101,50 +84,20 @@ async def get_kpi_target(
 
     Returns float (NUMERIC(12,2) in DB). Backward compatible.
 
-    Resolution order:
-    1. Monthly record matching effective_date's year/month (officer → unit → global)
-    2. Evergreen record effective_month IS NULL (officer → unit → global)
-    3. Hardcoded DEFAULT_KPIS
-
-    Args:
-        effective_date: Optional date/datetime. If None, uses current month.
-                        When provided, resolves target for that specific month
-                        (e.g. viewing dashboard for a past period).
+    Delegates to kpi_resolver.resolve_target() for the actual resolution logic.
+    This function is a thin wrapper preserving the existing call signature.
     """
-    from ..repositories import KpiRepository
+    from .kpi_resolver import resolve_target
 
-    repo = KpiRepository(db)
-    default = DEFAULT_KPIS.get(kpi_code, 0)
-
-    # Extract year/month for temporal resolution
-    effective_year = None
-    effective_month = None
-    if effective_date is not None:
-        effective_year = effective_date.year
-        effective_month = effective_date.month
-    else:
-        # Default to current month (spec §8.4: "Khi effective_date=None: dùng tháng hiện tại")
-        from datetime import datetime as dt
-        from zoneinfo import ZoneInfo
-        now = dt.now(ZoneInfo("Asia/Ho_Chi_Minh"))
-        effective_year = now.year
-        effective_month = now.month
-
-    target = await repo.get_kpi_target_with_inheritance(
+    resolution = await resolve_target(
+        db=db,
         kpi_code=kpi_code,
         officer_id=officer_id,
         unit_id=unit_id,
         period_type=period_type,
-        default=default,
-        effective_year=effective_year,
-        effective_month=effective_month,
+        effective_date=effective_date,
     )
-
-    log.debug(
-        "KPI target resolved", kpi_code=kpi_code, value=target,
-        effective=f"{effective_year}/{effective_month}",
-    )
-    return float(target)
+    return resolution.value
 
 
 async def get_kpi_target_source_info(
@@ -159,58 +112,21 @@ async def get_kpi_target_source_info(
     Get KPI target value with inheritance + source information.
 
     Returns: {"value": float, "is_unit_target": bool}
-      - is_unit_target=True when the resolved KpiConfig has source_plan_id
-        pointing to a plan with officer_id IS NULL (unit plan).
 
-    Args:
-        effective_date: Optional date/datetime. If None, uses current month.
+    Delegates to kpi_resolver.resolve_target() — eliminates the second
+    DB round-trip that the old implementation required.
     """
-    from ..repositories import KpiRepository
+    from .kpi_resolver import resolve_target
 
-    repo = KpiRepository(db)
-    default = DEFAULT_KPIS.get(kpi_code, 0)
-
-    # Use effective_date for temporal resolution
-    if effective_date is not None:
-        effective_year = effective_date.year
-        effective_month = effective_date.month
-    else:
-        from datetime import datetime as dt
-        from zoneinfo import ZoneInfo
-        now = dt.now(ZoneInfo("Asia/Ho_Chi_Minh"))
-        effective_year = now.year
-        effective_month = now.month
-
-    target = await repo.get_kpi_target_with_inheritance(
+    resolution = await resolve_target(
+        db=db,
         kpi_code=kpi_code,
         officer_id=officer_id,
         unit_id=unit_id,
         period_type=period_type,
-        default=default,
-        effective_year=effective_year,
-        effective_month=effective_month,
+        effective_date=effective_date,
     )
-
-    # Check if resolved config comes from a unit plan (officer_id IS NULL)
-    is_unit_target = False
-    config = await repo.get_resolved_kpi_config(
-        kpi_code=kpi_code,
-        officer_id=officer_id,
-        unit_id=unit_id,
-        period_type=period_type,
-        effective_year=effective_year,
-        effective_month=effective_month,
-    )
-    if config is not None and config.source_plan_id is not None:
-        from sqlalchemy import select
-        from ..models.config import KpiPlan
-        plan_officer = (await db.execute(
-            select(KpiPlan.officer_id).where(KpiPlan.id == config.source_plan_id)
-        )).scalar_one_or_none()
-        if plan_officer is None:
-            is_unit_target = True
-
-    return {"value": float(target), "is_unit_target": is_unit_target}
+    return {"value": resolution.value, "is_unit_target": resolution.is_unit_target}
 
 
 async def get_all_kpi_targets(
@@ -249,79 +165,47 @@ async def get_annual_target_progress(
     """
     Get annual target progress for an officer.
 
-    Args:
-        effective_date: Optional date/datetime for temporal context.
-            When provided, months_left and expected_ytd are calculated
-            relative to this date instead of now(). Use filter_end when
-            viewing historical dashboard periods.
+    Delegates to kpi_resolver.resolve_annual_progress() for the resolution logic,
+    then formats the result into the existing response dict shape.
 
-    Returns:
-        {
-            "annual_target": 80,
-            "achieved_ytd": 67,
-            "remaining": 13,
-            "progress_pct": 83.75,
-            "months_left": 1,
-            "monthly_target": 13.0,
-            "status": "in_progress",  # or "completed", "at_risk"
-            "on_track": True,
-            "last_sync_at": datetime
-        }
+    Returns the same dict shape as before, plus `resolution_kind` field.
     """
+    from .kpi_resolver import resolve_annual_progress
+
     if fiscal_year is None:
         fiscal_year = datetime.now(timezone.utc).year
-    
-    # ✅ REFACTORED: Use repository for data access
-    from ..repositories import KpiRepository
-    repo = KpiRepository(db)
-    
-    # Get officer's unit_id for fallback
-    unit_id = await repo.get_user_unit_id(officer_id)
-    
-    # Try to find annual target (officer → unit → org)
-    target_record = await repo.get_annual_target_with_priority(
+
+    # Convert effective_date to date if it's a datetime
+    eff_date = None
+    if effective_date is not None:
+        if hasattr(effective_date, 'date') and callable(effective_date.date):
+            eff_date = effective_date.date()
+        else:
+            eff_date = effective_date
+
+    # Delegate to resolver
+    resolution = await resolve_annual_progress(
+        db=db,
         officer_id=officer_id,
-        kpi_code=kpi_code,
         fiscal_year=fiscal_year,
-        unit_id=unit_id,
+        kpi_code=kpi_code,
+        effective_date=eff_date,
     )
-    
-    if not target_record:
+
+    if resolution is None:
         return None
 
-    annual = target_record.annual_target
+    annual = resolution.annual_target
     if annual <= 0:
         return None  # No meaningful target configured
 
-    # R2: Auto-load seasonal weights from plan if not injected
-    if seasonal_weights is None:
-        plan_found, weights = await repo.get_active_plan_weights(
-            officer_id, unit_id, fiscal_year,
-        )
-        if plan_found:
-            if weights and len(weights) == 12:
-                seasonal_weights = weights
-            else:
-                # Plan exists but seasonal_weights=NULL → use defaults
-                from .kpi_planning_service import DEFAULT_ENROLLMENT_WEIGHTS
-                seasonal_weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
-        # else: No plan → seasonal_weights stays None → linear fallback
-
-    # R0.5: When effective_date is provided (historical period), count enrollments
-    # up to that date instead of using the Celery-synced snapshot.
-    if effective_date is not None:
-        # Convert datetime to date if needed
-        if hasattr(effective_date, 'date') and callable(effective_date.date):
-            _as_of = effective_date.date()
-        else:
-            _as_of = effective_date
-        ytd = await repo.count_enrollments_ytd(officer_id, fiscal_year, as_of_date=_as_of)
-    else:
-        ytd = target_record.achieved_ytd
+    ytd = resolution.achieved_ytd
     remaining = max(0, annual - ytd)
-    
-    # Calculate months remaining — account for fiscal year boundary
-    # Use effective_date for temporal context (historical dashboard), fallback to now
+
+    # Use caller-injected weights, else resolver-provided weights
+    sw = seasonal_weights if seasonal_weights is not None else resolution.seasonal_weights
+
+    # Calculate months remaining
     if effective_date is not None:
         ref_year = effective_date.year
         ref_month = effective_date.month
@@ -331,17 +215,16 @@ async def get_annual_target_progress(
         ref_month = now.month
 
     if fiscal_year < ref_year:
-        months_left = 0  # Fiscal year ended
+        months_left = 0
     elif fiscal_year > ref_year:
-        months_left = 12  # All months remain
+        months_left = 12
     else:
-        months_left = 12 - ref_month + 1  # Include current month
+        months_left = 12 - ref_month + 1
 
-    # Calculate monthly target + status (uses shared pure function)
     status = compute_progress_status(
         ytd=ytd, annual=annual,
         fiscal_year=fiscal_year, ref_year=ref_year, ref_month=ref_month,
-        seasonal_weights=seasonal_weights,
+        seasonal_weights=sw,
     )
     if status == "completed":
         monthly_target = 0
@@ -354,9 +237,8 @@ async def get_annual_target_progress(
         surplus = 0
 
     progress_pct = (ytd / annual * 100) if annual > 0 else 0
-    # "overdue" should NOT be on_track
     on_track = status in ("in_progress", "completed")
-    
+
     return {
         "kpi_code": kpi_code,
         "fiscal_year": fiscal_year,
@@ -369,7 +251,8 @@ async def get_annual_target_progress(
         "status": status,
         "on_track": on_track,
         "surplus": surplus if status == "completed" else None,
-        "last_sync_at": target_record.last_sync_at,
+        "last_sync_at": resolution.target_record.last_sync_at if resolution.target_record else None,
+        "resolution_kind": resolution.resolution_kind,
     }
 
 
