@@ -23,6 +23,7 @@ export interface LeaderboardFilters {
   endDate?: string;
   scope?: "personal" | "team" | "organization";
   unitId?: number | null;
+  officerId?: number | null;
 }
 
 export interface ScheduleActivity {
@@ -71,26 +72,29 @@ export const officerApi = {
     if (filters?.endDate) params.append("end_date", filters.endDate);
     if (filters?.scope) params.append("scope", filters.scope);
     if (filters?.unitId) params.append("unit_id", filters.unitId.toString());
+    if (filters?.officerId) params.append("officer_id", filters.officerId.toString());
 
     const url = `/api/officer/leaderboard${params.toString() ? `?${params.toString()}` : ""}`;
     const response = await api.get<WeeklyLeaderboardData>(url);
     return response.data;
   },
 
-  getUpcomingActivities: async (month: number, year: number, scope?: string, unitId?: number) => {
+  getUpcomingActivities: async (month: number, year: number, scope?: string, unitId?: number, officerId?: number) => {
     const params: Record<string, string | number> = { month, year };
     if (scope) params.scope = scope;
     if (unitId) params.unit_id = unitId;
+    if (officerId) params.officer_id = officerId;
     const response = await api.get<UpcomingActivitiesResponse>("/api/officer/upcoming-activities", {
       params,
     });
     return response.data;
   },
 
-  getRecommendations: async (limit: number = 5, startDate?: string, endDate?: string) => {
+  getRecommendations: async (limit: number = 5, startDate?: string, endDate?: string, officerId?: number) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (startDate) params.append("start_date", startDate);
     if (endDate) params.append("end_date", endDate);
+    if (officerId) params.append("officer_id", String(officerId));
     const response = await api.get<RecommendationsResponse>(
       `/api/officer/recommendations?${params}`
     );

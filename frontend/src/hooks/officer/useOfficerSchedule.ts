@@ -9,11 +9,12 @@ export function useOfficerSchedule(
   year: number,
   scope?: string,
   unitId?: number | null,
+  officerId?: number | null,
 ) {
   return useQuery<UpcomingActivitiesResponse>({
-    queryKey: [...officerKeys.upcomingActivities(month, year), scope, unitId],
+    queryKey: [...officerKeys.upcomingActivities(month, year), scope, unitId, officerId],
     queryFn: async () => {
-      return officerApi.getUpcomingActivities(month, year, scope, unitId ?? undefined);
+      return officerApi.getUpcomingActivities(month, year, scope, unitId ?? undefined, officerId ?? undefined);
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });

@@ -10,6 +10,7 @@ export const officerKeys = {
     filters?.endDate,
     filters?.scope,
     filters?.unitId,
+    filters?.officerId,
   ] as const,
   upcomingActivities: (month: number, year: number) => [...officerKeys.all, "upcoming-activities", month, year] as const,
   recommendations: (limit: number, startDate?: string, endDate?: string) =>
@@ -22,6 +23,7 @@ export interface UseWeeklyLeaderboardOptions {
   endDate?: string;
   scope?: "personal" | "team" | "organization";
   unitId?: number | null;
+  officerId?: number | null;
 }
 
 export function useWeeklyLeaderboard(options?: UseWeeklyLeaderboardOptions) {
@@ -30,6 +32,7 @@ export function useWeeklyLeaderboard(options?: UseWeeklyLeaderboardOptions) {
     endDate: options?.endDate,
     scope: options?.scope,
     unitId: options?.unitId ?? undefined,
+    officerId: options?.officerId ?? undefined,
   };
 
   return useQuery<WeeklyLeaderboardData>({

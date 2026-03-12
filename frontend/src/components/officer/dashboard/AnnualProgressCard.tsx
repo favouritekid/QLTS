@@ -44,6 +44,7 @@ export interface AnnualProgressInfo {
   surplus?: number | null;
   last_sync_at?: string | null;
   resolution_kind?: "assigned" | "inherited_estimate" | null;
+  expected_progress_pct?: number | null;
 
   // R3: Team breakdown (manager view only)
   officer_count?: number | null;
@@ -180,10 +181,14 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             value={Math.min(progress.progress_pct, 100)} 
             className="h-3"
           />
-          {/* Expected progress marker — use backend-provided months_left for correct historical periods */}
+          {/* Expected progress marker — prefer backend seasonal-aware value, fallback to linear */}
           {progress.status !== "completed" && (() => {
-            const monthsElapsed = 12 - progress.months_left;
-            const expectedPct = monthsElapsed > 0 ? (monthsElapsed / 12) * 100 : 0;
+            const expectedPct = progress.expected_progress_pct != null
+              ? progress.expected_progress_pct
+              : (() => {
+                  const monthsElapsed = 12 - progress.months_left;
+                  return monthsElapsed > 0 ? (monthsElapsed / 12) * 100 : 0;
+                })();
             return (
               <div
                 className="absolute top-0 h-3 w-0.5 bg-muted-foreground dark:bg-muted-foreground"

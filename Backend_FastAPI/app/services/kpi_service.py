@@ -239,6 +239,19 @@ async def get_annual_target_progress(
     progress_pct = (ytd / annual * 100) if annual > 0 else 0
     on_track = status in ("in_progress", "completed")
 
+    # Compute seasonal-aware expected progress for frontend marker
+    if annual > 0 and fiscal_year == ref_year:
+        months_elapsed = ref_month
+        if sw and len(sw) == 12:
+            expected_ytd = annual * sum(sw[:months_elapsed])
+        else:
+            expected_ytd = (annual / 12) * months_elapsed
+        expected_progress_pct = round((expected_ytd / annual) * 100, 1)
+    elif annual > 0 and fiscal_year > ref_year:
+        expected_progress_pct = 0.0
+    else:
+        expected_progress_pct = 100.0
+
     return {
         "kpi_code": kpi_code,
         "fiscal_year": fiscal_year,
@@ -253,6 +266,7 @@ async def get_annual_target_progress(
         "surplus": surplus if status == "completed" else None,
         "last_sync_at": resolution.target_record.last_sync_at if resolution.target_record else None,
         "resolution_kind": resolution.resolution_kind,
+        "expected_progress_pct": expected_progress_pct,
     }
 
 
@@ -293,6 +307,16 @@ def aggregate_annual_progresses(
         "inherited_estimate" if has_estimate else None
     )
 
+    # Weighted expected_progress_pct: weighted by annual_target per officer
+    if total_annual > 0:
+        weighted_expected = sum(
+            p.get("expected_progress_pct", 0) * p["annual_target"]
+            for p in progresses
+        )
+        agg_expected_pct = round(weighted_expected / total_annual, 1)
+    else:
+        agg_expected_pct = 0.0
+
     return {
         "kpi_code": "enrollments_annual",
         "fiscal_year": progresses[0]["fiscal_year"],
@@ -307,6 +331,7 @@ def aggregate_annual_progresses(
         "surplus": total_ytd - total_annual if worst == "completed" else None,
         "last_sync_at": None,
         "resolution_kind": aggregate_kind,
+        "expected_progress_pct": agg_expected_pct,
         # R1: Team breakdown for manager drill-down
         "officer_count": len(progresses),
         "officers_at_risk": sum(1 for p in progresses if p["status"] == "at_risk"),

@@ -28,6 +28,8 @@ interface WeeklyLeaderboardProps {
   scope?: "personal" | "team" | "organization";
   /** Selected unit ID (for organization scope) */
   unitId?: number | null;
+  /** Drill-down target officer (highlights this officer in leaderboard) */
+  officerId?: number | null;
 }
 
 const getRankIcon = (rank: number) => {
@@ -87,13 +89,14 @@ const getRankBg = (rank: number, isCurrentUser: boolean) => {
   }
 };
 
-export function WeeklyLeaderboard({ scope, unitId }: WeeklyLeaderboardProps) {
+export function WeeklyLeaderboard({ scope, unitId, officerId }: WeeklyLeaderboardProps) {
   const { startDate, endDate } = useDashboardDate();
   const { data, isLoading, error } = useWeeklyLeaderboard({
     startDate,
     endDate,
     scope,
     unitId,
+    officerId,
   });
 
   if (isLoading) {

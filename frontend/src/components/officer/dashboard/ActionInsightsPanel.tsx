@@ -98,10 +98,12 @@ const typeIconMap: Record<string, typeof Lightbulb> = {
 interface ActionInsightsPanelProps {
   actions: PriorityAction[];
   scope?: "personal" | "team" | "organization" | null;
+  officerId?: number | null;
 }
 
-export function ActionInsightsPanel({ actions, scope }: ActionInsightsPanelProps) {
-  const isPersonal = !scope || scope === "personal";
+export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsightsPanelProps) {
+  // When drilling into a specific officer, treat as personal scope for recommendations
+  const isPersonal = (!scope || scope === "personal") || officerId != null;
 
   // --- Priority Actions state ---
   const [filter, setFilter] = useState<FilterType>("all");
@@ -142,6 +144,7 @@ export function ActionInsightsPanel({ actions, scope }: ActionInsightsPanelProps
     startDate,
     endDate,
     enabled: isPersonal,
+    officerId,
   });
   const recommendations = recsData?.recommendations ?? [];
 

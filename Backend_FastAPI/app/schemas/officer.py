@@ -230,6 +230,8 @@ class AnnualProgressInfo(BaseModel):
     on_track: bool  # True if progress >= expected pace
     surplus: Optional[float] = None  # Only if status == "completed"
     last_sync_at: Optional[datetime] = None  # Last YTD sync timestamp
+    resolution_kind: Optional[str] = None  # "assigned" | "inherited_estimate" | None
+    expected_progress_pct: Optional[float] = None  # Seasonal-aware expected % at current month
 
     # R3: Team breakdown (only present in aggregated/manager response)
     officer_count: Optional[int] = None

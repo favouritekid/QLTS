@@ -33,6 +33,7 @@ interface TodayScheduleProps {
   className?: string;
   scope?: "personal" | "team" | "organization" | null;
   unitId?: number | null;
+  officerId?: number | null;
 }
 
 // =============================================================================
@@ -193,17 +194,18 @@ function MiniCalendar({
 // MAIN COMPONENT
 // =============================================================================
 
-export function TodaySchedule({ className, scope, unitId }: TodayScheduleProps) {
+export function TodaySchedule({ className, scope, unitId, officerId }: TodayScheduleProps) {
   const router = useRouter();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
 
-  // Fetch upcoming activities for current view month (scope-aware)
+  // Fetch upcoming activities for current view month (scope-aware + officer drill-down)
   const { data, isLoading } = useOfficerSchedule(
     viewDate.getMonth() + 1,
     viewDate.getFullYear(),
     scope ?? undefined,
     unitId,
+    officerId,
   );
   
   // Filter activities for selected date

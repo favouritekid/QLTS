@@ -40,6 +40,7 @@ export function WorkloadCard({ statusOverview, scope }: WorkloadCardProps) {
   
   // Use optimistic state during mutation, otherwise derive from props
   const isAvailable = optimisticAvailable ?? (statusOverview.availability_status === "available");
+  const isOffline = !optimisticAvailable && statusOverview.availability_status === "offline";
 
   const mutation = useOfficerAvailability();
 
@@ -87,11 +88,12 @@ export function WorkloadCard({ statusOverview, scope }: WorkloadCardProps) {
             variant={isAvailable ? "default" : "secondary"}
             className={cn(
               "text-xs",
-              isAvailable && "bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400"
+              isAvailable && "bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400",
+              isOffline && "bg-muted text-muted-foreground"
             )}
           >
             <CircleDot aria-hidden="true" className="h-3 w-3 mr-1" />
-            {isAvailable ? "Sẵn sàng" : "Bận"}
+            {isAvailable ? "Sẵn sàng" : isOffline ? "Ngoại tuyến" : "Bận"}
           </Badge>
         </div>
       </CardHeader>
@@ -163,7 +165,7 @@ export function WorkloadCard({ statusOverview, scope }: WorkloadCardProps) {
             <div className="text-sm">
               <p className="font-medium">Nhận lead mới</p>
               <p className="text-xs text-muted-foreground">
-                {isAvailable ? "Đang nhận leads tự động" : "Tạm dừng nhận leads"}
+                {isAvailable ? "Đang nhận leads tự động" : isOffline ? "Không hoạt động" : "Tạm dừng nhận leads"}
               </p>
             </div>
             <Switch

@@ -173,4 +173,44 @@ describe("AnnualProgressCard", () => {
     });
     expect(info.resolution_kind).toBe("inherited_estimate");
   });
+
+  it("AnnualProgressInfo type includes expected_progress_pct", () => {
+    // Type-level contract test: if this compiles, the field exists
+    const info: AnnualProgressInfo = makeProgress({
+      expected_progress_pct: 25.0,
+    });
+    expect(info.expected_progress_pct).toBe(25.0);
+  });
+
+  it("renders expected progress marker with backend value when provided", () => {
+    const { container } = render(
+      <AnnualProgressCard
+        progress={makeProgress({
+          expected_progress_pct: 30.0,
+          months_left: 10,
+          status: "in_progress",
+        })}
+      />,
+      { wrapper: createQueryWrapper() },
+    );
+    // The marker should use expected_progress_pct=30% (not linear (12-10)/12*100=16.7%)
+    const marker = container.querySelector('[title*="Tiến độ kỳ vọng: 30%"]');
+    expect(marker).toBeInTheDocument();
+  });
+
+  it("falls back to linear expected when expected_progress_pct is null", () => {
+    const { container } = render(
+      <AnnualProgressCard
+        progress={makeProgress({
+          expected_progress_pct: null,
+          months_left: 6,
+          status: "in_progress",
+        })}
+      />,
+      { wrapper: createQueryWrapper() },
+    );
+    // Linear: (12-6)/12*100 = 50%
+    const marker = container.querySelector('[title*="Tiến độ kỳ vọng: 50%"]');
+    expect(marker).toBeInTheDocument();
+  });
 });

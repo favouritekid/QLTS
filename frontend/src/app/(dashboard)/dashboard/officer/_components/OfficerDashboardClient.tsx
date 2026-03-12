@@ -329,16 +329,16 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
             <AnnualProgressCard progress={stats.annual_progress} />
           )}
           <WorkloadCard statusOverview={stats.status_overview} scope={scope} />
-          <TodaySchedule scope={scope} unitId={selectedUnitId} />
+          <TodaySchedule scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
         </div>
       </div>
 
       {/* Row 2: Action Panels */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
         {/* Left — Action Insights (wider, more room for cards) */}
-        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} />
+        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} officerId={selectedOfficerId} />
         {/* Right — Leaderboard */}
-        <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} />
+        <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
       </div>
     </div>
   );

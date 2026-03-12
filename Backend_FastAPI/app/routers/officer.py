@@ -131,6 +131,7 @@ async def get_leaderboard(
     end_date: str = None,
     scope: str = None,
     unit_id: int = None,
+    officer_id: int = None,
 ):
     """
     Leaderboard showing top officers by consultations.
@@ -140,6 +141,8 @@ async def get_leaderboard(
         end_date: End date (YYYY-MM-DD). Defaults to today.
         scope: "personal" | "team" | "organization". Affects unit filtering.
         unit_id: Filter by specific unit (for organization scope).
+        officer_id: Drill-down target. Highlights this officer instead of requester.
+                    Only admin/manager may specify another officer.
     """
     from datetime import date as date_type
 
@@ -153,9 +156,15 @@ async def get_leaderboard(
         except ValueError:
             pass  # Use defaults
 
+    # Resolve target officer for highlighting (drill-down support)
+    target_officer_id = current_user.id
+    if officer_id is not None and officer_id != current_user.id:
+        if current_user.role in ("admin", "manager"):
+            target_officer_id = officer_id
+
     leaderboard = await officer_service.get_weekly_leaderboard(
         db=db,
-        officer_id=current_user.id,
+        officer_id=target_officer_id,
         start_date=parsed_start,
         end_date=parsed_end,
         scope=scope,
@@ -233,8 +242,9 @@ async def get_upcoming_activities(
     year: int = None,
     scope: str = "personal",
     unit_id: int = None,
+    officer_id: int = None,
 ):
-    """Get leads with scheduled follow-ups for the given month. Supports scope filtering."""
+    """Get leads with scheduled follow-ups for the given month. Supports scope and officer drill-down."""
     from datetime import datetime
 
     if month is None or year is None:
@@ -242,9 +252,15 @@ async def get_upcoming_activities(
         month = month or now.month
         year = year or now.year
 
+    # Resolve target officer for drill-down
+    target_officer_id = current_user.id
+    if officer_id is not None and officer_id != current_user.id:
+        if current_user.role in ("admin", "manager"):
+            target_officer_id = officer_id
+
     result = await officer_service.get_upcoming_activities(
         db=db,
-        officer_id=current_user.id,
+        officer_id=target_officer_id,
         month=month,
         year=year,
         scope=scope,
@@ -270,6 +286,7 @@ async def get_recommendations(
     limit: int = 5,
     start_date: str = None,
     end_date: str = None,
+    officer_id: int = None,
 ):
     """
     Phase 7: Auto Recommendations
@@ -302,9 +319,15 @@ async def get_recommendations(
         except ValueError:
             pass
 
+    # Resolve target officer for drill-down
+    target_officer_id = current_user.id
+    if officer_id is not None and officer_id != current_user.id:
+        if current_user.role in ("admin", "manager"):
+            target_officer_id = officer_id
+
     recommendations = await get_officer_recommendations(
         db=db,
-        officer_id=current_user.id,
+        officer_id=target_officer_id,
         limit=limit,
         start_date=validated_start,
         end_date=validated_end,

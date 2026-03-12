@@ -9,6 +9,8 @@ export interface UseOfficerRecommendationsOptions {
   endDate?: string;
   /** Disable query (e.g. when scope is not personal) */
   enabled?: boolean;
+  /** Drill-down target officer (admin/manager only) */
+  officerId?: number | null;
 }
 
 export function useOfficerRecommendations(
@@ -16,9 +18,9 @@ export function useOfficerRecommendations(
   options?: UseOfficerRecommendationsOptions,
 ) {
   return useQuery<RecommendationsResponse>({
-    queryKey: officerKeys.recommendations(limit, options?.startDate, options?.endDate),
+    queryKey: [...officerKeys.recommendations(limit, options?.startDate, options?.endDate), options?.officerId],
     queryFn: async () => {
-      return officerApi.getRecommendations(limit, options?.startDate, options?.endDate);
+      return officerApi.getRecommendations(limit, options?.startDate, options?.endDate, options?.officerId ?? undefined);
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     enabled: options?.enabled ?? true,
