@@ -65,43 +65,53 @@ export function AdminCard({ profile }: AdminCardProps) {
         {/* Documents Summary */}
         <div
           className={`rounded-lg p-3.5 border ${
-            verifiedCount === mandatoryCount && mandatoryCount > 0
-              ? "bg-gradient-to-br from-success-50 to-success-100 border-success-200"
-              : "bg-gradient-to-br from-warning-50 to-warning-100 border-warning-200"
+            mandatoryCount === 0
+              ? "bg-gradient-to-br from-muted/50 to-muted border-border"
+              : verifiedCount === mandatoryCount
+                ? "bg-gradient-to-br from-success-50 to-success-100 border-success-200"
+                : "bg-gradient-to-br from-warning-50 to-warning-100 border-warning-200"
           }`}
         >
-          <div className="flex justify-between items-center text-sm mb-1">
-            <span
-              className={`font-medium ${
-                verifiedCount === mandatoryCount && mandatoryCount > 0
-                  ? "text-success-900"
-                  : "text-warning-900"
-              }`}
-            >
-              Tài liệu đã nộp / Bắt buộc
-            </span>
-            <span
-              className={`font-bold text-lg ${
-                verifiedCount === mandatoryCount && mandatoryCount > 0
-                  ? "text-success-700"
-                  : "text-warning-700"
-              }`}
-            >
-              {submittedCount} / {mandatoryCount}
-            </span>
-          </div>
-
-          {missingCount > 0 && (
-            <div className="text-xs text-error-600 font-medium">
-              Còn thiếu: {missingCount} tài liệu
+          {mandatoryCount === 0 ? (
+            <div className="text-sm text-muted-foreground font-medium">
+              Không có tài liệu bắt buộc
             </div>
-          )}
+          ) : (
+            <>
+              <div className="flex justify-between items-center text-sm mb-1">
+                <span
+                  className={`font-medium ${
+                    verifiedCount === mandatoryCount
+                      ? "text-success-900"
+                      : "text-warning-900"
+                  }`}
+                >
+                  Tài liệu đã nộp / Bắt buộc
+                </span>
+                <span
+                  className={`font-bold text-lg ${
+                    verifiedCount === mandatoryCount
+                      ? "text-success-700"
+                      : "text-warning-700"
+                  }`}
+                >
+                  {submittedCount} / {mandatoryCount}
+                </span>
+              </div>
 
-          {missingCount === 0 && verifiedCount < mandatoryCount && (
-            <div className="text-xs text-warning-700 font-medium">
-              Đã nộp đủ, chờ xác nhận ({verifiedCount}/{mandatoryCount} đã duyệt)
-            </div>
-          )}
+              {missingCount > 0 && (
+                <div className="text-xs text-error-600 font-medium">
+                  Còn thiếu: {missingCount} tài liệu
+                </div>
+              )}
+
+              {missingCount === 0 && verifiedCount < mandatoryCount && (
+                <div className="text-xs text-warning-700 font-medium">
+                  Đã nộp đủ, chờ xác nhận ({verifiedCount}/{mandatoryCount} đã duyệt)
+                </div>
+              )}
+            </>
+          )
 
           {verifiedCount === mandatoryCount && mandatoryCount > 0 && (
             <div className="text-xs text-success-700 font-medium flex items-center gap-1">

@@ -246,11 +246,14 @@ export function LeadFilterBar({
     }, DEBOUNCE_DELAY);
   }, [onSearchChange]);
 
-  // Cleanup timeout on unmount
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
+      }
+      if (officerSearchDebounceRef.current) {
+        clearTimeout(officerSearchDebounceRef.current);
       }
     };
   }, []);
@@ -369,7 +372,8 @@ export function LeadFilterBar({
     offeringFilters.length +
     officerFilters.length +
     (hasScoreFilter ? 1 : 0) +
-    (dateFrom || dateTo ? 1 : 0);
+    (dateFrom || dateTo ? 1 : 0) +
+    (search ? 1 : 0);
 
   return (
     <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 border-b backdrop-blur">
@@ -813,7 +817,7 @@ export function LeadFilterBar({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={onReset}
+                onClick={() => { onReset(); setMobileFiltersOpen(false); }}
                 className="h-9 text-xs"
               >
                 <RotateCcw className="mr-1 h-3.5 w-3.5" />

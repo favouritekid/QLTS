@@ -126,6 +126,7 @@ function loadFiltersFromStorage(): StoredFilters | null {
       // ✅ VERSIONING: Check version and reset if mismatched
       if (parsed?.version !== STORAGE_VERSION) {
         // Clear stale data with incompatible schema
+        console.warn(`[useLeadsFilter] Cleared stale filters (v${parsed?.version} → v${STORAGE_VERSION})`);
         localStorage.removeItem(LEADS_FILTERS_STORAGE_KEY);
         return null;
       }
@@ -479,11 +480,15 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
 
   const handleDateFromChange = useCallback((date: string) => {
     setDateFrom(date);
+    // Auto-clear dateTo if it's before the new dateFrom
+    setDateTo(prev => (prev && date && prev < date) ? "" : prev);
     setPage(1);
   }, []);
 
   const handleDateToChange = useCallback((date: string) => {
     setDateTo(date);
+    // Auto-clear dateFrom if it's after the new dateTo
+    setDateFrom(prev => (prev && date && prev > date) ? "" : prev);
     setPage(1);
   }, []);
 

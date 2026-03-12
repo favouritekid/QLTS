@@ -287,14 +287,25 @@ export function AdmissionDetailClient({
       }
     })
 
-    // Transform nested nullable field: academic_history[n].graduation_type
+    // Transform nested nullable fields: convert "" → null in array items
+    const nullifyEmptyStrings = (arr: Array<Record<string, unknown>>) =>
+      arr.map(record => {
+        const cleaned = { ...record }
+        Object.keys(cleaned).forEach(k => {
+          if (cleaned[k] === "") cleaned[k] = null
+        })
+        return cleaned
+      })
+
     if (Array.isArray(transformedData.academic_history)) {
-      transformedData.academic_history = (
+      transformedData.academic_history = nullifyEmptyStrings(
         transformedData.academic_history as Array<Record<string, unknown>>
-      ).map(record => ({
-        ...record,
-        graduation_type: record.graduation_type === "" ? null : record.graduation_type,
-      }))
+      )
+    }
+    if (Array.isArray(transformedData.family_info)) {
+      transformedData.family_info = nullifyEmptyStrings(
+        transformedData.family_info as Array<Record<string, unknown>>
+      )
     }
 
     updateMutation.mutate(transformedData as AdmissionProfileUpdate, {
