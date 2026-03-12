@@ -174,17 +174,20 @@ def sync_kpi_ytd_task(self):
 )
 def sync_kpi_plan_monthly_task(self):
     """
-    Celery Beat monthly task — 3-step pipeline (Phase B5).
+    Celery Beat monthly task — 4-step pipeline (Phase B5).
 
-    Runs on day 1 of each month at 02:00 AM.
+    Runs on day 1 of each month at 02:00 AM (VN timezone).
     For each active KpiPlan (current fiscal year):
-      Step 1: fill_month_actuals(prev_month) — populate actuals for last month
-      Step 2: recalibrate_factors(current_month) — EMA + damping + derived KPI regen for future months
-      Step 3: sync_plan_to_kpi_config(current_month) — push targets to KpiConfig
-
-    Note: recalibrate_factors already regenerates derived KPIs inline for
-    future months, so a separate generate_monthly_kpis call is not needed
-    (and would overwrite past months set by B6 mid-year redistribute).
+      Step 1:   fill_month_actuals(prev_month, ALL plans)
+                — populate 6 actual fields for last month (unit + officer)
+      Step 1.5: rebalance_enrollment_targets(prev_month, OFFICER plans only)
+                — redistribute remaining annual quota to future months based on YTD actuals
+      Step 2:   recalibrate_factors(current_month, OFFICER plans only)
+                — EMA + damping + derived KPI regen for future months
+                — unit plans are immutable baseline, never recalibrated
+      Step 3:   sync_plan_to_kpi_config(current_month, unit plans + orphan officer plans)
+                — push 7 monthly KpiConfigs + annual KpiTarget per officer
+                — unit plan sync resolves officer plan override internally
 
     Commit-per-plan isolation: 1 plan failure doesn't block others.
     January edge case: fills December actuals from previous year's plans.
