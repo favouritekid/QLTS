@@ -142,21 +142,22 @@ async def get_coverage_report(
             # P2 fix: Use officer-specific plan weights if available
             officer_plan = officer_plans.get(officer.id)
 
-            # V2: Priority chain mirrors kpi_resolver.resolve_annual_progress()
-            # but uses batch-prefetched data to avoid N+1 queries.
+            # Priority chain mirrors kpi_resolver.resolve_annual_progress():
+            # 1. Officer KpiTarget  2. Officer KpiPlan  3. Unit plan  4. Unit target  5. Global
+            # Uses batch-prefetched data to avoid N+1 queries.
             # Mapping to resolver output: custom→assigned, inherited→inherited_estimate
-            if officer_plan:
-                # Officer has own plan → plan annual is source of truth
-                source = "custom"
-                target_id = custom_target.id if custom_target else None
-                annual = officer_plan.annual_enrollment_target
-                ytd = custom_target.achieved_ytd if custom_target else ytd_grouped.get(officer.id, 0)
-            elif custom_target:
-                # Officer has KpiTarget but no plan (legacy data)
+            if custom_target:
+                # Officer has explicit KpiTarget (highest priority, may be admin-edited)
                 source = "custom"
                 target_id = custom_target.id
                 annual = custom_target.annual_target
                 ytd = custom_target.achieved_ytd
+            elif officer_plan:
+                # Officer has own KpiPlan but no KpiTarget
+                source = "custom"
+                target_id = None
+                annual = officer_plan.annual_enrollment_target
+                ytd = ytd_grouped.get(officer.id, 0)
             elif plan and officer_count > 0:
                 # Inherit from unit plan
                 source = "inherited"

@@ -18,7 +18,7 @@ import {
   Calendar
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getStaticDisplayName } from "@/lib/hooks/use-kpi-catalog";
+import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
 import {
   Tooltip,
   TooltipContent,
@@ -86,14 +86,6 @@ const statusConfig = {
   },
 };
 
-/**
- * Get display name for KPI code from canonical catalog.
- * Falls back to code if not found.
- */
-function getKpiDisplayName(kpiCode: string): string {
-  return getStaticDisplayName(kpiCode, "annual_progress");
-}
-
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -104,6 +96,7 @@ interface AnnualProgressCardProps {
 }
 
 export function AnnualProgressCard({ progress, className }: AnnualProgressCardProps) {
+  const { getDisplayName } = useKpiCatalog();
   const currentYear = new Date().getFullYear();
   
   // Show empty state if no progress data
@@ -138,7 +131,7 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
   const isEstimate = progress.resolution_kind === "inherited_estimate";
 
   // Format KPI name for display
-  const kpiName = getKpiDisplayName(progress.kpi_code);
+  const kpiName = getDisplayName(progress.kpi_code, "annual_progress");
 
   return (
     <Card className={cn("border bg-card overflow-hidden", className)}>

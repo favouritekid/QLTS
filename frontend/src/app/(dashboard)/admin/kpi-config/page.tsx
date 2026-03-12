@@ -115,7 +115,7 @@ interface KpiTarget {
 // =============================================================================
 
 // KPI codes sourced from canonical catalog (single source of truth)
-import { KPI_OPTIONS as KPI_CODES } from "@/lib/hooks/use-kpi-catalog";
+import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
 
 const PERIOD_TYPES = [
   { value: "daily", label: "Hàng ngày" },
@@ -193,6 +193,8 @@ async function syncKpiTarget(id: number): Promise<SyncYTDResponse> {
 
 export default function KpiConfigPage() {
   const queryClient = useQueryClient();
+  const { getKpiOptions } = useKpiCatalog();
+  const KPI_CODES = getKpiOptions();
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isTargetDialogOpen, setIsTargetDialogOpen] = useState(false);
