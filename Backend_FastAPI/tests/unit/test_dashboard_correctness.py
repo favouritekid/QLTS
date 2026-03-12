@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from app.schemas.officer import AnnualProgressInfo
 from app.services.kpi_service import aggregate_annual_progresses
+from app.utils.exceptions import ResourceNotFoundError
 
 
 # =============================================================================
@@ -423,40 +424,268 @@ class TestSLAAggregateSemantics:
 # =============================================================================
 
 
-class TestDrillDownDependencyContract:
+class _FakeUser:
+    """Minimal User stub for deps testing."""
+    def __init__(self, id, role, unit_id=None):
+        self.id = id
+        self.role = role
+        self.unit_id = unit_id
+
+
+class _FakeDB:
+    """Minimal AsyncSession stub that returns preset users by ID."""
+    def __init__(self, users: dict):
+        self._users = users  # {id: _FakeUser}
+
+    async def get(self, model_class, pk):
+        return self._users.get(pk)
+
+
+class _FakeOrgRepo:
+    """Stub for OrganizationRepository.get_descendant_unit_ids."""
+    def __init__(self, descendants: list):
+        self._descendants = descendants
+
+    async def get_descendant_unit_ids(self, unit_id):
+        return self._descendants
+
+
+class TestResolveDrillDownOfficerId:
     """
-    Verify resolve_drill_down_officer_id exists, has correct signature,
-    and enforces role-based access rules.
+    Behavioral tests for resolve_drill_down_officer_id.
+    Calls the actual async function with mock db/user objects.
     """
 
-    def test_dependency_is_importable(self):
+    async def test_officer_self_ok(self):
         from app.core.deps import resolve_drill_down_officer_id
-        import inspect
-        assert inspect.iscoroutinefunction(resolve_drill_down_officer_id)
+        user = _FakeUser(id=1, role="officer", unit_id=10)
+        result = await resolve_drill_down_officer_id(officer_id=None, db=None, current_user=user)
+        assert result == 1
 
-    def test_dependency_in_module_exports(self):
-        from app.core import deps
-        assert "resolve_drill_down_officer_id" in deps.__all__
-
-    def test_dependency_accepts_officer_id_param(self):
-        import inspect
+    async def test_officer_explicit_self_ok(self):
         from app.core.deps import resolve_drill_down_officer_id
-        sig = inspect.signature(resolve_drill_down_officer_id)
-        assert "officer_id" in sig.parameters
+        user = _FakeUser(id=1, role="officer", unit_id=10)
+        result = await resolve_drill_down_officer_id(officer_id=1, db=None, current_user=user)
+        assert result == 1
 
-    def test_dependency_docstring_mentions_role_check(self):
-        """Ensure the dependency validates target has role 'officer'."""
+    async def test_officer_other_404(self):
         from app.core.deps import resolve_drill_down_officer_id
-        doc = resolve_drill_down_officer_id.__doc__ or ""
-        assert "officer" in doc.lower()
-        # Must mention descendant units for manager scope
-        assert "descendant" in doc.lower()
+        user = _FakeUser(id=1, role="officer", unit_id=10)
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_drill_down_officer_id(officer_id=2, db=_FakeDB({}), current_user=user)
 
-    def test_dependency_docstring_mentions_404(self):
-        """Ensure the dependency returns 404, never 403."""
+    async def test_manager_descendant_officer_ok(self):
+        """Manager can drill into officer in descendant unit."""
         from app.core.deps import resolve_drill_down_officer_id
-        doc = resolve_drill_down_officer_id.__doc__ or ""
-        assert "404" in doc
+        import unittest.mock as mock
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="officer", unit_id=11)  # child unit
+        db = _FakeDB({42: target})
+
+        with mock.patch(
+            "app.repositories.organization_repository.OrganizationRepository",
+            return_value=_FakeOrgRepo([10, 11, 12]),
+        ):
+            result = await resolve_drill_down_officer_id(officer_id=42, db=db, current_user=manager)
+        assert result == 42
+
+    async def test_manager_out_of_scope_officer_404(self):
+        """Manager cannot drill into officer outside their unit hierarchy."""
+        from app.core.deps import resolve_drill_down_officer_id
+        import unittest.mock as mock
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="officer", unit_id=99)  # different tree
+        db = _FakeDB({42: target})
+
+        with mock.patch(
+            "app.repositories.organization_repository.OrganizationRepository",
+            return_value=_FakeOrgRepo([10, 11]),
+        ):
+            with pytest.raises(ResourceNotFoundError):
+                await resolve_drill_down_officer_id(officer_id=42, db=db, current_user=manager)
+
+    async def test_manager_target_non_officer_404(self):
+        """Manager cannot drill into a user who is not an officer."""
+        from app.core.deps import resolve_drill_down_officer_id
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="user", unit_id=10)  # not an officer
+        db = _FakeDB({42: target})
+
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_drill_down_officer_id(officer_id=42, db=db, current_user=manager)
+
+    async def test_manager_self_id_non_officer_404(self):
+        """Manager passing own ID → 404 because manager is not an officer."""
+        from app.core.deps import resolve_drill_down_officer_id
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        db = _FakeDB({100: manager})
+
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_drill_down_officer_id(officer_id=100, db=db, current_user=manager)
+
+    async def test_admin_target_officer_ok(self):
+        from app.core.deps import resolve_drill_down_officer_id
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        target = _FakeUser(id=42, role="officer", unit_id=10)
+        db = _FakeDB({42: target})
+
+        result = await resolve_drill_down_officer_id(officer_id=42, db=db, current_user=admin)
+        assert result == 42
+
+    async def test_admin_target_non_officer_404(self):
+        from app.core.deps import resolve_drill_down_officer_id
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        target = _FakeUser(id=42, role="manager", unit_id=10)
+        db = _FakeDB({42: target})
+
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_drill_down_officer_id(officer_id=42, db=db, current_user=admin)
+
+    async def test_admin_self_id_non_officer_404(self):
+        """Admin passing own ID → 404 because admin is not an officer."""
+        from app.core.deps import resolve_drill_down_officer_id
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        db = _FakeDB({1: admin})
+
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_drill_down_officer_id(officer_id=1, db=db, current_user=admin)
+
+    async def test_admin_nonexistent_officer_404(self):
+        from app.core.deps import resolve_drill_down_officer_id
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        db = _FakeDB({})  # empty
+
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_drill_down_officer_id(officer_id=999, db=db, current_user=admin)
+
+    async def test_no_officer_id_returns_self_for_any_role(self):
+        """officer_id=None always returns current_user.id (no validation)."""
+        from app.core.deps import resolve_drill_down_officer_id
+
+        for role in ("officer", "manager", "admin"):
+            user = _FakeUser(id=50, role=role, unit_id=10)
+            result = await resolve_drill_down_officer_id(officer_id=None, db=None, current_user=user)
+            assert result == 50, f"Failed for role={role}"
+
+
+class TestGetOfficerDashboardScopeIDOR:
+    """
+    Behavioral tests for get_officer_dashboard_scope officer_id validation.
+    Verifies same security model as resolve_drill_down_officer_id.
+    """
+
+    async def test_manager_target_non_officer_404(self):
+        """Manager drilling into non-officer user → 404."""
+        from app.core.deps import get_officer_dashboard_scope
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="user", unit_id=10)
+        db = _FakeDB({42: target})
+
+        with pytest.raises(ResourceNotFoundError):
+            await get_officer_dashboard_scope(
+                scope="team", officer_id=42, unit_id=None,
+                db=db, current_user=manager,
+            )
+
+    async def test_manager_target_descendant_officer_ok(self):
+        """Manager can drill into officer in descendant unit."""
+        from app.core.deps import get_officer_dashboard_scope
+        import unittest.mock as mock
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="officer", unit_id=11)
+        db = _FakeDB({42: target})
+
+        with mock.patch(
+            "app.repositories.organization_repository.OrganizationRepository",
+            return_value=_FakeOrgRepo([10, 11]),
+        ):
+            result = await get_officer_dashboard_scope(
+                scope="team", officer_id=42, unit_id=None,
+                db=db, current_user=manager,
+            )
+        assert result.officer_id == 42
+
+    async def test_manager_out_of_scope_404(self):
+        """Manager cannot drill into officer outside unit hierarchy."""
+        from app.core.deps import get_officer_dashboard_scope
+        import unittest.mock as mock
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="officer", unit_id=99)
+        db = _FakeDB({42: target})
+
+        with mock.patch(
+            "app.repositories.organization_repository.OrganizationRepository",
+            return_value=_FakeOrgRepo([10, 11]),
+        ):
+            with pytest.raises(ResourceNotFoundError):
+                await get_officer_dashboard_scope(
+                    scope="team", officer_id=42, unit_id=None,
+                    db=db, current_user=manager,
+                )
+
+    async def test_admin_target_officer_ok(self):
+        from app.core.deps import get_officer_dashboard_scope
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        target = _FakeUser(id=42, role="officer", unit_id=10)
+        db = _FakeDB({42: target})
+
+        result = await get_officer_dashboard_scope(
+            scope="personal", officer_id=42, unit_id=None,
+            db=db, current_user=admin,
+        )
+        assert result.officer_id == 42
+
+    async def test_admin_target_non_officer_404(self):
+        from app.core.deps import get_officer_dashboard_scope
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        target = _FakeUser(id=42, role="manager", unit_id=10)
+        db = _FakeDB({42: target})
+
+        with pytest.raises(ResourceNotFoundError):
+            await get_officer_dashboard_scope(
+                scope="personal", officer_id=42, unit_id=None,
+                db=db, current_user=admin,
+            )
+
+    async def test_admin_no_officer_id_ok(self):
+        """Admin without officer_id → no validation, returns scope."""
+        from app.core.deps import get_officer_dashboard_scope
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        db = _FakeDB({})
+
+        result = await get_officer_dashboard_scope(
+            scope="organization", officer_id=None, unit_id=None,
+            db=db, current_user=admin,
+        )
+        assert result.officer_id is None
+        assert result.scope == "organization"
+
+    async def test_officer_other_id_404(self):
+        """Officer trying to view another officer → 404."""
+        from app.core.deps import get_officer_dashboard_scope
+
+        officer = _FakeUser(id=1, role="officer", unit_id=10)
+        db = _FakeDB({})
+
+        with pytest.raises(ResourceNotFoundError):
+            await get_officer_dashboard_scope(
+                scope="personal", officer_id=2, unit_id=None,
+                db=db, current_user=officer,
+            )
 
 
 # =============================================================================
