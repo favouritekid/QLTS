@@ -53,7 +53,14 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
   const exportLeads = useExportLeads();
 
   const handleExport = () => {
-    exportLeads.mutate({ filters });
+    // ✅ T4 FIX: Map pipeline filter fields to leads export API contract
+    // Pipeline uses officer_id, but leads export API expects assigned_officer_id
+    const exportFilters: Record<string, unknown> = {};
+    if (filters.unit_id) exportFilters.unit_id = filters.unit_id;
+    if (filters.officer_id) exportFilters.assigned_officer_id = filters.officer_id;
+    if (filters.date_from) exportFilters.date_from = filters.date_from;
+    if (filters.date_to) exportFilters.date_to = filters.date_to;
+    exportLeads.mutate({ filters: exportFilters });
   };
 
   if (isLoading) {
@@ -182,16 +189,22 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                 <Select
                   defaultValue="all"
                   onValueChange={(value) => {
-                    // ✅ TECHNICAL DEBT FIX: Implement date range logic
+                    // ✅ T8 FIX: Set date_to to end of day (23:59:59.999) to include all data on the last day
                     const getDateRange = (option: string): { date_from?: string; date_to?: string } => {
                       const now = new Date();
                       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                      
+
+                      // Helper: set date to end of day (23:59:59.999)
+                      const endOfDay = (date: Date): Date => {
+                        date.setHours(23, 59, 59, 999);
+                        return date;
+                      };
+
                       switch (option) {
                         case "today":
                           return {
                             date_from: today.toISOString(),
-                            date_to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString(),
+                            date_to: endOfDay(new Date(today)).toISOString(),
                           };
                         case "week": {
                           const weekStart = new Date(today);
@@ -200,7 +213,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                           weekEnd.setDate(weekStart.getDate() + 6);
                           return {
                             date_from: weekStart.toISOString(),
-                            date_to: weekEnd.toISOString(),
+                            date_to: endOfDay(weekEnd).toISOString(),
                           };
                         }
                         case "month": {
@@ -208,7 +221,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                           const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
                           return {
                             date_from: monthStart.toISOString(),
-                            date_to: monthEnd.toISOString(),
+                            date_to: endOfDay(monthEnd).toISOString(),
                           };
                         }
                         case "year": {
@@ -216,7 +229,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                           const yearEnd = new Date(today.getFullYear(), 11, 31);
                           return {
                             date_from: yearStart.toISOString(),
-                            date_to: yearEnd.toISOString(),
+                            date_to: endOfDay(yearEnd).toISOString(),
                           };
                         }
                         default:

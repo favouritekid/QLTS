@@ -41,7 +41,11 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
     transform,
     transition,
     isDragging: isSortableDragging,
-  } = useSortable({ id: lead.id });
+  } = useSortable({
+    id: lead.id,
+    // ✅ T2 FIX: Attach metadata so handleDragEnd can resolve target stage from card drops
+    data: { type: "card", stageId: lead.pipeline_stage?.id },
+  });
 
   // Hydration-safe date calculation — useMemo avoids extra render cycle from useEffect+useState
   const daysInPipeline = React.useMemo(() => {

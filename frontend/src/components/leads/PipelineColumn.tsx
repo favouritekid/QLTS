@@ -34,6 +34,8 @@ const getColumnStyle = (hexColor: string) => ({
 export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: stage.id,
+    // ✅ T2 FIX: Attach stage metadata so drop-on-card can resolve correct target stage
+    data: { type: "column", stageId: stage.id },
   });
 
   // Use stage.color_code from database, fallback to centralized STAGE_COLORS

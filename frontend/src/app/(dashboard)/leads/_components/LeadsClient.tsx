@@ -127,6 +127,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       !filterState.unitId &&
       !filterState.dateFrom &&
       !filterState.dateTo &&
+      // ✅ T6 FIX: Don't inject unfiltered initialData when score filter is active
+      filterState.scoreRange[0] === 0 &&
+      filterState.scoreRange[1] === 100 &&
       filterState.sortBy === "created_at" &&
       filterState.sortOrder === "desc"
         ? initialData

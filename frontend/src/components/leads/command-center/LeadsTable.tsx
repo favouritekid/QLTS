@@ -340,6 +340,12 @@ export function LeadsTable({
     }
   }, [resetSelectionKey]);
 
+  // ✅ T1 FIX: Reset selection when dataset changes (page/filter/sort) — page-scoped selection
+  // This prevents selecting leads on page A then performing bulk action on page B's leads
+  useEffect(() => {
+    setRowSelection({});
+  }, [page, sortBy, sortOrder]);
+
   // Reset focused row when leads data changes (after create/update/delete)
   useEffect(() => {
     setFocusedRowIndex(-1);
@@ -599,6 +605,9 @@ export function LeadsTable({
   const table = useReactTable({
     data: leads,
     columns,
+    // ✅ T1 FIX: Use lead.id as row identity instead of array index
+    // This ensures selection maps to actual lead IDs, not positional indices
+    getRowId: (row) => String(row.id),
     state: {
       sorting,
       rowSelection,

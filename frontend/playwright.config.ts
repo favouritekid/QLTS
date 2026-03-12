@@ -119,7 +119,7 @@ export default defineConfig({
     // logins from hitting rate-limiting. Serial per-file is enforced via test.describe.configure.
     {
       name: 'e2e-workflow',
-      testMatch: /(lifecycle|workflow|bulk)\.spec\.ts/,
+      testMatch: /(lifecycle|workflow|bulk|regression)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
       },

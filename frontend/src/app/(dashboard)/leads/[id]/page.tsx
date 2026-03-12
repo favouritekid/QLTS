@@ -53,14 +53,19 @@ function LeadDetailLoading() {
  * Server Component - Fetches initial lead data + timeline + insights in parallel
  */
 async function LeadDetailPageContent({ leadId }: { leadId: number }) {
-  // Fetch lead data — 404 triggers notFound(), other errors let client retry
+  // Fetch lead data — 404 triggers notFound(), other errors bubble to error boundary
   let initialData: Awaited<ReturnType<typeof serverApi.leads.getLead>> | undefined;
   try {
     initialData = await serverApi.leads.getLead(leadId);
-  } catch {
-    // Lead not found or server error — show 404
-    // Client component will re-fetch and show proper error state
-    notFound();
+  } catch (err) {
+    // ✅ T9 FIX: Only notFound() for actual 404s; other errors (500, network) go to error boundary
+    // serverFetch throws: "API Error (STATUS): message" — match the exact prefix pattern
+    const message = err instanceof Error ? err.message : "";
+    if (/^API Error \(404\)/.test(message)) {
+      notFound();
+    }
+    // For non-404 errors, let client component re-fetch and show error state
+    // initialData remains undefined — client will retry via React Query
   }
 
   // ✅ Parallel fetch: timeline and insights (non-critical, catch gracefully)

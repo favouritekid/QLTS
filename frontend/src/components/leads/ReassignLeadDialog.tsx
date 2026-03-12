@@ -116,7 +116,8 @@ export function ReassignLeadDialog({
   };
   
   const canSubmit = selectedReason && (selectedReason !== "other" || customReason.trim());
-  const quotaExceeded = !hasManagerAccess && quota && quota.remaining_today <= 0;
+  // ✅ T5 FIX: Use backend field name `remaining` instead of `remaining_today`
+  const quotaExceeded = !hasManagerAccess && quota && quota.remaining <= 0;
   
   return (
     <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
@@ -147,8 +148,8 @@ export function ReassignLeadDialog({
               {quotaLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : quota ? (
-                <Badge variant={quota.remaining_today > 0 ? "secondary" : "destructive"}>
-                  {quota.remaining_today}/{quota.max_per_day}
+                <Badge variant={quota.remaining > 0 ? "secondary" : "destructive"}>
+                  {quota.remaining}/{quota.limit}
                 </Badge>
               ) : null}
             </div>

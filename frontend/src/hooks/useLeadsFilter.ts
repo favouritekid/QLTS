@@ -312,6 +312,12 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (urlFilters.dateField !== dateField) {
       setDateField(urlFilters.dateField);
     }
+    // ✅ T7 FIX: Sync scoreRange from URL params on external navigation
+    const urlScoreMin = urlFilters.scoreMin ?? 0;
+    const urlScoreMax = urlFilters.scoreMax ?? 100;
+    if (urlScoreMin !== scoreRange[0] || urlScoreMax !== scoreRange[1]) {
+      setScoreRange([urlScoreMin, urlScoreMax]);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]); // Only trigger on searchParams change
 
@@ -394,6 +400,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     };
 
     // Save if any filter is active OR if not on page 1
+    // ✅ T7 FIX: Include scoreRange in shouldSave check
+    const hasScoreFilterActive = scoreRange[0] > 0 || scoreRange[1] < 100;
     const shouldSave =
       page > 1 ||
       search ||
@@ -405,16 +413,18 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       officerFilters.length > 0 ||
       !!unitId ||
       dateFrom ||
-      dateTo;
+      dateTo ||
+      hasScoreFilterActive;
 
     if (shouldSave) {
       saveFiltersToStorage(filtersToSave);
     } else {
       clearFiltersFromStorage();
     }
+  // ✅ T7 FIX: Add scoreRange to dependency array
   }, [
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
-    stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
+    stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField, scoreRange,
   ]);
 
   // ==========================================================================

@@ -25,10 +25,11 @@ import type {
 } from '@/types/lead.types'
 
 export interface ReassignQuota {
-  remaining_today: number;
-  max_per_day: number;
-  used_today: number;
-  reset_time: string;
+  // ✅ T5 FIX: Match backend contract { allowed, used, limit, remaining }
+  allowed: boolean;
+  used: number;
+  limit: number;
+  remaining: number;
 }
 
 // ============================================

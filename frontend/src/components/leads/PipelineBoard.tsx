@@ -72,13 +72,27 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
     }
   };
 
+  // ✅ T2 FIX: Helper to resolve target stage ID from any droppable/sortable element
+  // When dropping on a column, over.id is the stage ID directly.
+  // When dropping on a card, over.data.current has { type: "card", stageId }.
+  const resolveTargetStageId = (over: DragOverEvent["over"] | DragEndEvent["over"]): string | null => {
+    if (!over) return null;
+    const data = over.data?.current;
+    if (data?.type === "column") return data.stageId as string;
+    if (data?.type === "card") return data.stageId as string;
+    // Fallback: check if over.id matches a known stage
+    const asString = String(over.id);
+    if (pipeline.stages.some((s) => s.id === asString)) return asString;
+    return null;
+  };
+
   const handleDragOver = (event: DragOverEvent) => {
     const { over } = event;
     if (!over) return;
 
-    // Update active stage for visual feedback
-    const newStageId = over.id as string;
-    if (newStageId !== activeStageId) {
+    // ✅ T2 FIX: Resolve stage from metadata instead of assuming over.id is stageId
+    const newStageId = resolveTargetStageId(over);
+    if (newStageId && newStageId !== activeStageId) {
       setActiveStageId(newStageId);
     }
   };
@@ -94,7 +108,16 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
     }
 
     const leadId = active.id as number;
-    const targetStageId = over.id as string;
+    // ✅ T2 FIX: Resolve target stage from metadata — works for both column and card drops
+    const targetStageId = resolveTargetStageId(over);
+
+    if (!targetStageId) {
+      // Could not determine target stage — cancel the move
+      setActiveId(null);
+      setActiveLead(null);
+      setActiveStageId(null);
+      return;
+    }
 
     // Find source stage
     let sourceStageId: string | null = null;
