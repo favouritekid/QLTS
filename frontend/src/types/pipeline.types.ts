@@ -26,7 +26,7 @@ export interface PipelineStage {
 
   // Statistics (when loaded with full pipeline)
   lead_count?: number;
-  conversion_rate?: number;
+  stage_distribution_pct?: number; // % of total leads in this stage
 }
 
 /**
@@ -244,7 +244,7 @@ export interface PipelineStageWithStats extends PipelineStage {
   lead_count: number;
   statuses: ConsultationStatus[];
   leads?: Lead[]; // Optional: leads in this stage
-  conversion_rate?: number; // Percentage converted to next stage
+  stage_distribution_pct?: number; // % of total leads in this stage
   avg_time_in_stage_days?: number;
 }
 

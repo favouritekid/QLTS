@@ -73,7 +73,7 @@ export function AssignLeadDialog({
   // Fetch officers — server-filtered by role to avoid client-side truncation
   const { data: usersData, isLoading: usersLoading } = useAdminUsersList({
     page: 1,
-    page_size: 500,
+    page_size: 100,
     status: "active",
     role: "officer",
   });

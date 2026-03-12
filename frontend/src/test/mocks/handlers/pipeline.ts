@@ -14,8 +14,13 @@ export const pipelineHandlers = [
     return HttpResponse.json(mockPipelineStages);
   }),
 
-  // Get full pipeline with stats
+  // Get full pipeline config (stages + statuses)
   http.get(`${API_BASE_URL}/api/pipeline/all`, async () => {
+    return HttpResponse.json(mockFullPipeline);
+  }),
+
+  // Get pipeline board (stages + leads + stats)
+  http.get(`${API_BASE_URL}/api/pipeline/board`, async () => {
     return HttpResponse.json(mockFullPipeline);
   }),
 

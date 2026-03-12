@@ -364,7 +364,7 @@ export async function getPipelineStats(
     stage_id: string
     stage_name: string
     lead_count: number
-    conversion_rate: number
+    stage_distribution_pct: number
   }>
 }> {
   const pipeline = await getFullPipeline(params)
@@ -377,7 +377,7 @@ export async function getPipelineStats(
       stage_id: stage.id,
       stage_name: stage.name,
       lead_count: stage.lead_count,
-      conversion_rate: stage.conversion_rate ?? 0,
+      stage_distribution_pct: stage.stage_distribution_pct ?? 0,
     })),
   }
 }

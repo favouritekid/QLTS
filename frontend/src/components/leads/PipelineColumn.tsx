@@ -13,12 +13,6 @@ import { sanitizeColorCode } from "@/lib/utils";
 import type { PipelineStageWithStats } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
-// Helper: handles both ratio (0-1) and percentage (0-100)
-function formatConversionRate(value: number): number {
-  if (value <= 1) return value * 100;
-  return value;
-}
-
 interface PipelineColumnProps {
   stage: PipelineStageWithStats;
   leads: Lead[];
@@ -43,16 +37,16 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
   const columnStyle = getColumnStyle(stageHexColor);
   const leadIds = leads.map((lead) => lead.id);
 
-  // Determine conversion trend (normalize to percentage)
-  const conversionRate = formatConversionRate(stage.conversion_rate ?? 0);
+  // Stage distribution: % of total leads sitting in this stage
+  const distributionPct = stage.stage_distribution_pct ?? 0;
   let TrendIcon = Minus;
   let trendColor = "text-muted-foreground";
-  if (conversionRate > 75) {
+  if (distributionPct > 40) {
     TrendIcon = TrendingUp;
     trendColor = "text-success-600";
-  } else if (conversionRate < 40) {
+  } else if (distributionPct < 10) {
     TrendIcon = TrendingDown;
-    trendColor = "text-error-600";
+    trendColor = "text-muted-foreground";
   }
 
   return (
@@ -85,7 +79,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
             <div className="flex items-center gap-1">
               <TrendIcon className={`h-3 w-3 ${trendColor}`} />
               <span className={`text-xs font-medium tabular-nums ${trendColor}`}>
-                {conversionRate.toFixed(0)}%
+                {distributionPct.toFixed(0)}%
               </span>
             </div>
             {stage.avg_time_in_stage_days && (

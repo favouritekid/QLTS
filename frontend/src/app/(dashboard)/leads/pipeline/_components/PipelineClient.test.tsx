@@ -19,7 +19,7 @@ import type { FullPipeline } from "@/types/pipeline.types";
 
 const mockPipelineData = {
   stages: [
-    { id: "new_lead", name: "New", order: 1, lead_count: 5, is_final_stage: false, leads: [], statuses: [], conversion_rate: 0, avg_time_in_stage_days: 0 },
+    { id: "new_lead", name: "New", order: 1, lead_count: 5, is_final_stage: false, leads: [], statuses: [], stage_distribution_pct: 0, avg_time_in_stage_days: 0 },
   ],
   total_leads: 5,
   conversion_rate: 0.2,

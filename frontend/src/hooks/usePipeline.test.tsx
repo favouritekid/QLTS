@@ -171,7 +171,7 @@ describe("usePipeline Hook", () => {
             return HttpResponse.json({
               ...newStageData,
               lead_count: 0,
-              conversion_rate: 0,
+              stage_distribution_pct: 0,
             } as PipelineStage);
           })
         );
@@ -204,7 +204,7 @@ describe("usePipeline Hook", () => {
               id,
               ...updateData,
               lead_count: 0,
-              conversion_rate: 0,
+              stage_distribution_pct: 0,
             } as PipelineStage);
           })
         );

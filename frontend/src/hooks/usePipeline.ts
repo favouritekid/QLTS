@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
 import { pipelineApi } from "@/lib/api/pipeline";
+import { api } from "@/lib/api/client";
 import { leadsKeys } from "@/hooks/useLeads";
 import type { ApiErrorResponse } from "@/types/api.types";
 import type { Lead } from "@/types/lead.types";
@@ -131,7 +132,7 @@ export function usePipelineStats(params?: PipelineQueryParams) {
         stage_id: string;
         stage_name: string;
         lead_count: number;
-        conversion_rate: number;
+        stage_distribution_pct: number;
       }>;
     },
     AxiosError<ApiErrorResponse>
@@ -166,14 +167,12 @@ export function useConsultationStatuses(options?: { initialData?: ConsultationSt
   return useQuery<ConsultationStatus[], AxiosError<ApiErrorResponse>>({
     queryKey: pipelineKeys.consultationStatuses(),
     queryFn: async () => {
-      // Use public endpoint instead of admin endpoint for officer access
-      const fullPipeline = await pipelineApi.getFullPipeline();
-
-      // Backend returns statuses as a separate top-level array
-      // Type assertion needed because FullPipeline type may not include statuses
-      const response = fullPipeline as { stages: unknown[]; statuses?: ConsultationStatus[] };
-
-      return response.statuses || [];
+      // Use /pipeline/all (config endpoint) for statuses — accessible by all roles
+      // /pipeline/board (data endpoint) nests statuses inside stages, not top-level
+      const response = await api.get<{ stages: unknown[]; statuses?: ConsultationStatus[] }>(
+        "/api/pipeline/all",
+      );
+      return response.data.statuses || [];
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 10, // 10 minutes in cache

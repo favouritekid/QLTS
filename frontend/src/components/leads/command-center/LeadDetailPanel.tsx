@@ -45,8 +45,11 @@ import { useIsMobile } from "@/hooks/useMediaQuery";
 import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
+import { useAuth } from "@/hooks/useAuth";
+import { isManagerOrAbove } from "@/lib/utils/permissions";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
+import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -103,7 +106,10 @@ const getInitials = (name: string) => {
 
 export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
+  const { user } = useAuth();
+  const hasManagerAccess = isManagerOrAbove(user);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [assignOpen, setAssignOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   const isMobile = useIsMobile();
@@ -304,7 +310,18 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     Gán cho cán bộ
                   </MobileActionSheet.Item>
                 )}
-                {lead.assigned_officer && (
+                {lead.assigned_officer && hasManagerAccess && (
+                  <MobileActionSheet.Item
+                    icon={UserPlus}
+                    onClick={() => {
+                      setActionSheetOpen(false);
+                      setAssignOpen(true);
+                    }}
+                  >
+                    Chuyển giao lead
+                  </MobileActionSheet.Item>
+                )}
+                {lead.assigned_officer && !hasManagerAccess && (
                   <MobileActionSheet.Item
                     icon={RefreshCcw}
                     onClick={() => {
@@ -312,7 +329,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                       setReassignOpen(true);
                     }}
                   >
-                    Phân công lại
+                    Yêu cầu đổi người phụ trách
                   </MobileActionSheet.Item>
                 )}
                 <MobileActionSheet.Divider />
@@ -354,10 +371,16 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     Gán cho cán bộ
                   </DropdownMenuItem>
                 )}
-                {lead.assigned_officer && (
+                {lead.assigned_officer && hasManagerAccess && (
+                  <DropdownMenuItem onClick={() => setAssignOpen(true)}>
+                    <UserPlus className="mr-2 h-4 w-4" />
+                    Chuyển giao lead
+                  </DropdownMenuItem>
+                )}
+                {lead.assigned_officer && !hasManagerAccess && (
                   <DropdownMenuItem onClick={() => setReassignOpen(true)}>
                     <RefreshCcw className="mr-2 h-4 w-4" />
-                    Phân công lại
+                    Yêu cầu đổi người phụ trách
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
@@ -588,7 +611,13 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
         </div>
       </ScrollArea>
       
-      {/* Reassign Dialog */}
+      {/* Assign Dialog (Manager/Admin: direct reassign) */}
+      <AssignLeadDialog
+        open={assignOpen}
+        onOpenChange={setAssignOpen}
+        lead={lead}
+      />
+      {/* Reassign Dialog (Officer: request reassign) */}
       <ReassignLeadDialog
         open={reassignOpen}
         onOpenChange={setReassignOpen}

@@ -1017,14 +1017,14 @@ async def get_pipeline_board(
 
     Filters are applied to leads, stages are always returned in full.
     """
-    from datetime import datetime as dt
+    from datetime import datetime as dt, timezone as _tz
 
     # 1. Get all stages (cached)
     stages_data = await get_all_pipeline_stages(db)
     statuses_data = await get_all_consultation_statuses(db)
 
-    # 2. Query leads with filters
-    lead_query = select(models.Lead).where(models.Lead.is_deleted == False)  # noqa: E712
+    # 2. Query leads with filters (soft-delete uses deleted_at, not is_deleted)
+    lead_query = select(models.Lead).where(models.Lead.deleted_at.is_(None))
 
     if unit_id:
         lead_query = lead_query.where(models.Lead.unit_id == unit_id)
@@ -1063,14 +1063,28 @@ async def get_pipeline_board(
     board_stages = []
     total_leads = len(all_leads)
 
+    now = dt.now(tz=_tz.utc)  # aware UTC — matches DB DateTime(timezone=True)
+
     for stage in stages_data:
         stage_leads = leads_by_stage.get(stage["id"], [])
+        # Stage distribution: % of total leads sitting in this stage
+        stage_pct = (len(stage_leads) / total_leads * 100) if total_leads else 0
+        # Avg days leads have been in this stage (approximated via updated_at)
+        stage_days_list = [
+            (now - l.updated_at).days
+            for l in stage_leads
+            if l.updated_at
+        ]
+        avg_stage_days = (
+            sum(stage_days_list) / len(stage_days_list) if stage_days_list else 0
+        )
+
         board_stage = {
             **stage,
             "lead_count": len(stage_leads),
             "statuses": [s for s in statuses_data if s.get("stage_id") == stage["id"]],
-            "conversion_rate": 0,
-            "avg_time_in_stage_days": 0,
+            "stage_distribution_pct": round(stage_pct, 1),
+            "avg_time_in_stage_days": round(avg_stage_days, 1),
         }
         if include_leads:
             board_stage["leads"] = [
@@ -1089,7 +1103,6 @@ async def get_pipeline_board(
                     "updated_at": l.updated_at.isoformat() if l.updated_at else None,
                     "is_hot_lead": l.is_hot_lead,
                     "is_overdue": l.is_overdue,
-                    "days_in_stage": l.days_in_stage,
                     "assigned_officer": {
                         "id": l.assigned_officer.id,
                         "full_name": l.assigned_officer.full_name,
@@ -1111,8 +1124,13 @@ async def get_pipeline_board(
         final_count = sum(1 for l in all_leads if l.pipeline_stage_id in final_stage_ids)
         conversion_rate = (final_count / total_leads) * 100 if total_leads else 0
 
-        days_sum = sum(l.days_in_stage or 0 for l in all_leads)
-        avg_time = days_sum / total_leads if total_leads else 0
+        # Avg total pipeline time = avg(now - created_at) across all leads
+        pipeline_days = [
+            (now - l.created_at).days
+            for l in all_leads
+            if l.created_at
+        ]
+        avg_time = sum(pipeline_days) / len(pipeline_days) if pipeline_days else 0
 
     return {
         "stages": board_stages,

@@ -195,7 +195,7 @@ export function LeadFilterBar({
   const { user } = useAuth();
   const { data: pipelineStages = [] } = usePipelineStages();
   const { data: offeringsList = [] } = useAllProgramOfferings();
-  const { data: usersData } = useAdminUsersList({ page: 1, page_size: 500, status: "active", role: "officer" });
+  const { data: usersData } = useAdminUsersList({ page: 1, page_size: 100, status: "active", role: "officer" });
   const officers = usersData?.users || [];
 
   const [isMounted, setIsMounted] = React.useState(false);

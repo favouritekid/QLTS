@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import database, models, schemas
-from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
+from ..core.deps import CasbinAuth, LeadListFilter, get_lead_list_filter  # ✅ Phase 2.2: Use standard alias
 from ..services import pipeline_service
 from app.core.rate_limits import limiter, RateLimits
 
@@ -46,6 +46,8 @@ async def get_pipeline_board(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
+    # ✅ Role-scope: officer sees own leads, manager sees unit, admin sees all
+    lead_filter: LeadListFilter = Depends(get_lead_list_filter),
     unit_id: Optional[int] = Query(None, description="Filter leads by organization unit"),
     officer_id: Optional[int] = Query(None, description="Filter leads by assigned officer"),
     date_from: Optional[str] = Query(None, description="Filter leads from this date (ISO format)"),
@@ -58,11 +60,19 @@ async def get_pipeline_board(
 
     Supports filtering by unit, officer, and date range.
     Returns full board data for Kanban rendering.
+
+    **RBAC:** Officers see only their leads, Managers see their unit only.
     """
+    # Apply role-enforced scope (same pattern as leads list endpoint)
+    effective_officer_id = None
+    if lead_filter.assigned_officer_id:
+        effective_officer_id = int(lead_filter.assigned_officer_id.split(",")[0])
+    effective_unit_id = lead_filter.unit_id
+
     return await pipeline_service.get_pipeline_board(
         db,
-        unit_id=unit_id,
-        officer_id=officer_id,
+        unit_id=effective_unit_id or unit_id,
+        officer_id=effective_officer_id or officer_id,
         date_from=date_from,
         date_to=date_to,
         include_leads=include_leads,
