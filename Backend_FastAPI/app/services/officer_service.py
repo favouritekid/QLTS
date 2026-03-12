@@ -1011,7 +1011,9 @@ async def get_aggregated_dashboard_stats(
     # Aggregated Win Rate
     win_rate_data = await repo.get_aggregated_win_rate_stats(officer_ids, filter_start, filter_end)
 
-    # Aggregated SLA Compliance
+    # Aggregated SLA Compliance — intentionally uses global default (no officer/unit).
+    # Aggregate SLA uses a single threshold so all officers are judged by the same standard.
+    # Per-officer thresholds would make the aggregate rate an apples-to-oranges comparison.
     sla_hours = await kpi_service.get_kpi_target(
         db, "response_time_hours", effective_date=filter_end,
     )
@@ -1117,10 +1119,9 @@ async def get_aggregated_dashboard_stats(
 
     total_consultations_target = 0
     for oid in officer_ids:
-        # Resolve officer's unit_id for correct inheritance when target_unit_id is None
-        oid_unit = target_unit_id
-        if oid_unit is None:
-            oid_unit = await kpi_repo.get_user_unit_id(oid)
+        # Always resolve each officer's OWN unit_id for correct KPI inheritance.
+        # Using target_unit_id (manager's/admin's filter unit) is wrong for child-unit officers.
+        oid_unit = await kpi_repo.get_user_unit_id(oid)
 
         # consultations_daily: resolve via KpiConfig inheritance
         t = await kpi_service.get_kpi_target(
@@ -1471,11 +1472,20 @@ async def get_weekly_leaderboard(
             })
             current_user_rank = len(all_officers) + 1
     
+    # total_officers = actual population count (don't inflate for non-participants)
+    # For officers with 0 consultations who were appended above, they're already
+    # counted via len(all_officers)+1 in their rank. Only inflate if we actually added them.
+    added_zero_officer = (
+        current_user_rank is not None
+        and current_user_rank == len(all_officers) + 1
+    )
+    total = len(all_officers) + (1 if added_zero_officer else 0)
+
     return {
         "week_start": period_start.isoformat(),
         "week_end": period_end.isoformat(),
-        "total_officers": len(all_officers) + (1 if current_user_rank is None else 0),
-        "current_user_rank": current_user_rank or (len(all_officers) + 1),
+        "total_officers": total,
+        "current_user_rank": current_user_rank,  # None for manager/admin not in population
         "leaderboard": leaderboard,
     }
 
@@ -1582,7 +1592,10 @@ async def get_upcoming_activities(
     else:
         end_of_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
 
-    if scope == "personal" or not requesting_user:
+    # Drill-down: when officer_id is explicitly set (different from requester),
+    # always use personal path — show only THAT officer's activities.
+    is_drill_down = requesting_user and officer_id != requesting_user.id
+    if scope == "personal" or not requesting_user or is_drill_down:
         leads = await repo.get_upcoming_activities(officer_id, start_of_month, end_of_month)
     else:
         # Resolve officer IDs for team/organization scope

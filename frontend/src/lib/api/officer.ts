@@ -14,7 +14,7 @@ export interface WeeklyLeaderboardData {
   week_start: string;
   week_end?: string;
   total_officers: number;
-  current_user_rank: number;
+  current_user_rank: number | null;
   leaderboard: LeaderboardEntry[];
 }
 

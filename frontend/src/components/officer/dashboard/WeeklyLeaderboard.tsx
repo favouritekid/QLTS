@@ -159,7 +159,9 @@ export function WeeklyLeaderboard({ scope, unitId, officerId }: WeeklyLeaderboar
             </p>
           </div>
           <Badge variant="outline" className="text-xs">
-            #{data.current_user_rank}/{data.total_officers}
+            {data.current_user_rank != null
+              ? `#${data.current_user_rank}/${data.total_officers}`
+              : `${data.total_officers} officers`}
           </Badge>
         </div>
       </CardHeader>

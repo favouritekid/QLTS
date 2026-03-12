@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
 from ..database import get_db
-from ..core.deps import CasbinAuth, OfficerDashboardScope, get_officer_dashboard_scope  # ✅ Phase 2.2
+from ..core.deps import CasbinAuth, OfficerDashboardScope, get_officer_dashboard_scope, resolve_drill_down_officer_id  # ✅ Phase 2.2
 from ..services import officer_service
 from app.core.rate_limits import limiter, RateLimits
 
@@ -127,11 +127,11 @@ async def get_leaderboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth],
+    validated_officer_id: Annotated[int, Depends(resolve_drill_down_officer_id)],
     start_date: str = None,
     end_date: str = None,
     scope: str = None,
     unit_id: int = None,
-    officer_id: int = None,
 ):
     """
     Leaderboard showing top officers by consultations.
@@ -141,8 +141,7 @@ async def get_leaderboard(
         end_date: End date (YYYY-MM-DD). Defaults to today.
         scope: "personal" | "team" | "organization". Affects unit filtering.
         unit_id: Filter by specific unit (for organization scope).
-        officer_id: Drill-down target. Highlights this officer instead of requester.
-                    Only admin/manager may specify another officer.
+        officer_id: Drill-down target (validated by resolve_drill_down_officer_id).
     """
     from datetime import date as date_type
 
@@ -156,15 +155,9 @@ async def get_leaderboard(
         except ValueError:
             pass  # Use defaults
 
-    # Resolve target officer for highlighting (drill-down support)
-    target_officer_id = current_user.id
-    if officer_id is not None and officer_id != current_user.id:
-        if current_user.role in ("admin", "manager"):
-            target_officer_id = officer_id
-
     leaderboard = await officer_service.get_weekly_leaderboard(
         db=db,
-        officer_id=target_officer_id,
+        officer_id=validated_officer_id,
         start_date=parsed_start,
         end_date=parsed_end,
         scope=scope,
@@ -188,10 +181,10 @@ async def get_team_stats(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth],
+    validated_officer_id: Annotated[int, Depends(resolve_drill_down_officer_id)],
     days: int = 30,
     start_date: str = None,
     end_date: str = None,
-    officer_id: int = None,
 ):
     """Get team average statistics for performance comparison."""
     from datetime import date
@@ -206,17 +199,16 @@ async def get_team_stats(
         except ValueError:
             pass  # Fallback to days param
 
-    # BUG 17: Resolve unit_id for team stats context
-    target_officer_id = officer_id or current_user.id
-    if target_officer_id != current_user.id:
-        target_user = await db.get(models.User, target_officer_id)
+    # Resolve unit_id from validated officer (not raw officer_id)
+    if validated_officer_id != current_user.id:
+        target_user = await db.get(models.User, validated_officer_id)
         resolved_unit_id = target_user.unit_id if target_user else current_user.unit_id
     else:
         resolved_unit_id = current_user.unit_id
 
     stats = await officer_service.get_team_stats(
         db=db,
-        officer_id=target_officer_id,
+        officer_id=validated_officer_id,
         days=days,
         start_date=parsed_start,
         end_date=parsed_end,
@@ -238,11 +230,11 @@ async def get_upcoming_activities(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth],
+    validated_officer_id: Annotated[int, Depends(resolve_drill_down_officer_id)],
     month: int = None,
     year: int = None,
     scope: str = "personal",
     unit_id: int = None,
-    officer_id: int = None,
 ):
     """Get leads with scheduled follow-ups for the given month. Supports scope and officer drill-down."""
     from datetime import datetime
@@ -252,15 +244,9 @@ async def get_upcoming_activities(
         month = month or now.month
         year = year or now.year
 
-    # Resolve target officer for drill-down
-    target_officer_id = current_user.id
-    if officer_id is not None and officer_id != current_user.id:
-        if current_user.role in ("admin", "manager"):
-            target_officer_id = officer_id
-
     result = await officer_service.get_upcoming_activities(
         db=db,
-        officer_id=target_officer_id,
+        officer_id=validated_officer_id,
         month=month,
         year=year,
         scope=scope,
@@ -283,10 +269,10 @@ async def get_recommendations(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth],
+    validated_officer_id: Annotated[int, Depends(resolve_drill_down_officer_id)],
     limit: int = 5,
     start_date: str = None,
     end_date: str = None,
-    officer_id: int = None,
 ):
     """
     Phase 7: Auto Recommendations
@@ -319,15 +305,9 @@ async def get_recommendations(
         except ValueError:
             pass
 
-    # Resolve target officer for drill-down
-    target_officer_id = current_user.id
-    if officer_id is not None and officer_id != current_user.id:
-        if current_user.role in ("admin", "manager"):
-            target_officer_id = officer_id
-
     recommendations = await get_officer_recommendations(
         db=db,
-        officer_id=target_officer_id,
+        officer_id=validated_officer_id,
         limit=limit,
         start_date=validated_start,
         end_date=validated_end,

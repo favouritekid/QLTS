@@ -70,6 +70,9 @@ __all__ = [
     "get_collaborator_for_user",
     "get_lead_claim_for_review",
 
+    # Drill-down IDOR (widget endpoints)
+    "resolve_drill_down_officer_id",
+
     # Data Classes
     "OfficerDashboardScope",
     "LeadListFilter",
@@ -657,6 +660,56 @@ async def get_officer_dashboard_scope(
     # === ALL OTHER ROLES: Deny by default (fail-closed) ===
     raise PermissionDeniedError(
         detail="Your role is not allowed to access officer dashboard"
+    )
+
+
+async def resolve_drill_down_officer_id(
+    officer_id: int | None = None,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> int:
+    """
+    IDOR gate for widget drill-down endpoints (leaderboard, upcoming-activities,
+    recommendations, team-stats).
+
+    Returns a validated officer_id that the current user is allowed to view.
+
+    Rules:
+    - Officer: can only view own data. Any other officer_id → 404.
+    - Manager: can view own + officers in their unit. Out-of-scope → 404.
+    - Admin: can view any existing officer. Non-existent → 404.
+    - Other roles: denied (fail-closed).
+
+    Returns 404 (not 403) per AUTHORIZATION_GUIDELINES — never leak resource existence.
+    """
+    # No drill-down requested → return self
+    if officer_id is None or officer_id == current_user.id:
+        return current_user.id
+
+    user_role = current_user.role
+
+    # === OFFICER: Self only ===
+    if user_role == UserRole.OFFICER:
+        # Return 404 instead of 403 to avoid leaking existence
+        raise ResourceNotFoundError(detail="Officer not found")
+
+    # === MANAGER: Own unit only ===
+    if user_role == UserRole.MANAGER:
+        target_officer = await db.get(models.User, officer_id)
+        if not target_officer or target_officer.unit_id != current_user.unit_id:
+            raise ResourceNotFoundError(detail="Officer not found")
+        return officer_id
+
+    # === ADMIN: Any existing officer ===
+    if user_role == UserRole.ADMIN:
+        target_officer = await db.get(models.User, officer_id)
+        if not target_officer:
+            raise ResourceNotFoundError(detail="Officer not found")
+        return officer_id
+
+    # === Fail-closed for unknown roles ===
+    raise PermissionDeniedError(
+        detail="Your role is not allowed to access officer data"
     )
 
 
