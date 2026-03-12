@@ -9,7 +9,8 @@ import { metaApi, type MetricCatalogEntry } from "../api/meta";
 // Must stay in sync with backend kpi_catalog.py METRIC_CATALOG
 // =============================================================================
 
-const LOCAL_FALLBACK: MetricCatalogEntry[] = [
+/** @internal Exported for drift testing only — do not use as data source. */
+export const LOCAL_FALLBACK: MetricCatalogEntry[] = [
   {
     code: "consultations_daily",
     display_name: "Tư vấn/ngày",
@@ -166,7 +167,7 @@ export function useKpiCatalog() {
 // =============================================================================
 
 /** Check if a date range covers exactly one calendar month */
-function isCalendarMonth(range: { start: Date; end: Date }): boolean {
+export function isCalendarMonth(range: { start: Date; end: Date }): boolean {
   const s = range.start;
   const e = range.end;
   if (s.getFullYear() !== e.getFullYear() || s.getMonth() !== e.getMonth()) return false;
