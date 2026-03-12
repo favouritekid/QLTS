@@ -128,6 +128,7 @@ export default function KpiSetupPage() {
                 fiscalYear={report.fiscal_year}
                 triggerSeed={pendingSeed}
                 onSeedHandled={() => setPendingSeed(false)}
+                isAdmin={isAdmin}
               />
             </TabsContent>
 

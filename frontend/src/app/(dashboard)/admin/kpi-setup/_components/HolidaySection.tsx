@@ -23,6 +23,7 @@ interface Props {
   fiscalYear: number;
   triggerSeed?: boolean;
   onSeedHandled?: () => void;
+  isAdmin?: boolean;
 }
 
 export function HolidaySection({
@@ -30,6 +31,7 @@ export function HolidaySection({
   fiscalYear,
   triggerSeed = false,
   onSeedHandled,
+  isAdmin = true,
 }: Props) {
   const seedMut = useSeedHolidays();
   const qc = useQueryClient();
@@ -92,23 +94,25 @@ export function HolidaySection({
           </p>
 
           <div className="flex items-center gap-3">
-            <Button
-              size="sm"
-              onClick={() => void handleSeed()}
-              disabled={seedMut.isPending || holiday.is_complete}
-            >
-              {seedMut.isPending ? (
-                <>
-                  <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
-                  Đang tạo mẫu...
-                </>
-              ) : (
-                <>
-                  <Sparkles aria-hidden="true" className="h-4 w-4" />
-                  Tạo lịch nghỉ mẫu
-                </>
-              )}
-            </Button>
+            {isAdmin && (
+              <Button
+                size="sm"
+                onClick={() => void handleSeed()}
+                disabled={seedMut.isPending || holiday.is_complete}
+              >
+                {seedMut.isPending ? (
+                  <>
+                    <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+                    Đang tạo mẫu...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles aria-hidden="true" className="h-4 w-4" />
+                    Tạo lịch nghỉ mẫu
+                  </>
+                )}
+              </Button>
+            )}
 
             <Link
               href="/admin/kpi-planning/holidays"

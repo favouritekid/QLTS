@@ -115,19 +115,21 @@ export function UnitPlansSection({
   const shouldFetchPlan = dialogMode?.type === "edit" && editPlanId > 0;
   const { data: planDetail } = useKpiPlan(editPlanId, shouldFetchPlan);
 
-  // Sync fetched plan detail into form state (render-time state adjustment pattern)
+  // Sync fetched plan detail into form state when edit dialog opens.
   const [populatedPlanId, setPopulatedPlanId] = useState<number | null>(null);
-  if (planDetail && dialogMode?.type === "edit" && populatedPlanId !== planDetail.id) {
-    setPopulatedPlanId(planDetail.id);
-    setAnnualTarget(planDetail.annual_enrollment_target ?? 300);
-    setSlaTarget(planDetail.sla_target ?? 85);
-    setResponseTime(planDetail.response_time_target ?? 2);
-    setSeasonalWeights(
-      (planDetail.seasonal_weights ?? DEFAULT_SEASONAL_WEIGHTS).map(
-        (w) => Math.round(w * 1000) / 10
-      )
-    );
-  }
+  useEffect(() => {
+    if (planDetail && dialogMode?.type === "edit" && populatedPlanId !== planDetail.id) {
+      setPopulatedPlanId(planDetail.id);
+      setAnnualTarget(planDetail.annual_enrollment_target ?? 300);
+      setSlaTarget(planDetail.sla_target ?? 85);
+      setResponseTime(planDetail.response_time_target ?? 2);
+      setSeasonalWeights(
+        (planDetail.seasonal_weights ?? DEFAULT_SEASONAL_WEIGHTS).map(
+          (w) => Math.round(w * 1000) / 10
+        )
+      );
+    }
+  }, [planDetail, dialogMode, populatedPlanId]);
 
   const openCreateDialog = useCallback((unit: UnitCoverage) => {
     setDialogMode({

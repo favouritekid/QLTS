@@ -144,7 +144,13 @@ export function KpiConfigSection({ fiscalYear: _fiscalYear, isAdmin = true }: Pr
     setEditIsActive(config.is_active);
   }
 
+  const isScopeValid =
+    scope === "global" ||
+    (scope === "unit" && selectedUnitId != null) ||
+    (scope === "officer" && selectedUnitId != null && selectedOfficerId != null);
+
   function handleCreate() {
+    if (!isScopeValid) return;
     createMut.mutate(
       {
         kpi_code: kpiCode,
@@ -375,7 +381,7 @@ export function KpiConfigSection({ fiscalYear: _fiscalYear, isAdmin = true }: Pr
             <Button
               type="button"
               onClick={handleCreate}
-              disabled={createMut.isPending || !kpiCode || targetValue <= 0}
+              disabled={createMut.isPending || !kpiCode || targetValue <= 0 || !isScopeValid}
             >
               {createMut.isPending ? "Đang lưu…" : "Tạo"}
             </Button>
