@@ -181,6 +181,7 @@ export function QuickConsultationSectionV2({
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef(false);
   const pendingStatusRef = useRef<ConsultationStatus | null>(null);
+  const commitSaveRef = useRef<((status: ConsultationStatus) => Promise<void>) | null>(null);
 
   // --- Collapsible details ---
   // Initialize as false to avoid hydration mismatch, sync from localStorage after mount
@@ -212,7 +213,7 @@ export function QuickConsultationSectionV2({
         const statusToSave = pendingStatusRef.current;
         if (statusToSave && !isSavingRef.current) {
           e.preventDefault();
-          commitSave(statusToSave);
+          commitSaveRef.current?.(statusToSave);
         }
       }
     };
@@ -306,6 +307,11 @@ export function QuickConsultationSectionV2({
       isSavingRef.current = false;
     }
   };
+
+  // Keep commitSaveRef pointing to the latest commitSave so the Ctrl+Enter
+  // handler (which has empty deps) always calls the current version.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { commitSaveRef.current = commitSave; });
 
   const handleStatusClick = (status: ConsultationStatus) => {
     if (isSavingRef.current) return;

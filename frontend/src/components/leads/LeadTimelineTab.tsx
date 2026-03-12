@@ -263,9 +263,16 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
           const actorName = consultData?.officer?.full_name || assignData?.officer?.full_name || "";
           const scheduledAt = consultData?.scheduled_at;
 
+          const compactDataId = isConsultation
+            ? (eventData as { id?: number })?.id
+            : isAssignment
+              ? (eventData as { id?: number })?.id
+              : undefined;
+          const compactKey = `${event.type}-${event.timestamp}-${compactDataId ?? index}`;
+
           return (
             <div
-              key={`${event.id}-${index}`}
+              key={compactKey}
               className="flex items-start gap-3 p-3 bg-muted hover:bg-muted/80 rounded-xl transition-colors"
             >
               {/* Icon */}
@@ -479,8 +486,13 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                   actorName = event.actor?.full_name || "";
                 }
 
+                const consultId = isConsultation ? (eventData as { id?: number })?.id : undefined;
+                const assignId = isAssignment ? (eventData as { id?: number })?.id : undefined;
+                const itemId = consultId ?? assignId;
+                const itemKey = `${event.type}-${event.timestamp}-${itemId ?? index}`;
+
                 return (
-                  <div key={index} className="relative flex gap-3 group">
+                  <div key={itemKey} className="relative flex gap-3 group">
                     {/* Timeline Dot (Icon) - smaller and neutral */}
                     <div
                       className={cn(

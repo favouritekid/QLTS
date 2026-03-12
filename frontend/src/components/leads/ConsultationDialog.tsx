@@ -191,9 +191,10 @@ export function ConsultationDialog({
         notes: consultation.notes || "",
         method: consultation.method || "phone",
         duration_minutes: consultation.duration_minutes || undefined,
-        // Loss reason from consultation (if available)
-        loss_reason_code: (consultation as unknown as { loss_reason_code?: string })?.loss_reason_code || null,
-        loss_reason_note: (consultation as unknown as { loss_reason_note?: string })?.loss_reason_note || "",
+        // Loss reason: backend stores these in LeadStatusHistory, not on Consultation record.
+        // They cannot be preloaded in edit mode; officer must re-enter if changing to a loss status.
+        loss_reason_code: null,
+        loss_reason_note: "",
       });
     } else if (isCreate) {
       // Reset to empty for create mode
@@ -268,7 +269,11 @@ export function ConsultationDialog({
         loss_reason_code?: string | null;
         loss_reason_note?: string;
       } = {};
-      if (data.scheduled_at) updateData.scheduled_at = data.scheduled_at.toISOString();
+      if (data.scheduled_at) {
+        updateData.scheduled_at = data.scheduled_at.toISOString();
+      } else {
+        updateData.scheduled_at = null;
+      }
       if (data.status_id) updateData.status_id = data.status_id;
       if (data.notes !== undefined) updateData.notes = data.notes;
       if (data.method) updateData.method = data.method;
@@ -361,7 +366,7 @@ export function ConsultationDialog({
                       value={field.value}
                       onChange={field.onChange}
                       placeholder="Chọn ngày giờ"
-                      minDate={new Date()}
+                      minDate={isCreate ? new Date() : undefined}
                       error={form.formState.errors.scheduled_at?.message}
                     />
                   </FormControl>

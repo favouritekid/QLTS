@@ -317,7 +317,9 @@ export function useUpdateLead() {
       if (previousLead) {
         const scalarUpdates: Partial<Lead> = {};
         for (const [key, value] of Object.entries(data)) {
-          if (value !== undefined && typeof value !== "object") {
+          // Allow null (clears nullable fields like email, phone2, offering_id).
+          // typeof null === "object" in JS, so must check for null explicitly.
+          if (value !== undefined && (value === null || typeof value !== "object")) {
             (scalarUpdates as Record<string, unknown>)[key] = value;
           }
         }

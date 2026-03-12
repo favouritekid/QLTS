@@ -195,8 +195,28 @@ export function LeadFilterBar({
   const { user } = useAuth();
   const { data: pipelineStages = [] } = usePipelineStages();
   const { data: offeringsList = [] } = useAllProgramOfferings();
-  const { data: usersData } = useAdminUsersList({ page: 1, page_size: 100, status: "active", role: "officer" });
+  const [officerSearch, setOfficerSearch] = useState("");
+  const [debouncedOfficerSearch, setDebouncedOfficerSearch] = useState("");
+  const officerSearchDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleOfficerSearchChange = useCallback((value: string) => {
+    setOfficerSearch(value);
+    if (officerSearchDebounceRef.current) clearTimeout(officerSearchDebounceRef.current);
+    officerSearchDebounceRef.current = setTimeout(() => {
+      setDebouncedOfficerSearch(value);
+    }, 300);
+  }, []);
+
+  const { data: usersData } = useAdminUsersList({
+    page: 1,
+    page_size: 50,
+    status: "active",
+    role: "officer",
+    ...(debouncedOfficerSearch && { search: debouncedOfficerSearch }),
+  });
   const officers = usersData?.users || [];
+  const officersTotalCount = usersData?.total_count ?? 0;
+  const officersTruncated = officersTotalCount > officers.length;
 
   const [isMounted, setIsMounted] = React.useState(false);
   React.useEffect(() => { setIsMounted(true); }, []);
@@ -506,22 +526,35 @@ export function LeadFilterBar({
           {/* Officer Filter - Admin/Manager only */}
           {canFilterByOfficerFlag && (
             <FilterDropdown label="Cán bộ" count={officerFilters.length}>
-              <div className="max-h-48 space-y-2 overflow-y-auto">
-                {officers.map((officer) => (
-                  <div key={officer.id} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`bar-officer-${officer.id}`}
-                      checked={officerFilters.includes(officer.id.toString())}
-                      onCheckedChange={() => handleOfficerToggle(officer.id.toString())}
-                    />
-                    <Label
-                      htmlFor={`bar-officer-${officer.id}`}
-                      className="cursor-pointer text-sm font-normal"
-                    >
-                      {officer.full_name}
-                    </Label>
-                  </div>
-                ))}
+              <div className="space-y-2">
+                <Input
+                  placeholder="Tìm cán bộ…"
+                  value={officerSearch}
+                  onChange={(e) => handleOfficerSearchChange(e.target.value)}
+                  className="h-7 text-xs"
+                />
+                <div className="max-h-48 space-y-2 overflow-y-auto">
+                  {officers.map((officer) => (
+                    <div key={officer.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`bar-officer-${officer.id}`}
+                        checked={officerFilters.includes(officer.id.toString())}
+                        onCheckedChange={() => handleOfficerToggle(officer.id.toString())}
+                      />
+                      <Label
+                        htmlFor={`bar-officer-${officer.id}`}
+                        className="cursor-pointer text-sm font-normal"
+                      >
+                        {officer.full_name}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+                {officersTruncated && (
+                  <p className="text-xs text-muted-foreground pt-1">
+                    Hiển thị {officers.length}/{officersTotalCount} — nhập tên để tìm thêm
+                  </p>
+                )}
               </div>
             </FilterDropdown>
           )}
@@ -740,22 +773,35 @@ export function LeadFilterBar({
             {/* Officer Filter - Admin/Manager only */}
             {canFilterByOfficerFlag && (
               <FilterDropdown label="Cán bộ" count={officerFilters.length}>
-                <div className="max-h-48 space-y-2 overflow-y-auto">
-                  {officers.map((officer) => (
-                    <div key={officer.id} className="flex items-center space-x-2">
-                      <Checkbox
-                        id={`mobile-officer-${officer.id}`}
-                        checked={officerFilters.includes(officer.id.toString())}
-                        onCheckedChange={() => handleOfficerToggle(officer.id.toString())}
-                      />
-                      <Label
-                        htmlFor={`mobile-officer-${officer.id}`}
-                        className="cursor-pointer text-sm font-normal"
-                      >
-                        {officer.full_name}
-                      </Label>
-                    </div>
-                  ))}
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Tìm cán bộ…"
+                    value={officerSearch}
+                    onChange={(e) => handleOfficerSearchChange(e.target.value)}
+                    className="h-7 text-xs"
+                  />
+                  <div className="max-h-48 space-y-2 overflow-y-auto">
+                    {officers.map((officer) => (
+                      <div key={officer.id} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`mobile-officer-${officer.id}`}
+                          checked={officerFilters.includes(officer.id.toString())}
+                          onCheckedChange={() => handleOfficerToggle(officer.id.toString())}
+                        />
+                        <Label
+                          htmlFor={`mobile-officer-${officer.id}`}
+                          className="cursor-pointer text-sm font-normal"
+                        >
+                          {officer.full_name}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                  {officersTruncated && (
+                    <p className="text-xs text-muted-foreground pt-1">
+                      Hiển thị {officers.length}/{officersTotalCount} — nhập tên để tìm thêm
+                    </p>
+                  )}
                 </div>
               </FilterDropdown>
             )}

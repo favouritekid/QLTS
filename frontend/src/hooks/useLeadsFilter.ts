@@ -165,6 +165,7 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
     searchParams.get("unit_id") ||
     searchParams.get("from") ||
     searchParams.get("to") ||
+    searchParams.get("date_field") ||
     searchParams.get("score_min") ||
     searchParams.get("score_max")
   );

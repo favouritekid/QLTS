@@ -245,6 +245,10 @@ export interface Consultation {
   consultation_status_id?: string | null;
   created_at?: string | null; // ISO datetime
   updated_at?: string | null; // ISO datetime
+  // Note: loss_reason_code/loss_reason_note are stored in LeadStatusHistory,
+  // not on the Consultation record. Backend does not return these in the response.
+  loss_reason_code?: string | null;
+  loss_reason_note?: string | null;
 
   // Relationships
   officer?: User | null;
@@ -475,21 +479,31 @@ export type TimelineItemType =
 
 /**
  * Timeline item for lead history
+ * Backend contract: only `type`, `timestamp`, `data` are returned.
+ * Fields below marked @deprecated are NOT sent by backend — kept as optional
+ * to avoid breaking existing code that may reference them defensively.
  */
 export interface TimelineItem {
-  id: number;
+  /** Backend sends "consultation" | "assignment" */
   type: TimelineItemType;
-  event_type: TimelineItemType;
   timestamp: string; // ISO datetime
-  created_at?: string | null; // ISO datetime
-  description: string;
+  /** Typed event payload — Consultation or AssignmentLog object */
+  data: Consultation | AssignmentLog | Record<string, unknown>;
+
+  // Legacy / defensive fields — NOT sent by backend, kept optional for safety
+  /** @deprecated Not in backend contract */
+  id?: number;
+  /** @deprecated Not in backend contract — use `type` instead */
+  event_type?: TimelineItemType;
+  /** @deprecated Not in backend contract — derive from data fields */
+  description?: string;
+  /** @deprecated Not in backend contract — use data.officer */
   actor?: {
     id: number;
     full_name: string;
   } | null;
-  actor_id?: number | null; // Direct actor ID (alternative to actor object)
+  actor_id?: number | null;
   metadata?: Record<string, unknown>;
-  data?: TimelineEventData; // ✅ TECHNICAL DEBT FIX: Typed event data
 }
 
 // ============================================
