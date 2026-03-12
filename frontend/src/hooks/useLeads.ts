@@ -463,10 +463,10 @@ export function useAssignLead() {
       });
 
       // Invalidate queries
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -663,15 +663,16 @@ export function usePerformLeadAction() {
       });
 
       // Invalidate queries
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
 
       // ✅ FIX BUG-17: Invalidate workflow context so current_phase/allowed_statuses refresh
       queryClient.invalidateQueries({
         queryKey: workflowContextKeys.byLead(updatedLead.id),
         exact: true,
+        refetchType: 'active',
       });
     },
 
@@ -1019,8 +1020,8 @@ export function useImportLeads() {
       });
 
       // Invalidate all lead lists
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
     },
 
     onError: (error) => {
