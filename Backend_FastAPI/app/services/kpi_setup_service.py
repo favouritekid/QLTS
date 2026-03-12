@@ -16,7 +16,11 @@ from app.repositories import KpiRepository
 from app.repositories.user_repository import UserRepository
 from app.services import calendar_service
 from app.services.kpi_service import compute_progress_status
-from app.services.kpi_planning_service import DEFAULT_ENROLLMENT_WEIGHTS
+from app.services.kpi_resolver import (
+    AnnualResolutionContext,
+    resolve_officer_annual_from_context,
+    map_resolution_to_coverage_source,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -116,79 +120,71 @@ async def get_coverage_report(
     ref_year = now.year
     ref_month = now.month
 
-    # P1 fix: Pre-compute total officers across ALL units for global target split
+    # Pre-compute total officers across ALL units for global target split
     total_officers_all_units = len(all_officer_ids)
 
-    # 8. Build per-unit coverage
+    # 8. Build shared resolution context from pre-fetched batch data
+    #    This context feeds the same pure rule function used by the single-officer
+    #    path (kpi_service.get_annual_target_progress), ensuring no rule drift.
+    _officer_unit_map: Dict[int, int] = {}
+    _unit_officer_counts: Dict[int, int] = {}
+    for uid, unit_officers_list in officers_by_unit.items():
+        _unit_officer_counts[uid] = len(unit_officers_list)
+        for o in unit_officers_list:
+            _officer_unit_map[o.id] = uid
+
+    # Merge YTD: officers with target use Celery snapshot, others use batch count
+    _ytd_by_officer: Dict[int, int] = {}
+    for oid in all_officer_ids:
+        if oid in officer_targets:
+            _ytd_by_officer[oid] = officer_targets[oid].achieved_ytd
+        else:
+            _ytd_by_officer[oid] = ytd_grouped.get(oid, 0)
+
+    resolution_ctx = AnnualResolutionContext(
+        officer_targets=officer_targets,
+        officer_plans=officer_plans,
+        unit_plans=plans_by_unit,
+        unit_targets=unit_targets,
+        global_target=global_target,
+        unit_officer_counts=_unit_officer_counts,
+        total_active_officers=total_officers_all_units,
+        ytd_by_officer=_ytd_by_officer,
+        officer_unit_map=_officer_unit_map,
+    )
+
+    # 9. Build per-unit coverage using shared annual resolution rule
     warnings: List[dict] = []
     unit_coverages: List[dict] = []
 
     for unit in units:
         plan = plans_by_unit.get(unit.id)
         unit_officers = officers_by_unit.get(unit.id, [])
-        officer_count = len(unit_officers)
-
-        # Default seasonal weights from unit plan (fallback for inherited officers)
-        unit_seasonal_weights = None
-        if plan and plan.seasonal_weights and len(plan.seasonal_weights) == 12:
-            unit_seasonal_weights = plan.seasonal_weights
-        elif plan:
-            unit_seasonal_weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
 
         officer_rows: List[dict] = []
         for officer in unit_officers:
-            custom_target = officer_targets.get(officer.id)
+            # Shared rule: same priority chain as single-officer resolver
+            resolution = resolve_officer_annual_from_context(
+                officer.id, resolution_ctx
+            )
 
-            # P2 fix: Use officer-specific plan weights if available
-            officer_plan = officer_plans.get(officer.id)
-
-            # Priority chain mirrors kpi_resolver.resolve_annual_progress():
-            # 1. Officer KpiTarget  2. Officer KpiPlan  3. Unit plan  4. Unit target  5. Global
-            # Uses batch-prefetched data to avoid N+1 queries.
-            # Mapping to resolver output: custom→assigned, inherited→inherited_estimate
-            if custom_target:
-                # Officer has explicit KpiTarget (highest priority, may be admin-edited)
-                source = "custom"
-                target_id = custom_target.id
-                annual = custom_target.annual_target
-                ytd = custom_target.achieved_ytd
-            elif officer_plan:
-                # Officer has own KpiPlan but no KpiTarget
-                source = "custom"
-                target_id = None
-                annual = officer_plan.annual_enrollment_target
-                ytd = ytd_grouped.get(officer.id, 0)
-            elif plan and officer_count > 0:
-                # Inherit from unit plan
-                source = "inherited"
-                target_id = None
-                annual = plan.annual_enrollment_target // officer_count
-                ytd = ytd_grouped.get(officer.id, 0)
-            elif unit.id in unit_targets and officer_count > 0:
-                # Inherit from unit-scoped KpiTarget
-                ut = unit_targets[unit.id]
-                source = "inherited"
-                target_id = None
-                annual = ut.annual_target // officer_count
-                ytd = ytd_grouped.get(officer.id, 0)
-            elif global_target and total_officers_all_units > 0:
-                # P1 fix: Inherit from global target — split by TOTAL officers org-wide
-                source = "inherited_global"
-                target_id = None
-                annual = global_target.annual_target // total_officers_all_units
-                ytd = ytd_grouped.get(officer.id, 0)
+            if resolution is not None:
+                source = map_resolution_to_coverage_source(resolution)
+                annual = resolution.annual_target
+                ytd = resolution.achieved_ytd
+                seasonal_weights = resolution.seasonal_weights
+                target_id = (
+                    resolution.target_record.id
+                    if resolution.target_record else None
+                )
             else:
                 source = "none"
-                target_id = None
                 annual = 0
-                ytd = ytd_grouped.get(officer.id, 0)
+                ytd = _ytd_by_officer.get(officer.id, 0)
+                seasonal_weights = None
+                target_id = None
 
-            if officer_plan and officer_plan.seasonal_weights and len(officer_plan.seasonal_weights) == 12:
-                seasonal_weights = officer_plan.seasonal_weights
-            elif officer_plan:
-                seasonal_weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
-            else:
-                seasonal_weights = unit_seasonal_weights
+            officer_plan = officer_plans.get(officer.id)
 
             progress_pct = round((ytd / annual * 100), 1) if annual > 0 else 0.0
             status = compute_progress_status(

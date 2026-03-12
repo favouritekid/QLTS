@@ -72,6 +72,46 @@ class AnnualProgressResolution:
     """Resolved seasonal weights from plan if available."""
 
 
+@dataclass
+class AnnualResolutionContext:
+    """Pre-fetched data for batch-aware annual resolution.
+
+    Callers build this context from either:
+    - Single-officer on-demand queries (_build_single_officer_context)
+    - Batch pre-fetched data (coverage report)
+
+    The pure rule function resolve_officer_annual_from_context() runs from
+    this context without any DB calls, ensuring single-path rule logic.
+    """
+
+    officer_targets: Dict[int, Any]
+    """officer_id → officer-scoped KpiTarget (step 1)."""
+
+    officer_plans: Dict[int, Any]
+    """officer_id → officer-scoped KpiPlan (step 2)."""
+
+    unit_plans: Dict[int, Any]
+    """unit_id → unit-scoped KpiPlan, officer_id IS NULL (step 3)."""
+
+    unit_targets: Dict[int, Any]
+    """unit_id → unit-scoped KpiTarget, officer_id IS NULL (step 4)."""
+
+    global_target: Optional[Any]
+    """Global KpiTarget, unit_id IS NULL, officer_id IS NULL (step 5)."""
+
+    unit_officer_counts: Dict[int, int]
+    """unit_id → count of active officers in that unit."""
+
+    total_active_officers: int
+    """Total active officers across all active units (for global split)."""
+
+    ytd_by_officer: Dict[int, int]
+    """officer_id → pre-resolved achieved_ytd count."""
+
+    officer_unit_map: Dict[int, Optional[int]]
+    """officer_id → unit_id mapping."""
+
+
 # =============================================================================
 # 1. resolve_target() — Monthly KpiConfig resolution
 # =============================================================================
@@ -215,9 +255,8 @@ async def resolve_annual_progress(
     """
     Resolve annual target progress for an officer using the full priority chain.
 
-    Combines logic from:
-    - kpi_service.get_annual_target_progress() (KpiTarget inheritance)
-    - kpi_setup_service.get_coverage_report() (equal split for inherited officers)
+    Builds a single-officer AnnualResolutionContext and delegates to the
+    shared pure rule function resolve_officer_annual_from_context().
 
     Priority chain:
     1. Officer-scoped KpiTarget -> kind="assigned"
@@ -239,179 +278,250 @@ async def resolve_annual_progress(
     Returns:
         AnnualProgressResolution or None if no target can be resolved.
     """
+    ctx = await _build_single_officer_context(
+        db, officer_id, fiscal_year, kpi_code, effective_date
+    )
+    result = resolve_officer_annual_from_context(officer_id, ctx)
+
+    if result is not None:
+        log.debug(
+            "Annual progress resolved",
+            officer_id=officer_id,
+            resolution_kind=result.resolution_kind,
+            annual_target=result.annual_target,
+            source=result.source_description,
+        )
+    else:
+        log.debug(
+            "No annual target resolvable for officer",
+            officer_id=officer_id,
+            fiscal_year=fiscal_year,
+        )
+    return result
+
+
+# =============================================================================
+# 3. BATCH-AWARE ANNUAL RESOLUTION — Shared pure rule + context builder
+# =============================================================================
+
+
+def resolve_officer_annual_from_context(
+    officer_id: int,
+    ctx: AnnualResolutionContext,
+) -> Optional[AnnualProgressResolution]:
+    """
+    Pure annual resolution rule — no DB calls.
+
+    Shared between single-officer path (kpi_service.get_annual_target_progress)
+    and batch path (kpi_setup_service.get_coverage_report).
+
+    Uses pre-fetched data from AnnualResolutionContext. Priority chain:
+    1. Officer KpiTarget -> kind="assigned"
+    2. Officer KpiPlan -> kind="assigned"
+    3. Unit KpiPlan -> kind="inherited_estimate" (equal split)
+    4. Unit KpiTarget -> kind="inherited_estimate" (equal split)
+    5. Global KpiTarget -> kind="inherited_estimate" (equal split)
+    6. None -> return None
+    """
+    unit_id = ctx.officer_unit_map.get(officer_id)
+    ytd = ctx.ytd_by_officer.get(officer_id, 0)
+
+    # Step 1: Officer KpiTarget
+    officer_target = ctx.officer_targets.get(officer_id)
+    if officer_target is not None:
+        weights = _resolve_weights_from_context(officer_id, unit_id, ctx)
+        return AnnualProgressResolution(
+            annual_target=officer_target.annual_target,
+            achieved_ytd=ytd,
+            resolution_kind="assigned",
+            source_description="Officer KpiTarget",
+            target_record=officer_target,
+            seasonal_weights=weights,
+        )
+
+    # Step 2: Officer KpiPlan
+    officer_plan = ctx.officer_plans.get(officer_id)
+    if officer_plan is not None:
+        weights = _extract_plan_weights(officer_plan)
+        return AnnualProgressResolution(
+            annual_target=officer_plan.annual_enrollment_target,
+            achieved_ytd=ytd,
+            resolution_kind="assigned",
+            source_description="Officer KpiPlan",
+            target_record=None,
+            seasonal_weights=weights,
+        )
+
+    # Step 3: Unit KpiPlan (equal split)
+    if unit_id is not None:
+        unit_plan = ctx.unit_plans.get(unit_id)
+        if unit_plan is not None:
+            count = ctx.unit_officer_counts.get(unit_id, 0)
+            if count > 0:
+                split_target = unit_plan.annual_enrollment_target // count
+                weights = _extract_plan_weights(unit_plan)
+                return AnnualProgressResolution(
+                    annual_target=split_target,
+                    achieved_ytd=ytd,
+                    resolution_kind="inherited_estimate",
+                    source_description=f"Unit plan (ước tính, {count} officers)",
+                    target_record=None,
+                    seasonal_weights=weights,
+                )
+
+    # Step 4: Unit KpiTarget (equal split)
+    if unit_id is not None:
+        unit_target = ctx.unit_targets.get(unit_id)
+        if unit_target is not None:
+            count = ctx.unit_officer_counts.get(unit_id, 0)
+            if count > 0:
+                split_target = unit_target.annual_target // count
+                weights = _resolve_weights_from_context(officer_id, unit_id, ctx)
+                return AnnualProgressResolution(
+                    annual_target=split_target,
+                    achieved_ytd=ytd,
+                    resolution_kind="inherited_estimate",
+                    source_description=f"Unit target (ước tính, {count} officers)",
+                    target_record=None,
+                    seasonal_weights=weights,
+                )
+
+    # Step 5: Global KpiTarget (equal split)
+    if ctx.global_target is not None and ctx.total_active_officers > 0:
+        split_target = ctx.global_target.annual_target // ctx.total_active_officers
+        weights = _resolve_weights_from_context(officer_id, unit_id, ctx)
+        return AnnualProgressResolution(
+            annual_target=split_target,
+            achieved_ytd=ytd,
+            resolution_kind="inherited_estimate",
+            source_description=f"Global target (ước tính, {ctx.total_active_officers} officers)",
+            target_record=None,
+            seasonal_weights=weights,
+        )
+
+    # Step 6: Nothing found
+    return None
+
+
+def map_resolution_to_coverage_source(
+    resolution: Optional[AnnualProgressResolution],
+) -> str:
+    """Map resolver output to coverage report target_source contract values.
+
+    Mapping:
+        assigned → "custom"
+        inherited_estimate (unit scope) → "inherited"
+        inherited_estimate (global scope) → "inherited_global"
+        None → "none"
+    """
+    if resolution is None:
+        return "none"
+    if resolution.resolution_kind == "assigned":
+        return "custom"
+    if resolution.source_description.startswith("Global"):
+        return "inherited_global"
+    return "inherited"
+
+
+def _resolve_weights_from_context(
+    officer_id: int,
+    unit_id: Optional[int],
+    ctx: AnnualResolutionContext,
+) -> Optional[List[float]]:
+    """Resolve seasonal weights from context: officer plan -> unit plan -> None."""
+    officer_plan = ctx.officer_plans.get(officer_id)
+    if officer_plan is not None:
+        return _extract_plan_weights(officer_plan)
+
+    if unit_id is not None:
+        unit_plan = ctx.unit_plans.get(unit_id)
+        if unit_plan is not None:
+            return _extract_plan_weights(unit_plan)
+
+    return None  # No plan found -> linear fallback
+
+
+async def _build_single_officer_context(
+    db: AsyncSession,
+    officer_id: int,
+    fiscal_year: int,
+    kpi_code: str,
+    effective_date: Optional[date],
+) -> AnnualResolutionContext:
+    """Build AnnualResolutionContext for a single officer (on-demand queries).
+
+    Same query count as the old resolve_annual_progress() — no regression.
+    """
     from ..repositories import KpiRepository, KpiPlanningRepository
 
     kpi_repo = KpiRepository(db)
 
-    # --- Resolve officer's unit_id ---
+    # 1. Officer -> unit mapping
     unit_id = await kpi_repo.get_user_unit_id(officer_id)
 
-    # --- Step 1: Officer-scoped KpiTarget ---
+    # 2. Officer-scoped KpiTarget
     officer_target = await _get_officer_scoped_target(
         db, officer_id, kpi_code, fiscal_year, unit_id
     )
-    if officer_target is not None:
-        achieved_ytd = await _resolve_achieved_ytd(
-            kpi_repo, officer_id, fiscal_year, effective_date, officer_target
-        )
-        seasonal_weights = await _resolve_seasonal_weights(
-            kpi_repo, officer_id, unit_id, fiscal_year
-        )
+    officer_targets = {officer_id: officer_target} if officer_target else {}
 
-        log.debug(
-            "Annual progress resolved from officer KpiTarget",
-            officer_id=officer_id,
-            annual_target=officer_target.annual_target,
-            achieved_ytd=achieved_ytd,
-        )
+    # 3-4. Plans and targets (need unit_id)
+    officer_plans: Dict[int, Any] = {}
+    unit_plans: Dict[int, Any] = {}
+    unit_targets: Dict[int, Any] = {}
+    unit_officer_counts: Dict[int, int] = {}
 
-        return AnnualProgressResolution(
-            annual_target=officer_target.annual_target,
-            achieved_ytd=achieved_ytd,
-            resolution_kind="assigned",
-            source_description="Officer KpiTarget",
-            target_record=officer_target,
-            seasonal_weights=seasonal_weights,
-        )
-
-    # --- Step 2: Officer has own KpiPlan ---
     if unit_id is not None:
         planning_repo = KpiPlanningRepository(db)
-        officer_plan = await planning_repo.get_active_plan_by_scope(
-            unit_id=unit_id,
-            fiscal_year=fiscal_year,
-            officer_id=officer_id,
-            with_months=False,
+
+        # Officer's own plan
+        op = await planning_repo.get_active_plan_by_scope(
+            unit_id=unit_id, fiscal_year=fiscal_year,
+            officer_id=officer_id, with_months=False,
         )
-        if officer_plan is not None:
-            achieved_ytd = await _resolve_achieved_ytd(
-                kpi_repo, officer_id, fiscal_year, effective_date, None
-            )
-            seasonal_weights = _extract_plan_weights(officer_plan)
+        if op:
+            officer_plans[officer_id] = op
 
-            log.debug(
-                "Annual progress resolved from officer KpiPlan",
-                officer_id=officer_id,
-                plan_id=officer_plan.id,
-                annual_target=officer_plan.annual_enrollment_target,
-            )
-
-            return AnnualProgressResolution(
-                annual_target=officer_plan.annual_enrollment_target,
-                achieved_ytd=achieved_ytd,
-                resolution_kind="assigned",
-                source_description="Officer KpiPlan",
-                target_record=None,
-                seasonal_weights=seasonal_weights,
-            )
-
-    # --- Steps 3-5: Inherited estimates (require officer count for split) ---
-
-    # Step 3: Unit has KpiPlan
-    if unit_id is not None:
-        planning_repo = KpiPlanningRepository(db)
-        unit_plan = await planning_repo.get_active_plan_by_scope(
-            unit_id=unit_id,
-            fiscal_year=fiscal_year,
-            officer_id=None,
-            with_months=False,
+        # Unit plan (officer_id IS NULL)
+        up = await planning_repo.get_active_plan_by_scope(
+            unit_id=unit_id, fiscal_year=fiscal_year,
+            officer_id=None, with_months=False,
         )
-        if unit_plan is not None:
-            active_count = await _count_active_officers_in_unit(db, unit_id)
-            if active_count > 0:
-                split_target = unit_plan.annual_enrollment_target // active_count
-                achieved_ytd = await _resolve_achieved_ytd(
-                    kpi_repo, officer_id, fiscal_year, effective_date, None
-                )
-                seasonal_weights = _extract_plan_weights(unit_plan)
+        if up:
+            unit_plans[unit_id] = up
 
-                log.debug(
-                    "Annual progress resolved from unit KpiPlan (inherited)",
-                    officer_id=officer_id,
-                    plan_id=unit_plan.id,
-                    split_target=split_target,
-                    active_officers=active_count,
-                )
+        # Unit-scoped KpiTarget
+        ut = await _get_unit_scoped_target(db, kpi_code, fiscal_year, unit_id)
+        if ut:
+            unit_targets[unit_id] = ut
 
-                return AnnualProgressResolution(
-                    annual_target=split_target,
-                    achieved_ytd=achieved_ytd,
-                    resolution_kind="inherited_estimate",
-                    source_description=f"Unit plan (ước tính, {active_count} officers)",
-                    target_record=None,
-                    seasonal_weights=seasonal_weights,
-                )
-
-    # Step 4: Unit-scoped KpiTarget
-    if unit_id is not None:
-        unit_target = await _get_unit_scoped_target(
-            db, kpi_code, fiscal_year, unit_id
+        # Active officer count for unit
+        unit_officer_counts[unit_id] = await _count_active_officers_in_unit(
+            db, unit_id
         )
-        if unit_target is not None:
-            active_count = await _count_active_officers_in_unit(db, unit_id)
-            if active_count > 0:
-                split_target = unit_target.annual_target // active_count
-                achieved_ytd = await _resolve_achieved_ytd(
-                    kpi_repo, officer_id, fiscal_year, effective_date, None
-                )
-                seasonal_weights = await _resolve_seasonal_weights(
-                    kpi_repo, officer_id, unit_id, fiscal_year
-                )
 
-                log.debug(
-                    "Annual progress resolved from unit KpiTarget (inherited)",
-                    officer_id=officer_id,
-                    unit_target_id=unit_target.id,
-                    split_target=split_target,
-                    active_officers=active_count,
-                )
-
-                return AnnualProgressResolution(
-                    annual_target=split_target,
-                    achieved_ytd=achieved_ytd,
-                    resolution_kind="inherited_estimate",
-                    source_description=f"Unit target (ước tính, {active_count} officers)",
-                    target_record=None,
-                    seasonal_weights=seasonal_weights,
-                )
-
-    # Step 5: Global KpiTarget
+    # 5. Global target
     global_target = await _get_global_target(db, kpi_code, fiscal_year)
-    if global_target is not None:
-        total_count = await _count_total_active_officers(db)
-        if total_count > 0:
-            split_target = global_target.annual_target // total_count
-            achieved_ytd = await _resolve_achieved_ytd(
-                kpi_repo, officer_id, fiscal_year, effective_date, None
-            )
-            seasonal_weights = await _resolve_seasonal_weights(
-                kpi_repo, officer_id, unit_id, fiscal_year
-            )
 
-            log.debug(
-                "Annual progress resolved from global KpiTarget (inherited)",
-                officer_id=officer_id,
-                global_target_id=global_target.id,
-                split_target=split_target,
-                total_officers=total_count,
-            )
+    # 6. Total active officers (for global split)
+    total_active = await _count_total_active_officers(db)
 
-            return AnnualProgressResolution(
-                annual_target=split_target,
-                achieved_ytd=achieved_ytd,
-                resolution_kind="inherited_estimate",
-                source_description=f"Global target (ước tính, {total_count} officers)",
-                target_record=None,
-                seasonal_weights=seasonal_weights,
-            )
-
-    # Step 6: Nothing found
-    log.debug(
-        "No annual target resolvable for officer",
-        officer_id=officer_id,
-        fiscal_year=fiscal_year,
+    # 7. Resolve YTD
+    ytd = await _resolve_achieved_ytd(
+        kpi_repo, officer_id, fiscal_year, effective_date, officer_target
     )
-    return None
+
+    return AnnualResolutionContext(
+        officer_targets=officer_targets,
+        officer_plans=officer_plans,
+        unit_plans=unit_plans,
+        unit_targets=unit_targets,
+        global_target=global_target,
+        unit_officer_counts=unit_officer_counts,
+        total_active_officers=total_active,
+        ytd_by_officer={officer_id: ytd},
+        officer_unit_map={officer_id: unit_id},
+    )
 
 
 # =============================================================================
