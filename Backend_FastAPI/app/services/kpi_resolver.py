@@ -426,20 +426,20 @@ async def _get_officer_scoped_target(
     fiscal_year: int,
     unit_id: Optional[int],
 ) -> Optional[models.KpiTarget]:
-    """Get officer-scoped KpiTarget (officer_id matches, scoped to unit if known)."""
-    from sqlalchemy import and_
+    """Get officer-scoped KpiTarget (officer_id is unique enough, no unit filter).
 
-    conditions = [
-        models.KpiTarget.officer_id == officer_id,
-        models.KpiTarget.kpi_code == kpi_code,
-        models.KpiTarget.fiscal_year == fiscal_year,
-        models.KpiTarget.is_active == True,  # noqa: E712
-    ]
-    if unit_id is not None:
-        conditions.append(models.KpiTarget.unit_id == unit_id)
-
+    Note: unit_id param kept for signature compat but not used in query.
+    Officer may have been transferred — their KpiTarget still references old unit.
+    Filtering by unit_id would miss the target in that case, diverging from coverage
+    report which loads all officer targets regardless of unit (admin view).
+    """
     result = await db.execute(
-        select(models.KpiTarget).where(*conditions).limit(1)
+        select(models.KpiTarget).where(
+            models.KpiTarget.officer_id == officer_id,
+            models.KpiTarget.kpi_code == kpi_code,
+            models.KpiTarget.fiscal_year == fiscal_year,
+            models.KpiTarget.is_active == True,  # noqa: E712
+        ).limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -561,11 +561,21 @@ async def _count_active_officers_in_unit(
 async def _count_total_active_officers(
     db: AsyncSession,
 ) -> int:
-    """Count total active officers across the organization."""
+    """Count total active officers in active units (matches coverage report scope).
+
+    Coverage report loads officers from OrganizationUnit.is_active == True only.
+    Must use same scope here to avoid split divergence on global target.
+    """
     result = await db.execute(
-        select(func.count(models.User.id)).where(
+        select(func.count(models.User.id))
+        .join(
+            models.OrganizationUnit,
+            models.User.unit_id == models.OrganizationUnit.id,
+        )
+        .where(
             models.User.role == "officer",
             models.User.status == "active",
+            models.OrganizationUnit.is_active == True,  # noqa: E712
         )
     )
     return result.scalar() or 0

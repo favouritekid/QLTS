@@ -125,7 +125,7 @@ export interface KpiConfigUpdate {
 }
 
 // KPI_CODES has been moved to kpi_catalog (canonical source of truth).
-// Import from: import { KPI_OPTIONS } from "@/lib/hooks/use-kpi-catalog";
+// Use: const { getKpiOptions } = useKpiCatalog();
 
 export const PERIOD_TYPES = [
   { value: "daily", label: "Hàng ngày" },

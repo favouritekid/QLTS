@@ -175,21 +175,3 @@ function isCalendarMonth(range: { start: Date; end: Date }): boolean {
   return e.getDate() === lastDay;
 }
 
-// =============================================================================
-// NON-HOOK EXPORTS — for use outside React context
-// =============================================================================
-
-/** KPI options for dropdowns (static, no API call needed) */
-export const KPI_OPTIONS = LOCAL_FALLBACK.map((m) => ({
-  value: m.code,
-  label: m.display_aliases.config,
-}));
-
-/** Get display name from local fallback (no hook needed) */
-export function getStaticDisplayName(
-  code: string,
-  context: keyof MetricCatalogEntry["display_aliases"] = "dashboard",
-): string {
-  const entry = LOCAL_FALLBACK.find((m) => m.code === code);
-  return entry?.display_aliases[context] ?? code;
-}
