@@ -1,11 +1,11 @@
 // src/components/leads/AssignLeadDialog.tsx
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Loader2, RefreshCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +34,8 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-import { useAssignLead, useBulkAssignLeads } from "@/hooks/useLeads";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useAssignLead, useBulkAssignLeads, usePerformLeadAction } from "@/hooks/useLeads";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import type { Lead } from "@/types/lead.types";
 
@@ -66,12 +67,15 @@ export function AssignLeadDialog({
 }: AssignLeadDialogProps) {
   const assignMutation = useAssignLead();
   const bulkAssignMutation = useBulkAssignLeads();
+  const performAction = usePerformLeadAction();
+  const [showFallback, setShowFallback] = useState(false);
 
-  // Fetch officers (users with role "officer" or "admin")
+  // Fetch officers — server-filtered by role to avoid client-side truncation
   const { data: usersData, isLoading: usersLoading } = useAdminUsersList({
     page: 1,
-    page_size: 100,
+    page_size: 500,
     status: "active",
+    role: "officer",
   });
 
   const isBulk = !!leadIds && leadIds.length > 0;
@@ -89,6 +93,7 @@ export function AssignLeadDialog({
   useEffect(() => {
     if (!open) {
       form.reset();
+      setShowFallback(false);
     }
   }, [open, form]);
 
@@ -108,6 +113,13 @@ export function AssignLeadDialog({
           onSuccess: () => {
             onOpenChange(false);
             onSuccess?.();
+          },
+          onError: (error) => {
+            const status = error.response?.status;
+            // Officer inactive/not found → offer auto-reassign fallback
+            if (status === 404 || status === 403) {
+              setShowFallback(true);
+            }
           },
         }
       );
@@ -130,10 +142,8 @@ export function AssignLeadDialog({
 
   const isSubmitting = assignMutation.isPending || bulkAssignMutation.isPending;
 
-  // Filter users to get only officers (backend rejects non-officer assignments)
-  const officers = usersData?.users?.filter(
-    (user) => user.role === "officer"
-  ) || [];
+  // Officers already server-filtered by role param
+  const officers = usersData?.users || [];
 
   return (
     <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
@@ -217,6 +227,45 @@ export function AssignLeadDialog({
                 </FormItem>
               )}
             />
+
+            {showFallback && isSingle && lead && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="flex items-center justify-between">
+                  <span>Phân công thất bại. Bạn có thể thử phân công tự động.</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={performAction.isPending}
+                    onClick={() => {
+                      performAction.mutate(
+                        {
+                          leadId: lead.id,
+                          data: {
+                            action: "reassign",
+                            reason: "Phân công thủ công thất bại — tự động phân lại",
+                          },
+                        },
+                        {
+                          onSuccess: () => {
+                            onOpenChange(false);
+                            onSuccess?.();
+                          },
+                        },
+                      );
+                    }}
+                  >
+                    {performAction.isPending ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCcw className="mr-1 h-3 w-3" />
+                    )}
+                    Tự động phân lại
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
 
             <ResponsiveDialogFooter>
               <Button

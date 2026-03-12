@@ -12,6 +12,7 @@ export interface OfficerCoverage {
   officer_name: string;
   target_source: "custom" | "inherited" | "inherited_global" | "none";
   target_id: number | null;
+  plan_id: number | null;
   annual_target: number;
   achieved_ytd: number;
   progress_pct: number;

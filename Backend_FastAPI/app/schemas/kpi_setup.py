@@ -18,6 +18,7 @@ class OfficerCoverage(BaseModel):
     officer_name: str
     target_source: str  # "custom" | "inherited" | "inherited_global" | "none"
     target_id: Optional[int] = None  # KpiTarget.id if custom
+    plan_id: Optional[int] = None  # KpiPlan.id if officer has own plan
     annual_target: int
     achieved_ytd: int
     progress_pct: float

@@ -22,6 +22,8 @@ from app.models import User
 from app.models.config import KpiPlan, KpiPlanMonth
 from app.repositories.kpi_planning_repository import KpiPlanningRepository
 from app.schemas.kpi_planning import (
+    AssignOfficerQuotaRequest,
+    AssignOfficerQuotaResponse,
     BatchOverrideRequest,
     BatchOverrideResponse,
     HolidayCreate,
@@ -96,6 +98,32 @@ async def create_plan(
     if callback:
         await callback()
     return plan
+
+
+@router.post(
+    "/plans/assign-officer-quota",
+    status_code=status.HTTP_201_CREATED,
+    summary="Assign quota to officer — auto-create KPI plan + target",
+)
+async def assign_officer_quota(
+    data: AssignOfficerQuotaRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AdminDep],
+):
+    """
+    Assign a quota to an officer by auto-creating a KpiPlan (inheriting from unit plan)
+    and upserting KpiTarget. Hard-blocks if quota sum exceeds unit target.
+
+    Admin only.
+    """
+    result, callback = await kpi_planning_service.assign_officer_quota(
+        db, data.unit_id, data.officer_id, data.fiscal_year, data.quota,
+        created_by=current_user.id,
+    )
+    await db.commit()
+    if callback:
+        await callback()
+    return result
 
 
 @router.get(
@@ -301,6 +329,7 @@ async def preview_plan(
         sla_target=data.sla_target,
         response_time_target=data.response_time_target,
         seasonal_weights=data.seasonal_weights,
+        start_month=data.start_month,
     )
     return result
 

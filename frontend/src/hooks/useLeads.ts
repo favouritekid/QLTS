@@ -595,7 +595,7 @@ export function useBulkDeleteLeads() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    { message: string; deleted_count: number },
+    { message: string; deleted_count: number; skipped?: Array<{ lead_id: number; reason: string }> },
     AxiosError<ApiErrorResponse>,
     { lead_ids: number[] }
   >({

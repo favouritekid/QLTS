@@ -236,6 +236,47 @@ class KpiPlanningRepository(BaseRepository[KpiPlan]):
         )
         return result.scalar_one() > 0
 
+    async def sum_officer_quotas(
+        self,
+        unit_id: int,
+        fiscal_year: int,
+        exclude_officer_id: Optional[int] = None,
+        lock_unit_plan: bool = False,
+    ) -> int:
+        """
+        Sum annual_enrollment_target for all active officer plans in a unit/year.
+
+        Args:
+            exclude_officer_id: Exclude this officer from sum (for update validation)
+            lock_unit_plan: If True, SELECT FOR UPDATE on unit plan row to serialize
+                           concurrent inserts (prevents race in quota validation)
+        Returns:
+            Sum of officer quotas (0 if no officer plans exist)
+        """
+        if lock_unit_plan:
+            # Lock unit plan row to serialize concurrent quota operations
+            await self.db.execute(
+                select(KpiPlan.id)
+                .where(
+                    KpiPlan.unit_id == unit_id,
+                    KpiPlan.fiscal_year == fiscal_year,
+                    KpiPlan.officer_id.is_(None),
+                    KpiPlan.is_active == True,  # noqa: E712
+                )
+                .with_for_update()
+            )
+
+        query = select(func.coalesce(func.sum(KpiPlan.annual_enrollment_target), 0)).where(
+            KpiPlan.unit_id == unit_id,
+            KpiPlan.fiscal_year == fiscal_year,
+            KpiPlan.officer_id.isnot(None),
+            KpiPlan.is_active == True,  # noqa: E712
+        )
+        if exclude_officer_id is not None:
+            query = query.where(KpiPlan.officer_id != exclude_officer_id)
+        result = (await self.db.execute(query)).scalar()
+        return int(result)
+
     # =========================================================================
     # PLAN MONTHS
     # =========================================================================

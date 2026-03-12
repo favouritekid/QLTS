@@ -51,9 +51,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hooks/useLeads";
+import { useAuth } from "@/hooks/useAuth";
+import { isManagerOrAbove } from "@/lib/utils/permissions";
 import { useWorkflowContext } from "@/hooks/useWorkflowContext";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
+import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
 import { ActionBanner } from "@/components/leads/ActionBanner";
@@ -84,9 +87,12 @@ const getInitials = (name: string) => {
 
 export function LeadDetailClient({ leadId, initialData, initialTimeline, initialInsights }: LeadDetailClientProps) {
   const router = useRouter();
+  const { user } = useAuth();
+  const hasManagerAccess = isManagerOrAbove(user);
 
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [phoneCopied, setPhoneCopied] = useState(false);
 
@@ -333,10 +339,17 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                   <Edit className="mr-2 h-4 w-4" />
                   Chỉnh sửa
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setAssignDialogOpen(true)}>
-                  <TrendingUp className="mr-2 h-4 w-4" />
-                  Phân công lại
-                </DropdownMenuItem>
+                {hasManagerAccess ? (
+                  <DropdownMenuItem onClick={() => setAssignDialogOpen(true)}>
+                    <TrendingUp className="mr-2 h-4 w-4" />
+                    Chuyển giao lead
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onClick={() => setReassignDialogOpen(true)}>
+                    <TrendingUp className="mr-2 h-4 w-4" />
+                    Yêu cầu đổi người phụ trách
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => setDeleteDialogOpen(true)}
@@ -466,6 +479,12 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
       <AssignLeadDialog
         open={assignDialogOpen}
         onOpenChange={setAssignDialogOpen}
+        lead={lead}
+      />
+
+      <ReassignLeadDialog
+        open={reassignDialogOpen}
+        onOpenChange={setReassignDialogOpen}
         lead={lead}
       />
 

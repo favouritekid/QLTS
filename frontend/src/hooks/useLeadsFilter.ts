@@ -558,11 +558,14 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (officerFilters.length > 0) params.assigned_officer_id = officerFilters.join(",");
     if (unitId) params.unit_id = parseInt(unitId, 10);
 
-    if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
+    if (dateFrom) {
+      // Parse as local date (not UTC) to match VN timezone
+      const [y, m, d] = dateFrom.split("-").map(Number);
+      params.date_from = new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
+    }
     if (dateTo) {
-      const endDate = new Date(dateTo);
-      endDate.setHours(23, 59, 59, 999);
-      params.date_to = endDate.toISOString();
+      const [y, m, d] = dateTo.split("-").map(Number);
+      params.date_to = new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
     }
     if (dateFrom || dateTo) params.date_field = dateField;
 

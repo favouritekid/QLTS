@@ -77,6 +77,7 @@ export interface KpiPlanPreviewRequest {
   sla_target?: number;
   response_time_target?: number;
   seasonal_weights?: number[] | null;
+  start_month?: number | null;
 }
 
 export interface PreviewMonth {
@@ -156,6 +157,30 @@ export interface HolidayListResponse {
   total: number;
 }
 
+// =============================================================================
+// OFFICER QUOTA ASSIGNMENT (V2)
+// =============================================================================
+
+export interface AssignOfficerQuotaRequest {
+  unit_id: number;
+  officer_id: number;
+  fiscal_year: number;
+  quota: number;
+}
+
+export interface QuotaSummary {
+  unit_plan_target: number;
+  officer_quota: number;
+  other_officers_total: number;
+  remaining_unassigned: number;
+}
+
+export interface AssignOfficerQuotaResponse {
+  plan_id: number;
+  target_id: number;
+  quota_summary: QuotaSummary;
+}
+
 // Month labels in Vietnamese
 export const MONTH_LABELS: Record<number, string> = {
   1: "T1", 2: "T2", 3: "T3", 4: "T4", 5: "T5", 6: "T6",
@@ -166,6 +191,15 @@ export const MONTH_LABELS: Record<number, string> = {
 export const DEFAULT_SEASONAL_WEIGHTS: readonly number[] = [
   0.040, 0.033, 0.050, 0.060, 0.073, 0.127,
   0.153, 0.160, 0.133, 0.093, 0.043, 0.033,
+];
+
+// Even weights (equal distribution across 12 months)
+export const EVEN_WEIGHTS: readonly number[] = Array.from({ length: 12 }, () => 1 / 12);
+
+// High season weights (peak June-September)
+export const HIGH_SEASON_WEIGHTS: readonly number[] = [
+  0.040, 0.040, 0.050, 0.060, 0.080, 0.130,
+  0.160, 0.160, 0.140, 0.080, 0.030, 0.030,
 ];
 
 // Overridable derived fields

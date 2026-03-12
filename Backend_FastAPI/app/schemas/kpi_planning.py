@@ -56,6 +56,7 @@ class KpiPlanPreview(BaseModel):
     seasonal_weights: Optional[List[float]] = Field(
         None, min_length=12, max_length=12,
     )
+    start_month: Optional[int] = Field(None, ge=1, le=12, description="Start month for mid-year preview")
 
 
 # =============================================================================
@@ -289,3 +290,31 @@ class BatchOverrideResponse(BaseModel):
     """Response for batch override."""
     updated: int
     months: List[MonthOverrideResponse]
+
+
+# =============================================================================
+# OFFICER QUOTA ASSIGNMENT (V2)
+# =============================================================================
+
+class AssignOfficerQuotaRequest(BaseModel):
+    """Request to assign quota to an officer — auto-creates KpiPlan + KpiTarget."""
+    unit_id: int
+    officer_id: int
+    fiscal_year: int = Field(..., ge=2020, le=2100)
+    quota: int = Field(..., ge=1, le=10000)
+
+
+class QuotaSummary(BaseModel):
+    """Summary of quota allocation for a unit."""
+    unit_plan_target: int
+    officer_quota: int
+    other_officers_total: int
+    remaining_unassigned: int
+
+
+class AssignOfficerQuotaResponse(BaseModel):
+    """Response after assigning officer quota."""
+    model_config = ConfigDict(from_attributes=True)
+    plan_id: int
+    target_id: int
+    quota_summary: QuotaSummary

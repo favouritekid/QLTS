@@ -1,7 +1,7 @@
 # app/routers/pipeline.py
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,6 +38,36 @@ async def get_full_pipeline(
     stages = await pipeline_service.get_all_pipeline_stages(db)
     statuses = await pipeline_service.get_all_consultation_statuses(db)
     return {"stages": stages, "statuses": statuses}
+
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/board")
+async def get_pipeline_board(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    unit_id: Optional[int] = Query(None, description="Filter leads by organization unit"),
+    officer_id: Optional[int] = Query(None, description="Filter leads by assigned officer"),
+    date_from: Optional[str] = Query(None, description="Filter leads from this date (ISO format)"),
+    date_to: Optional[str] = Query(None, description="Filter leads until this date (ISO format)"),
+    include_leads: bool = Query(True, description="Include lead details in each stage"),
+    include_stats: bool = Query(True, description="Include conversion stats"),
+):
+    """
+    Pipeline board endpoint: stages + leads grouped by stage + analytics.
+
+    Supports filtering by unit, officer, and date range.
+    Returns full board data for Kanban rendering.
+    """
+    return await pipeline_service.get_pipeline_board(
+        db,
+        unit_id=unit_id,
+        officer_id=officer_id,
+        date_from=date_from,
+        date_to=date_to,
+        include_leads=include_leads,
+        include_stats=include_stats,
+    )
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour

@@ -653,7 +653,11 @@ class KpiPlan(Base):
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False,
+        server_default=text("NOW()"),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     # Relationships
     unit = relationship("OrganizationUnit", foreign_keys=[unit_id])
@@ -720,7 +724,11 @@ class KpiPlanMonth(Base):
     actual_sla_compliance_rate = Column(Numeric(6, 2), nullable=True)
 
     # Audit
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False,
+        server_default=text("NOW()"),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     # Relationships
     plan = relationship("KpiPlan", back_populates="months")

@@ -59,7 +59,19 @@ export function BulkDeleteDialog({
       { lead_ids: leadIds },
       {
         onSuccess: (data) => {
-          toast.success(`Đã xóa ${data.deleted_count || count} lead`);
+          if (data.skipped && data.skipped.length > 0) {
+            toast.warning(
+              `Đã xóa ${data.deleted_count} lead. ${data.skipped.length} lead không thể xóa.`,
+              {
+                description: data.skipped
+                  .slice(0, 5)
+                  .map((s) => `Lead #${s.lead_id}: ${s.reason}`)
+                  .join("; "),
+              },
+            );
+          } else {
+            toast.success(`Đã xóa ${data.deleted_count || count} lead`);
+          }
           onOpenChange(false);
           onSuccess?.(); // Notify parent to clear selection
         },

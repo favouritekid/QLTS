@@ -202,6 +202,7 @@ def sync_kpi_plan_monthly_task(self):
         from zoneinfo import ZoneInfo
         VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
         now_local = datetime.now(VN_TZ)
+        task_start_time = datetime.now(timezone.utc)
         fiscal_year = now_local.year
         current_month = now_local.month
 
@@ -212,6 +213,15 @@ def sync_kpi_plan_monthly_task(self):
         else:
             prev_month = current_month - 1
             prev_fiscal_year = fiscal_year
+
+        def _plan_modified_after(plan_obj, threshold):
+            """Check if plan or any months modified after threshold."""
+            if plan_obj.updated_at and plan_obj.updated_at > threshold:
+                return True
+            for m in (plan_obj.months or []):
+                if m.updated_at and m.updated_at > threshold:
+                    return True
+            return False
 
         result = {
             "plans": 0, "synced": 0, "errors": 0,
@@ -282,15 +292,45 @@ def sync_kpi_plan_monthly_task(self):
                 result["errors"] += 1
                 task_log.warning("Plan %d: actuals fill failed for month %d: %s", plan.id, prev_month, e)
 
-        # --- Step 2: Recalibrate factors + inline derived regen (ALL current-year plans) ---
-        failed_plan_ids: set = set()
-        for plan in plans_to_recalibrate:
+        # --- Step 1.5: Rebalance enrollment targets (OFFICER PLANS ONLY) ---
+        officer_plans_for_rebalance = [p for p in plans_for_actuals if p.officer_id is not None]
+        for plan in officer_plans_for_rebalance:
             try:
                 async with task_db_session() as session:
-                    # recalibrate_factors already regenerates derived KPIs
-                    # inline for future months. Do NOT call generate_monthly_kpis
-                    # here — it rewrites all 12 months and would overwrite
-                    # past months' enrollment_target set by B6 mid-year redistribute.
+                    fresh = (await session.execute(
+                        select(KpiPlan)
+                        .options(selectinload(KpiPlan.months))
+                        .where(KpiPlan.id == plan.id)
+                    )).scalar_one_or_none()
+                    if fresh is None or not fresh.is_active:
+                        continue
+                    if _plan_modified_after(fresh, task_start_time):
+                        task_log.info("Plan %d: skip rebalance — modified after task start", plan.id)
+                        continue
+                    await kpi_planning_service.rebalance_enrollment_targets(
+                        session, plan.id, prev_month,
+                    )
+                    await session.commit()
+                    task_log.info("Plan %d: rebalanced for month %d", plan.id, prev_month)
+            except Exception as e:
+                task_log.warning("Plan %d: rebalance failed: %s", plan.id, e)
+
+        # --- Step 2: Recalibrate factors (OFFICER PLANS ONLY — unit plan is baseline) ---
+        failed_plan_ids: set = set()
+        officer_plans_to_recalibrate = [p for p in plans_to_recalibrate if p.officer_id is not None]
+        for plan in officer_plans_to_recalibrate:
+            try:
+                async with task_db_session() as session:
+                    fresh = (await session.execute(
+                        select(KpiPlan)
+                        .options(selectinload(KpiPlan.months))
+                        .where(KpiPlan.id == plan.id)
+                    )).scalar_one_or_none()
+                    if fresh is None or not fresh.is_active:
+                        continue
+                    if _plan_modified_after(fresh, task_start_time):
+                        task_log.info("Plan %d: skip recalibrate — modified after task start", plan.id)
+                        continue
                     await kpi_planning_service.recalibrate_factors(
                         session, plan.id, current_month,
                     )
@@ -315,6 +355,9 @@ def sync_kpi_plan_monthly_task(self):
                     )
                     fresh_plan = plan_result.scalar_one_or_none()
                     if fresh_plan is None or not fresh_plan.is_active:
+                        continue
+                    if _plan_modified_after(fresh_plan, task_start_time):
+                        task_log.info("Plan %d: skip sync — modified after task start", plan.id)
                         continue
 
                     target_officer = fresh_plan.officer_id

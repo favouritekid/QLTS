@@ -609,6 +609,8 @@ async def get_leads(
     # === SCORE RANGE FILTER ===
     score_min: Optional[int] = None,
     score_max: Optional[int] = None,
+    # === VALIDITY STATUS FILTER ===
+    validity_status: Optional[str] = None,
     # === SELECTIVE EXPORT ===
     lead_ids: Optional[List[int]] = None,
 ) -> Tuple[int, List[models.Lead]]:
@@ -641,6 +643,8 @@ async def get_leads(
         # === SCORE RANGE FILTER ===
         score_min=score_min,
         score_max=score_max,
+        # === VALIDITY STATUS FILTER ===
+        validity_status=validity_status,
         # === SELECTIVE EXPORT ===
         lead_ids=lead_ids,
     )

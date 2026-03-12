@@ -125,7 +125,7 @@ export function ReassignLeadDialog({
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle className="flex items-center gap-2">
             <RefreshCcw className="h-5 w-5" />
-            Phân công lại Lead
+            {hasManagerAccess ? "Phân công lại tự động" : "Yêu cầu đổi người phụ trách"}
           </ResponsiveDialogTitle>
           <ResponsiveDialogDescription>
             {hasManagerAccess 

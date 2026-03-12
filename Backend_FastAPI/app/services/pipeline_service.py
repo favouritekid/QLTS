@@ -996,3 +996,127 @@ async def get_allowed_next_statuses(
     # Ở đây ta trả về list, Frontend sẽ dùng field stage_id hoặc stage object để group.
 
     return final_list
+
+
+# ===============================================================
+# PIPELINE BOARD (với filter + stats)
+# ===============================================================
+
+
+async def get_pipeline_board(
+    db: AsyncSession,
+    unit_id: Optional[int] = None,
+    officer_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    include_leads: bool = True,
+    include_stats: bool = True,
+) -> dict:
+    """
+    Lấy pipeline board data: stages + leads grouped by stage + stats.
+
+    Filters are applied to leads, stages are always returned in full.
+    """
+    from datetime import datetime as dt
+
+    # 1. Get all stages (cached)
+    stages_data = await get_all_pipeline_stages(db)
+    statuses_data = await get_all_consultation_statuses(db)
+
+    # 2. Query leads with filters
+    lead_query = select(models.Lead).where(models.Lead.is_deleted == False)  # noqa: E712
+
+    if unit_id:
+        lead_query = lead_query.where(models.Lead.unit_id == unit_id)
+    if officer_id:
+        lead_query = lead_query.where(models.Lead.assigned_officer_id == officer_id)
+    if date_from:
+        try:
+            df = dt.fromisoformat(date_from.replace("Z", "+00:00"))
+            lead_query = lead_query.where(models.Lead.created_at >= df)
+        except (ValueError, AttributeError):
+            pass
+    if date_to:
+        try:
+            dto = dt.fromisoformat(date_to.replace("Z", "+00:00"))
+            lead_query = lead_query.where(models.Lead.created_at <= dto)
+        except (ValueError, AttributeError):
+            pass
+
+    # 3. Group leads by stage
+    result = await db.execute(
+        lead_query.options(
+            selectinload(models.Lead.assigned_officer),
+            selectinload(models.Lead.pipeline_stage),
+            selectinload(models.Lead.consultation_status),
+        )
+    )
+    all_leads = result.scalars().all()
+
+    # Build stage_id -> leads mapping
+    leads_by_stage: dict[str, list] = {}
+    for lead in all_leads:
+        stage_id = lead.pipeline_stage_id or "unassigned"
+        leads_by_stage.setdefault(stage_id, []).append(lead)
+
+    # 4. Build response stages with stats
+    board_stages = []
+    total_leads = len(all_leads)
+
+    for stage in stages_data:
+        stage_leads = leads_by_stage.get(stage["id"], [])
+        board_stage = {
+            **stage,
+            "lead_count": len(stage_leads),
+            "statuses": [s for s in statuses_data if s.get("stage_id") == stage["id"]],
+            "conversion_rate": 0,
+            "avg_time_in_stage_days": 0,
+        }
+        if include_leads:
+            board_stage["leads"] = [
+                {
+                    "id": l.id,
+                    "full_name": l.full_name,
+                    "phone": l.phone,
+                    "email": l.email,
+                    "status": l.status,
+                    "lead_score": l.lead_score,
+                    "source": l.source,
+                    "pipeline_stage_id": l.pipeline_stage_id,
+                    "consultation_status_id": l.consultation_status_id,
+                    "assigned_officer_id": l.assigned_officer_id,
+                    "created_at": l.created_at.isoformat() if l.created_at else None,
+                    "updated_at": l.updated_at.isoformat() if l.updated_at else None,
+                    "is_hot_lead": l.is_hot_lead,
+                    "is_overdue": l.is_overdue,
+                    "days_in_stage": l.days_in_stage,
+                    "assigned_officer": {
+                        "id": l.assigned_officer.id,
+                        "full_name": l.assigned_officer.full_name,
+                    } if l.assigned_officer else None,
+                    "pipeline_stage": {
+                        "id": l.pipeline_stage.id,
+                        "name": l.pipeline_stage.name,
+                    } if l.pipeline_stage else None,
+                }
+                for l in stage_leads
+            ]
+        board_stages.append(board_stage)
+
+    # 5. Calculate overall stats
+    conversion_rate = 0.0
+    avg_time = 0.0
+    if include_stats and total_leads > 0:
+        final_stage_ids = [s["id"] for s in stages_data if s.get("is_final_stage")]
+        final_count = sum(1 for l in all_leads if l.pipeline_stage_id in final_stage_ids)
+        conversion_rate = (final_count / total_leads) * 100 if total_leads else 0
+
+        days_sum = sum(l.days_in_stage or 0 for l in all_leads)
+        avg_time = days_sum / total_leads if total_leads else 0
+
+    return {
+        "stages": board_stages,
+        "total_leads": total_leads,
+        "conversion_rate": round(conversion_rate, 1),
+        "avg_time_in_pipeline_days": round(avg_time, 1),
+    }

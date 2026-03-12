@@ -305,7 +305,7 @@ const admin = {
       if (cookieHeader) {
         options.headers = { Cookie: cookieHeader };
       }
-      return serverFetch<FullPipeline>('/api/pipeline/all', options);
+      return serverFetch<FullPipeline>('/api/pipeline/board', options);
     },
   },
 

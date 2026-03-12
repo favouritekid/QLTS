@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import structlog
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import KpiPlan, KpiPlanMonth
@@ -228,6 +229,31 @@ async def create_plan(
                 f"Officer {officer_id} thuộc unit {officer}, không thuộc unit {unit_id}"
             )
 
+    # --- Check duplicate active plan (scope-aware, via repository) ---
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+    repo = KpiPlanningRepository(db)
+
+    # --- V2: Quota guards when creating officer plan ---
+    if officer_id is not None:
+        # Guard 1: MUST have unit plan before creating officer plan
+        unit_plan = await repo.get_active_plan_by_scope(unit_id, fiscal_year, officer_id=None)
+        if unit_plan is None:
+            raise BusinessRuleViolation(
+                f"Đơn vị {unit_id} chưa có KPI Plan cho năm {fiscal_year}. "
+                "Vui lòng tạo plan đơn vị trước khi gán chỉ tiêu officer."
+            )
+
+        # Guard 2: Quota sum validation (race-safe with SELECT FOR UPDATE)
+        other_sum = await repo.sum_officer_quotas(
+            unit_id, fiscal_year, exclude_officer_id=officer_id,
+            lock_unit_plan=True,
+        )
+        if other_sum + annual_target > unit_plan.annual_enrollment_target:
+            raise BusinessRuleViolation(
+                f"Tổng chỉ tiêu officer ({other_sum} + {annual_target} = {other_sum + annual_target}) "
+                f"vượt quá chỉ tiêu đơn vị ({unit_plan.annual_enrollment_target})"
+            )
+
     # --- P2: Hard-block if holiday calendar is incomplete ---
     from app.services.calendar_service import get_holiday_status
     holiday_status = await get_holiday_status(db, fiscal_year)
@@ -236,10 +262,6 @@ async def create_plan(
             holiday_status.get("warning")
             or f"Lịch lễ năm {fiscal_year} chưa đầy đủ. Vui lòng cấu hình ngày lễ trước khi tạo kế hoạch."
         )
-
-    # --- Check duplicate active plan (scope-aware, via repository) ---
-    from app.repositories.kpi_planning_repository import KpiPlanningRepository
-    repo = KpiPlanningRepository(db)
 
     if await repo.check_duplicate_active_plan(unit_id, fiscal_year, officer_id):
         scope_label = (
@@ -262,8 +284,14 @@ async def create_plan(
         is_active=True,
         created_by=created_by,
     )
-    db.add(plan)
-    await db.flush()  # Get plan.id for FK
+    try:
+        db.add(plan)
+        await db.flush()  # Get plan.id for FK
+    except IntegrityError as exc:
+        raise DuplicateResourceError(
+            f"Active plan for scope (unit_id={unit_id}, officer_id={officer_id}, "
+            f"fiscal_year={fiscal_year}) was just created by another request"
+        ) from exc
 
     # --- Generate 12 months ---
     await _generate_months_for_plan(db, plan, weights_list)
@@ -275,6 +303,160 @@ async def create_plan(
     )
 
     return plan, None
+
+
+# =============================================================================
+# ASSIGN OFFICER QUOTA — auto-create officer plan + target (V2)
+# =============================================================================
+
+async def assign_officer_quota(
+    db: AsyncSession,
+    unit_id: int,
+    officer_id: int,
+    fiscal_year: int,
+    quota: int,
+    created_by: Optional[int] = None,
+) -> Tuple[dict, Callback]:
+    """
+    Assign quota to an officer: auto-create KpiPlan (inheriting from unit plan)
+    + upsert KpiTarget.
+
+    Mid-year handling: if fiscal_year == current year and current_month > 1,
+    past months get target=0 with NULL derived KPIs, future months get
+    redistributed quota with re-normalized weights.
+
+    Returns: (response_dict, callback)
+    """
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+
+    VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+    now_local = dt.now(VN_TZ)
+
+    if quota < 1:
+        raise BusinessRuleViolation("quota phải >= 1")
+
+    repo = KpiPlanningRepository(db)
+
+    # 1. Fetch unit plan (required)
+    unit_plan = await repo.get_active_plan_by_scope(unit_id, fiscal_year, officer_id=None)
+    if unit_plan is None:
+        raise BusinessRuleViolation(
+            f"Đơn vị {unit_id} chưa có KPI Plan cho năm {fiscal_year}. "
+            "Vui lòng tạo plan đơn vị trước khi gán chỉ tiêu officer."
+        )
+
+    # 2. Resolve weights from unit plan
+    if unit_plan.seasonal_weights and len(unit_plan.seasonal_weights) == 12:
+        weights = unit_plan.seasonal_weights
+    else:
+        weights = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+
+    sla = float(unit_plan.sla_target)
+    response_time = float(unit_plan.response_time_target)
+
+    # 3. Create plan via create_plan() — includes quota guard + duplicate check
+    plan, _ = await create_plan(
+        db,
+        unit_id=unit_id,
+        fiscal_year=fiscal_year,
+        annual_target=quota,
+        sla_target=sla,
+        response_time_target=response_time,
+        seasonal_weights=weights,
+        officer_id=officer_id,
+        created_by=created_by,
+    )
+
+    # 4. Mid-year handling: zero out past months
+    start_month = 1
+    if fiscal_year == now_local.year and now_local.month > 1:
+        start_month = now_local.month
+
+    if start_month > 1:
+        # Re-normalize weights for future months
+        future_weights = weights[start_month - 1:]
+        total_fw = sum(future_weights)
+        if total_fw > 0:
+            normalized_fw = [w / total_fw for w in future_weights]
+            future_targets = distribute_by_largest_remainder(quota, normalized_fw)
+        else:
+            future_targets = [0] * len(future_weights)
+
+        months_by_num = {m.month: m for m in plan.months}
+
+        # Zero out past months
+        for m_num in range(1, start_month):
+            pm = months_by_num.get(m_num)
+            if pm is not None:
+                pm.enrollment_target = 0
+                pm.consultations_daily = None
+                pm.conversion_rate = None
+                pm.win_rate = None
+                pm.consultation_effectiveness = None
+                pm.lead_forecast = None
+                pm.close_forecast = None
+
+        # Redistribute future months
+        for idx, m_num in enumerate(range(start_month, 13)):
+            pm = months_by_num.get(m_num)
+            if pm is not None and idx < len(future_targets):
+                pm.enrollment_target = future_targets[idx]
+                # Regenerate derived KPIs for new target
+                derived = compute_derived_kpis(
+                    future_targets[idx], pm.working_days,
+                    float(pm.k_factor), pm.lead_forecast, pm.close_forecast,
+                )
+                for field, value in derived.items():
+                    setattr(pm, field, value)
+
+        await db.flush()
+
+    # 5. Upsert KpiTarget
+    from app.models.config import KpiTarget
+    existing_target = await _find_annual_kpi_target(
+        db, officer_id=officer_id, unit_id=unit_id, fiscal_year=fiscal_year,
+    )
+    if existing_target is not None:
+        existing_target.annual_target = quota
+        target_id = existing_target.id
+    else:
+        new_target = KpiTarget(
+            kpi_code="enrollments_annual",
+            annual_target=quota,
+            fiscal_year=fiscal_year,
+            officer_id=officer_id,
+            unit_id=unit_id,
+            is_active=True,
+            achieved_ytd=0,
+        )
+        db.add(new_target)
+        await db.flush()
+        target_id = new_target.id
+
+    # 6. Build response
+    other_sum = await repo.sum_officer_quotas(
+        unit_id, fiscal_year, exclude_officer_id=officer_id,
+    )
+    response = {
+        "plan_id": plan.id,
+        "target_id": target_id,
+        "quota_summary": {
+            "unit_plan_target": unit_plan.annual_enrollment_target,
+            "officer_quota": quota,
+            "other_officers_total": other_sum,
+            "remaining_unassigned": unit_plan.annual_enrollment_target - other_sum - quota,
+        },
+    }
+
+    log.info(
+        "Officer quota assigned",
+        plan_id=plan.id, officer_id=officer_id, quota=quota,
+        unit_target=unit_plan.annual_enrollment_target,
+    )
+
+    return response, None
 
 
 # =============================================================================
@@ -409,6 +591,7 @@ async def preview_plan(
     sla_target: float = 85.0,
     response_time_target: float = 2.0,
     seasonal_weights: Optional[List[float]] = None,
+    start_month: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Dry-run: compute 12 monthly KPIs WITHOUT persisting.
@@ -430,6 +613,25 @@ async def preview_plan(
 
     monthly_targets = distribute_by_largest_remainder(annual_target, weights_list)
 
+    # V2: Mid-year preview — past months = 0, redistribute to future months
+    effective_start = 1
+    if start_month is not None and start_month > 1:
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+        current_year = dt.now(ZoneInfo("Asia/Ho_Chi_Minh")).year
+        if fiscal_year == current_year:
+            effective_start = start_month
+
+    if effective_start > 1:
+        future_weights = weights_list[effective_start - 1:]
+        total_fw = sum(future_weights)
+        if total_fw > 0:
+            normalized_fw = [w / total_fw for w in future_weights]
+            future_targets = distribute_by_largest_remainder(annual_target, normalized_fw)
+        else:
+            future_targets = [0] * len(future_weights)
+        monthly_targets = [0] * (effective_start - 1) + future_targets
+
     months_preview: List[Dict[str, Any]] = []
     for month_idx in range(12):
         month_num = month_idx + 1
@@ -437,7 +639,16 @@ async def preview_plan(
         wd_t = await count_working_days(db, fiscal_year, month_num)
         k_t = DEFAULT_K_FACTOR
 
-        derived = compute_derived_kpis(m_t, wd_t, k_t, None, None)
+        # V2: Past months in mid-year → derived KPIs = None
+        if effective_start > 1 and month_num < effective_start:
+            derived = {
+                "consultations_daily": None,
+                "conversion_rate": None,
+                "win_rate": None,
+                "consultation_effectiveness": None,
+            }
+        else:
+            derived = compute_derived_kpis(m_t, wd_t, k_t, None, None)
         # Convert Decimal to float for JSON serialization
         for key, val in derived.items():
             if isinstance(val, Decimal):
@@ -510,6 +721,25 @@ async def update_plan(
             plan.annual_enrollment_target = annual_target
             changed = True
             target_changed = True
+
+    # V2: Quota guard for officer plan target changes
+    if target_changed and plan.officer_id is not None:
+        from app.repositories.kpi_planning_repository import KpiPlanningRepository
+        _repo = KpiPlanningRepository(db)
+        _unit_plan = await _repo.get_active_plan_by_scope(
+            plan.unit_id, plan.fiscal_year, officer_id=None,
+        )
+        if _unit_plan:
+            other_sum = await _repo.sum_officer_quotas(
+                plan.unit_id, plan.fiscal_year,
+                exclude_officer_id=plan.officer_id,
+                lock_unit_plan=True,
+            )
+            if other_sum + annual_target > _unit_plan.annual_enrollment_target:
+                raise BusinessRuleViolation(
+                    f"Tổng chỉ tiêu officer ({other_sum} + {annual_target} = {other_sum + annual_target}) "
+                    f"vượt quá chỉ tiêu đơn vị ({_unit_plan.annual_enrollment_target})"
+                )
 
     if sla_target is not None:
         if not (0 <= sla_target <= 100):
@@ -932,24 +1162,34 @@ async def sync_plan_to_kpi_config(
             stats["configs_upserted"] += 1
 
         # --- Upsert enrollments_annual → KpiTarget ---
-        annual_target_value = effective_plan.annual_enrollment_target
-        existing_target = await _find_annual_kpi_target(
-            db, officer_id=officer_id, unit_id=plan.unit_id,
-            fiscal_year=plan.fiscal_year,
-        )
-        if existing_target is not None:
-            existing_target.annual_target = annual_target_value
+        # V1 fix: only create/update KpiTarget when officer has own plan
+        if officer_plan is not None:
+            # Officer has own plan → use officer plan target (source of truth)
+            annual_target_value = officer_plan.annual_enrollment_target
         else:
-            db.add(KpiTarget(
-                kpi_code="enrollments_annual",
-                annual_target=annual_target_value,
+            # Officer has NO plan → skip KpiTarget upsert entirely
+            # (sync only pushes KpiConfig monthly, not KpiTarget for plan-less officers)
+            annual_target_value = None
+
+        if annual_target_value is not None:
+            existing_target = await _find_annual_kpi_target(
+                db, officer_id=officer_id, unit_id=plan.unit_id,
                 fiscal_year=plan.fiscal_year,
-                officer_id=officer_id,
-                unit_id=plan.unit_id,
-                is_active=True,
-                achieved_ytd=0,
-            ))
-        stats["configs_upserted"] += 1
+            )
+            if existing_target is not None:
+                existing_target.annual_target = annual_target_value
+            else:
+                db.add(KpiTarget(
+                    kpi_code="enrollments_annual",
+                    annual_target=annual_target_value,
+                    fiscal_year=plan.fiscal_year,
+                    officer_id=officer_id,
+                    unit_id=plan.unit_id,
+                    is_active=True,
+                    achieved_ytd=0,
+                ))
+            stats["configs_upserted"] += 1
+        # else: skip — officer has no plan, target managed by admin or assign_officer_quota
 
         stats["officers_synced"] += 1
 
@@ -1295,6 +1535,107 @@ async def recalibrate_factors(
         is_first=is_first_calibration,
         damping=f"{damping_lo:.0%}/{damping_hi:.0%}",
         months_calibrated=calibrated_count,
+    )
+    return plan, None
+
+
+# =============================================================================
+# REBALANCE ENROLLMENT TARGETS — monthly shortfall redistribution (V3)
+# =============================================================================
+
+async def rebalance_enrollment_targets(
+    db: AsyncSession,
+    plan_id: int,
+    up_to_month: int,
+) -> Tuple[KpiPlan, Callback]:
+    """
+    Rebalance enrollment targets for future months based on actual performance.
+
+    Algorithm:
+      1. achieved_ytd = sum(actual_enrollments for months <= up_to_month)
+      2. remaining = annual_target - achieved_ytd
+      3. If remaining <= 0: set all future months target = 0
+      4. If remaining > 0: redistribute via Largest Remainder with re-normalized weights
+      5. Regenerate derived KPIs for affected months (respects overridden_fields)
+
+    Only applies to officer plans (unit plans are never rebalanced).
+    Does NOT commit.
+    """
+    if not (1 <= up_to_month <= 12):
+        raise BusinessRuleViolation(f"up_to_month phải trong 1..12, nhận {up_to_month}")
+
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+
+    repo = KpiPlanningRepository(db)
+    plan = await repo.get_plan_by_id(plan_id, with_months=True)
+    if plan is None:
+        raise ResourceNotFoundError("KpiPlan", plan_id)
+
+    months_by_num = {m.month: m for m in plan.months}
+
+    # 1. Sum actuals for completed months
+    achieved_ytd = 0
+    for m_num in range(1, up_to_month + 1):
+        pm = months_by_num.get(m_num)
+        if pm is not None and pm.actual_enrollments is not None:
+            achieved_ytd += pm.actual_enrollments
+
+    # 2. Calculate remaining
+    remaining = plan.annual_enrollment_target - achieved_ytd
+
+    # 3. Get future months and their weights
+    future_months = [m_num for m_num in range(up_to_month + 1, 13)]
+    if not future_months:
+        return plan, None  # No future months to rebalance
+
+    weights_list: List[float]
+    if plan.seasonal_weights:
+        weights_list = plan.seasonal_weights
+    else:
+        weights_list = [DEFAULT_ENROLLMENT_WEIGHTS[m] for m in range(1, 13)]
+
+    future_weights = [weights_list[m - 1] for m in future_months]
+    total_fw = sum(future_weights)
+
+    if remaining <= 0:
+        # Exceeded target — set all future months to 0
+        for m_num in future_months:
+            pm = months_by_num.get(m_num)
+            if pm is not None:
+                pm.enrollment_target = 0
+                overridden = pm.overridden_fields or {}
+                derived = compute_derived_kpis(
+                    0, pm.working_days, float(pm.k_factor),
+                    pm.lead_forecast, pm.close_forecast,
+                )
+                for field, value in derived.items():
+                    if field not in overridden:
+                        setattr(pm, field, value)
+    elif total_fw > 0:
+        # Redistribute remaining via Largest Remainder
+        normalized = [w / total_fw for w in future_weights]
+        future_targets = distribute_by_largest_remainder(max(0, remaining), normalized)
+
+        for idx, m_num in enumerate(future_months):
+            pm = months_by_num.get(m_num)
+            if pm is not None:
+                pm.enrollment_target = future_targets[idx]
+                overridden = pm.overridden_fields or {}
+                derived = compute_derived_kpis(
+                    future_targets[idx], pm.working_days, float(pm.k_factor),
+                    pm.lead_forecast, pm.close_forecast,
+                )
+                for field, value in derived.items():
+                    if field not in overridden:
+                        setattr(pm, field, value)
+
+    await db.flush()
+
+    log.info(
+        "rebalance_enrollment_targets completed",
+        plan_id=plan_id, up_to_month=up_to_month,
+        achieved_ytd=achieved_ytd, remaining=remaining,
+        future_months=len(future_months),
     )
     return plan, None
 

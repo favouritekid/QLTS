@@ -632,9 +632,9 @@ export interface PaginationParams {
  */
 export interface LeadListParams extends PaginationParams {
   status?: string; // Comma-separated
-  assigned_officer_id?: number;
+  assigned_officer_id?: number | string; // Single ID or comma-separated "1,2,3"
   unit_id?: number;
-  offering_id?: number;
+  offering_id?: number | string; // Single ID or comma-separated "1,2,3"
   source?: string; // Comma-separated
   search?: string;
   sort_by?: string;
@@ -646,6 +646,8 @@ export interface LeadListParams extends PaginationParams {
   // === SCORE RANGE FILTER ===
   score_min?: number;
   score_max?: number;
+  // === VALIDITY STATUS FILTER ===
+  validity_status?: string; // Comma-separated
   // === SELECTIVE EXPORT ===
   lead_ids?: string; // Comma-separated lead IDs
 }

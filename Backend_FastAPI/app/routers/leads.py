@@ -250,6 +250,10 @@ async def get_all_leads(
     # === SCORE RANGE FILTER ===
     score_min: Optional[int] = Query(None, ge=0, le=100, description="Minimum lead score"),
     score_max: Optional[int] = Query(None, ge=0, le=100, description="Maximum lead score"),
+    # === VALIDITY STATUS FILTER ===
+    validity_status: Optional[str] = Query(
+        None, description="Filter by validity status (comma-separated, e.g. 'valid,invalid,pending')"
+    ),
     # === KẾT THÚC THÊM THAM SỐ ===
 ):
     """
@@ -288,6 +292,8 @@ async def get_all_leads(
         # === SCORE RANGE FILTER ===
         score_min=score_min,
         score_max=score_max,
+        # === VALIDITY STATUS FILTER ===
+        validity_status=validity_status,
         # === KẾT THÚC TRUYỀN THAM SỐ ===
     )
     return {"total_count": total, "leads": leads}
@@ -339,6 +345,10 @@ async def export_leads(
     # === SCORE RANGE FILTER ===
     score_min: Optional[int] = Query(None, ge=0, le=100, description="Minimum lead score"),
     score_max: Optional[int] = Query(None, ge=0, le=100, description="Maximum lead score"),
+    # === VALIDITY STATUS FILTER ===
+    validity_status: Optional[str] = Query(
+        None, description="Filter by validity status (comma-separated)"
+    ),
     # === SELECTIVE EXPORT ===
     lead_ids: Optional[str] = Query(None, description="Comma-separated lead IDs to export"),
 ):
@@ -385,6 +395,7 @@ async def export_leads(
         date_field=date_field,
         score_min=score_min,
         score_max=score_max,
+        validity_status=validity_status,
         lead_ids=parsed_lead_ids,
     )
 

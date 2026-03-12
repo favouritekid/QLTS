@@ -139,8 +139,18 @@ async def get_coverage_report(
         for officer in unit_officers:
             custom_target = officer_targets.get(officer.id)
 
-            if custom_target:
-                # Officer has custom KpiTarget
+            # P2 fix: Use officer-specific plan weights if available
+            officer_plan = officer_plans.get(officer.id)
+
+            # V2: Priority: officer_plan > custom_target > inherited
+            if officer_plan:
+                # Officer has own plan → plan annual is source of truth
+                source = "custom"
+                target_id = custom_target.id if custom_target else None
+                annual = officer_plan.annual_enrollment_target
+                ytd = custom_target.achieved_ytd if custom_target else ytd_grouped.get(officer.id, 0)
+            elif custom_target:
+                # Officer has KpiTarget but no plan (legacy data)
                 source = "custom"
                 target_id = custom_target.id
                 annual = custom_target.annual_target
@@ -170,8 +180,6 @@ async def get_coverage_report(
                 annual = 0
                 ytd = ytd_grouped.get(officer.id, 0)
 
-            # P2 fix: Use officer-specific plan weights if available
-            officer_plan = officer_plans.get(officer.id)
             if officer_plan and officer_plan.seasonal_weights and len(officer_plan.seasonal_weights) == 12:
                 seasonal_weights = officer_plan.seasonal_weights
             elif officer_plan:
@@ -191,6 +199,7 @@ async def get_coverage_report(
                 "officer_name": officer.full_name or officer.username,
                 "target_source": source,
                 "target_id": target_id,
+                "plan_id": officer_plan.id if officer_plan else None,
                 "annual_target": annual,
                 "achieved_ytd": ytd,
                 "progress_pct": progress_pct,

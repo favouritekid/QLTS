@@ -61,7 +61,7 @@ export async function getStages(): Promise<PipelineStage[]> {
 export async function getFullPipeline(
   params?: PipelineQueryParams
 ): Promise<FullPipeline> {
-  const response = await api.get<FullPipeline>('/api/pipeline/all', { params })
+  const response = await api.get<FullPipeline>('/api/pipeline/board', { params })
   return response.data
 }
 

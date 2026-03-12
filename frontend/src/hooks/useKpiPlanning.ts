@@ -25,6 +25,8 @@ import type {
   MonthOverrideRequest,
   MonthResetRequest,
   WorkingDaysOverrideRequest,
+  AssignOfficerQuotaRequest,
+  AssignOfficerQuotaResponse,
 } from "@/types/kpi-planning.types";
 
 interface ApiError {
@@ -392,6 +394,35 @@ export function useSeedHolidays() {
     },
     onError: (err) => {
       toast.error(err.response?.data?.detail || "Lỗi seed holidays");
+    },
+  });
+}
+
+// =============================================================================
+// OFFICER QUOTA ASSIGNMENT (V2)
+// =============================================================================
+
+export function useAssignOfficerQuota() {
+  const qc = useQueryClient();
+  return useMutation<
+    AssignOfficerQuotaResponse,
+    AxiosError<ApiError>,
+    AssignOfficerQuotaRequest
+  >({
+    mutationFn: async (data) => {
+      const res = await api.post<AssignOfficerQuotaResponse>(
+        `${BASE}/plans/assign-officer-quota`,
+        data,
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      toast.success("Đã gán chỉ tiêu cho cán bộ");
+      qc.invalidateQueries({ queryKey: kpiPlanningKeys.plans() });
+      qc.invalidateQueries({ queryKey: ["kpi-setup"] });
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || "Lỗi gán chỉ tiêu");
     },
   });
 }
