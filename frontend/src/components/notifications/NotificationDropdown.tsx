@@ -28,7 +28,7 @@ import type { Notification } from "@/types/api.types";
 export function NotificationDropdown() {
   const [isOpen, setIsOpen] = useState(false);
   // Only fetch unread notifications for the dropdown
-  const { data, isLoading } = useNotifications({ page_size: 10, unread_only: true });
+  const { data, isLoading, isError } = useNotifications({ page_size: 10, unread_only: true });
   const markAsRead = useMarkAsRead();
   const markAllAsRead = useMarkAllAsRead();
 
@@ -123,6 +123,13 @@ export function NotificationDropdown() {
                 </div>
               ))}
             </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Bell className="text-destructive mb-2 h-10 w-10" />
+              <p className="text-destructive text-sm">
+                Không thể tải thông báo
+              </p>
+            </div>
           ) : notifications.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Bell className="text-muted-foreground mb-2 h-10 w-10" />
@@ -166,7 +173,7 @@ export function NotificationDropdown() {
                           <div className="bg-primary mt-1 h-2 w-2 shrink-0 rounded-full" />
                         )}
                       </div>
-                      <p className="text-muted-foreground text-xs leading-snug">
+                      <p className="text-muted-foreground text-xs leading-snug line-clamp-2">
                         {notification.message}
                       </p>
                       <div className="flex items-center gap-2 mt-1">

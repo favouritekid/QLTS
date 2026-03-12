@@ -124,7 +124,7 @@ export function toPaymentViewModel(payment: Payment): PaymentViewModel {
     // Maker-Checker info (from API denormalized names)
     created_by_display: payment.created_by_name ?? `User #${payment.created_by_id}`,
     verified_by_display: payment.verified_by_name ?? (payment.verified_by_id ? `User #${payment.verified_by_id}` : null),
-    rejected_by_display: payment.rejection_reason ?? null,
+    rejected_by_display: null, // Backend does not provide rejected_by_name yet
   }
 }
 

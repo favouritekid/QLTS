@@ -69,7 +69,7 @@ export interface FeeViewModel extends Omit<FeeDetail, "status" | "fee_type"> {
 export function toFeeViewModel(fee: FeeDetail): FeeViewModel {
   const finalAmount = parseAmount(fee.final_amount)
   const paidAmount = parseAmount(fee.paid_amount)
-  const paymentProgress = finalAmount > 0 ? Math.round((paidAmount / finalAmount) * 100) : 0
+  const paymentProgress = finalAmount > 0 ? Math.min(100, Math.round((paidAmount / finalAmount) * 100)) : 0
 
   return {
     ...fee,
@@ -187,7 +187,7 @@ export function toFeeListViewModel(fees: Fee[]): FeeListItemViewModel[] {
   return fees.map((fee) => {
     const finalAmount = parseAmount(fee.final_amount)
     const paidAmount = parseAmount(fee.paid_amount)
-    const paymentProgress = finalAmount > 0 ? Math.round((paidAmount / finalAmount) * 100) : 0
+    const paymentProgress = finalAmount > 0 ? Math.min(100, Math.round((paidAmount / finalAmount) * 100)) : 0
 
     // Format due date
     let dueDateFormatted: string | null = null

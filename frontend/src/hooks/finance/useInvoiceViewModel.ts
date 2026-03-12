@@ -103,7 +103,7 @@ function calculateDaysUntilDue(dueDate: string): number | null {
 export function toInvoiceViewModel(invoice: InvoiceDetail): InvoiceViewModel {
   const amount = parseAmount(invoice.amount)
   const paidAmount = parseAmount(invoice.paid_amount)
-  const paymentProgress = amount > 0 ? Math.round((paidAmount / amount) * 100) : 0
+  const paymentProgress = amount > 0 ? Math.min(100, Math.round((paidAmount / amount) * 100)) : 0
   const daysUntilDue = calculateDaysUntilDue(invoice.due_date)
 
   return {
@@ -223,7 +223,7 @@ export function toInvoiceListViewModel(invoices: Invoice[]): InvoiceListItemView
   return invoices.map((invoice) => {
     const amount = parseAmount(invoice.amount)
     const paidAmount = parseAmount(invoice.paid_amount)
-    const paymentProgress = amount > 0 ? Math.round((paidAmount / amount) * 100) : 0
+    const paymentProgress = amount > 0 ? Math.min(100, Math.round((paidAmount / amount) * 100)) : 0
     const daysUntilDue = calculateDaysUntilDue(invoice.due_date)
 
     return {

@@ -346,19 +346,35 @@ export function useAddNotification() {
   const queryClient = useQueryClient();
 
   return (notification: Notification) => {
-    // Update all notification queries by adding the new notification
-    queryClient.setQueriesData<NotificationsPage>(
-      { queryKey: notificationKeys.lists() },
-      (oldData) => {
-        if (!oldData) return oldData;
+    // Only prepend to page-1 caches; invalidate the rest so they refetch on demand
+    const allCaches = queryClient.getQueriesData<NotificationsPage>({
+      queryKey: notificationKeys.lists(),
+    });
 
-        return {
-          ...oldData,
-          total_count: oldData.total_count + 1,
-          unread_count: oldData.unread_count + 1,
-          notifications: [notification, ...oldData.notifications],
-        };
+    for (const [queryKey, oldData] of allCaches) {
+      if (!oldData) continue;
+
+      // Extract params from key: ["notifications", "list", { page, page_size, ... }]
+      const params = queryKey[2] as Record<string, unknown> | undefined;
+      const page = (params?.page as number) ?? 1;
+
+      if (page !== 1) {
+        // Non-first pages: just invalidate so they refetch in order
+        queryClient.invalidateQueries({ queryKey, exact: true, refetchType: 'active' });
+        continue;
       }
-    );
+
+      // Dedup: skip if notification already exists in cache
+      if (oldData.notifications.some((n) => n.id === notification.id)) continue;
+
+      const pageSize = (params?.page_size as number) ?? 10;
+
+      queryClient.setQueryData<NotificationsPage>(queryKey, {
+        ...oldData,
+        total_count: oldData.total_count + 1,
+        unread_count: oldData.unread_count + 1,
+        notifications: [notification, ...oldData.notifications].slice(0, pageSize),
+      });
+    }
   };
 }
