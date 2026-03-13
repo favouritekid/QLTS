@@ -1,7 +1,8 @@
 // src/components/officer/dashboard/ActionInsightsPanel.tsx
 /**
- * Action Insights Panel - Tabbed wrapper combining Priority Actions + Recommendations
- * Reduces right column component count and groups related "action" panels together.
+ * Action Insights Panel - Unified view combining Priority Actions + Recommendations
+ * Top recommendation is surfaced above the priority list; remaining recommendations
+ * are expandable via a toggle link below the priority actions.
  */
 
 "use client";
@@ -12,8 +13,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Target,
   Zap,
@@ -107,6 +106,7 @@ export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsight
 
   // --- Priority Actions state ---
   const [filter, setFilter] = useState<FilterType>("all");
+  const [showAllRecs, setShowAllRecs] = useState(false);
 
   const urgentCount = actions.filter((a) => a.priority === "urgent").length;
 
@@ -140,7 +140,7 @@ export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsight
 
   // --- Recommendations data (always called — Rules of Hooks) ---
   const { startDate, endDate } = useDashboardDate();
-  const { data: recsData, isLoading: recsLoading, error: recsError } = useOfficerRecommendations(5, {
+  const { data: recsData, isLoading: recsLoading } = useOfficerRecommendations(5, {
     startDate,
     endDate,
     enabled: isPersonal,
@@ -154,7 +154,7 @@ export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsight
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <Target className="h-4 w-4 text-primary" aria-hidden="true" />
-            Hành động
+            Hành động & Khuyến nghị
           </CardTitle>
           {urgentCount > 0 && (
             <Badge variant="destructive" className="text-xs h-5 px-1.5">
@@ -165,127 +165,93 @@ export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsight
         </div>
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="priority">
-          <TabsList className="w-full">
-            <TabsTrigger value="priority" className="flex-1 gap-1">
-              Ưu tiên
-              <Badge variant="secondary" className="text-[10px] h-4 px-1 ml-0.5">
-                {actions.length}
-              </Badge>
-            </TabsTrigger>
-            {isPersonal && (
-              <TabsTrigger value="recommendations" className="flex-1 gap-1">
-                Khuyến nghị
-                {recommendations.length > 0 && (
-                  <Badge variant="secondary" className="text-[10px] h-4 px-1 ml-0.5">
-                    {recommendations.length}
-                  </Badge>
+        {/* Top recommendation (highest priority) */}
+        {isPersonal && recommendations.length > 0 && !recsLoading && (
+          <div className="mb-3">
+            <RecommendationCard recommendation={recommendations[0]} />
+          </div>
+        )}
+
+        {/* Sub-filter */}
+        <div className="flex flex-wrap gap-1 mb-3">
+          {(Object.keys(filterConfig) as FilterType[]).map((key) => {
+            const config = filterConfig[key];
+            const Icon = config.icon;
+            const count = countByType[key];
+
+            if (key !== "all" && count === 0) return null;
+
+            return (
+              <Button
+                key={key}
+                variant="ghost"
+                size="sm"
+                onClick={() => setFilter(key)}
+                className={cn(
+                  "h-6 px-2 text-xs font-medium gap-1",
+                  filter === key
+                    ? "bg-muted shadow-sm"
+                    : "hover:bg-muted/50"
                 )}
-              </TabsTrigger>
-            )}
-          </TabsList>
+              >
+                {Icon && <Icon className={cn("h-3 w-3", config.color)} aria-hidden="true" />}
+                {config.label}
+                {key !== "all" && count > 0 && (
+                  <span className="text-muted-foreground">({count})</span>
+                )}
+              </Button>
+            );
+          })}
+        </div>
 
-          {/* Tab: Ưu tiên */}
-          <TabsContent value="priority">
-            {/* Sub-filter */}
-            <div className="flex flex-wrap gap-1 mb-3">
-              {(Object.keys(filterConfig) as FilterType[]).map((key) => {
-                const config = filterConfig[key];
-                const Icon = config.icon;
-                const count = countByType[key];
-
-                if (key !== "all" && count === 0) return null;
-
-                return (
-                  <Button
-                    key={key}
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setFilter(key)}
-                    className={cn(
-                      "h-6 px-2 text-xs font-medium gap-1",
-                      filter === key
-                        ? "bg-muted shadow-sm"
-                        : "hover:bg-muted/50"
-                    )}
-                  >
-                    {Icon && <Icon className={cn("h-3 w-3", config.color)} aria-hidden="true" />}
-                    {config.label}
-                    {key !== "all" && count > 0 && (
-                      <span className="text-muted-foreground">({count})</span>
-                    )}
-                  </Button>
-                );
-              })}
+        {/* Priority actions list */}
+        {filteredActions.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mb-3">
+              <Target className="h-6 w-6 text-muted-foreground" />
             </div>
-
-            {/* Priority actions list */}
-            {filteredActions.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mb-3">
-                  <Target className="h-6 w-6 text-muted-foreground" />
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  {filter === "all" ? "Không có hành động ưu tiên" : `Không có mục ${filterConfig[filter].label.toLowerCase()}`}
-                </p>
-                {filter === "all" && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Làm việc tốt lắm! 🎉
-                  </p>
-                )}
-              </div>
-            ) : (
-              <ScrollArea className="h-[320px] virtual-list">
-                <div className="space-y-2 pr-3">
-                  {filteredActions.map((action) => (
-                    <PriorityActionCard
-                      key={action.id}
-                      action={action}
-                      onCall={handleCall}
-                      onZalo={handleZalo}
-                    />
-                  ))}
-                </div>
-              </ScrollArea>
+            <p className="text-sm text-muted-foreground">
+              {filter === "all" ? "Không có hành động ưu tiên" : `Không có mục ${filterConfig[filter].label.toLowerCase()}`}
+            </p>
+            {filter === "all" && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Làm việc tốt lắm! 🎉
+              </p>
             )}
-          </TabsContent>
+          </div>
+        ) : (
+          <ScrollArea className="h-[320px] virtual-list">
+            <div className="space-y-2 pr-3">
+              {filteredActions.map((action) => (
+                <PriorityActionCard
+                  key={action.id}
+                  action={action}
+                  onCall={handleCall}
+                  onZalo={handleZalo}
+                />
+              ))}
+            </div>
+          </ScrollArea>
+        )}
 
-          {/* Tab: Khuyến nghị (personal scope only) */}
-          {isPersonal && (
-            <TabsContent value="recommendations">
-              {recsLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <Skeleton key={i} className="h-20 w-full" />
-                  ))}
-                </div>
-              ) : recsError ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <AlertTriangle aria-hidden="true" className="h-8 w-8 text-muted-foreground mb-2" />
-                  <p className="text-sm text-muted-foreground">Không thể tải khuyến nghị</p>
-                </div>
-              ) : recommendations.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <div className="h-12 w-12 rounded-full bg-success-100 dark:bg-success-900/30 flex items-center justify-center mb-3">
-                    <PartyPopper className="h-6 w-6 text-success-600 dark:text-success-400" />
-                  </div>
-                  <p className="text-sm font-medium">Tuyệt vời!</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Không có khuyến nghị nào. Bạn đang làm rất tốt! 🎉
-                  </p>
-                </div>
-              ) : (
-                <ScrollArea className="h-[320px]">
-                  <div className="space-y-2.5 pr-3">
-                    {recommendations.map((rec, index) => (
-                      <RecommendationCard key={`${rec.type}-${index}`} recommendation={rec} />
-                    ))}
-                  </div>
-                </ScrollArea>
-              )}
-            </TabsContent>
-          )}
-        </Tabs>
+        {/* More recommendations toggle */}
+        {isPersonal && recommendations.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setShowAllRecs(v => !v)}
+            className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+          >
+            <Lightbulb className="h-3 w-3" />
+            {showAllRecs ? "Ẩn khuyến nghị" : `+${recommendations.length - 1} khuyến nghị khác`}
+          </button>
+        )}
+        {showAllRecs && (
+          <div className="mt-2 space-y-2">
+            {recommendations.slice(1).map((rec, index) => (
+              <RecommendationCard key={`${rec.type}-${index + 1}`} recommendation={rec} />
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

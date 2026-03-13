@@ -46,7 +46,6 @@ import {
 import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
 import { useDashboardStats, useOfficerKpiPlan, type DashboardScope, type EnhancedOfficerStats } from "@/hooks/useDashboardStats";
 import { useAuth } from "@/hooks/useAuth";
-import { toast } from "sonner";
 
 // =============================================================================
 // INNER CONTENT (must be inside DashboardDateProvider to use useDashboardDate)
@@ -106,16 +105,10 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
 
   // === HOOKS (must be before any early returns — Rules of Hooks) ===
   const router = useRouter();
-  const handleQuickAction = useCallback((action: "new_lead" | "log_call" | "schedule") => {
+  const handleQuickAction = useCallback((action: "new_lead") => {
     switch (action) {
       case "new_lead":
         router.push("/leads?action=create");
-        break;
-      case "log_call":
-        toast.info("Tính năng đang phát triển");
-        break;
-      case "schedule":
-        toast.info("Tính năng đang phát triển");
         break;
     }
   }, [router]);
