@@ -72,6 +72,11 @@ describe("MonthlyBreakdownCard", () => {
     expect(container.innerHTML).toBe("");
   });
 
+  it("returns null when plan is null (404 from hook)", () => {
+    const { container } = render(<MonthlyBreakdownCard plan={null} />);
+    expect(container.innerHTML).toBe("");
+  });
+
   it("returns null when loading", () => {
     const { container } = render(<MonthlyBreakdownCard plan={makePlan()} isLoading={true} />);
     expect(container.innerHTML).toBe("");
@@ -123,9 +128,64 @@ describe("MonthlyBreakdownCard", () => {
     expect(screen.getByText("Tổng cộng")).toBeInTheDocument();
   });
 
-  it("displays progress summary in header", () => {
+  it("displays progress summary in header using canonical plan values", () => {
     render(<MonthlyBreakdownCard plan={makePlan({ achieved_ytd: 16, annual_target: 84, progress_pct: 19.0 })} />);
-    // Header shows "16/84 (19,0%)"
+    // Header shows "16/84 (19,0%)" from plan.achieved_ytd/plan.annual_target
     expect(screen.getByText(/16\/84/)).toBeInTheDocument();
+  });
+
+  it("footer target equals sum of row targets, not annual_target", async () => {
+    const user = userEvent.setup();
+    // Months with mixed targets: 6 months × 5 + 6 months × 10 = 90
+    // But annual_target is 100 (intentional mismatch)
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      enrollment_target: i < 6 ? 5 : 10,
+      enrollment_actual: null,
+      working_days: 22,
+      consultations_daily: 10,
+      consultations_monthly_total: 220,
+      conversion_rate: 15.0,
+      win_rate: 33.0,
+    }));
+    render(
+      <MonthlyBreakdownCard
+        plan={makePlan({ annual_target: 100, months })}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    const table = screen.getByTestId("monthly-breakdown-table");
+    const footer = within(table).getAllByRole("row").at(-1)!;
+    const cells = within(footer).getAllByRole("cell");
+    // Footer target cell (index 1) should show sum=90, NOT annual_target=100
+    expect(cells[1].textContent).toBe("90");
+  });
+
+  it("footer actual equals sum of row actuals", async () => {
+    const user = userEvent.setup();
+    // Jan=3, Feb=5, rest=null → total=8
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      enrollment_target: 7,
+      enrollment_actual: i === 0 ? 3 : i === 1 ? 5 : null,
+      working_days: 22,
+      consultations_daily: 10,
+      consultations_monthly_total: 220,
+      conversion_rate: 15.0,
+      win_rate: 33.0,
+    }));
+    render(
+      <MonthlyBreakdownCard
+        plan={makePlan({ achieved_ytd: 99, months })}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    const table = screen.getByTestId("monthly-breakdown-table");
+    const footer = within(table).getAllByRole("row").at(-1)!;
+    const cells = within(footer).getAllByRole("cell");
+    // Footer actual cell (index 2) should show sum=8, NOT achieved_ytd=99
+    expect(cells[2].textContent).toBe("8");
   });
 });

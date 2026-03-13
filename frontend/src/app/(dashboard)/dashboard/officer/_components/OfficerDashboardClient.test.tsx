@@ -108,6 +108,7 @@ vi.mock("@/components/officer/dashboard", () => ({
   ActionInsightsPanel: () => <div data-testid="action-insights" />,
   WeeklyLeaderboard: () => <div data-testid="leaderboard" />,
   AnnualProgressCard: () => <div data-testid="annual-progress" />,
+  MonthlyBreakdownCard: () => <div data-testid="monthly-breakdown" />,
   SmartHeader: (props: any) => {
     capturedOnQuickAction = props.onQuickAction;
     return (

@@ -94,11 +94,13 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   });
 
   // === Gap 2: Monthly KPI Plan ===
+  // personal → always fetch; team/org → only when drilled down to a specific officer
   const currentFiscalYear = new Date().getFullYear();
+  const shouldFetchKpiPlan = scope === "personal" || (!!scope && !!selectedOfficerId);
   const kpiPlanQuery = useOfficerKpiPlan({
     fiscalYear: currentFiscalYear,
     officerId: selectedOfficerId ?? undefined,
-    enabled: !!scope,
+    enabled: shouldFetchKpiPlan,
   });
 
   // === HOOKS (must be before any early returns — Rules of Hooks) ===
@@ -345,10 +347,25 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       </div>
 
       {/* Gap 2: Monthly KPI Plan Breakdown (full-width, collapsed default) */}
-      <MonthlyBreakdownCard
-        plan={kpiPlanQuery.data}
-        isLoading={kpiPlanQuery.isLoading}
-      />
+      {shouldFetchKpiPlan && (
+        <>
+          {kpiPlanQuery.error && !kpiPlanQuery.isLoading && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Không thể tải kế hoạch KPI tháng.
+                <button onClick={() => kpiPlanQuery.refetch()} className="ml-4 underline">
+                  Thử lại
+                </button>
+              </AlertDescription>
+            </Alert>
+          )}
+          <MonthlyBreakdownCard
+            plan={kpiPlanQuery.data}
+            isLoading={kpiPlanQuery.isLoading}
+          />
+        </>
+      )}
 
       {/* Row 2: Action Panels */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">

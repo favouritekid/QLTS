@@ -72,6 +72,7 @@ __all__ = [
 
     # Drill-down IDOR (widget endpoints)
     "resolve_drill_down_officer_id",
+    "resolve_kpi_plan_officer_id",
 
     # Data Classes
     "OfficerDashboardScope",
@@ -734,6 +735,45 @@ async def resolve_drill_down_officer_id(
     # === Fail-closed for unknown roles ===
     raise PermissionDeniedError(
         detail="Your role is not allowed to access officer data"
+    )
+
+
+async def resolve_kpi_plan_officer_id(
+    officer_id: int | None = None,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> int:
+    """
+    IDOR gate for /my-kpi-plan endpoint.
+
+    Differs from resolve_drill_down_officer_id because KPI plan retrieval
+    requires an actual officer target — not a "highlight matching" context.
+
+    - Officer: returns self (officer_id optional). Other officer → 404.
+    - Manager/Admin: officer_id is REQUIRED. Must point to a valid officer
+      in scope. Missing officer_id → 400 (BusinessRuleViolation).
+    - Other roles: fail-closed.
+    """
+    user_role = current_user.role
+
+    # === OFFICER: self only ===
+    if user_role == UserRole.OFFICER:
+        if officer_id is None or officer_id == current_user.id:
+            return current_user.id
+        raise ResourceNotFoundError(detail="Officer not found")
+
+    # === MANAGER / ADMIN: officer_id required ===
+    if user_role in (UserRole.MANAGER, UserRole.ADMIN):
+        if officer_id is None:
+            raise BusinessRuleViolation(
+                detail="officer_id is required when viewing another officer's KPI plan"
+            )
+        await _validate_officer_target(db, officer_id, current_user)
+        return officer_id
+
+    # === Fail-closed ===
+    raise PermissionDeniedError(
+        detail="Your role is not allowed to access officer KPI plans"
     )
 
 

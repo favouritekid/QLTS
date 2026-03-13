@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 DASHBOARD_URL = "/api/officer/dashboard"
 LEADERBOARD_URL = "/api/officer/leaderboard"
 UPCOMING_URL = "/api/officer/upcoming-activities"
+KPI_PLAN_URL = "/api/officer/my-kpi-plan"
 
 # ---------------------------------------------------------------------------
 # Extra user data (beyond what conftest provides)
@@ -714,3 +715,122 @@ class TestLeaderboardHighlightSemantics:
         # current_user_rank should reflect the drilled officer's rank
         assert data["current_user_rank"] is not None
         assert data["current_user_rank"] >= 1
+
+
+# ===========================================================================
+# === /api/officer/my-kpi-plan Route Wiring Tests ===
+# ===========================================================================
+
+class TestMyKpiPlanRouteWiring:
+    """
+    Route-level tests for GET /api/officer/my-kpi-plan.
+
+    Proves that resolve_kpi_plan_officer_id is wired correctly through
+    FastAPI middleware, returning the right HTTP status codes:
+    - 200 + null: valid officer, no plan
+    - 200 + body: valid officer, plan exists
+    - 400: manager/admin without officer_id
+    - 404: IDOR failure (out-of-scope, non-officer, nonexistent)
+    """
+
+    @pytest.mark.asyncio
+    async def test_officer_self_200_null_no_plan(
+        self, client: AsyncClient, officer_user_in_db, officer_token_headers
+    ):
+        """Officer viewing own plan (no plan exists) → 200 + null body."""
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"fiscal_year": 2099},  # Far future → no plan
+            headers=officer_token_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json() is None
+
+    @pytest.mark.asyncio
+    async def test_officer_other_404(
+        self, client: AsyncClient, officer_user_in_db, officer_token_headers, officer2_in_unit1
+    ):
+        """Officer viewing another officer's plan → 404 (IDOR)."""
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"officer_id": officer2_in_unit1["id"]},
+            headers=officer_token_headers,
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_manager_without_officer_id_400(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers
+    ):
+        """Manager without officer_id → 400 (BusinessRuleViolation)."""
+        resp = await client.get(KPI_PLAN_URL, headers=manager_token_headers)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_admin_without_officer_id_400(
+        self, client: AsyncClient, admin_user_in_db, admin_token_headers
+    ):
+        """Admin without officer_id → 400 (BusinessRuleViolation)."""
+        resp = await client.get(KPI_PLAN_URL, headers=admin_token_headers)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_manager_valid_officer_200(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers, officer_user_in_db
+    ):
+        """Manager + valid officer_id in scope → 200 (null or plan data)."""
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"officer_id": officer_user_in_db["id"]},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 200
+        # Body is null (no plan) or plan dict — either is valid 200
+
+    @pytest.mark.asyncio
+    async def test_manager_out_of_scope_404(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers, officer_in_unrelated_unit
+    ):
+        """Manager + officer in unrelated unit → 404 (IDOR)."""
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"officer_id": officer_in_unrelated_unit["id"]},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_manager_non_officer_target_404(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers, regular_user_in_db
+    ):
+        """Manager + non-officer user → 404."""
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"officer_id": regular_user_in_db["id"]},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_admin_valid_officer_200(
+        self, client: AsyncClient, admin_user_in_db, admin_token_headers, officer_user_in_db
+    ):
+        """Admin + valid officer_id → 200."""
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"officer_id": officer_user_in_db["id"]},
+            headers=admin_token_headers,
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_admin_non_officer_target_404(
+        self, client: AsyncClient, admin_user_in_db, admin_token_headers, regular_user_in_db
+    ):
+        """Admin + non-officer target → 404."""
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"officer_id": regular_user_in_db["id"]},
+            headers=admin_token_headers,
+        )
+        assert resp.status_code == 404

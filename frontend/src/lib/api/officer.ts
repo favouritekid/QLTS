@@ -107,10 +107,10 @@ export const officerApi = {
     return response.data;
   },
 
-  getMyKpiPlan: async (fiscalYear: number, officerId?: number) => {
+  getMyKpiPlan: async (fiscalYear: number, officerId?: number): Promise<OfficerKpiPlanResponse | null> => {
     const params = new URLSearchParams({ fiscal_year: String(fiscalYear) });
     if (officerId) params.append("officer_id", String(officerId));
-    const response = await api.get<OfficerKpiPlanResponse>(
+    const response = await api.get<OfficerKpiPlanResponse | null>(
       `/api/officer/my-kpi-plan?${params}`
     );
     return response.data;

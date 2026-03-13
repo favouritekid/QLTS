@@ -56,8 +56,16 @@ vi.mock("@/lib/socket/client", () => ({
   },
 }));
 
+// Mock officer API module for useOfficerKpiPlan tests
+const mockGetMyKpiPlan = vi.fn();
+vi.mock("@/lib/api/officer", () => ({
+  officerApi: {
+    getMyKpiPlan: (...args: any[]) => mockGetMyKpiPlan(...args),
+  },
+}));
+
 // Import AFTER mocks
-import { useDashboardStats } from "./useDashboardStats";
+import { useDashboardStats, useOfficerKpiPlan } from "./useDashboardStats";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -211,5 +219,109 @@ describe("useDashboardStats", () => {
 
     // teamStats should be undefined because query was disabled
     expect(result.current.teamStats).toBeUndefined();
+  });
+});
+
+
+// =============================================================================
+// useOfficerKpiPlan — Gap 2 contract tests
+// =============================================================================
+
+const KPI_PLAN_RESPONSE = {
+  fiscal_year: 2026,
+  annual_target: 80,
+  achieved_ytd: 25,
+  progress_pct: 31.3,
+  source: "officer" as const,
+  months: Array.from({ length: 12 }, (_, i) => ({
+    month: i + 1,
+    enrollment_target: 7,
+    enrollment_actual: i < 3 ? 8 : null,
+    working_days: 22,
+    consultations_daily: 10,
+    consultations_monthly_total: 220,
+    conversion_rate: 15,
+    win_rate: 33,
+  })),
+};
+
+describe("useOfficerKpiPlan", () => {
+  beforeEach(() => {
+    mockGetMyKpiPlan.mockReset();
+  });
+
+  it("returns plan data on successful 200 response", async () => {
+    mockGetMyKpiPlan.mockResolvedValue(KPI_PLAN_RESPONSE);
+
+    const { result } = renderHook(
+      () => useOfficerKpiPlan({ fiscalYear: 2026, enabled: true }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(KPI_PLAN_RESPONSE);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("returns null data on 200+null response (no plan exists)", async () => {
+    mockGetMyKpiPlan.mockResolvedValue(null);
+
+    const { result } = renderHook(
+      () => useOfficerKpiPlan({ fiscalYear: 2026, enabled: true }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("propagates 404 IDOR error to error state (not swallowed)", async () => {
+    const idorError = { response: { status: 404 }, message: "Not found" };
+    mockGetMyKpiPlan.mockRejectedValue(idorError);
+
+    const { result } = renderHook(
+      () => useOfficerKpiPlan({ fiscalYear: 2026, officerId: 999, enabled: true }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.error).toBe(idorError);
+  });
+
+  it("propagates 400 BusinessRuleViolation to error state", async () => {
+    const brError = { response: { status: 400 }, message: "officer_id required" };
+    mockGetMyKpiPlan.mockRejectedValue(brError);
+
+    const { result } = renderHook(
+      () => useOfficerKpiPlan({ fiscalYear: 2026, enabled: true }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toBe(brError);
+  });
+
+  it("does not fetch when enabled=false", async () => {
+    renderHook(
+      () => useOfficerKpiPlan({ fiscalYear: 2026, enabled: false }),
+      { wrapper: createWrapper() },
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockGetMyKpiPlan).not.toHaveBeenCalled();
+  });
+
+  it("passes officerId to API call when provided", async () => {
+    mockGetMyKpiPlan.mockResolvedValue(KPI_PLAN_RESPONSE);
+
+    const { result } = renderHook(
+      () => useOfficerKpiPlan({ fiscalYear: 2026, officerId: 42, enabled: true }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockGetMyKpiPlan).toHaveBeenCalledWith(2026, 42);
   });
 });

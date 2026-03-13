@@ -395,14 +395,16 @@ export interface UseOfficerKpiPlanOptions {
 export function useOfficerKpiPlan(options: UseOfficerKpiPlanOptions) {
   const { fiscalYear, officerId, enabled = true } = options;
 
-  return useQuery({
+  return useQuery<OfficerKpiPlanResponse | null>({
     queryKey: ["officer", "kpi-plan", fiscalYear, officerId],
     queryFn: async () => {
       const { officerApi } = await import("@/lib/api/officer");
+      // Backend returns 200+null for "no plan" and 404 only for IDOR failures.
+      // All non-2xx errors (400, 404, 500) propagate to React Query error state.
       return officerApi.getMyKpiPlan(fiscalYear, officerId);
     },
     enabled,
-    retry: false, // 404 = no plan, don't retry
+    retry: false,
     staleTime: 300_000, // 5 min
   });
 }

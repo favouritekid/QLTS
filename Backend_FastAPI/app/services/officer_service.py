@@ -1678,7 +1678,7 @@ async def get_officer_kpi_plan(
     db: AsyncSession,
     officer_id: int,
     fiscal_year: int,
-) -> Dict[str, Any]:
+) -> Dict[str, Any] | None:
     """
     Return monthly KPI plan breakdown for an officer.
 
@@ -1687,7 +1687,7 @@ async def get_officer_kpi_plan(
     2. Fallback: unit plan (officer_id IS NULL) for the officer's unit
 
     Monthly actuals come from KpiPlanMonth.actual_enrollments (source of truth).
-    Raises ResourceNotFoundError if no plan exists at either level.
+    Returns None if no plan exists at either level (NOT raise 404).
     """
     from app.repositories.kpi_planning_repository import KpiPlanningRepository
     from app.utils.exceptions import ResourceNotFoundError
@@ -1720,7 +1720,7 @@ async def get_officer_kpi_plan(
         )
 
     if plan is None:
-        raise ResourceNotFoundError("Không tìm thấy kế hoạch KPI cho năm này")
+        return None  # No plan exists — caller (router) returns null/204
 
     # Build monthly summaries from plan.months
     months_by_num = {m.month: m for m in plan.months}

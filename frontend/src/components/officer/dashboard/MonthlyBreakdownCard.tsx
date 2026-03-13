@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import type { OfficerKpiPlanResponse } from "@/lib/api/officer";
 
 interface MonthlyBreakdownCardProps {
-  plan: OfficerKpiPlanResponse | undefined;
+  plan: OfficerKpiPlanResponse | null | undefined;
   isLoading?: boolean;
 }
 
@@ -44,9 +44,13 @@ export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardPr
   const currentYear = new Date().getFullYear();
   const isCurrentYear = plan.fiscal_year === currentYear;
 
-  // Compute totals
-  const totalTarget = plan.annual_target;
-  const totalActual = plan.achieved_ytd;
+  // Compute footer totals from displayed rows (must match table body)
+  const totalTarget = plan.months.reduce(
+    (sum, m) => sum + m.enrollment_target, 0
+  );
+  const totalActual = plan.months.reduce(
+    (sum, m) => sum + (m.enrollment_actual ?? 0), 0
+  );
   const totalConsultMonthly = plan.months.reduce(
     (sum, m) => sum + (m.consultations_monthly_total ?? 0), 0
   );
@@ -70,7 +74,7 @@ export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardPr
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted-foreground hidden sm:inline">
-              {totalActual}/{totalTarget} ({fmtPct(plan.progress_pct)})
+              {plan.achieved_ytd}/{plan.annual_target} ({fmtPct(plan.progress_pct)})
             </span>
             {expanded ? (
               <ChevronUp className="h-4 w-4 text-muted-foreground" aria-hidden="true" />

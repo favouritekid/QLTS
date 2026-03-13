@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from app.schemas.officer import AnnualProgressInfo
 from app.services.kpi_service import aggregate_annual_progresses
-from app.utils.exceptions import ResourceNotFoundError
+from app.utils.exceptions import BusinessRuleViolation, PermissionDeniedError, ResourceNotFoundError
 
 
 # =============================================================================
@@ -574,6 +574,138 @@ class TestResolveDrillDownOfficerId:
             user = _FakeUser(id=50, role=role, unit_id=10)
             result = await resolve_drill_down_officer_id(officer_id=None, db=None, current_user=user)
             assert result == 50, f"Failed for role={role}"
+
+
+class TestResolveKpiPlanOfficerId:
+    """
+    Behavioral tests for resolve_kpi_plan_officer_id.
+
+    Key difference from resolve_drill_down_officer_id:
+    - Manager/Admin WITHOUT officer_id → 400 (BusinessRuleViolation)
+      instead of silently returning self.
+    - Officer without officer_id → still returns self (viewing own plan).
+    """
+
+    # --- Officer ---
+
+    async def test_officer_self_ok(self):
+        """Officer with no officer_id → returns own id."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        user = _FakeUser(id=1, role="officer", unit_id=10)
+        result = await resolve_kpi_plan_officer_id(officer_id=None, db=None, current_user=user)
+        assert result == 1
+
+    async def test_officer_explicit_self_ok(self):
+        """Officer passing own id → returns own id."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        user = _FakeUser(id=1, role="officer", unit_id=10)
+        result = await resolve_kpi_plan_officer_id(officer_id=1, db=None, current_user=user)
+        assert result == 1
+
+    async def test_officer_other_404(self):
+        """Officer cannot view another officer's plan."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        user = _FakeUser(id=1, role="officer", unit_id=10)
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_kpi_plan_officer_id(officer_id=2, db=_FakeDB({}), current_user=user)
+
+    # --- Manager ---
+
+    async def test_manager_valid_officer_in_scope_ok(self):
+        """Manager + valid officer_id in descendant unit → returns officer_id."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+        import unittest.mock as mock
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="officer", unit_id=11)
+        db = _FakeDB({42: target})
+
+        with mock.patch(
+            "app.repositories.organization_repository.OrganizationRepository",
+            return_value=_FakeOrgRepo([10, 11, 12]),
+        ):
+            result = await resolve_kpi_plan_officer_id(officer_id=42, db=db, current_user=manager)
+        assert result == 42
+
+    async def test_manager_out_of_scope_404(self):
+        """Manager + officer_id outside unit hierarchy → 404."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+        import unittest.mock as mock
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="officer", unit_id=99)
+        db = _FakeDB({42: target})
+
+        with mock.patch(
+            "app.repositories.organization_repository.OrganizationRepository",
+            return_value=_FakeOrgRepo([10, 11]),
+        ):
+            with pytest.raises(ResourceNotFoundError):
+                await resolve_kpi_plan_officer_id(officer_id=42, db=db, current_user=manager)
+
+    async def test_manager_non_officer_target_404(self):
+        """Manager targeting a non-officer user → 404."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        target = _FakeUser(id=42, role="user", unit_id=10)
+        db = _FakeDB({42: target})
+
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_kpi_plan_officer_id(officer_id=42, db=db, current_user=manager)
+
+    async def test_manager_without_officer_id_400(self):
+        """Manager without officer_id → 400 BusinessRuleViolation (NOT implicit self)."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        manager = _FakeUser(id=100, role="manager", unit_id=10)
+        with pytest.raises(BusinessRuleViolation):
+            await resolve_kpi_plan_officer_id(officer_id=None, db=None, current_user=manager)
+
+    # --- Admin ---
+
+    async def test_admin_valid_officer_ok(self):
+        """Admin + valid officer_id → returns officer_id."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        target = _FakeUser(id=42, role="officer", unit_id=10)
+        db = _FakeDB({42: target})
+
+        result = await resolve_kpi_plan_officer_id(officer_id=42, db=db, current_user=admin)
+        assert result == 42
+
+    async def test_admin_non_officer_target_404(self):
+        """Admin targeting non-officer → 404."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        target = _FakeUser(id=42, role="manager", unit_id=10)
+        db = _FakeDB({42: target})
+
+        with pytest.raises(ResourceNotFoundError):
+            await resolve_kpi_plan_officer_id(officer_id=42, db=db, current_user=admin)
+
+    async def test_admin_without_officer_id_400(self):
+        """Admin without officer_id → 400 BusinessRuleViolation (NOT implicit self)."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        admin = _FakeUser(id=1, role="admin", unit_id=None)
+        with pytest.raises(BusinessRuleViolation):
+            await resolve_kpi_plan_officer_id(officer_id=None, db=None, current_user=admin)
+
+    # --- Fail-closed ---
+
+    async def test_unknown_role_permission_denied(self):
+        """Unsupported role → PermissionDeniedError."""
+        from app.core.deps import resolve_kpi_plan_officer_id
+
+        user = _FakeUser(id=1, role="user", unit_id=10)
+        with pytest.raises(PermissionDeniedError):
+            await resolve_kpi_plan_officer_id(officer_id=None, db=None, current_user=user)
 
 
 class TestGetOfficerDashboardScopeIDOR:
