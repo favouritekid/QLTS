@@ -17,6 +17,7 @@ import {
   Clock,
   ShieldCheck,
   Target,
+  Info,
   type LucideIcon,
 } from "lucide-react";
 import { KPICard, isTargetMet } from "./KPICard";
@@ -112,9 +113,11 @@ interface StatItemProps {
   targetUnit?: string;
   /** If true, actual >= target is good. Default: true */
   higherIsBetter?: boolean;
+  /** If true, this metric is non-comparable (trend-only, no meaningful target). */
+  trendOnly?: boolean;
 }
 
-function StatItem({ icon: Icon, label, value, tooltip, trend, inverseTrend = false, onClick, target, actualValue, targetUnit = "%", higherIsBetter = true }: StatItemProps) {
+function StatItem({ icon: Icon, label, value, tooltip, trend, inverseTrend = false, onClick, target, actualValue, targetUnit = "%", higherIsBetter = true, trendOnly = false }: StatItemProps) {
   const TrendIcon =
     trend?.direction === "up"
       ? TrendingUp
@@ -159,6 +162,12 @@ function StatItem({ icon: Icon, label, value, tooltip, trend, inverseTrend = fal
               : "text-warning-600 dark:text-warning-500",
           )}>
             Mục tiêu: {fmtPct(target)}{targetUnit}
+          </p>
+        )}
+        {trendOnly && target == null && (
+          <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-0.5">
+            <Info className="h-2.5 w-2.5" />
+            Xu hướng
           </p>
         )}
       </div>
@@ -299,6 +308,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
             trend={kpis.new_lead_conversion_rate_trend ?? undefined}
             icon={TrendingUp}
             onClick={goToLeads}
+            trendOnly={true}
           />
         </div>
 
@@ -322,6 +332,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               tooltip={TOOLTIPS.effectiveness}
               trend={kpis.consultation_effectiveness_trend}
               onClick={goToLeads}
+              trendOnly={true}
             />
             <StatItem
               icon={Clock}

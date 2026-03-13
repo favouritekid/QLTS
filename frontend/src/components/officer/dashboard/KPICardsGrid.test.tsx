@@ -58,6 +58,7 @@ vi.mock("lucide-react", () => ({
   Clock: () => <span />,
   ShieldCheck: () => <span />,
   Target: () => <span />,
+  Info: () => <span />,
 }));
 
 import { KPICardsGrid } from "./KPICardsGrid";

@@ -41,6 +41,7 @@ import {
   SmartHeader,
   AnnualProgressCard,
   MonthlyBreakdownCard,
+  CurrentMonthSnapshot,
   KpiSummaryBanner,
 } from "@/components/officer/dashboard";
 import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
@@ -346,6 +347,14 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
           <TodaySchedule scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
         </div>
       </div>
+
+      {/* Current Month Snapshot — quick glance before expanding full table */}
+      {shouldFetchKpiPlan && (
+        <CurrentMonthSnapshot
+          plan={kpiPlanQuery.data}
+          isLoading={kpiPlanQuery.isLoading}
+        />
+      )}
 
       {/* Gap 2: Monthly KPI Plan Breakdown (full-width, collapsed default) */}
       {shouldFetchKpiPlan && (

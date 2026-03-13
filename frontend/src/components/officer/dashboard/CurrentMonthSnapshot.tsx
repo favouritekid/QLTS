@@ -1,0 +1,144 @@
+// src/components/officer/dashboard/CurrentMonthSnapshot.tsx
+/**
+ * Current Month Snapshot — 4 compact stat cards showing this month's KPI progress.
+ * Surfaces data that otherwise requires expanding MonthlyBreakdownCard.
+ */
+
+"use client";
+
+import { CalendarDays } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
+import type { OfficerKpiPlanResponse } from "@/lib/api/officer";
+
+interface CurrentMonthSnapshotProps {
+  plan: OfficerKpiPlanResponse | null | undefined;
+  isLoading?: boolean;
+}
+
+function fmtNum(n: number | null | undefined): string {
+  if (n == null) return "\u2014";
+  return n.toLocaleString("vi-VN", { maximumFractionDigits: 1 });
+}
+
+/**
+ * Consultation achievement: actual_avg vs target daily.
+ * Returns "met" | "near" | "behind" | null (no actual data).
+ */
+function consultationStatus(
+  target: number | null | undefined,
+  actualAvg: number | null | undefined,
+): "met" | "near" | "behind" | null {
+  if (actualAvg == null || target == null || target === 0) return null;
+  const ratio = actualAvg / target;
+  if (ratio >= 1) return "met";
+  if (ratio >= 0.8) return "near";
+  return "behind";
+}
+
+const STATUS_COLORS = {
+  met: "text-success-600 dark:text-success-500",
+  near: "text-warning-600 dark:text-warning-500",
+  behind: "text-destructive",
+} as const;
+
+const PROGRESS_INDICATOR_COLORS = {
+  met: "bg-success-500",
+  near: "bg-warning-500",
+  behind: "bg-destructive",
+} as const;
+
+export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotProps) {
+  if (isLoading || !plan) return null;
+
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1; // 1-based
+  const currentYear = now.getFullYear();
+
+  const monthData = plan.months.find((m) => m.month === currentMonth);
+  if (!monthData) return null;
+
+  // --- Stat 1: Enrollment ---
+  const enrollActual = monthData.enrollment_actual ?? 0;
+  const enrollTarget = monthData.enrollment_target;
+  const enrollPct = enrollTarget > 0 ? Math.round((enrollActual / enrollTarget) * 100) : 0;
+  const enrollMet = enrollActual >= enrollTarget;
+
+  // --- Stat 2: Avg consultations/day ---
+  const cStatus = consultationStatus(monthData.consultations_daily, monthData.consultations_actual_avg);
+
+  // --- Stat 3: Total consultations this month ---
+  // plain number, no target comparison
+
+  // --- Stat 4: Conversion rate ---
+  // percentage, no target comparison
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+        <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+        Th\u00e1ng {currentMonth}/{currentYear} \u2014 Ti\u1ebfn \u0111\u1ed9 hi\u1ec7n t\u1ea1i
+      </h3>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* 1. Enrollment this month */}
+        <div className="rounded-lg border bg-card p-3">
+          <p className="text-xs text-muted-foreground mb-1">Nh\u1eadp h\u1ecdc th\u00e1ng</p>
+          <p className={cn("text-lg font-semibold tabular-nums", enrollMet ? "text-success-600 dark:text-success-500" : "text-warning-600 dark:text-warning-500")}>
+            {fmtNum(monthData.enrollment_actual)}/{fmtNum(enrollTarget)}
+          </p>
+          <Progress
+            value={enrollPct}
+            className="h-1.5 mt-1.5"
+            indicatorClassName={enrollMet ? "bg-success-500" : "bg-warning-500"}
+          />
+          <p className="text-[11px] text-muted-foreground mt-1">
+            {enrollPct}% ch\u1ec9 ti\u00eau
+          </p>
+        </div>
+
+        {/* 2. Avg consultations/day */}
+        <div className="rounded-lg border bg-card p-3">
+          <p className="text-xs text-muted-foreground mb-1">TV trung b\u00ecnh/ng\u00e0y</p>
+          <p className={cn("text-lg font-semibold tabular-nums", cStatus && STATUS_COLORS[cStatus])}>
+            {fmtNum(monthData.consultations_actual_avg)}
+          </p>
+          {monthData.consultations_daily != null && (
+            <>
+              {monthData.consultations_actual_avg != null && (
+                <Progress
+                  value={Math.round((monthData.consultations_actual_avg / monthData.consultations_daily) * 100)}
+                  className="h-1.5 mt-1.5"
+                  indicatorClassName={cStatus ? PROGRESS_INDICATOR_COLORS[cStatus] : undefined}
+                />
+              )}
+              <p className="text-[11px] text-muted-foreground mt-1">
+                M\u1ee5c ti\u00eau: {fmtNum(monthData.consultations_daily)}/ng\u00e0y
+              </p>
+            </>
+          )}
+        </div>
+
+        {/* 3. Total consultations this month */}
+        <div className="rounded-lg border bg-card p-3">
+          <p className="text-xs text-muted-foreground mb-1">T\u1ed5ng TV th\u00e1ng</p>
+          <p className="text-lg font-semibold tabular-nums">
+            {fmtNum(monthData.consultations_monthly_total)}
+          </p>
+        </div>
+
+        {/* 4. Conversion rate */}
+        <div className="rounded-lg border bg-card p-3">
+          <p className="text-xs text-muted-foreground mb-1">Conv% th\u00e1ng</p>
+          <p className="text-lg font-semibold tabular-nums">
+            {monthData.conversion_rate != null
+              ? monthData.conversion_rate.toLocaleString("vi-VN", {
+                  minimumFractionDigits: 1,
+                  maximumFractionDigits: 1,
+                }) + "%"
+              : "\u2014"}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}

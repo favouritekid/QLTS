@@ -14,7 +14,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
-import { TrendingUp, TrendingDown, Minus, type LucideIcon } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Info, type LucideIcon } from "lucide-react";
 
 interface TrendInfo {
   value: number;
@@ -39,6 +39,8 @@ interface KPICardProps {
   targetUnit?: string;
   /** If true, actual >= target is good. If false, actual <= target is good. Default: true */
   higherIsBetter?: boolean;
+  /** If true, this metric is non-comparable (trend-only, no meaningful target). */
+  trendOnly?: boolean;
 }
 
 /** Determine if actual meets target. Equal-to-target is always success. */
@@ -67,6 +69,7 @@ export const KPICard = memo(function KPICard({
   actualValue,
   targetUnit = "%",
   higherIsBetter = true,
+  trendOnly = false,
 }: KPICardProps) {
   const TrendIcon =
     trend?.direction === "up"
@@ -110,6 +113,13 @@ export const KPICard = memo(function KPICard({
             : "text-warning-600 dark:text-warning-500",
         )}>
           Mục tiêu: {formatViNumber(target)}{targetUnit}
+        </p>
+      )}
+
+      {trendOnly && target == null && (
+        <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-0.5">
+          <Info className="h-2.5 w-2.5" />
+          Chỉ theo dõi xu hướng
         </p>
       )}
 
