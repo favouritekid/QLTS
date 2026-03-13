@@ -16,6 +16,7 @@ import { useUpdateCriteria } from "@/hooks/admissions/useAdmissionPaths";
 import { useSubjectGroups } from "@/hooks/admissions/useMasterData";
 import { AdmissionPathResponse } from "@/lib/zod/admission-path";
 import type { SubjectGroup } from "../shared/types";
+import type { PydanticValidationError } from "@/types/api.types";
 
 interface ConfigCriteriaProps {
   path: AdmissionPathResponse;
@@ -187,8 +188,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
 
       if (Array.isArray(errorDetail)) {
         // Pydantic validation errors
-        interface ValidationError { loc?: string[]; msg?: string }
-        errorMessage = errorDetail.map((e: ValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
+        errorMessage = errorDetail.map((e: PydanticValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
       } else if (typeof errorDetail === "string") {
         errorMessage = errorDetail;
       }

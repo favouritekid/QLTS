@@ -14,6 +14,7 @@ import { useUpdatePathDocuments, usePathDocuments } from "@/hooks/admissions/use
 import { useDocumentTypes } from "@/hooks/admissions/useMasterData";
 import { AdmissionPathResponse } from "@/lib/zod/admission-path";
 import type { DocumentType } from "../shared/types";
+import type { PydanticValidationError } from "@/types/api.types";
 
 interface ConfigDocumentsProps {
   path: AdmissionPathResponse;
@@ -141,8 +142,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
       let errorMessage = "Lưu thất bại. Vui lòng thử lại.";
 
       if (Array.isArray(errorDetail)) {
-        interface ValidationError { loc?: string[]; msg?: string }
-        errorMessage = errorDetail.map((e: ValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
+        errorMessage = errorDetail.map((e: PydanticValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
       } else if (typeof errorDetail === "string") {
         errorMessage = errorDetail;
       }
