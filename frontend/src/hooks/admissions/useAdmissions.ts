@@ -160,6 +160,8 @@ export function useCreateAdmission() {
     onSuccess: (data) => {
       toast.success("Tạo hồ sơ thành công")
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
       router.push(`/admissions/${data.id}`)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
@@ -217,9 +219,12 @@ export function useSubmitAdmission(id: number) {
       }
       
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      handleApiError(error, { 
+      handleApiError(error, {
         queryClient,
         invalidateKeys: [[...admissionsKeys.detail(id)]],
         context: "nộp hồ sơ"
@@ -248,6 +253,8 @@ export function useResubmitAdmission(id: number) {
       }
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, {
@@ -290,6 +297,8 @@ export function useApproveAdmission(id: number) {
       
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       // Centralized error handler with 409 Conflict support
@@ -333,6 +342,8 @@ export function useRejectAdmission(id: number) {
       
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       // Centralized error handler with 409 Conflict support
@@ -356,6 +367,9 @@ export function useEnrollStudent(id: number) {
         description: `Mã sinh viên: ${data.student_code}`
       })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
       // Delay navigation
       setTimeout(() => {
         router.push(`/students/${data.student_id}`)
@@ -399,6 +413,8 @@ export function useDeleteAdmission(id: number) {
     onSuccess: () => {
       toast.success("Xóa hồ sơ thành công")
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
       router.push("/admissions")
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
@@ -434,24 +450,6 @@ export function useVerifyDocument(id: number) {
       admissionsApi.verifyDocumentFormat(id, variables.docCode, variables.format),
     onSuccess: (data, variables) => {
       toast.success("Đã xác nhận tài liệu")
-      
-      // Update cache optimistically or invalidate
-      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
-        if (!oldData) return oldData
-        
-        const updatedChecklist = oldData.documents_checklist?.map(doc => 
-          doc.code === variables.docCode
-            ? { 
-                ...doc, 
-                status: "verified" as const, 
-                submission_format: variables.format 
-              }
-            : doc
-        ) || []
-        
-        return { ...oldData, documents_checklist: updatedChecklist }
-      })
-      
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
@@ -468,20 +466,6 @@ export function useRejectDocument(id: number) {
       admissionsApi.rejectDocument(id, variables.docCode, variables.reason),
     onSuccess: (data, variables) => {
       toast.success("Đã từ chối tài liệu")
-
-      // Optimistic update
-      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
-        if (!oldData) return oldData
-
-        const updatedChecklist = oldData.documents_checklist?.map(doc =>
-          doc.code === variables.docCode
-            ? { ...doc, status: "rejected" as const, rejection_reason: variables.reason }
-            : doc
-        ) || []
-
-        return { ...oldData, documents_checklist: updatedChecklist }
-      })
-
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
@@ -535,6 +519,8 @@ export function useBulkApproveAdmissions() {
         })
       }
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "phê duyệt hàng loạt" })
@@ -565,6 +551,8 @@ export function useBulkRejectAdmissions() {
         })
       }
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "từ chối hàng loạt" })
@@ -595,6 +583,8 @@ export function useBulkAssignAdmissions() {
         })
       }
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "phân công hàng loạt" })

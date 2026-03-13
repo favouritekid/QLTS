@@ -128,6 +128,10 @@ export function CRUDTable<T extends CRUDEntity, TFormValues>({
     setDeleteConfirmOpen(true);
   };
 
+  const getItemName = (item: T): string | undefined => {
+    return item.name || (item as Record<string, unknown>).name_vi as string | undefined;
+  };
+
   const handleConfirmDelete = async () => {
     if (pendingDelete) {
       try {
@@ -280,7 +284,7 @@ export function CRUDTable<T extends CRUDEntity, TFormValues>({
                                   key="delete"
                                   variant="ghost"
                                   size="icon"
-                                  onClick={() => handleDelete(item.id, item.name)}
+                                  onClick={() => handleDelete(item.id, getItemName(item))}
                                   aria-label="Xóa"
                                 >
                                   <Trash2 className="h-4 w-4 text-destructive" />

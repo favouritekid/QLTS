@@ -93,6 +93,11 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
       return;
     }
 
+    if (effectiveFrom && effectiveTo && effectiveFrom > effectiveTo) {
+      toast.warning("Ngày bắt đầu hiệu lực không được lớn hơn ngày kết thúc");
+      return;
+    }
+
     try {
       // Helper to safely parse float and avoid NaN
       const safeParseFloat = (value: string): number | null => {

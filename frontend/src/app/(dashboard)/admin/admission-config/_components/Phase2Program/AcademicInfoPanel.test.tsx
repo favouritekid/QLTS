@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, within, waitFor } from "@/test/utils/test-utils";
 import { AcademicInfoPanel } from "./AcademicInfoPanel";
 import * as UseProgramDataHooks from "@/hooks/admissions/useProgramData";
+import { toast } from "sonner";
 
 // Mock the hooks
 vi.mock("@/hooks/admissions/useProgramData", () => ({
@@ -10,6 +11,19 @@ vi.mock("@/hooks/admissions/useProgramData", () => ({
   useCreateOfferingAcademicInfo: vi.fn(),
   useUpdateOfferingAcademicInfo: vi.fn(),
   useDeleteOfferingAcademicInfo: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
+}));
+
+vi.mock("@/hooks/admissions/useAdmissionConfigState", () => ({
+  useAdmissionConfigState: () => ({ navigate: vi.fn() }),
 }));
 
 describe("AcademicInfoPanel", () => {
@@ -194,6 +208,185 @@ describe("AcademicInfoPanel", () => {
 
     await waitFor(() => {
       expect(mockDeleteMutate).toHaveBeenCalledWith(2);
+    });
+  });
+
+  // ============================================
+  // BUG-04: parseInt NaN guard for academic_year
+  // ============================================
+  it("BUG-04: should not produce NaN when academic_year input is cleared", async () => {
+    render(<AcademicInfoPanel />);
+
+    // Edit an existing item to get a pre-populated form
+    const row = screen.getByText("CNTT - Chính quy").closest("tr");
+    const editButton = row?.querySelector("button");
+    fireEvent.click(editButton!);
+
+    const dialog = await screen.findByRole("dialog");
+    const withinDialog = within(dialog);
+
+    // Wait for form to populate
+    const yearInput = await waitFor(() => {
+      const input = withinDialog.getByLabelText(/năm học|academic year/i) as HTMLInputElement;
+      expect(input.value).toBe("2024");
+      return input;
+    });
+
+    // Clear the year field (simulating user backspacing all digits)
+    fireEvent.change(yearInput, { target: { value: "" } });
+
+    // The value should fall back to 0 or empty string, NOT NaN
+    expect(yearInput.value).not.toBe("NaN");
+    expect(Number.isNaN(Number(yearInput.value))).toBe(false);
+  });
+
+  it("BUG-04: mutation payload should not contain NaN when numeric fields are cleared", async () => {
+    mockUpdateMutate.mockResolvedValueOnce({});
+
+    render(<AcademicInfoPanel />);
+
+    // Edit first row
+    const row = screen.getByText("CNTT - Chính quy").closest("tr");
+    const editButton = row?.querySelector("button");
+    fireEvent.click(editButton!);
+
+    const dialog = await screen.findByRole("dialog");
+    const withinDialog = within(dialog);
+
+    // Wait for form to populate
+    await waitFor(() => {
+      const input = withinDialog.getByLabelText(/năm học|academic year/i) as HTMLInputElement;
+      expect(input.value).toBe("2024");
+    });
+
+    // Clear tuition fee and quota fields (these are in the update payload)
+    const feeInput = withinDialog.getByLabelText(/học phí/i) as HTMLInputElement;
+    const quotaInput = withinDialog.getByLabelText(/chỉ tiêu/i) as HTMLInputElement;
+
+    fireEvent.change(feeInput, { target: { value: "" } });
+    fireEvent.change(quotaInput, { target: { value: "" } });
+
+    // Submit the form (use role to avoid matching dialog title "Cập nhật Thông tin")
+    const submitButton = withinDialog.getByRole("button", { name: /cập nhật/i });
+    fireEvent.click(submitButton);
+
+    // Assert mutation was called and payload contains no NaN
+    await waitFor(() => {
+      expect(mockUpdateMutate).toHaveBeenCalled();
+    });
+
+    const callArgs = mockUpdateMutate.mock.calls[0][0];
+    const payload = callArgs.data || callArgs;
+
+    // tuition_fee_per_year and annual_admission_quota must NOT be NaN
+    if (payload.tuition_fee_per_year !== undefined) {
+      expect(Number.isNaN(payload.tuition_fee_per_year)).toBe(false);
+    }
+    if (payload.annual_admission_quota !== undefined) {
+      expect(Number.isNaN(payload.annual_admission_quota)).toBe(false);
+    }
+  });
+
+  // ============================================
+  // BUG-24: formatCurrency should handle zero
+  // ============================================
+  it("BUG-24: should render tuition_fee_per_year=0 as a currency value, not as em-dash", () => {
+    // Override mock data with a zero tuition fee item
+    (UseProgramDataHooks.useOfferingAcademicInfos as any).mockReturnValue({
+      data: [
+        {
+          id: 10,
+          offering_id: 1,
+          academic_year: 2025,
+          tuition_fee_per_year: 0,
+          annual_admission_quota: 50,
+          is_published: true,
+        },
+      ],
+      isLoading: false,
+    });
+
+    render(<AcademicInfoPanel />);
+
+    // formatCurrency(0) should NOT return "—" (em-dash)
+    // It should format 0 as a currency string (e.g., "0 ₫" or "0" depending on locale)
+    const row = screen.getByText("CNTT - Chính quy").closest("tr");
+    expect(row).toBeInTheDocument();
+
+    // The em-dash "—" should NOT appear in the tuition fee cell
+    // The fee cell is column index 5 (0-indexed) in the table
+    const cells = row!.querySelectorAll("td");
+    const feeCell = cells[5]; // Học phí column
+
+    // The cell should contain "0" formatted as currency, not "—"
+    expect(feeCell.textContent).not.toBe("—");
+    expect(feeCell.textContent).toMatch(/0/);
+  });
+
+  // ============================================
+  // BUG-25: quota zero should not render as em-dash
+  // ============================================
+  it("BUG-25: should render annual_admission_quota=0 as '0', not as em-dash", () => {
+    // Override mock data with a zero quota item
+    (UseProgramDataHooks.useOfferingAcademicInfos as any).mockReturnValue({
+      data: [
+        {
+          id: 11,
+          offering_id: 1,
+          academic_year: 2025,
+          tuition_fee_per_year: 10000000,
+          annual_admission_quota: 0,
+          is_published: true,
+        },
+      ],
+      isLoading: false,
+    });
+
+    render(<AcademicInfoPanel />);
+
+    const row = screen.getByText("CNTT - Chính quy").closest("tr");
+    expect(row).toBeInTheDocument();
+
+    // The quota cell is column index 6 (0-indexed)
+    const cells = row!.querySelectorAll("td");
+    const quotaCell = cells[6]; // Chỉ tiêu column
+
+    // Zero quota should render as "0", not "—"
+    expect(quotaCell.textContent).toBe("0");
+    expect(quotaCell.textContent).not.toBe("—");
+  });
+
+  // ============================================
+  // BUG-09: delete dialog should close even on error
+  // ============================================
+  it("BUG-09: should close delete dialog even when deletion fails", async () => {
+    // Make delete mutation reject
+    mockDeleteMutate.mockRejectedValueOnce(new Error("Server error"));
+
+    render(<AcademicInfoPanel />);
+
+    // Open delete dialog for second row
+    const row = screen.getByText("QTVHKD - Vừa làm vừa học").closest("tr");
+    const buttons = row?.querySelectorAll("button");
+    const deleteButton = buttons?.[1];
+    fireEvent.click(deleteButton!);
+
+    // Wait for AlertDialog
+    const alertDialog = await screen.findByRole("alertdialog");
+    expect(alertDialog).toBeInTheDocument();
+
+    // Confirm deletion
+    const confirmBtn = within(alertDialog).getByRole("button", { name: /xóa/i });
+    fireEvent.click(confirmBtn);
+
+    // The mutation was called
+    await waitFor(() => {
+      expect(mockDeleteMutate).toHaveBeenCalledWith(2);
+    });
+
+    // The dialog should close (finally block runs) even though mutation failed
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
   });
 });

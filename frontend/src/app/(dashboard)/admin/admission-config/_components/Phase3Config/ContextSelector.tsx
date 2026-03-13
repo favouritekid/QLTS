@@ -48,11 +48,28 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
   const { data: offerings = [], isLoading: loadingOfferings } = useProgramOfferings();
   const { data: academicInfos = [], isLoading: loadingAcademicInfos } = useOfferingAcademicInfos();
 
-  // Filter offerings by selected major
+  // Filter majors to only those with offerings that have academic info in selected year
+  const filteredMajors = useMemo(() => {
+    if (!selectedYear) return majors;
+    const offeringIdsWithYear = new Set(
+      academicInfos.filter((ai: OfferingAcademicInfo) => ai.academic_year === selectedYear).map((ai: OfferingAcademicInfo) => ai.offering_id)
+    );
+    const majorIdsWithYear = new Set(
+      offerings.filter((o: ProgramOffering) => offeringIdsWithYear.has(o.id)).map((o: ProgramOffering) => o.program_id)
+    );
+    return majors.filter((m: MajorProgram) => majorIdsWithYear.has(m.id));
+  }, [majors, offerings, academicInfos, selectedYear]);
+
+  // Filter offerings by selected major AND selected year (only show offerings with academic info in that year)
   const filteredOfferings = useMemo(() => {
     if (!selectedMajorId) return [];
-    return offerings.filter((o: ProgramOffering) => o.program_id === selectedMajorId);
-  }, [offerings, selectedMajorId]);
+    const byMajor = offerings.filter((o: ProgramOffering) => o.program_id === selectedMajorId);
+    if (!selectedYear) return byMajor;
+    const offeringIdsWithYear = new Set(
+      academicInfos.filter((ai: OfferingAcademicInfo) => ai.academic_year === selectedYear).map((ai: OfferingAcademicInfo) => ai.offering_id)
+    );
+    return byMajor.filter((o: ProgramOffering) => offeringIdsWithYear.has(o.id));
+  }, [offerings, academicInfos, selectedMajorId, selectedYear]);
 
   // Filter academic infos by selected offering and year
   const filteredAcademicInfos = useMemo(() => {
@@ -182,8 +199,8 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
               <SelectContent>
                 {loadingMajors ? (
                   <div className="p-2 text-sm text-muted-foreground">Đang tải ngành...</div>
-                ) : majors.length > 0 ? (
-                  majors.map((major: MajorProgram) => (
+                ) : filteredMajors.length > 0 ? (
+                  filteredMajors.map((major: MajorProgram) => (
                     <SelectItem key={major.id} value={major.id.toString()}>
                       {major.name}
                       <span className="text-muted-foreground ml-2">({major.code})</span>

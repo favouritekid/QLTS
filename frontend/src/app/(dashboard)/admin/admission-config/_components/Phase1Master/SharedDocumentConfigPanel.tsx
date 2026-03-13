@@ -87,16 +87,17 @@ export function SharedDocumentConfigPanel() {
     if (checked) {
       // Add new or restore from initial
       const existing = initialSelections[typeId];
-      setModifications(prev => ({
-        ...prev,
-        [typeId]: existing ?? {
-          document_type_id: typeId,
-          is_mandatory: true,
-          requires_upload: true,
-          submission_format: null,
-          display_order: Object.keys(selections).length + 1
+      setModifications(prev => {
+        if (existing) {
+          // Re-enable: delete the null marker so it falls back to initialSelections
+          const { [typeId]: _, ...rest } = prev;
+          return rest;
         }
-      }));
+        // New selection: compute display_order from prev + initialSelections
+        const currentActiveCount = Object.keys(initialSelections).length
+          + Object.values(prev).filter(v => v !== null).length;
+        return { ...prev, [typeId]: { document_type_id: typeId, is_mandatory: true, requires_upload: true, submission_format: null, display_order: currentActiveCount + 1 } };
+      });
     } else {
       // Mark as removed
       setModifications(prev => ({
@@ -128,7 +129,7 @@ export function SharedDocumentConfigPanel() {
         offeringTypeId: selectedOfferingTypeId,
         data: { items: payload }
       });
-      // Toast handled by hook
+      setModifications({});
     } catch {
       // Error handled by hook
     }
