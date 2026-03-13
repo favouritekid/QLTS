@@ -41,6 +41,7 @@ import {
   SmartHeader,
   AnnualProgressCard,
   MonthlyBreakdownCard,
+  KpiSummaryBanner,
 } from "@/components/officer/dashboard";
 import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
 import { useDashboardStats, useOfficerKpiPlan, type DashboardScope, type EnhancedOfficerStats } from "@/hooks/useDashboardStats";
@@ -255,6 +256,13 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         onOfficerChange={setSelectedOfficerId}
         selectedUnitId={selectedUnitId}
         onUnitChange={setSelectedUnitId}
+      />
+
+      {/* KPI Summary Banner */}
+      <KpiSummaryBanner
+        kpis={stats.kpis}
+        annualProgress={stats.annual_progress}
+        plan={kpiPlanQuery.data}
       />
 
       {/* KPI Cards Row */}

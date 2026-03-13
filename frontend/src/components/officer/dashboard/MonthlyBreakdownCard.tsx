@@ -108,6 +108,32 @@ export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardPr
 
       {expanded && (
         <CardContent className="px-0 pb-0 pt-0">
+          {/* Color legend */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 py-1.5 text-[11px] text-muted-foreground border-b" data-testid="monthly-legend">
+            <span className="font-medium">Thực tế tuyển sinh:</span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-success-500" aria-hidden="true" />
+              Đạt
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-warning-500" aria-hidden="true" />
+              Chưa đạt
+            </span>
+            <span className="mx-1 text-border">|</span>
+            <span className="font-medium">TV/ngày:</span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-success-500" aria-hidden="true" />
+              Đạt
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-warning-500" aria-hidden="true" />
+              Gần đạt (≥80%)
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-destructive" aria-hidden="true" />
+              Cần cải thiện
+            </span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid="monthly-breakdown-table">
               <thead>

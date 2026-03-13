@@ -13,5 +13,6 @@ export { SmartHeader } from "./SmartHeader";
 export { RecommendationsPanel } from "./RecommendationsPanel";
 export { AnnualProgressCard, type AnnualProgressInfo } from "./AnnualProgressCard";
 export { MonthlyBreakdownCard } from "./MonthlyBreakdownCard";
+export { KpiSummaryBanner } from "./KpiSummaryBanner";
 
 
