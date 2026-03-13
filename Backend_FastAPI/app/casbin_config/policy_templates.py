@@ -114,6 +114,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # Pipeline access (for consultation statuses in QuickDisposition)
         {"subject": "{role}", "object": "/api/pipeline/stages", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/all", "action": "GET"},
+        {"subject": "{role}", "object": "/api/pipeline/board", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/allowed-next-statuses", "action": "GET"},
         # Officer Dashboard access (Phase 4: Unified Dashboard)
         {"subject": "{role}", "object": "/api/officer/stats", "action": "GET"},

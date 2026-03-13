@@ -215,7 +215,7 @@ async def get_all_users(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
+    page_size: int = Query(10, ge=1, le=500),
 ):
     """(Admin only) Lấy danh sách tất cả người dùng với phân trang, filter, search."""
     skip = (page - 1) * page_size

@@ -3,7 +3,8 @@
  * Based on Backend Models (verified in BACKEND_VERIFICATION_REPORT.md)
  */
 
-import type { Lead } from "./lead.types";
+// NOTE: Lead is referenced via inline import() to break circular dependency
+// (lead.types.ts re-exports from this file, causing Turbopack resolution failure)
 
 // ============================================
 // PIPELINE STAGE TYPES
@@ -243,7 +244,7 @@ export interface AllowedTransitionUpdate {
 export interface PipelineStageWithStats extends PipelineStage {
   lead_count: number;
   statuses: ConsultationStatus[];
-  leads?: Lead[]; // Optional: leads in this stage
+  leads?: import("./lead.types").Lead[]; // Optional: leads in this stage
   stage_distribution_pct?: number; // % of total leads in this stage
   avg_time_in_stage_days?: number;
 }
@@ -270,7 +271,7 @@ export interface KanbanColumn {
   id: string;
   name: string;
   order: number;
-  leads: Lead[];
+  leads: import("./lead.types").Lead[];
   lead_count: number;
   limit?: number; // Optional: WIP limit
 }
@@ -394,7 +395,7 @@ export interface DropData {
  */
 export interface DnDResult {
   success: boolean;
-  lead?: Lead;
+  lead?: import("./lead.types").Lead;
   error?: string;
 }
 
