@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Plus, Edit } from "lucide-react"
 import { todayVN } from "@/lib/utils/vn-date"
+import { SmartConsultationStatusSelector } from "@/components/common/selectors/SmartConsultationStatusSelector"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -359,9 +360,15 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
               name="trigger_status_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Trigger Status ID <span className="text-destructive">*</span></FormLabel>
+                  <FormLabel>Trạng thái kích hoạt <span className="text-destructive">*</span></FormLabel>
                   <FormControl>
-                    <Input placeholder="VD: sts11" className="font-mono" {...field} />
+                    <SmartConsultationStatusSelector
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn trạng thái kích hoạt hoa hồng"
+                      variant="select"
+                      showOutcomeType
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
