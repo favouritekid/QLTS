@@ -110,14 +110,14 @@ export function AdminCard({ profile }: AdminCardProps) {
                   Đã nộp đủ, chờ xác nhận ({verifiedCount}/{mandatoryCount} đã duyệt)
                 </div>
               )}
-            </>
-          )
 
-          {verifiedCount === mandatoryCount && mandatoryCount > 0 && (
-            <div className="text-xs text-success-700 font-medium flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3" />
-              Đã xác nhận đầy đủ
-            </div>
+              {verifiedCount === mandatoryCount && (
+                <div className="text-xs text-success-700 font-medium flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Đã xác nhận đầy đủ
+                </div>
+              )}
+            </>
           )}
         </div>
 

@@ -8,10 +8,10 @@
 
 import { Suspense } from 'react';
 import { connection } from 'next/server';
-import { subDays, startOfDay, endOfDay } from 'date-fns';
 import { Skeleton } from '@/components/ui/skeleton';
 import { serverApi } from '@/lib/api/server';
 import { OfficerDashboardClient } from './_components/OfficerDashboardClient';
+import { todayVN, subDaysVN } from '@/lib/utils/vn-date';
 
 /**
  * Loading component for Suspense boundary
@@ -37,21 +37,14 @@ function DashboardLoading() {
 }
 
 /**
- * Compute default date range matching DashboardDateProvider "7d" preset
+ * Compute default date range matching DashboardDateProvider "7d" preset.
+ * Uses Vietnam timezone so SSR (UTC) and client produce the same dates.
  */
-function formatLocalDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 function getDefaultDateRange() {
-  const today = new Date();
-  const from = subDays(today, 6);
+  const today = todayVN();
   return {
-    start_date: formatLocalDate(startOfDay(from)),
-    end_date: formatLocalDate(endOfDay(today)),
+    start_date: subDaysVN(today, 6),
+    end_date: today,
   };
 }
 

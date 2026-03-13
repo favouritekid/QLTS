@@ -13,8 +13,8 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import { subDays, startOfMonth, startOfDay, endOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
+import { todayVN, subDaysVN, startOfMonthVN } from "@/lib/utils/vn-date";
 
 // Preset options
 export type DatePreset = "7d" | "30d" | "this_month" | "custom";
@@ -31,19 +31,25 @@ interface DashboardDateContextValue {
 
 const DashboardDateContext = createContext<DashboardDateContextValue | null>(null);
 
+/** Parse a YYYY-MM-DD string into a local Date (noon to avoid DST drift) */
+function parseLocalDate(s: string): Date {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function getPresetRange(preset: DatePreset): DateRange {
-  const today = new Date();
-  
+  const today = todayVN();
+
   switch (preset) {
     case "7d":
-      return { from: subDays(today, 6), to: today };
+      return { from: parseLocalDate(subDaysVN(today, 6)), to: parseLocalDate(today) };
     case "30d":
-      return { from: subDays(today, 29), to: today };
+      return { from: parseLocalDate(subDaysVN(today, 29)), to: parseLocalDate(today) };
     case "this_month":
-      return { from: startOfMonth(today), to: today };
+      return { from: parseLocalDate(startOfMonthVN(today)), to: parseLocalDate(today) };
     case "custom":
     default:
-      return { from: subDays(today, 6), to: today };
+      return { from: parseLocalDate(subDaysVN(today, 6)), to: parseLocalDate(today) };
   }
 }
 
@@ -83,8 +89,8 @@ export function DashboardDateProvider({
     preset,
     setPreset,
     setCustomRange,
-    startDate: dateRange.from ? formatDateForAPI(startOfDay(dateRange.from)) : "",
-    endDate: dateRange.to ? formatDateForAPI(endOfDay(dateRange.to)) : "",
+    startDate: dateRange.from ? formatDateForAPI(dateRange.from) : "",
+    endDate: dateRange.to ? formatDateForAPI(dateRange.to) : "",
   }), [dateRange, preset, setPreset, setCustomRange]);
 
   return (

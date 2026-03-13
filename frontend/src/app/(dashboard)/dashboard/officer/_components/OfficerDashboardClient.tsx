@@ -1,7 +1,8 @@
 // src/app/(dashboard)/dashboard/officer/_components/OfficerDashboardClient.tsx
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -212,10 +213,11 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   const funnelNetConversionTrend = stats.funnel_net_conversion_trend ?? null;
 
   // Quick action handler
-  const handleQuickAction = (action: "new_lead" | "log_call" | "schedule") => {
+  const router = useRouter();
+  const handleQuickAction = useCallback((action: "new_lead" | "log_call" | "schedule") => {
     switch (action) {
       case "new_lead":
-        window.location.href = "/leads?action=create";
+        router.push("/leads?action=create");
         break;
       case "log_call":
         toast.info("Tính năng đang phát triển");
@@ -224,7 +226,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         toast.info("Tính năng đang phát triển");
         break;
     }
-  };
+  }, [router]);
 
   // Calculate if daily goal is met for sparkle icon
   const isGoalMet = stats.kpis.consultations_target > 0 &&

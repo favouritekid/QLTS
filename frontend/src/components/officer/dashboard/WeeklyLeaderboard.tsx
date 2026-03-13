@@ -20,6 +20,8 @@ import {
   Trophy
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { format, parseISO } from "date-fns";
+import { vi } from "date-fns/locale";
 import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import { useWeeklyLeaderboard } from "@/hooks/officer/useWeeklyLeaderboard";
 
@@ -137,12 +139,19 @@ export function WeeklyLeaderboard({ scope, unitId, officerId }: WeeklyLeaderboar
     return null;
   }
 
-  // Format date range for display
+  // Format date range for display (YYYY-MM-DD → dd/MM/yyyy vi-VN)
   const formatDateRange = () => {
-    if (data.week_end && data.week_start !== data.week_end) {
-      return `${data.week_start} → ${data.week_end}`;
+    try {
+      const startFormatted = format(parseISO(data.week_start), "dd/MM/yyyy", { locale: vi });
+      if (data.week_end && data.week_start !== data.week_end) {
+        const endFormatted = format(parseISO(data.week_end), "dd/MM/yyyy", { locale: vi });
+        return `${startFormatted} → ${endFormatted}`;
+      }
+      return startFormatted;
+    } catch {
+      // Graceful fallback if parse fails
+      return data.week_end ? `${data.week_start} → ${data.week_end}` : data.week_start;
     }
-    return data.week_start;
   };
 
   return (

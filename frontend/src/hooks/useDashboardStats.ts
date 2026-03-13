@@ -6,8 +6,8 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import { subDays, startOfDay, endOfDay } from "date-fns";
-import { useDashboardDate, formatDateForAPI } from "@/contexts/DashboardDateContext";
+import { useDashboardDate } from "@/contexts/DashboardDateContext";
+import { todayVN, subDaysVN } from "@/lib/utils/vn-date";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
 
@@ -294,13 +294,12 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
   const unitId = options?.unitId;
   const enabled = options?.enabled ?? true;
 
-  // Compute what SSR would have used (same logic as page.tsx getDefaultDateRange)
+  // Compute what SSR would have used (same VN timezone logic as page.tsx)
   const ssrDefault = useMemo(() => {
-    const today = new Date();
-    const from = subDays(today, 6);
+    const today = todayVN();
     return {
-      start: formatDateForAPI(startOfDay(from)),
-      end: formatDateForAPI(endOfDay(today)),
+      start: subDaysVN(today, 6),
+      end: today,
     };
   }, []); // Empty deps: only compute once on mount (matches SSR snapshot)
 
@@ -330,12 +329,12 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     enabled,
   });
 
-  // Fetch team stats (with date filter + drill-down officer)
+  // Fetch team stats only for personal scope (used for team avg comparison line)
   const teamStatsQuery = useQuery({
     queryKey: ["officer", "team-stats", startDate, endDate, officerId],
     queryFn: () => fetchTeamStats(startDate, endDate, officerId),
     staleTime: 300000,
-    enabled,
+    enabled: enabled && scope === "personal",
   });
 
   // Socket.IO integration for real-time updates
