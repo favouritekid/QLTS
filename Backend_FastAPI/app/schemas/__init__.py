@@ -323,6 +323,9 @@ from .officer import (
     # Phase 6: Team Stats + Annual Progress
     TeamStats,
     AnnualProgressInfo,
+    # Gap 2: Monthly KPI Plan Breakdown
+    OfficerPlanMonthSummary,
+    OfficerKpiPlanResponse,
 )
 
 # --- Từ tuition_discount_policy.py ---

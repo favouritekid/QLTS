@@ -39,10 +39,11 @@ import {
   ActionInsightsPanel,
   WeeklyLeaderboard,
   SmartHeader,
-  AnnualProgressCard
+  AnnualProgressCard,
+  MonthlyBreakdownCard,
 } from "@/components/officer/dashboard";
 import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
-import { useDashboardStats, type DashboardScope, type EnhancedOfficerStats } from "@/hooks/useDashboardStats";
+import { useDashboardStats, useOfficerKpiPlan, type DashboardScope, type EnhancedOfficerStats } from "@/hooks/useDashboardStats";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
@@ -89,6 +90,14 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     officerId: selectedOfficerId ?? undefined,
     unitId: selectedUnitId ?? undefined,
     initialData: scope === "personal" ? initialStats : undefined,
+    enabled: !!scope,
+  });
+
+  // === Gap 2: Monthly KPI Plan ===
+  const currentFiscalYear = new Date().getFullYear();
+  const kpiPlanQuery = useOfficerKpiPlan({
+    fiscalYear: currentFiscalYear,
+    officerId: selectedOfficerId ?? undefined,
     enabled: !!scope,
   });
 
@@ -334,6 +343,12 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
           <TodaySchedule scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
         </div>
       </div>
+
+      {/* Gap 2: Monthly KPI Plan Breakdown (full-width, collapsed default) */}
+      <MonthlyBreakdownCard
+        plan={kpiPlanQuery.data}
+        isLoading={kpiPlanQuery.isLoading}
+      />
 
       {/* Row 2: Action Panels */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">

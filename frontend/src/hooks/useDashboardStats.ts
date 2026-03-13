@@ -39,6 +39,11 @@ export interface KPIStats {
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
   consultations_avg_per_day?: number;
+  // Gap 1: Rate metric targets (null when not comparable)
+  win_rate_target?: number | null;
+  new_lead_conversion_rate_target?: number | null;
+  sla_compliance_rate_target?: number | null;
+  consultation_effectiveness_target?: number | null;
   // Phase D: Daily Quality KPIs
   verified_consultations_daily?: number;
   quality_rate_daily?: number | null;
@@ -372,4 +377,32 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     error: dashboardQuery.error,
     refetch: dashboardQuery.refetch,
   };
+}
+
+
+// =============================================================================
+// GAP 2: Monthly KPI Plan Hook
+// =============================================================================
+
+export { type OfficerKpiPlanResponse, type OfficerPlanMonthSummary } from "@/lib/api/officer";
+
+export interface UseOfficerKpiPlanOptions {
+  fiscalYear: number;
+  officerId?: number;
+  enabled?: boolean;
+}
+
+export function useOfficerKpiPlan(options: UseOfficerKpiPlanOptions) {
+  const { fiscalYear, officerId, enabled = true } = options;
+
+  return useQuery({
+    queryKey: ["officer", "kpi-plan", fiscalYear, officerId],
+    queryFn: async () => {
+      const { officerApi } = await import("@/lib/api/officer");
+      return officerApi.getMyKpiPlan(fiscalYear, officerId);
+    },
+    enabled,
+    retry: false, // 404 = no plan, don't retry
+    staleTime: 300_000, // 5 min
+  });
 }

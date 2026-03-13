@@ -170,6 +170,12 @@ class KPIStats(BaseModel):
     # Leads created in period that are still active (for period analysis)
     active_leads_in_period: int = 0
 
+    # Gap 1: Rate metric targets (populated only when comparable per catalog)
+    win_rate_target: Optional[float] = None
+    new_lead_conversion_rate_target: Optional[float] = None
+    sla_compliance_rate_target: Optional[float] = None
+    consultation_effectiveness_target: Optional[float] = None
+
     # Daily Quality KPIs (Phase D — spec §15.7)
     verified_consultations_daily: int = 0
     quality_rate_daily: Optional[float] = None  # NULL when H_D = 0
@@ -275,3 +281,29 @@ class TeamStats(BaseModel):
     officer_rank_percentile: int  # Current officer's percentile rank (0-100)
     total_officers: int
     period_days: int = 30
+
+
+# =============================================================================
+# GAP 2: Monthly KPI Plan Breakdown (Officer self-tracking)
+# =============================================================================
+
+class OfficerPlanMonthSummary(BaseModel):
+    """Monthly breakdown row for officer KPI plan."""
+    month: int
+    enrollment_target: int
+    enrollment_actual: Optional[int] = None
+    working_days: int
+    consultations_daily: Optional[int] = None
+    consultations_monthly_total: Optional[int] = None
+    conversion_rate: Optional[float] = None
+    win_rate: Optional[float] = None
+
+
+class OfficerKpiPlanResponse(BaseModel):
+    """Officer KPI plan with monthly breakdown. Source = KpiPlanMonth actuals."""
+    fiscal_year: int
+    annual_target: int
+    achieved_ytd: int
+    progress_pct: float
+    months: List[OfficerPlanMonthSummary]
+    source: Literal["officer", "unit"]

@@ -218,6 +218,42 @@ async def get_team_stats(
 
 
 # =============================================================================
+# GAP 2: Monthly KPI Plan Breakdown
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/my-kpi-plan",
+    response_model=schemas.OfficerKpiPlanResponse,
+    summary="Get officer's monthly KPI plan breakdown"
+)
+async def get_my_kpi_plan(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, CasbinAuth],
+    validated_officer_id: Annotated[int, Depends(resolve_drill_down_officer_id)],
+    fiscal_year: int = None,
+):
+    """
+    Monthly KPI plan breakdown for self-tracking.
+    Officer sees own plan (or unit plan fallback).
+    Manager/admin can drill-down via officer_id param.
+    Returns 404 if no plan exists.
+    """
+    from datetime import datetime as dt
+
+    if fiscal_year is None:
+        fiscal_year = dt.now().year
+
+    result = await officer_service.get_officer_kpi_plan(
+        db=db,
+        officer_id=validated_officer_id,
+        fiscal_year=fiscal_year,
+    )
+    return result
+
+
+# =============================================================================
 # Today's Schedule Widget - Upcoming Activities
 # =============================================================================
 

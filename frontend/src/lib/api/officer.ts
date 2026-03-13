@@ -106,4 +106,37 @@ export const officerApi = {
     const response = await api.post("/api/officer/availability", data);
     return response.data;
   },
+
+  getMyKpiPlan: async (fiscalYear: number, officerId?: number) => {
+    const params = new URLSearchParams({ fiscal_year: String(fiscalYear) });
+    if (officerId) params.append("officer_id", String(officerId));
+    const response = await api.get<OfficerKpiPlanResponse>(
+      `/api/officer/my-kpi-plan?${params}`
+    );
+    return response.data;
+  },
 };
+
+// =============================================================================
+// GAP 2: Monthly KPI Plan Types
+// =============================================================================
+
+export interface OfficerPlanMonthSummary {
+  month: number;
+  enrollment_target: number;
+  enrollment_actual: number | null;
+  working_days: number;
+  consultations_daily: number | null;
+  consultations_monthly_total: number | null;
+  conversion_rate: number | null;
+  win_rate: number | null;
+}
+
+export interface OfficerKpiPlanResponse {
+  fiscal_year: number;
+  annual_target: number;
+  achieved_ytd: number;
+  progress_pct: number;
+  months: OfficerPlanMonthSummary[];
+  source: "officer" | "unit";
+}
