@@ -933,6 +933,7 @@ class TestMyKpiPlanResponseShape:
         m3 = data["months"][2]
         assert m3["consultations_actual_avg"] is None
 
-        # Verify field exists on all 12 months
+        # Months 4-12: all null
+        expected = {1: 12.5, 2: 8.0}
         for m in data["months"]:
-            assert "consultations_actual_avg" in m
+            assert m["consultations_actual_avg"] == expected.get(m["month"])
