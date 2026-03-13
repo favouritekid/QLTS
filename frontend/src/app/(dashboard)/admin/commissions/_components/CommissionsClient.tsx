@@ -214,6 +214,16 @@ export function CommissionsClient() {
                           <Badge variant={STATUS_CONFIG[record.status]?.variant ?? "outline"}>
                             {STATUS_CONFIG[record.status]?.label ?? record.status}
                           </Badge>
+                          {record.status === "rejected" && record.rejection_reason && (
+                            <p className="text-xs text-destructive mt-1 truncate max-w-[150px]" title={record.rejection_reason}>
+                              {record.rejection_reason}
+                            </p>
+                          )}
+                          {record.status === "cancelled" && record.cancellation_reason && (
+                            <p className="text-xs text-muted-foreground mt-1 truncate max-w-[150px]" title={record.cancellation_reason}>
+                              {record.cancellation_reason}
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell className="text-muted-foreground text-sm">
                           {formatDate(record.triggered_at)}
@@ -321,6 +331,7 @@ export function CommissionsClient() {
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               placeholder="Nhập lý do..."
+              maxLength={500}
               className="mt-1"
             />
           </div>

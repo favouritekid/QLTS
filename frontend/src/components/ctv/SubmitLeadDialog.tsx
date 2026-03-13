@@ -251,7 +251,7 @@ export function SubmitLeadDialog({ open, onOpenChange }: SubmitLeadDialogProps) 
               </Button>
               <Button
                 type="submit"
-                disabled={submitLead.isPending || (phoneCheck !== null && !phoneCheck.available)}
+                disabled={submitLead.isPending || phoneChecking || (phoneCheck !== null && !phoneCheck.available)}
               >
                 {submitLead.isPending && (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />

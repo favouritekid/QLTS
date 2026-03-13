@@ -88,7 +88,7 @@ function StatCard({ title, value, icon, isLoading }: StatCardProps) {
         {isLoading ? (
           <Skeleton className="h-8 w-16" />
         ) : (
-          <div className="text-2xl font-bold">{value ?? 0}</div>
+          <div className="text-2xl font-bold">{value ?? "-"}</div>
         )}
       </CardContent>
     </Card>
@@ -424,6 +424,16 @@ export function CTVDashboardClient() {
                             <Badge variant={statusConfig.variant}>
                               {statusConfig.label}
                             </Badge>
+                            {record.status === "rejected" && record.rejection_reason && (
+                              <p className="text-xs text-destructive mt-1 truncate max-w-[150px]" title={record.rejection_reason}>
+                                {record.rejection_reason}
+                              </p>
+                            )}
+                            {record.status === "cancelled" && record.cancellation_reason && (
+                              <p className="text-xs text-muted-foreground mt-1 truncate max-w-[150px]" title={record.cancellation_reason}>
+                                {record.cancellation_reason}
+                              </p>
+                            )}
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">
                             {formatDate(record.triggered_at)}

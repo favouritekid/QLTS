@@ -49,11 +49,11 @@ interface ClaimReviewDialogProps {
 
 const CLAIM_STATUS_CONFIG: Record<
   string,
-  { label: string; variant: "warning" | "success" | "error" }
+  { label: string; variant: "secondary" | "default" | "destructive" }
 > = {
-  pending: { label: "Chờ duyệt", variant: "warning" },
-  approved: { label: "Đã duyệt", variant: "success" },
-  rejected: { label: "Từ chối", variant: "error" },
+  pending: { label: "Chờ duyệt", variant: "secondary" },
+  approved: { label: "Đã duyệt", variant: "default" },
+  rejected: { label: "Từ chối", variant: "destructive" },
 };
 
 // =====================================================================
@@ -111,7 +111,7 @@ export function ClaimReviewDialog({
 
   const statusConfig = CLAIM_STATUS_CONFIG[claim.status] ?? {
     label: claim.status,
-    variant: "warning" as const,
+    variant: "secondary" as const,
   };
 
   return (

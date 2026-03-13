@@ -155,6 +155,7 @@ export function useCTVProfile() {
   return useQuery<Collaborator>({
     queryKey: ctvKeys.profile,
     queryFn: collaboratorsApi.getMyProfile,
+    staleTime: 1000 * 5,
   })
 }
 
@@ -178,6 +179,7 @@ export function useCTVStats() {
   return useQuery<CollaboratorStats>({
     queryKey: ctvKeys.stats,
     queryFn: collaboratorsApi.getMyStats,
+    staleTime: 1000 * 5,
   })
 }
 
