@@ -46,8 +46,10 @@ import {
   Clock,
   DollarSign,
   Lightbulb,
-  ExternalLink
+  ExternalLink,
+  PieChart,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { TrendInfo } from "@/hooks/useDashboardStats";
 
 // ============================================================================
@@ -104,12 +106,12 @@ const formatVNDFull = (amount: number): string => {
 
 /** Map loss reason codes to human-readable labels (Vietnamese) */
 const LOSS_REASON_LABELS: Record<string, { label: string; icon: string }> = {
-  PRICE_HIGH: { label: "Học phí", icon: "💰" },
-  LOCATION_FAR: { label: "Xa nhà", icon: "📍" },
-  CHOSE_COMPETITOR: { label: "Trường khác", icon: "🎓" },
-  NO_CONTACT: { label: "K.liên lạc", icon: "📞" },
-  TIMING_BAD: { label: "Chưa sẵn sàng", icon: "⏰" },
-  OTHER: { label: "Khác", icon: "❓" },
+  PRICE_HIGH: { label: "Học phí", icon: "×" },
+  LOCATION_FAR: { label: "Xa nhà", icon: "×" },
+  CHOSE_COMPETITOR: { label: "Trường khác", icon: "→" },
+  NO_CONTACT: { label: "K.liên lạc", icon: "×" },
+  TIMING_BAD: { label: "Chưa sẵn sàng", icon: "•" },
+  OTHER: { label: "Khác", icon: "•" },
 };
 
 interface FunnelStage {
@@ -147,11 +149,11 @@ interface FunnelSuggestion {
 }
 
 /** Map suggestion type to icon and color */
-const SUGGESTION_STYLES: Record<FunnelSuggestion["type"], { icon: string; color: string; bgColor: string }> = {
-  bottleneck: { icon: "🚧", color: "text-error-600", bgColor: "bg-error-50 dark:bg-error-950/30" },
-  slow_stage: { icon: "🐢", color: "text-amber-600", bgColor: "bg-amber-50 dark:bg-amber-950/30" },
-  high_loss: { icon: "💸", color: "text-rose-600", bgColor: "bg-rose-50 dark:bg-rose-950/30" },
-  loss_reason: { icon: "📊", color: "text-blue-600", bgColor: "bg-blue-50 dark:bg-blue-950/30" },
+const SUGGESTION_STYLES: Record<FunnelSuggestion["type"], { icon: LucideIcon; color: string; bgColor: string }> = {
+  bottleneck: { icon: AlertTriangle, color: "text-error-600", bgColor: "bg-error-50 dark:bg-error-950/30" },
+  slow_stage: { icon: Clock, color: "text-amber-600", bgColor: "bg-amber-50 dark:bg-amber-950/30" },
+  high_loss: { icon: TrendingDown, color: "text-rose-600", bgColor: "bg-rose-50 dark:bg-rose-950/30" },
+  loss_reason: { icon: PieChart, color: "text-blue-600", bgColor: "bg-blue-50 dark:bg-blue-950/30" },
 };
 
 /** Map priority to badge variant */
@@ -705,7 +707,7 @@ export function FunnelChart({
                           
                           {isBottleneck && (
                             <p className="text-error-300 font-medium bg-error-500/30 p-1.5 rounded">
-                              ⚠️ Điểm nghẽn chính - cần review quy trình
+                              Điểm nghẽn chính - cần review quy trình
                             </p>
                           )}
                         </div>
@@ -877,7 +879,7 @@ export function FunnelChart({
                               {stage.early_exit_count !== undefined && stage.early_exit_count > 0 && (
                                 <div className="text-error-300">
                                   <p>
-                                    <span className="text-white/60">✖ Rời bỏ:</span>{" "}
+                                    <span className="text-white/60">× Rời bỏ:</span>{" "}
                                     <span className="font-semibold">{stage.early_exit_count}</span>
                                     <span className="text-white/50 text-[10px] ml-1">
                                       (leads kết thúc tại đây)
@@ -1158,7 +1160,7 @@ export function FunnelChart({
                       )}
                     >
                       <div className="flex items-start gap-2">
-                        <span className="text-lg shrink-0">{style.icon}</span>
+                        <style.icon className={cn("h-5 w-5 shrink-0", style.color)} />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <p className={cn("text-sm font-medium", style.color)}>

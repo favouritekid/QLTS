@@ -190,15 +190,15 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
               strokeOpacity={0.5}
             />
 
-            {/* Team Average Line (if provided) */}
+            {/* Team Average Line (if provided) — cyan to contrast with violet Leads line */}
             {teamAverage !== undefined && (
-              <ReferenceLine 
-                y={teamAverage} 
-                stroke="#8b5cf6" 
+              <ReferenceLine
+                y={teamAverage}
+                stroke="#06b6d4"
                 strokeDasharray="8 4"
-                label={{ 
-                  value: `TB team: ${teamAverage}`, 
-                  fill: "#8b5cf6",
+                label={{
+                  value: `TB team: ${teamAverage}`,
+                  fill: "#06b6d4",
                   fontSize: 10,
                   position: "insideBottomRight"
                 }}
@@ -262,7 +262,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
           </div>
           {teamAverage !== undefined && (
             <div className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full ring-2 ring-purple-500/20 bg-purple-500" />
+              <div className="h-2 w-2 rounded-full ring-2 ring-cyan-500/20 bg-cyan-500" />
               <span>TB team: {teamAverage}</span>
             </div>
           )}

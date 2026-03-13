@@ -52,7 +52,33 @@ import { useAuth } from "@/hooks/useAuth";
 // INNER CONTENT (must be inside DashboardDateProvider to use useDashboardDate)
 // =============================================================================
 
+/** Read a URL search param from the current browser URL (SSR-safe) */
+function getUrlParam(key: string): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get(key);
+}
+
 function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStats }) {
+  const navRouter = useRouter();
+
+  // Helper to update search params synchronously via history.replaceState.
+  // Using window.history directly avoids batching issues when multiple
+  // filter changes fire in the same event (e.g. scope change resets unit + officer).
+  const updateSearchParams = useCallback((updates: Record<string, string | null>) => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === null || value === "") {
+        params.delete(key);
+      } else {
+        params.set(key, value);
+      }
+    }
+    const qs = params.toString();
+    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(null, "", newUrl);
+  }, []);
+
   // Get user to determine default scope
   const { user } = useAuth();
 
@@ -69,21 +95,47 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     )
     : null;
 
-  const [scope, setScope] = useState<DashboardScope | null>(null);
+  // Read initial filter state from URL (lazy init, only runs on mount)
+  const validScopes: DashboardScope[] = ["personal", "team", "organization"];
+
+  const [scope, setScope] = useState<DashboardScope | null>(() => {
+    const urlScope = getUrlParam("scope");
+    return urlScope && validScopes.includes(urlScope as DashboardScope)
+      ? (urlScope as DashboardScope)
+      : null;
+  });
+
+  // Track whether scope was initialized from URL (stable across renders)
+  const scopeFromUrlRef = useRef(scope !== null);
   const prevResolvedRef = useRef<DashboardScope | null>(null);
 
-  // Sync scope from role during render (no useEffect needed)
+  // Sync scope from role during render — only if URL didn't provide a scope
+  // and only when resolvedScope changes (i.e., user hydrates)
   if (resolvedScope !== prevResolvedRef.current) {
     prevResolvedRef.current = resolvedScope;
-    setScope(resolvedScope);
+    if (!scopeFromUrlRef.current && scope === null) {
+      setScope(resolvedScope);
+    }
   }
 
-  // Secondary filter states
-  const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
-  const [selectedOfficerId, setSelectedOfficerId] = useState<number | null>(null);
+  // Secondary filter states — initialized from URL
+  const [selectedUnitId, setSelectedUnitId] = useState<number | null>(() => {
+    const raw = getUrlParam("unit");
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return isNaN(parsed) ? null : parsed;
+  });
+  const [selectedOfficerId, setSelectedOfficerId] = useState<number | null>(() => {
+    const raw = getUrlParam("officer");
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return isNaN(parsed) ? null : parsed;
+  });
 
   // Funnel view mode: "chart" (visual) or "table" (tabular)
-  const [funnelViewMode, setFunnelViewMode] = useState<"chart" | "table">("chart");
+  const [funnelViewMode, setFunnelViewMode] = useState<"chart" | "table">(
+    () => getUrlParam("funnel") === "table" ? "table" : "chart"
+  );
 
   // Pass scope and filter options to useDashboardStats hook
   const { stats, teamStats, isLoading, error, refetch } = useDashboardStats({
@@ -105,14 +157,13 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   });
 
   // === HOOKS (must be before any early returns — Rules of Hooks) ===
-  const router = useRouter();
   const handleQuickAction = useCallback((action: "new_lead") => {
     switch (action) {
       case "new_lead":
-        router.push("/leads?action=create");
+        navRouter.push("/leads?action=create");
         break;
     }
-  }, [router]);
+  }, [navRouter]);
 
   // === DATA TRANSFORMERS ===
   const performanceTrends = useMemo(() => (stats?.performance_trends ?? []).map((t) => ({
@@ -245,11 +296,23 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         isGoalMet={isGoalMet}
         onQuickAction={handleQuickAction}
         scope={scope!}
-        onScopeChange={(s) => setScope(s)}
+        onScopeChange={(s) => {
+          setScope(s);
+          setSelectedUnitId(null);
+          setSelectedOfficerId(null);
+          updateSearchParams({ scope: s, unit: null, officer: null });
+        }}
         selectedOfficerId={selectedOfficerId}
-        onOfficerChange={setSelectedOfficerId}
+        onOfficerChange={(id) => {
+          setSelectedOfficerId(id);
+          updateSearchParams({ officer: id?.toString() ?? null });
+        }}
         selectedUnitId={selectedUnitId}
-        onUnitChange={setSelectedUnitId}
+        onUnitChange={(id) => {
+          setSelectedUnitId(id);
+          setSelectedOfficerId(null);
+          updateSearchParams({ unit: id?.toString() ?? null, officer: null });
+        }}
       />
 
       {/* KPI Summary Banner */}
@@ -292,7 +355,10 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
             <div className="flex justify-end">
               <div className="inline-flex items-center rounded-lg border bg-muted p-1 text-muted-foreground">
                 <button
-                  onClick={() => setFunnelViewMode("chart")}
+                  onClick={() => {
+                    setFunnelViewMode("chart");
+                    updateSearchParams({ funnel: null });
+                  }}
                   className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                     funnelViewMode === "chart"
                       ? "bg-background text-foreground shadow-sm"
@@ -303,7 +369,10 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
                   <span className="hidden sm:inline">Biểu đồ</span>
                 </button>
                 <button
-                  onClick={() => setFunnelViewMode("table")}
+                  onClick={() => {
+                    setFunnelViewMode("table");
+                    updateSearchParams({ funnel: "table" });
+                  }}
                   className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                     funnelViewMode === "table"
                       ? "bg-background text-foreground shadow-sm"
