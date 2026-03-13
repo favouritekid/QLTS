@@ -107,7 +107,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
       {/* Header */}
       <PageHeader
         title="Bảng Pipeline"
-        description="Kéo thả lead để di chuyển qua các giai đoạn pipeline"
+        description="Tổng quan lead theo từng giai đoạn. Mở lead để chuyển trạng thái qua bước tư vấn."
         backButton={{ href: "/leads", label: "Quay lại Leads" }}
         actions={
           <>

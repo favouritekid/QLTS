@@ -16,7 +16,6 @@ import type { Lead } from "@/types/lead.types";
 interface PipelineColumnProps {
   stage: PipelineStageWithStats;
   leads: Lead[];
-  isActiveDropZone?: boolean;
 }
 
 // Get column background style from hex color
@@ -25,8 +24,8 @@ const getColumnStyle = (hexColor: string) => ({
   borderColor: `${hexColor}40`, // 25% opacity for border
 });
 
-export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColumnProps) {
-  const { setNodeRef, isOver } = useDroppable({
+export function PipelineColumn({ stage, leads }: PipelineColumnProps) {
+  const { setNodeRef } = useDroppable({
     id: stage.id,
     // ✅ T2 FIX: Attach stage metadata so drop-on-card can resolve correct target stage
     data: { type: "column", stageId: stage.id },
@@ -52,11 +51,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
   return (
     <div
       ref={setNodeRef}
-      className={`flex-shrink-0 w-[85vw] sm:w-72 lg:w-80 snap-center lg:snap-align-none ${
-        isOver || isActiveDropZone
-          ? "ring-2 ring-primary ring-offset-2"
-          : ""
-      } transition-shadow duration-200`}
+      className="flex-shrink-0 w-[85vw] sm:w-72 lg:w-80 snap-center lg:snap-align-none"
     >
       <Card className="h-full flex flex-col border-2" style={columnStyle}>
         <CardHeader className="pb-3">
