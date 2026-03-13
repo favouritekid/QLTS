@@ -14,7 +14,6 @@ import type {
   ConsultationStatusUpdate,
   FullPipeline,
   PipelineQueryParams,
-  MoveLeadPayload,
   AllowedTransition as AllowedTransitionType,
   AllowedTransitionCreate as AllowedTransitionCreateType,
 } from '@/types/pipeline.types'
@@ -272,34 +271,6 @@ export async function deleteConsultationStatus(
 // ============================================
 
 /**
- * Move lead to different pipeline stage
- * Used for kanban drag-and-drop
- *
- * @throws {AxiosError} 404 if lead not found, 403 if no permission
- *
- * @example
- * ```ts
- * const updated = await pipelineApi.moveLeadToStage({
- *   lead_id: 123,
- *   from_stage_id: 'contacted',
- *   to_stage_id: 'consultation_scheduled',
- *   reason: 'Consultation booked for next week'
- * })
- * ```
- */
-export async function moveLeadToStage(data: MoveLeadPayload): Promise<unknown> {
-  const { lead_id, to_status_id } = data
-
-  // pipeline_stage_id is in SPECIAL_HANDLED_FIELDS (blocked by backend).
-  // Pipeline moves must go through the consultation flow.
-  const response = await api.post(`/api/leads/${lead_id}/consultations`, {
-    status_id: to_status_id,
-  })
-
-  return response.data
-}
-
-/**
  * Get leads in specific pipeline stage
  *
  * @example
@@ -495,7 +466,6 @@ export const pipelineApi = {
   deleteAllowedTransition,
 
   // Lead Pipeline Operations
-  moveLeadToStage,
   getLeadsInStage,
 
   // Admin: Revert

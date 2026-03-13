@@ -17,7 +17,6 @@ import {
   useCreateConsultationStatus,
   useUpdateConsultationStatus,
   useDeleteConsultationStatus,
-  useMoveLeadToStage,
   useRevertLeadStatus,
 } from "./usePipeline";
 import type {
@@ -325,64 +324,6 @@ describe("usePipeline Hook", () => {
   });
 
   describe("Mutations - Pipeline Operations", () => {
-    describe("useMoveLeadToStage", () => {
-      it("should move a lead to a different stage", async () => {
-        server.use(
-          http.post(`${API_BASE_URL}/api/leads/:id/consultations`, async () => {
-            return HttpResponse.json({
-              id: 1,
-              status_id: "sts02",
-              lead_id: 1,
-              created_at: new Date().toISOString(),
-            });
-          })
-        );
-
-        const { result } = renderHook(() => useMoveLeadToStage(), {
-          wrapper: createWrapper(),
-        });
-
-        result.current.mutate({
-          lead_id: 1,
-          from_stage_id: "new_lead",
-          to_stage_id: "contacted",
-          to_status_id: "sts02",
-        });
-
-        await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-        expect(result.current.data).toBeDefined();
-      });
-
-      it("should handle moving lead without from_stage_id", async () => {
-        server.use(
-          http.post(`${API_BASE_URL}/api/leads/:id/consultations`, async () => {
-            return HttpResponse.json({
-              id: 2,
-              status_id: "sts02",
-              lead_id: 1,
-              created_at: new Date().toISOString(),
-            });
-          })
-        );
-
-        const { result } = renderHook(() => useMoveLeadToStage(), {
-          wrapper: createWrapper(),
-        });
-
-        result.current.mutate({
-          lead_id: 1,
-          from_stage_id: "new_lead",
-          to_stage_id: "contacted",
-          to_status_id: "sts02",
-        });
-
-        await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-        expect(result.current.data).toBeDefined();
-      });
-    });
-
     describe("useRevertLeadStatus", () => {
       it("should revert a lead to a previous stage", async () => {
         server.use(
