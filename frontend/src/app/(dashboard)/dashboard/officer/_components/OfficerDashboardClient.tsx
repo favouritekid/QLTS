@@ -92,7 +92,23 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     enabled: !!scope,
   });
 
-  // === DATA TRANSFORMERS (must be before any early returns — Rules of Hooks) ===
+  // === HOOKS (must be before any early returns — Rules of Hooks) ===
+  const router = useRouter();
+  const handleQuickAction = useCallback((action: "new_lead" | "log_call" | "schedule") => {
+    switch (action) {
+      case "new_lead":
+        router.push("/leads?action=create");
+        break;
+      case "log_call":
+        toast.info("Tính năng đang phát triển");
+        break;
+      case "schedule":
+        toast.info("Tính năng đang phát triển");
+        break;
+    }
+  }, [router]);
+
+  // === DATA TRANSFORMERS ===
   const performanceTrends = useMemo(() => (stats?.performance_trends ?? []).map((t) => ({
     date: t.date,
     leads_assigned: t.assigned,
@@ -211,22 +227,6 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   // Phase 2: Funnel suggestions
   const funnelSuggestions = stats.funnel_suggestions ?? [];
   const funnelNetConversionTrend = stats.funnel_net_conversion_trend ?? null;
-
-  // Quick action handler
-  const router = useRouter();
-  const handleQuickAction = useCallback((action: "new_lead" | "log_call" | "schedule") => {
-    switch (action) {
-      case "new_lead":
-        router.push("/leads?action=create");
-        break;
-      case "log_call":
-        toast.info("Tính năng đang phát triển");
-        break;
-      case "schedule":
-        toast.info("Tính năng đang phát triển");
-        break;
-    }
-  }, [router]);
 
   // Calculate if daily goal is met for sparkle icon
   const isGoalMet = stats.kpis.consultations_target > 0 &&
