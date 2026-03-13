@@ -1,8 +1,8 @@
 // src/components/officer/dashboard/MonthlyBreakdownCard.tsx
 /**
- * Gap 2: Monthly KPI Plan Breakdown Card
+ * Gap 2+3: Monthly KPI Plan Breakdown Card
  * Collapsed by default, full-width, shows 12-month target vs actual.
- * Returns null when no plan exists (404).
+ * Gap 3: consultation daily target vs actual with achievement coloring.
  */
 
 "use client";
@@ -33,6 +33,27 @@ function fmtPct(n: number | null | undefined): string {
   if (n == null) return "—";
   return n.toLocaleString("vi-VN", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
 }
+
+/**
+ * Consultation achievement: actual_avg vs target daily.
+ * Returns "met" | "near" | "behind" | null (no actual data).
+ */
+function consultationStatus(
+  target: number | null | undefined,
+  actualAvg: number | null | undefined,
+): "met" | "near" | "behind" | null {
+  if (actualAvg == null || target == null || target === 0) return null;
+  const ratio = actualAvg / target;
+  if (ratio >= 1) return "met";
+  if (ratio >= 0.8) return "near";
+  return "behind";
+}
+
+const STATUS_COLORS = {
+  met: "text-success-600 dark:text-success-500",
+  near: "text-warning-600 dark:text-warning-500",
+  behind: "text-destructive",
+} as const;
 
 export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardProps) {
   const [expanded, setExpanded] = useState(false);
@@ -106,6 +127,7 @@ export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardPr
                   const isFuture = isCurrentYear && m.month > currentMonth;
                   const isOnTrack = m.enrollment_actual != null && m.enrollment_actual >= m.enrollment_target;
                   const isBehind = m.enrollment_actual != null && m.enrollment_actual < m.enrollment_target;
+                  const cStatus = consultationStatus(m.consultations_daily, m.consultations_actual_avg);
 
                   return (
                     <tr
@@ -133,7 +155,20 @@ export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardPr
                       )}>
                         {fmtNum(m.enrollment_actual)}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fmtNum(m.consultations_daily)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" data-testid={`consult-cell-${m.month}`}>
+                        {m.consultations_actual_avg != null ? (
+                          <span className={cn(cStatus && STATUS_COLORS[cStatus])}>
+                            {fmtNum(m.consultations_actual_avg)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                        {m.consultations_daily != null && (
+                          <span className="text-muted-foreground">
+                            /{fmtNum(m.consultations_daily)}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">{fmtNum(m.consultations_monthly_total)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{fmtPct(m.conversion_rate)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{fmtPct(m.win_rate)}</td>

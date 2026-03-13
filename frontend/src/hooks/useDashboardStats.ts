@@ -384,7 +384,8 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
 // GAP 2: Monthly KPI Plan Hook
 // =============================================================================
 
-export { type OfficerKpiPlanResponse, type OfficerPlanMonthSummary } from "@/lib/api/officer";
+import type { OfficerKpiPlanResponse, OfficerPlanMonthSummary } from "@/lib/api/officer";
+export type { OfficerKpiPlanResponse, OfficerPlanMonthSummary };
 
 export interface UseOfficerKpiPlanOptions {
   fiscalYear: number;

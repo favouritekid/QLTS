@@ -1,7 +1,7 @@
 // src/components/officer/dashboard/MonthlyBreakdownCard.test.tsx
 // @vitest-environment jsdom
 /**
- * Gap 2: Contract tests for MonthlyBreakdownCard.
+ * Gap 2+3: Contract tests for MonthlyBreakdownCard.
  *
  * Validates:
  * - Returns null when plan is undefined (404)
@@ -11,6 +11,8 @@
  * - Current month highlighted
  * - Footer totals correct
  * - Source label shows "Cá nhân" vs "Đơn vị"
+ * - Gap 3: consultation actual vs target rendering
+ * - Gap 3: achievement coloring (met/near/behind)
  */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -46,6 +48,7 @@ function makePlan(overrides: Partial<OfficerKpiPlanResponse> = {}): OfficerKpiPl
     enrollment_actual: i < 2 ? 8 : null, // Jan & Feb have actuals
     working_days: 22,
     consultations_daily: 10,
+    consultations_actual_avg: i < 2 ? 12.5 : null, // Jan & Feb have actual consultation avg
     consultations_monthly_total: 220,
     conversion_rate: 15.0,
     win_rate: 33.0,
@@ -63,7 +66,7 @@ function makePlan(overrides: Partial<OfficerKpiPlanResponse> = {}): OfficerKpiPl
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — Gap 2 (existing)
 // ---------------------------------------------------------------------------
 
 describe("MonthlyBreakdownCard", () => {
@@ -144,6 +147,7 @@ describe("MonthlyBreakdownCard", () => {
       enrollment_actual: null,
       working_days: 22,
       consultations_daily: 10,
+      consultations_actual_avg: null,
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
       win_rate: 33.0,
@@ -171,6 +175,7 @@ describe("MonthlyBreakdownCard", () => {
       enrollment_actual: i === 0 ? 3 : i === 1 ? 5 : null,
       working_days: 22,
       consultations_daily: 10,
+      consultations_actual_avg: null,
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
       win_rate: 33.0,
@@ -187,5 +192,124 @@ describe("MonthlyBreakdownCard", () => {
     const cells = within(footer).getAllByRole("cell");
     // Footer actual cell (index 2) should show sum=8, NOT achieved_ytd=99
     expect(cells[2].textContent).toBe("8");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tests — Gap 3: Consultation actual vs target
+  // ---------------------------------------------------------------------------
+
+  it("renders consultation actual/target in TV/ngày cell", async () => {
+    const user = userEvent.setup();
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      enrollment_target: 7,
+      enrollment_actual: null,
+      working_days: 22,
+      consultations_daily: 10,
+      consultations_actual_avg: i === 0 ? 12.0 : null, // Only Jan has actual
+      consultations_monthly_total: 220,
+      conversion_rate: 15.0,
+      win_rate: 33.0,
+    }));
+    render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+
+    // Month 1 cell should show "12/10" (actual/target)
+    const cell1 = screen.getByTestId("consult-cell-1");
+    expect(cell1.textContent).toContain("12");
+    expect(cell1.textContent).toContain("/10");
+
+    // Month 3 cell should show "—/10" (no actual, has target)
+    const cell3 = screen.getByTestId("consult-cell-3");
+    expect(cell3.textContent).toContain("—");
+    expect(cell3.textContent).toContain("/10");
+  });
+
+  it("shows green color when consultation actual >= target (met)", async () => {
+    const user = userEvent.setup();
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      enrollment_target: 7,
+      enrollment_actual: null,
+      working_days: 22,
+      consultations_daily: 10,
+      consultations_actual_avg: i === 0 ? 10.0 : null, // Exactly met
+      consultations_monthly_total: 220,
+      conversion_rate: 15.0,
+      win_rate: 33.0,
+    }));
+    render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+
+    const cell = screen.getByTestId("consult-cell-1");
+    const actualSpan = cell.querySelector("span");
+    expect(actualSpan?.className).toContain("success");
+  });
+
+  it("shows yellow color when consultation actual >= 80% target (near)", async () => {
+    const user = userEvent.setup();
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      enrollment_target: 7,
+      enrollment_actual: null,
+      working_days: 22,
+      consultations_daily: 10,
+      consultations_actual_avg: i === 0 ? 8.5 : null, // 85% = near
+      consultations_monthly_total: 220,
+      conversion_rate: 15.0,
+      win_rate: 33.0,
+    }));
+    render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+
+    const cell = screen.getByTestId("consult-cell-1");
+    const actualSpan = cell.querySelector("span");
+    expect(actualSpan?.className).toContain("warning");
+  });
+
+  it("shows red color when consultation actual < 80% target (behind)", async () => {
+    const user = userEvent.setup();
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      enrollment_target: 7,
+      enrollment_actual: null,
+      working_days: 22,
+      consultations_daily: 10,
+      consultations_actual_avg: i === 0 ? 5.0 : null, // 50% = behind
+      consultations_monthly_total: 220,
+      conversion_rate: 15.0,
+      win_rate: 33.0,
+    }));
+    render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+
+    const cell = screen.getByTestId("consult-cell-1");
+    const actualSpan = cell.querySelector("span");
+    expect(actualSpan?.className).toContain("destructive");
+  });
+
+  it("does not show achievement color when month has no actual (future month)", async () => {
+    const user = userEvent.setup();
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      enrollment_target: 7,
+      enrollment_actual: null,
+      working_days: 22,
+      consultations_daily: 10,
+      consultations_actual_avg: null, // No actual for any month
+      consultations_monthly_total: 220,
+      conversion_rate: 15.0,
+      win_rate: 33.0,
+    }));
+    render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+
+    const cell = screen.getByTestId("consult-cell-1");
+    const firstSpan = cell.querySelector("span");
+    // "—" dash span should have muted color, not achievement color
+    expect(firstSpan?.className).toContain("muted");
+    expect(firstSpan?.className).not.toContain("success");
+    expect(firstSpan?.className).not.toContain("warning");
+    expect(firstSpan?.className).not.toContain("destructive");
   });
 });

@@ -127,6 +127,7 @@ export interface OfficerPlanMonthSummary {
   enrollment_actual: number | null;
   working_days: number;
   consultations_daily: number | null;
+  consultations_actual_avg: number | null;
   consultations_monthly_total: number | null;
   conversion_rate: number | null;
   win_rate: number | null;

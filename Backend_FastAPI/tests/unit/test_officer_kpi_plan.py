@@ -15,7 +15,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from decimal import Decimal
 
-from app.utils.exceptions import ResourceNotFoundError
+# ResourceNotFoundError import removed — service now returns None for no-plan
 
 
 def _make_mock_user(officer_id=1, unit_id=10):
@@ -27,6 +27,7 @@ def _make_mock_user(officer_id=1, unit_id=10):
 
 def _make_mock_plan_month(month, enrollment_target=7, actual_enrollments=None,
                           working_days=22, consultations_daily=10,
+                          actual_consultations_avg=None,
                           conversion_rate=Decimal("15.00"), win_rate=Decimal("33.00")):
     pm = MagicMock()
     pm.month = month
@@ -34,6 +35,7 @@ def _make_mock_plan_month(month, enrollment_target=7, actual_enrollments=None,
     pm.actual_enrollments = actual_enrollments
     pm.working_days = working_days
     pm.consultations_daily = consultations_daily
+    pm.actual_consultations_avg = actual_consultations_avg
     pm.conversion_rate = conversion_rate
     pm.win_rate = win_rate
     return pm
@@ -104,8 +106,8 @@ class TestGetOfficerKpiPlan:
         assert result["source"] == "unit"
 
     @patch("app.services.officer_service.OfficerRepository")
-    async def test_no_plan_raises_404(self, MockOfficerRepo):
-        """When no plan at either level, raises ResourceNotFoundError."""
+    async def test_no_plan_returns_none(self, MockOfficerRepo):
+        """When no plan at either level, returns None (not raise 404)."""
         from app.services.officer_service import get_officer_kpi_plan
 
         mock_db = AsyncMock()
@@ -119,8 +121,9 @@ class TestGetOfficerKpiPlan:
         mock_planning_repo.get_active_plan_by_scope = AsyncMock(return_value=None)
 
         with patch("app.repositories.kpi_planning_repository.KpiPlanningRepository", return_value=mock_planning_repo):
-            with pytest.raises(ResourceNotFoundError):
-                await get_officer_kpi_plan(mock_db, officer_id=1, fiscal_year=2026)
+            result = await get_officer_kpi_plan(mock_db, officer_id=1, fiscal_year=2026)
+
+        assert result is None
 
     @patch("app.services.officer_service.OfficerRepository")
     async def test_actual_from_kpi_plan_month(self, MockOfficerRepo):
@@ -198,3 +201,32 @@ class TestGetOfficerKpiPlan:
         # 12 months * 5 = 60 / 100 * 100 = 60.0
         assert result["achieved_ytd"] == 60
         assert result["progress_pct"] == 60.0
+
+    @patch("app.services.officer_service.OfficerRepository")
+    async def test_consultations_actual_avg_from_plan_month(self, MockOfficerRepo):
+        """Gap 3: consultations_actual_avg read from KpiPlanMonth.actual_consultations_avg."""
+        from app.services.officer_service import get_officer_kpi_plan
+
+        mock_db = AsyncMock()
+        mock_user = _make_mock_user()
+
+        mock_officer_repo = MagicMock()
+        mock_officer_repo.get_officer_with_capacity = AsyncMock(return_value=mock_user)
+        MockOfficerRepo.return_value = mock_officer_repo
+
+        months = [
+            _make_mock_plan_month(1, actual_consultations_avg=Decimal("12.50")),
+            _make_mock_plan_month(2, actual_consultations_avg=Decimal("8.00")),
+            _make_mock_plan_month(3, actual_consultations_avg=None),  # No actual yet
+        ] + [_make_mock_plan_month(m) for m in range(4, 13)]
+        plan = _make_mock_plan(months=months)
+
+        mock_planning_repo = MagicMock()
+        mock_planning_repo.get_active_plan_by_scope = AsyncMock(return_value=plan)
+
+        with patch("app.repositories.kpi_planning_repository.KpiPlanningRepository", return_value=mock_planning_repo):
+            result = await get_officer_kpi_plan(mock_db, officer_id=1, fiscal_year=2026)
+
+        assert result["months"][0]["consultations_actual_avg"] == 12.5
+        assert result["months"][1]["consultations_actual_avg"] == 8.0
+        assert result["months"][2]["consultations_actual_avg"] is None

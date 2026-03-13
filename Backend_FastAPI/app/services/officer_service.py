@@ -1736,6 +1736,7 @@ async def get_officer_kpi_plan(
                 "enrollment_actual": None,
                 "working_days": 0,
                 "consultations_daily": None,
+                "consultations_actual_avg": None,
                 "consultations_monthly_total": None,
                 "conversion_rate": None,
                 "win_rate": None,
@@ -1747,6 +1748,7 @@ async def get_officer_kpi_plan(
             achieved_ytd += actual_enroll
 
         consult_daily = int(pm.consultations_daily) if pm.consultations_daily is not None else None
+        consult_actual_avg = float(pm.actual_consultations_avg) if pm.actual_consultations_avg is not None else None
         working_days = int(pm.working_days) if pm.working_days is not None else 0
         consult_monthly = (consult_daily * working_days) if consult_daily is not None else None
 
@@ -1756,6 +1758,7 @@ async def get_officer_kpi_plan(
             "enrollment_actual": actual_enroll,
             "working_days": working_days,
             "consultations_daily": consult_daily,
+            "consultations_actual_avg": consult_actual_avg,
             "consultations_monthly_total": consult_monthly,
             "conversion_rate": float(pm.conversion_rate) if pm.conversion_rate is not None else None,
             "win_rate": float(pm.win_rate) if pm.win_rate is not None else None,

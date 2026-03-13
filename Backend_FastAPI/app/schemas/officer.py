@@ -294,6 +294,7 @@ class OfficerPlanMonthSummary(BaseModel):
     enrollment_actual: Optional[int] = None
     working_days: int
     consultations_daily: Optional[int] = None
+    consultations_actual_avg: Optional[float] = None
     consultations_monthly_total: Optional[int] = None
     conversion_rate: Optional[float] = None
     win_rate: Optional[float] = None
