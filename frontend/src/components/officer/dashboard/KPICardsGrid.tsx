@@ -228,7 +228,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               icon={Phone}
               onClick={goToLeads}
             />
-            {kpis.is_unit_target && (
+            {kpis.is_unit_target && todayInRange && (
               <span className="absolute bottom-1.5 left-3 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                 Chỉ tiêu tập thể phòng
               </span>
