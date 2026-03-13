@@ -9,9 +9,11 @@ to verify:
 2. /api/officer/leaderboard IDOR via resolve_drill_down_officer_id
 3. /api/officer/upcoming-activities IDOR + drill-down behavior
 4. Leaderboard is_focus_officer / is_current_user semantics
+5. /api/officer/my-kpi-plan response shape (consultations_actual_avg field)
 """
 import logging
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 
 import pytest
 import pytest_asyncio
@@ -834,3 +836,103 @@ class TestMyKpiPlanRouteWiring:
             headers=admin_token_headers,
         )
         assert resp.status_code == 404
+
+
+# ===========================================================================
+# === /api/officer/my-kpi-plan Response Shape Tests ===
+# ===========================================================================
+
+async def _create_kpi_plan_with_months(
+    unit_id: int,
+    officer_id: int,
+    fiscal_year: int,
+    actual_consultations_avgs: dict[int, Decimal] | None = None,
+) -> int:
+    """Create a KpiPlan with 12 KpiPlanMonth rows.
+
+    actual_consultations_avgs: {month: Decimal} for months that have actuals.
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            plan = models.KpiPlan(
+                unit_id=unit_id,
+                officer_id=officer_id,
+                fiscal_year=fiscal_year,
+                annual_enrollment_target=84,
+                sla_target=Decimal("85.00"),
+                response_time_target=Decimal("2.00"),
+                is_active=True,
+            )
+            session.add(plan)
+            await session.flush()
+
+            for m in range(1, 13):
+                avg = (actual_consultations_avgs or {}).get(m)
+                pm = models.KpiPlanMonth(
+                    plan_id=plan.id,
+                    month=m,
+                    enrollment_target=7,
+                    working_days=22,
+                    weight=Decimal("0.0833"),
+                    consultations_daily=10,
+                    conversion_rate=Decimal("15.00"),
+                    win_rate=Decimal("33.00"),
+                    actual_consultations_avg=avg,
+                )
+                session.add(pm)
+            plan_id = plan.id
+    return plan_id
+
+
+class TestMyKpiPlanResponseShape:
+    """
+    Verify that /api/officer/my-kpi-plan response includes
+    consultations_actual_avg field (Gap 3) with correct values.
+    """
+
+    @pytest.mark.asyncio
+    async def test_response_includes_consultations_actual_avg(
+        self,
+        client: AsyncClient,
+        seed_lead_dependencies,
+        officer_user_in_db,
+        officer_token_headers,
+    ):
+        """Plan with actual_consultations_avg on months 1-2 → response reflects values."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        await _create_kpi_plan_with_months(
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            fiscal_year=2077,
+            actual_consultations_avgs={
+                1: Decimal("12.50"),
+                2: Decimal("8.00"),
+            },
+        )
+
+        resp = await client.get(
+            KPI_PLAN_URL,
+            params={"fiscal_year": 2077},
+            headers=officer_token_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data is not None
+        assert len(data["months"]) == 12
+
+        # Month 1: actual_consultations_avg = 12.5
+        m1 = data["months"][0]
+        assert m1["month"] == 1
+        assert m1["consultations_actual_avg"] == 12.5
+
+        # Month 2: actual_consultations_avg = 8.0
+        m2 = data["months"][1]
+        assert m2["consultations_actual_avg"] == 8.0
+
+        # Month 3: no actual → null
+        m3 = data["months"][2]
+        assert m3["consultations_actual_avg"] is None
+
+        # Verify field exists on all 12 months
+        for m in data["months"]:
+            assert "consultations_actual_avg" in m
