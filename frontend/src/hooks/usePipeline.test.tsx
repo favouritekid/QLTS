@@ -328,20 +328,13 @@ describe("usePipeline Hook", () => {
     describe("useMoveLeadToStage", () => {
       it("should move a lead to a different stage", async () => {
         server.use(
-          http.put(`${API_BASE_URL}/api/leads/:id`, async () => {
+          http.post(`${API_BASE_URL}/api/leads/:id/consultations`, async () => {
             return HttpResponse.json({
               id: 1,
-              full_name: "Test Lead",
-              email: "test@example.com",
-              phone: "0909999999",
-              source: "website",
-              status: "contacted",
-              lead_score: 60,
-              unit_id: 1,
-              pipeline_stage_id: "contacted",
+              status_id: "sts02",
+              lead_id: 1,
               created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            } as Lead);
+            });
           })
         );
 
@@ -353,31 +346,23 @@ describe("usePipeline Hook", () => {
           lead_id: 1,
           from_stage_id: "new_lead",
           to_stage_id: "contacted",
-          reason: "Called and spoke with prospect",
+          to_status_id: "sts02",
         });
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
         expect(result.current.data).toBeDefined();
-        expect(result.current.data?.pipeline_stage_id).toBe("contacted");
       });
 
       it("should handle moving lead without from_stage_id", async () => {
         server.use(
-          http.put(`${API_BASE_URL}/api/leads/:id`, async () => {
+          http.post(`${API_BASE_URL}/api/leads/:id/consultations`, async () => {
             return HttpResponse.json({
-              id: 1,
-              full_name: "Test Lead",
-              email: "test@example.com",
-              phone: "0909999999",
-              source: "website",
-              status: "contacted",
-              lead_score: 60,
-              unit_id: 1,
-              pipeline_stage_id: "contacted",
+              id: 2,
+              status_id: "sts02",
+              lead_id: 1,
               created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            } as Lead);
+            });
           })
         );
 
@@ -389,6 +374,7 @@ describe("usePipeline Hook", () => {
           lead_id: 1,
           from_stage_id: "new_lead",
           to_stage_id: "contacted",
+          to_status_id: "sts02",
         });
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));

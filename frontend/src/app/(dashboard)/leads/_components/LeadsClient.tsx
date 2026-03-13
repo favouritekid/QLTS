@@ -224,7 +224,6 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       deleteMutation.mutate(leadToDelete.id, {
         onSuccess: () => {
           setLeadToDelete(null);
-          toast.success("Xoá lead thành công");
         },
       });
     }
@@ -288,7 +287,6 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       filters.lead_ids = leads.map((l) => l.id).join(",");
     }
     exportMutation.mutate({ format: "csv", filters });
-    toast.success(`Xuất ${leads.length} lead đã chọn`);
   }, [exportMutation, apiFilters]);
 
   const handleBulkDelete = useCallback((leads: Lead[]) => {

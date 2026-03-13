@@ -508,13 +508,13 @@ export function useMoveLeadToStage() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    Lead,
+    unknown,
     AxiosError<ApiErrorResponse>,
     MoveLeadPayload,
     {
       previousLeadsInOldStage?: Lead[];
       previousLeadsInNewStage?: Lead[];
-      previousFullPipeline?: FullPipeline;
+      previousFullPipelines?: [queryKey: readonly unknown[], data: FullPipeline | undefined][];
     }
   >({
     mutationFn: async (data) => {
@@ -541,9 +541,9 @@ export function useMoveLeadToStage() {
       const previousLeadsInNewStage = queryClient.getQueryData<Lead[]>(
         pipelineKeys.stageLeads(to_stage_id)
       );
-      const previousFullPipeline = queryClient.getQueryData<FullPipeline>(
-        pipelineKeys.fullPipeline()
-      );
+      const previousFullPipelines = queryClient.getQueriesData<FullPipeline>({
+        queryKey: [...pipelineKeys.all, "full"],
+      });
 
       // Optimistically update cache (remove from old stage, add to new stage)
       if (previousLeadsInOldStage && from_stage_id) {
@@ -568,7 +568,7 @@ export function useMoveLeadToStage() {
       return {
         previousLeadsInOldStage,
         previousLeadsInNewStage,
-        previousFullPipeline,
+        previousFullPipelines,
       };
     },
 
@@ -586,8 +586,10 @@ export function useMoveLeadToStage() {
           context.previousLeadsInNewStage
         );
       }
-      if (context?.previousFullPipeline) {
-        queryClient.setQueryData(pipelineKeys.fullPipeline(), context.previousFullPipeline);
+      if (context?.previousFullPipelines) {
+        for (const [key, data] of context.previousFullPipelines) {
+          if (data) queryClient.setQueryData(key, data);
+        }
       }
 
       const detail = err.response?.data?.detail;
@@ -596,20 +598,18 @@ export function useMoveLeadToStage() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to move lead";
-      toast.error("Error", { description: message });
+            : "Không thể di chuyển lead";
+      toast.error("Lỗi", { description: message });
     },
 
-    onSuccess: (updatedLead, { from_stage_id, to_stage_id }) => {
-      toast.success("Lead moved successfully!", {
-        description: `Moved to ${to_stage_id.replace(/_/g, " ")}`,
-      });
+    onSuccess: (_, { lead_id, from_stage_id, to_stage_id }) => {
+      toast.success("Di chuyển lead thành công!");
 
       // Invalidate all relevant queries
       queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(lead_id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(lead_id) });
 
       if (from_stage_id) {
         queryClient.invalidateQueries({

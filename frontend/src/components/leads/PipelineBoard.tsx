@@ -16,10 +16,10 @@ import {
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
+import { toast } from "sonner";
 
 import { PipelineColumn } from "./PipelineColumn";
 import { LeadKanbanCard } from "./LeadKanbanCard";
-import { useMoveLeadToStage } from "@/hooks/usePipeline";
 import type { FullPipeline } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
@@ -31,8 +31,6 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [activeLead, setActiveLead] = useState<Lead | null>(null);
   const [activeStageId, setActiveStageId] = useState<string | null>(null);
-
-  const moveLead = useMoveLeadToStage();
 
   // Touch-optimized sensor configuration
   // - TouchSensor: 250ms delay to distinguish from scroll, 5px tolerance
@@ -107,12 +105,10 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
       return;
     }
 
-    const leadId = active.id as number;
     // ✅ T2 FIX: Resolve target stage from metadata — works for both column and card drops
     const targetStageId = resolveTargetStageId(over);
 
     if (!targetStageId) {
-      // Could not determine target stage — cancel the move
       setActiveId(null);
       setActiveLead(null);
       setActiveStageId(null);
@@ -122,19 +118,19 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
     // Find source stage
     let sourceStageId: string | null = null;
     for (const stage of pipeline.stages) {
-      if (stage.leads?.some((l) => l.id === leadId)) {
+      if (stage.leads?.some((l) => l.id === active.id)) {
         sourceStageId = stage.id;
         break;
       }
     }
 
-    // Only move if dropped on a different stage
+    // Drag-drop cannot directly move leads between pipeline stages.
+    // Pipeline stage changes are derived from consultation status transitions
+    // (each stage has multiple statuses with different business meanings).
+    // User must open the lead and create a consultation to change status.
     if (sourceStageId && sourceStageId !== targetStageId) {
-      moveLead.mutate({
-        lead_id: leadId,
-        from_stage_id: sourceStageId,
-        to_stage_id: targetStageId,
-        reason: `Moved from ${sourceStageId} to ${targetStageId}`,
+      toast.info("Vui lòng mở lead để chuyển trạng thái", {
+        description: "Di chuyển pipeline phải qua bước tư vấn (consultation) để đảm bảo đúng nghiệp vụ.",
       });
     }
 

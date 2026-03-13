@@ -18,6 +18,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
+import { useOrganizationUnits } from "@/hooks/useOrganization";
+import { useAdminUsersList } from "@/hooks/useAdminUsers";
 
 // ✅ PERFORMANCE: Dynamic import for heavy @dnd-kit components (~50KB)
 // This defers loading until the component is actually rendered
@@ -32,12 +34,6 @@ import { useFullPipeline } from "@/hooks/usePipeline";
 import { useExportLeads } from "@/hooks/useLeads";
 import type { PipelineQueryParams, FullPipeline } from "@/types/pipeline.types";
 
-// Helper: handles both ratio (0-1) and percentage (0-100)
-function formatConversionRate(value: number): number {
-  if (value <= 1) return value * 100;
-  return value;
-}
-
 interface PipelineClientProps {
   initialData?: FullPipeline;
 }
@@ -51,6 +47,14 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
 
   const { data: pipeline, isLoading, isError, error, refetch } = useFullPipeline(filters, { initialData: filters.include_leads === true && filters.include_stats === true ? initialData : undefined });
   const exportLeads = useExportLeads();
+
+  const { data: units } = useOrganizationUnits();
+  const { data: officersData } = useAdminUsersList({
+    role: "officer",
+    status: "active",
+    page_size: 100,
+    ...(filters.unit_id ? { unit_id: filters.unit_id } : {}),
+  });
 
   const handleExport = () => {
     // ✅ T4 FIX: Map pipeline filter fields to leads export API contract
@@ -158,7 +162,11 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Tất cả đơn vị</SelectItem>
-                    {/* Add unit options here */}
+                    {units?.map((unit) => (
+                      <SelectItem key={unit.id} value={unit.id.toString()}>
+                        {unit.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -178,7 +186,11 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Tất cả cán bộ</SelectItem>
-                    {/* Add officer options here */}
+                    {officersData?.users?.map((officer) => (
+                      <SelectItem key={officer.id} value={officer.id.toString()}>
+                        {officer.full_name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -208,7 +220,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                           };
                         case "week": {
                           const weekStart = new Date(today);
-                          weekStart.setDate(today.getDate() - today.getDay()); // Start of week (Sunday)
+                          weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7)); // Start of week (Monday)
                           const weekEnd = new Date(weekStart);
                           weekEnd.setDate(weekStart.getDate() + 6);
                           return {
@@ -279,7 +291,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
           <CardContent>
             <div className="text-2xl font-bold">
               {pipeline.conversion_rate != null
-                ? `${formatConversionRate(pipeline.conversion_rate).toFixed(1)}%`
+                ? `${pipeline.conversion_rate.toFixed(1)}%`
                 : "N/A"}
             </div>
             <p className="text-xs text-muted-foreground">Tổng chuyển đổi</p>

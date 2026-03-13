@@ -290,7 +290,7 @@ export interface MoveLeadPayload {
   lead_id: number;
   from_stage_id: string;
   to_stage_id: string;
-  reason?: string;
+  to_status_id: string; // Consultation status ID — required for consultation flow
 }
 
 // ============================================

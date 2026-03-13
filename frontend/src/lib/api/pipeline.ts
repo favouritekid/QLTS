@@ -287,12 +287,13 @@ export async function deleteConsultationStatus(
  * })
  * ```
  */
-export async function moveLeadToStage(data: MoveLeadPayload): Promise<Lead> {
-  const { lead_id, to_stage_id, reason } = data
+export async function moveLeadToStage(data: MoveLeadPayload): Promise<unknown> {
+  const { lead_id, to_status_id } = data
 
-  const response = await api.put<Lead>(`/api/leads/${lead_id}`, {
-    pipeline_stage_id: to_stage_id,
-    ...(reason && { officer_summary: reason }),
+  // pipeline_stage_id is in SPECIAL_HANDLED_FIELDS (blocked by backend).
+  // Pipeline moves must go through the consultation flow.
+  const response = await api.post(`/api/leads/${lead_id}/consultations`, {
+    status_id: to_status_id,
   })
 
   return response.data
