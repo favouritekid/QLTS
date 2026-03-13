@@ -122,6 +122,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/officer/team-stats", "action": "GET"},
         {"subject": "{role}", "object": "/api/officer/upcoming-activities", "action": "GET"},
         {"subject": "{role}", "object": "/api/officer/availability", "action": "POST"},
+        {"subject": "{role}", "object": "/api/officer/my-kpi-plan", "action": "GET"},  # Gap 2
         {"subject": "{role}", "object": "/api/officer/recommendations", "action": "GET"},  # Phase 7
         # Admissions access (Admission Profile workflow)
         {"subject": "{role}", "object": "/api/admissions", "action": "GET"},   # List profiles
