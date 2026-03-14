@@ -20,6 +20,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mocks
 // ---------------------------------------------------------------------------
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock("@/lib/utils", () => ({
   cn: (...args: any[]) => args.filter(Boolean).join(" "),
 }));
@@ -34,6 +38,12 @@ vi.mock("lucide-react", () => ({
 const mockUseDashboardDate = vi.fn();
 vi.mock("@/contexts/DashboardDateContext", () => ({
   useDashboardDate: () => mockUseDashboardDate(),
+  formatDateForAPI: (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${dd}`;
+  },
 }));
 
 // Mock useKpiCatalog
@@ -117,6 +127,8 @@ function setTodayInRange() {
   mockUseDashboardDate.mockReturnValue({
     dateRange: { from: weekAgo, to: today },
     preset: "7d",
+    startDate: "2026-03-07",
+    endDate: "2026-03-13",
   });
 }
 
@@ -129,6 +141,8 @@ function setTodayOutOfRange() {
   mockUseDashboardDate.mockReturnValue({
     dateRange: { from: pastStart, to: pastEnd },
     preset: "custom",
+    startDate: "2026-03-01",
+    endDate: "2026-03-03",
   });
 }
 

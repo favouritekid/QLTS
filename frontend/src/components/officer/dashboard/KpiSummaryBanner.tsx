@@ -6,14 +6,16 @@
  * - Only shows items that are notable (don't repeat what cards already show)
  * - Non-comparable metrics never mention targets
  * - Tone: good / attention / neutral — never alarmist
+ * - Items with matching leads filter are clickable deep-links
  */
 
 "use client";
 
 import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, AlertTriangle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useDashboardDate } from "@/contexts/DashboardDateContext";
+import { useDashboardDate, formatDateForAPI } from "@/contexts/DashboardDateContext";
 import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
 import type { KPIStats, AnnualProgressInfo } from "@/hooks/useDashboardStats";
 import type { OfficerKpiPlanResponse } from "@/lib/api/officer";
@@ -27,6 +29,7 @@ type SummaryTone = "good" | "attention" | "neutral";
 interface SummaryItem {
   tone: SummaryTone;
   text: string;
+  href?: string;
 }
 
 interface KpiSummaryBannerProps {
@@ -56,8 +59,19 @@ const TONE_COLOR = {
 // =============================================================================
 
 export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBannerProps) {
-  const { dateRange } = useDashboardDate();
+  const router = useRouter();
+  const { dateRange, startDate, endDate } = useDashboardDate();
   const { canShowTarget } = useKpiCatalog();
+
+  /** Build /leads URL with dashboard date range + extra params */
+  const leadsUrl = (extra: Record<string, string> = {}) => {
+    const params: Record<string, string> = {};
+    if (startDate) params.from = startDate;
+    if (endDate) params.to = endDate;
+    Object.assign(params, extra);
+    const qs = new URLSearchParams(params).toString();
+    return qs ? `/leads?${qs}` : "/leads";
+  };
 
   const items = useMemo(() => {
     const attention: SummaryItem[] = [];
@@ -72,33 +86,43 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
       today >= new Date(new Date(dateRange.from).setHours(0, 0, 0, 0)) &&
       today <= new Date(new Date(dateRange.to).setHours(23, 59, 59, 999));
 
+    const todayStr = formatDateForAPI(today);
+
+    // Month start/end for enrollment deep-links
+    const monthStart = `${today.getFullYear()}-${String(currentMonth).padStart(2, "0")}-01`;
+    const lastDay = new Date(today.getFullYear(), currentMonth, 0).getDate();
+    const monthEnd = `${today.getFullYear()}-${String(currentMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
     // 1. Annual enrollment progress — only notable statuses
     if (annualProgress) {
       const { status, achieved_ytd, annual_target, remaining } = annualProgress;
+      const enrollHref = leadsUrl({ status: "converted" });
       if (status === "completed") {
-        good.push({ tone: "good", text: `Nhập học năm: hoàn thành (${achieved_ytd}/${annual_target})` });
+        good.push({ tone: "good", text: `Nhập học năm: hoàn thành (${achieved_ytd}/${annual_target})`, href: enrollHref });
       } else if (status === "at_risk") {
-        attention.push({ tone: "attention", text: `Nhập học năm: ${achieved_ytd}/${annual_target} — cần tăng tốc (còn ${remaining})` });
+        attention.push({ tone: "attention", text: `Nhập học năm: ${achieved_ytd}/${annual_target} — cần tăng tốc (còn ${remaining})`, href: enrollHref });
       } else if (status === "overdue") {
-        attention.push({ tone: "attention", text: `Nhập học năm: chưa đạt, còn thiếu ${remaining}` });
+        attention.push({ tone: "attention", text: `Nhập học năm: chưa đạt, còn thiếu ${remaining}`, href: enrollHref });
       }
-      // in_progress (on track) → skip, already visible on AnnualProgressCard
     }
 
-    // 2. Current month enrollment (from plan) — only when behind
+    // 2. Current month enrollment (from plan)
     if (plan) {
       const monthData = plan.months.find((m) => m.month === currentMonth);
       if (monthData && monthData.enrollment_actual != null) {
         const met = monthData.enrollment_actual >= monthData.enrollment_target;
+        const monthHref = leadsUrl({ status: "converted", from: monthStart, to: monthEnd });
         if (met) {
           good.push({
             tone: "good",
             text: `Nhập học T${currentMonth}: ${monthData.enrollment_actual}/${monthData.enrollment_target} — đạt`,
+            href: monthHref,
           });
         } else {
           attention.push({
             tone: "attention",
             text: `Nhập học T${currentMonth}: ${monthData.enrollment_actual}/${monthData.enrollment_target}`,
+            href: monthHref,
           });
         }
       }
@@ -111,9 +135,9 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
         good.push({
           tone: "good",
           text: `Tư vấn hôm nay: ${kpis.consultations_today}/${kpis.consultations_target} — đạt mục tiêu`,
+          href: leadsUrl({ date_field: "last_consultation_at", from: todayStr, to: todayStr }),
         });
       }
-      // Not yet met → skip, already visible on KPI card
     }
 
     // 4. Comparable KPIs below target
@@ -126,6 +150,7 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
         attention.push({
           tone: "attention",
           text: `Tỷ lệ chốt đơn ${fmtVal(kpis.win_rate)}% — dưới mục tiêu ${fmtVal(kpis.win_rate_target)}%`,
+          href: leadsUrl({ status: "converted,unqualified,rejected" }),
         });
       }
     }
@@ -158,7 +183,8 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
     }
 
     return result;
-  }, [kpis, annualProgress, plan, dateRange, canShowTarget]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kpis, annualProgress, plan, dateRange, canShowTarget, startDate, endDate]);
 
   if (items.length === 0) return null;
 
@@ -170,8 +196,8 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
       <ul className="space-y-0.5" role="list">
         {items.map((item, idx) => {
           const Icon = TONE_ICON[item.tone];
-          return (
-            <li key={idx} className="flex items-center gap-2">
+          const content = (
+            <>
               <Icon className={cn("h-3.5 w-3.5 shrink-0", TONE_COLOR[item.tone])} aria-hidden="true" />
               <span className={cn(
                 "text-sm",
@@ -179,6 +205,26 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
               )}>
                 {item.text}
               </span>
+            </>
+          );
+
+          if (item.href) {
+            return (
+              <li key={idx}>
+                <button
+                  type="button"
+                  onClick={() => router.push(item.href!)}
+                  className="flex items-center gap-2 w-full text-left rounded-sm hover:bg-muted/50 transition-colors px-1 -mx-1"
+                >
+                  {content}
+                </button>
+              </li>
+            );
+          }
+
+          return (
+            <li key={idx} className="flex items-center gap-2">
+              {content}
             </li>
           );
         })}
