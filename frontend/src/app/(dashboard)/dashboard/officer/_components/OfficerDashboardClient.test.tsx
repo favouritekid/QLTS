@@ -78,13 +78,26 @@ vi.mock("@/lib/api/client", () => ({
   api: { get: vi.fn() },
 }));
 
-// Use a plain closure (not vi.fn) so mockReset: true doesn't clear it
-let kpiPlanMockValue: any = null;
+// Mock officerApi (needed for module resolution, actual data controlled via useOfficerKpiPlan below)
 vi.mock("@/lib/api/officer", () => ({
-  officerApi: {
-    getMyKpiPlan: (..._args: any[]) => Promise.resolve(kpiPlanMockValue),
-  },
+  officerApi: { getMyKpiPlan: () => Promise.resolve(null) },
 }));
+
+// Partially mock useDashboardStats module: keep useDashboardStats real, override useOfficerKpiPlan
+// to return data synchronously (avoids React Query async timing issues in jsdom)
+(globalThis as any).__kpiPlanMockValue = null;
+vi.mock("@/hooks/useDashboardStats", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useDashboardStats")>();
+  return {
+    ...actual,
+    useOfficerKpiPlan: () => ({
+      data: (globalThis as any).__kpiPlanMockValue,
+      isLoading: false,
+      error: null,
+      refetch: () => {},
+    }),
+  };
+});
 
 vi.mock("@/components/ui/skeleton", () => ({
   Skeleton: ({ className }: any) => <div className={className} />,
@@ -213,7 +226,7 @@ describe("OfficerDashboardClient", () => {
     perfChartProps = {};
     (mockUser as any).role = "officer";
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: DASHBOARD_RESPONSE });
-    kpiPlanMockValue = null; // default: no plan
+    (globalThis as any).__kpiPlanMockValue = null; // default: no plan
     // Reset date context to current-month-inclusive range
     mockDateContext = {
       startDate: "2026-03-07",
@@ -456,27 +469,46 @@ describe("OfficerDashboardClient", () => {
     expect(perfChartProps.enrollmentPace).toBeNull();
   });
 
-  it("enrollmentPace computation produces correct shape for current month plan data", () => {
-    // Unit test of the computation logic used in the component's useMemo.
-    // Integration positive case (plan data → PerformanceChart prop) is tested
-    // via PerformanceChart.test.tsx which proves non-null rendering.
-    // Here we verify the arithmetic matches the component source.
+  it("passes non-null enrollmentPace to PerformanceChart when KPI plan exists and range includes today", async () => {
+    // Set scope + date range that includes real today (useMemo uses new Date() internally)
+    setUrlSearch("?scope=personal");
     const now = new Date();
+    const weekAgo = new Date(now); weekAgo.setDate(now.getDate() - 6);
+    const weekAhead = new Date(now); weekAhead.setDate(now.getDate() + 1);
+    mockDateContext = {
+      ...mockDateContext,
+      dateRange: { from: weekAgo, to: weekAhead },
+      startDate: weekAgo.toISOString().slice(0, 10),
+      endDate: weekAhead.toISOString().slice(0, 10),
+    };
     const currentMonth = now.getMonth() + 1;
-    const target = 12;
-    const actual = 5;
-    const remaining = target - actual; // 7
-    const lastDay = new Date(now.getFullYear(), currentMonth, 0).getDate();
-    const daysLeft = Math.max(lastDay - now.getDate(), 1);
-    const pace = remaining / daysLeft;
-    const onTrack = actual >= target * (now.getDate() / lastDay);
-
-    expect(pace).toBeGreaterThan(0);
-    expect(pace).toBeCloseTo(remaining / daysLeft, 5);
-    expect(typeof onTrack).toBe("boolean");
-    expect(`${actual}/${target}`).toBe("5/12");
-    // When target met → pace 0
-    expect(0).toBe(Math.max(0 - 0, 0)); // remaining <= 0 → pace = 0
+    (globalThis as any).__kpiPlanMockValue = {
+      fiscal_year: now.getFullYear(),
+      annual_target: 80,
+      achieved_ytd: 40,
+      progress_pct: 50,
+      source: "officer",
+      months: [{
+        month: currentMonth,
+        enrollment_target: 12,
+        enrollment_actual: 5,
+        working_days: 22,
+        consultations_daily: 6,
+        consultations_actual_avg: 5.5,
+        consultations_monthly_total: 88,
+        conversion_rate: 22,
+        win_rate: 30,
+      }],
+    };
+    renderWithProviders();
+    // Wait until PerformanceChart receives enrollmentPace with .pace property
+    await waitFor(() => {
+      expect(perfChartProps.enrollmentPace).toBeTruthy();
+      expect(perfChartProps.enrollmentPace.pace).toBeDefined();
+    }, { timeout: 3000 });
+    expect(perfChartProps.enrollmentPace.pace).toBeGreaterThan(0);
+    expect(perfChartProps.enrollmentPace.label).toBe("5/12");
+    expect(typeof perfChartProps.enrollmentPace.onTrack).toBe("boolean");
   });
 
   it("passes enrollmentPace=null when date range is historical (today not in range)", async () => {
