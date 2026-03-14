@@ -789,15 +789,23 @@ async def get_lead_for_user(
         lead = await lead_service.get_lead_by_id_shallow(db, lead_id)
     except ResourceNotFoundError:
         raise
-    if current_user.role in [UserRole.ADMIN, UserRole.MANAGER]:
+
+    if current_user.role == UserRole.ADMIN:
         return lead
+
+    if current_user.role == UserRole.MANAGER:
+        if current_user.unit_id is not None:
+            from ..repositories.organization_repository import OrganizationRepository
+            org_repo = OrganizationRepository(db)
+            allowed_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+            if lead.unit_id in allowed_unit_ids:
+                return lead
+        raise ResourceNotFoundError(detail="Lead not found")
+
     if current_user.role == UserRole.OFFICER and lead.assigned_officer_id == current_user.id:
         return lead
-    # ✅ SECURITY FIX: Return 404 instead of 403 to prevent resource enumeration
-    # Per IDOR best practices, unauthorized access should not reveal resource existence
-    raise ResourceNotFoundError(
-        detail="Lead not found"
-    )
+
+    raise ResourceNotFoundError(detail="Lead not found")
 
 
 # ============================================================================
