@@ -49,9 +49,11 @@ function makePlan(overrides: Partial<OfficerKpiPlanResponse> = {}): OfficerKpiPl
     working_days: 22,
     consultations_daily: 10,
     consultations_actual_avg: i < 2 ? 12.5 : null, // Jan & Feb have actual consultation avg
-    consultations_monthly_total: 220,
-    conversion_rate: 15.0,
-    win_rate: 33.0,
+    consultations_monthly_total: 220, // plan-derived: 10 * 22
+    conversion_rate: 15.0,            // plan target
+    conversion_rate_actual: i < 2 ? 18.5 : null, // Jan & Feb have actual
+    win_rate: 33.0,                   // plan target
+    win_rate_actual: i < 2 ? 35.0 : null, // Jan & Feb have actual
   }));
 
   return {
@@ -150,7 +152,9 @@ describe("MonthlyBreakdownCard", () => {
       consultations_actual_avg: null,
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
+      conversion_rate_actual: null,
       win_rate: 33.0,
+      win_rate_actual: null,
     }));
     render(
       <MonthlyBreakdownCard
@@ -178,7 +182,9 @@ describe("MonthlyBreakdownCard", () => {
       consultations_actual_avg: null,
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
+      conversion_rate_actual: null,
       win_rate: 33.0,
+      win_rate_actual: null,
     }));
     render(
       <MonthlyBreakdownCard
@@ -209,7 +215,9 @@ describe("MonthlyBreakdownCard", () => {
       consultations_actual_avg: i === 0 ? 12.0 : null, // Only Jan has actual
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
+      conversion_rate_actual: null,
       win_rate: 33.0,
+      win_rate_actual: null,
     }));
     render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
     await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
@@ -236,7 +244,9 @@ describe("MonthlyBreakdownCard", () => {
       consultations_actual_avg: i === 0 ? 10.0 : null, // Exactly met
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
+      conversion_rate_actual: null,
       win_rate: 33.0,
+      win_rate_actual: null,
     }));
     render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
     await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
@@ -257,7 +267,9 @@ describe("MonthlyBreakdownCard", () => {
       consultations_actual_avg: i === 0 ? 8.5 : null, // 85% = near
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
+      conversion_rate_actual: null,
       win_rate: 33.0,
+      win_rate_actual: null,
     }));
     render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
     await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
@@ -278,7 +290,9 @@ describe("MonthlyBreakdownCard", () => {
       consultations_actual_avg: i === 0 ? 5.0 : null, // 50% = behind
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
+      conversion_rate_actual: null,
       win_rate: 33.0,
+      win_rate_actual: null,
     }));
     render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
     await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
@@ -299,7 +313,9 @@ describe("MonthlyBreakdownCard", () => {
       consultations_actual_avg: null, // No actual for any month
       consultations_monthly_total: 220,
       conversion_rate: 15.0,
+      conversion_rate_actual: null,
       win_rate: 33.0,
+      win_rate_actual: null,
     }));
     render(<MonthlyBreakdownCard plan={makePlan({ months })} />);
     await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
@@ -311,5 +327,37 @@ describe("MonthlyBreakdownCard", () => {
     expect(firstSpan?.className).not.toContain("success");
     expect(firstSpan?.className).not.toContain("warning");
     expect(firstSpan?.className).not.toContain("destructive");
+  });
+
+  // =========================================================================
+  // Plan vs Actual semantics
+  // =========================================================================
+
+  it("labels consultations_monthly_total column as CT (chỉ tiêu)", async () => {
+    const user = userEvent.setup();
+    render(<MonthlyBreakdownCard plan={makePlan()} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    expect(screen.getByText("CT TV tháng")).toBeInTheDocument();
+  });
+
+  it("shows actual conversion_rate when available (not plan target)", async () => {
+    const user = userEvent.setup();
+    render(<MonthlyBreakdownCard plan={makePlan()} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    // Jan & Feb have conversion_rate_actual=18.5 → should show 18,5% (not plan 15,0%)
+    const actualValues = screen.getAllByText("18,5%");
+    expect(actualValues.length).toBe(2); // Jan + Feb
+  });
+
+  it("shows plan conversion_rate in muted style when no actual", async () => {
+    const user = userEvent.setup();
+    render(<MonthlyBreakdownCard plan={makePlan()} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    // Month 3+ has no actual → plan target shown in muted
+    // All 10 months without actual show 15,0% in muted spans
+    const allCells = screen.getAllByText("15,0%");
+    // At least one should be in a muted-colored span (plan fallback)
+    const mutedSpan = allCells.find(el => el.tagName === "SPAN" && el.className.includes("muted"));
+    expect(mutedSpan).toBeDefined();
   });
 });

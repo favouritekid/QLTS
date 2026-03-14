@@ -289,16 +289,22 @@ class TeamStats(BaseModel):
 # =============================================================================
 
 class OfficerPlanMonthSummary(BaseModel):
-    """Monthly breakdown row for officer KPI plan."""
+    """Monthly breakdown row for officer KPI plan.
+
+    Fields suffixed _target are plan values. Fields suffixed _actual are
+    synced from real data.  Unsuffixed legacy fields kept for compatibility.
+    """
     month: int
     enrollment_target: int
     enrollment_actual: Optional[int] = None
     working_days: int
-    consultations_daily: Optional[int] = None
-    consultations_actual_avg: Optional[float] = None
-    consultations_monthly_total: Optional[int] = None
-    conversion_rate: Optional[float] = None
-    win_rate: Optional[float] = None
+    consultations_daily: Optional[int] = None          # plan target: daily consultations
+    consultations_actual_avg: Optional[float] = None   # actual: avg consultations/day (sync)
+    consultations_monthly_total: Optional[int] = None  # plan-derived: daily * working_days
+    conversion_rate: Optional[float] = None            # plan target (NOT actual)
+    conversion_rate_actual: Optional[float] = None     # actual conversion rate (sync)
+    win_rate: Optional[float] = None                   # plan target (NOT actual)
+    win_rate_actual: Optional[float] = None            # actual win rate (sync)
 
 
 class OfficerKpiPlanResponse(BaseModel):

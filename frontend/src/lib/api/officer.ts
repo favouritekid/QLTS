@@ -126,11 +126,13 @@ export interface OfficerPlanMonthSummary {
   enrollment_target: number;
   enrollment_actual: number | null;
   working_days: number;
-  consultations_daily: number | null;
-  consultations_actual_avg: number | null;
-  consultations_monthly_total: number | null;
-  conversion_rate: number | null;
-  win_rate: number | null;
+  consultations_daily: number | null;           // plan target
+  consultations_actual_avg: number | null;      // actual (sync)
+  consultations_monthly_total: number | null;   // plan-derived: daily * working_days
+  conversion_rate: number | null;               // plan target
+  conversion_rate_actual: number | null;        // actual (sync)
+  win_rate: number | null;                      // plan target
+  win_rate_actual: number | null;               // actual (sync)
 }
 
 export interface OfficerKpiPlanResponse {

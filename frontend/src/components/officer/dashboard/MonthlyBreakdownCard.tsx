@@ -150,7 +150,7 @@ export function MonthlyBreakdownCard({ plan, isLoading, expanded: controlledExpa
                   <th className="px-3 py-2 text-right font-medium text-muted-foreground">CT Tuyển sinh</th>
                   <th className="px-3 py-2 text-right font-medium text-muted-foreground">Thực tế</th>
                   <th className="px-3 py-2 text-right font-medium text-muted-foreground">TV/ngày</th>
-                  <th className="px-3 py-2 text-right font-medium text-muted-foreground">Tổng TV tháng</th>
+                  <th className="px-3 py-2 text-right font-medium text-muted-foreground">CT TV tháng</th>
                   <th className="px-3 py-2 text-right font-medium text-muted-foreground">Conv%</th>
                   <th className="px-3 py-2 text-right font-medium text-muted-foreground">Win%</th>
                 </tr>
@@ -203,9 +203,19 @@ export function MonthlyBreakdownCard({ plan, isLoading, expanded: controlledExpa
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fmtNum(m.consultations_monthly_total)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fmtPct(m.conversion_rate)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fmtPct(m.win_rate)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtNum(m.consultations_monthly_total)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {m.conversion_rate_actual != null
+                          ? fmtPct(m.conversion_rate_actual)
+                          : <span className="text-muted-foreground">{fmtPct(m.conversion_rate)}</span>
+                        }
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {m.win_rate_actual != null
+                          ? fmtPct(m.win_rate_actual)
+                          : <span className="text-muted-foreground">{fmtPct(m.win_rate)}</span>
+                        }
+                      </td>
                     </tr>
                   );
                 })}

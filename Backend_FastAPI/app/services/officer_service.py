@@ -10,6 +10,10 @@ from ..repositories import OfficerRepository
 from ..repositories.organization_repository import OrganizationRepository
 from .notification_dispatcher import dispatch
 from . import kpi_service
+from .pipeline_service import LOSS_REASONS
+
+# Build lookup from canonical loss reason source
+_LOSS_REASON_LOOKUP = {r["code"]: r for r in LOSS_REASONS}
 
 log = structlog.get_logger(__name__)
 
@@ -523,19 +527,14 @@ def generate_funnel_suggestions(
                 count = reason["count"]
                 pct = reason["percentage"]
 
-                # Map reason codes to actionable labels
-                reason_actions = {
-                    "PRICE_HIGH": ("học phí cao", "Xem xét chính sách học bổng/ưu đãi"),
-                    "LOCATION_FAR": ("xa nhà", "Hỗ trợ thông tin ký túc xá/di chuyển"),
-                    "CHOSE_COMPETITOR": ("chọn trường khác", "Phân tích USP và cải thiện pitch"),
-                    "NO_CONTACT": ("không liên lạc được", "Cải thiện quy trình follow-up"),
-                    "TIMING_BAD": ("chưa sẵn sàng", "Nurture leads chưa ready"),
-                }
-
-                reason_label, action_hint = reason_actions.get(
-                    reason_code,
-                    (reason_code.lower().replace("_", " "), "Phân tích và có chiến lược xử lý")
-                )
+                # Map reason codes to actionable labels (from canonical source)
+                reason_info = _LOSS_REASON_LOOKUP.get(reason_code)
+                if reason_info:
+                    reason_label = reason_info["label"].lower()
+                    action_hint = reason_info["action_hint"]
+                else:
+                    reason_label = reason_code.lower().replace("_", " ")
+                    action_hint = "Phân tích và có chiến lược xử lý"
 
                 suggestions.append({
                     "id": f"loss_reason_{reason_code}",
@@ -1766,9 +1765,11 @@ async def get_officer_kpi_plan(
             "working_days": working_days,
             "consultations_daily": consult_daily,
             "consultations_actual_avg": consult_actual_avg,
-            "consultations_monthly_total": consult_monthly,
+            "consultations_monthly_total": consult_monthly,  # plan-derived: daily * working_days
             "conversion_rate": float(pm.conversion_rate) if pm.conversion_rate is not None else None,
+            "conversion_rate_actual": float(pm.actual_conversion_rate) if pm.actual_conversion_rate is not None else None,
             "win_rate": float(pm.win_rate) if pm.win_rate is not None else None,
+            "win_rate_actual": float(pm.actual_win_rate) if pm.actual_win_rate is not None else None,
         })
 
     annual_target = int(plan.annual_enrollment_target)

@@ -118,25 +118,31 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
           )}
         </div>
 
-        {/* 3. Total consultations this month */}
+        {/* 3. Total consultations this month (plan-derived, not actual) */}
         <div className="rounded-lg border bg-card p-3">
-          <p className="text-xs text-muted-foreground mb-1">Tổng TV tháng</p>
+          <p className="text-xs text-muted-foreground mb-1">CT TV tháng</p>
           <p className="text-lg font-semibold tabular-nums">
             {fmtNum(monthData.consultations_monthly_total)}
           </p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Chỉ tiêu</p>
         </div>
 
-        {/* 4. Conversion rate */}
+        {/* 4. Conversion rate — show actual if available, otherwise plan target */}
         <div className="rounded-lg border bg-card p-3">
-          <p className="text-xs text-muted-foreground mb-1">Conv% tháng</p>
-          <p className="text-lg font-semibold tabular-nums">
-            {monthData.conversion_rate != null
-              ? monthData.conversion_rate.toLocaleString("vi-VN", {
-                  minimumFractionDigits: 1,
-                  maximumFractionDigits: 1,
-                }) + "%"
-              : "—"}
+          <p className="text-xs text-muted-foreground mb-1">
+            {monthData.conversion_rate_actual != null ? "Conv% thực tế" : "CT Conv%"}
           </p>
+          <p className="text-lg font-semibold tabular-nums">
+            {(() => {
+              const val = monthData.conversion_rate_actual ?? monthData.conversion_rate;
+              return val != null
+                ? val.toLocaleString("vi-VN", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%"
+                : "—";
+            })()}
+          </p>
+          {monthData.conversion_rate_actual == null && monthData.conversion_rate != null && (
+            <p className="text-[10px] text-muted-foreground mt-0.5">Chỉ tiêu</p>
+          )}
         </div>
       </div>
     </div>

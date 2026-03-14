@@ -24,6 +24,7 @@ export interface TrendInfo {
 export interface KPIStats {
   consultations_today: number;
   consultations_target: number;
+  is_unit_target?: boolean;
   consultations_trend: TrendInfo;
   active_leads: number;
   active_leads_in_period?: number;
