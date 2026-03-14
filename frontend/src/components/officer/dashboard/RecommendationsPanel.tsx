@@ -152,7 +152,7 @@ export function RecommendationsPanel({ limit = 5, className, scope = "personal" 
             </div>
             <p className="text-sm font-medium">Tuyệt vời!</p>
             <p className="text-xs text-muted-foreground mt-1">
-              Không có khuyến nghị nào. Bạn đang làm rất tốt! 🎉
+              Không có khuyến nghị nào. Bạn đang làm rất tốt!
             </p>
           </div>
         ) : (

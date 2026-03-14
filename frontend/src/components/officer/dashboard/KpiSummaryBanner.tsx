@@ -139,6 +139,16 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
       }
     }
 
+    // 5. Response time above target (lower is better)
+    if (canShowTarget("response_time_hours", dashboardRange) && kpis.avg_response_time_target != null) {
+      if (kpis.avg_response_time > kpis.avg_response_time_target) {
+        attention.push({
+          tone: "attention",
+          text: `Thời gian phản hồi ${fmtVal(kpis.avg_response_time)}h — trên mục tiêu ${fmtVal(kpis.avg_response_time_target)}h`,
+        });
+      }
+    }
+
     // Prioritize attention items, fill remaining slots with good items
     const MAX_ITEMS = 4;
     const result = [...attention];

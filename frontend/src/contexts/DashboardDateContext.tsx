@@ -11,6 +11,7 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
   useMemo,
   type ReactNode,
 } from "react";
@@ -99,7 +100,7 @@ function resolveInitialDateState(defaultPreset: DatePreset): { preset: DatePrese
   return { preset: defaultPreset, range: getPresetRange(defaultPreset) };
 }
 
-/** Update URL search params for date state without triggering navigation */
+/** Update URL search params for date state — uses pushState for back/forward support */
 function syncDateToURL(updates: Record<string, string | null>) {
   if (typeof window === "undefined") return;
   const params = new URLSearchParams(window.location.search);
@@ -112,7 +113,7 @@ function syncDateToURL(updates: Record<string, string | null>) {
   }
   const qs = params.toString();
   const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-  window.history.replaceState(null, "", newUrl);
+  window.history.pushState({ _dashboardDate: true }, "", newUrl);
 }
 
 interface DashboardDateProviderProps {
@@ -151,6 +152,17 @@ export function DashboardDateProvider({
       to: range.to ? formatDateForAPI(range.to) : null,
     });
   }, []);
+
+  // Restore date state on browser back/forward
+  useEffect(() => {
+    const handlePopState = () => {
+      const restored = resolveInitialDateState(defaultPreset);
+      setPresetState(restored.preset);
+      setDateRange(restored.range);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [defaultPreset]);
 
   const value = useMemo<DashboardDateContextValue>(() => ({
     dateRange,

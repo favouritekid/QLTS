@@ -51,6 +51,7 @@ interface KPIStats {
   new_lead_conversion_rate_trend?: TrendInfo | null;
   avg_response_time: number;
   avg_response_time_trend: TrendInfo;
+  avg_response_time_target?: number | null;
   sla_compliance_rate: number;
   sla_compliance_rate_trend?: TrendInfo | null;
   consultation_effectiveness: number;
@@ -255,6 +256,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   // Gap 1: Use catalog comparison policy to gate target display
   const winRateTarget = canShowTarget("win_rate", dashboardRange) ? kpis.win_rate_target : null;
   const slaTarget = canShowTarget("sla_compliance_rate", dashboardRange) ? kpis.sla_compliance_rate_target : null;
+  const responseTimeTarget = canShowTarget("response_time_hours", dashboardRange) ? kpis.avg_response_time_target : null;
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -342,6 +344,10 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               trend={kpis.avg_response_time_trend}
               inverseTrend={true}
               onClick={goToLeads}
+              target={responseTimeTarget}
+              actualValue={kpis.avg_response_time}
+              targetUnit="h"
+              higherIsBetter={false}
             />
           </div>
         </Card>

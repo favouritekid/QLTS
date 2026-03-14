@@ -34,6 +34,7 @@ export interface KPIStats {
   new_lead_conversion_rate_trend?: TrendInfo | null;
   avg_response_time: number;
   avg_response_time_trend: TrendInfo;
+  avg_response_time_target?: number | null;
   sla_compliance_rate: number;
   sla_compliance_rate_trend?: TrendInfo | null;
   consultation_effectiveness: number;

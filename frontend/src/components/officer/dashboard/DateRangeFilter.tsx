@@ -193,7 +193,7 @@ export function DateRangeFilter() {
                     </Button>
                   </>
                 ) : (
-                  <span className="text-amber-600">👆 Chọn ngày bắt đầu</span>
+                  <span className="text-amber-600">Chọn ngày bắt đầu</span>
                 )}
               </div>
               

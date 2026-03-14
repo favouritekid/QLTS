@@ -1,7 +1,7 @@
 // src/app/(dashboard)/dashboard/officer/_components/OfficerDashboardClient.tsx
 "use client";
 
-import { useState, useRef, useMemo, useCallback } from "react";
+import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,9 +61,7 @@ function getUrlParam(key: string): string | null {
 function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStats }) {
   const navRouter = useRouter();
 
-  // Helper to update search params synchronously via history.replaceState.
-  // Using window.history directly avoids batching issues when multiple
-  // filter changes fire in the same event (e.g. scope change resets unit + officer).
+  // Helper to update search params via pushState for back/forward support.
   const updateSearchParams = useCallback((updates: Record<string, string | null>) => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -76,7 +74,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     }
     const qs = params.toString();
     const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-    window.history.replaceState(null, "", newUrl);
+    window.history.pushState({ _dashboardFilters: true }, "", newUrl);
   }, []);
 
   // Get user to determine default scope
@@ -136,6 +134,27 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   const [funnelViewMode, setFunnelViewMode] = useState<"chart" | "table">(
     () => getUrlParam("funnel") === "table" ? "table" : "chart"
   );
+
+  // Restore filter state on browser back/forward.
+  // URL is the source of truth: if a param is absent, reset to default.
+  useEffect(() => {
+    const handlePopState = () => {
+      const urlScope = getUrlParam("scope");
+      if (urlScope && validScopes.includes(urlScope as DashboardScope)) {
+        setScope(urlScope as DashboardScope);
+      } else {
+        // No scope in URL → reset to role-derived default
+        setScope(resolvedScope);
+      }
+      const rawUnit = getUrlParam("unit");
+      setSelectedUnitId(rawUnit ? parseInt(rawUnit, 10) || null : null);
+      const rawOfficer = getUrlParam("officer");
+      setSelectedOfficerId(rawOfficer ? parseInt(rawOfficer, 10) || null : null);
+      setFunnelViewMode(getUrlParam("funnel") === "table" ? "table" : "chart");
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [resolvedScope]); // re-bind when role changes
 
   // Pass scope and filter options to useDashboardStats hook
   const { stats, teamStats, isLoading, error, refetch } = useDashboardStats({

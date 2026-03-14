@@ -124,9 +124,10 @@ export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsight
     new_lead: actions.filter(a => a.type === "new_lead").length,
   }), [actions]);
 
+  // Call feature not yet implemented — no-op handler
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleCall = useCallback((_leadId: number) => {
-    toast.info("Tính năng gọi điện đang phát triển");
+    // Intentionally no-op until call integration is available
   }, []);
 
   const handleZalo = useCallback((_leadId: number, phone?: string) => {
@@ -215,7 +216,7 @@ export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsight
             </p>
             {filter === "all" && (
               <p className="text-xs text-muted-foreground mt-1">
-                Làm việc tốt lắm! 🎉
+                Làm việc tốt lắm!
               </p>
             )}
           </div>

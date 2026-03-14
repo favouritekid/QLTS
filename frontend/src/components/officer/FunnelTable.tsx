@@ -167,10 +167,10 @@ const LOSS_REASON_LABELS: Record<string, string> = {
 
 /** Suggestion type styles */
 const SUGGESTION_STYLES: Record<FunnelSuggestion["type"], { icon: string; color: string; bg: string }> = {
-  bottleneck: { icon: "🚧", color: "text-red-600", bg: "bg-red-50 dark:bg-red-950/30" },
-  slow_stage: { icon: "🐢", color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
-  high_loss: { icon: "💸", color: "text-rose-600", bg: "bg-rose-50 dark:bg-rose-950/30" },
-  loss_reason: { icon: "📊", color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
+  bottleneck: { icon: "\u25B2", color: "text-red-600", bg: "bg-red-50 dark:bg-red-950/30" },
+  slow_stage: { icon: "\u25C7", color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
+  high_loss: { icon: "\u25BC", color: "text-rose-600", bg: "bg-rose-50 dark:bg-rose-950/30" },
+  loss_reason: { icon: "\u25C9", color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
 };
 
 /** Priority badge styles */

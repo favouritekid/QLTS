@@ -870,6 +870,10 @@ async def get_enhanced_dashboard_stats(
         db, "sla_compliance_rate", officer_id, user.unit_id, "monthly",
         effective_date=filter_end,
     )
+    avg_response_time_target = await kpi_service.get_kpi_target(
+        db, "response_time_hours", officer_id, user.unit_id, "daily",
+        effective_date=filter_end,
+    )
 
     # Build enhanced response
     return {
@@ -887,6 +891,7 @@ async def get_enhanced_dashboard_stats(
             "new_lead_conversion_rate_trend": new_lead_conversion_trend,
             "avg_response_time": avg_response_time,
             "avg_response_time_trend": avg_response_trend,
+            "avg_response_time_target": avg_response_time_target,
             "sla_compliance_rate": sla_stats["rate"],
             "sla_compliance_rate_trend": sla_compliance_trend,
             "consultation_effectiveness": effectiveness_stats["effectiveness"],
@@ -1213,6 +1218,7 @@ async def get_aggregated_dashboard_stats(
             "new_lead_conversion_rate_trend": conversion_trend,
             "avg_response_time": agg_avg_response_time or 0,
             "avg_response_time_trend": response_time_trend,
+            "avg_response_time_target": None,  # Not meaningful for aggregated view
             "sla_compliance_rate": agg_sla_stats["rate"],
             "sla_compliance_rate_trend": sla_trend,
             "consultation_effectiveness": agg_effectiveness_stats["effectiveness"],
@@ -1266,6 +1272,7 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "new_lead_conversion_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "avg_response_time": 0,
             "avg_response_time_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "avg_response_time_target": None,
             "sla_compliance_rate": 0,
             "sla_compliance_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "consultation_effectiveness": 0,

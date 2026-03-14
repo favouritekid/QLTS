@@ -109,7 +109,7 @@ class ActionableLists(BaseModel):
     stale: List[LeadPreview]
     upcoming: List[UpcomingConsultation]
 
-# 👇 Class gây lỗi đây, đảm bảo nó nằm ở đây
+# Main response model — must be defined after component schemas above
 class OfficerDashboardStats(BaseModel):
     status_overview: WorkloadStats
     performance_trends: List[TrendPoint]
@@ -156,6 +156,7 @@ class KPIStats(BaseModel):
     # Average response time (hours)
     avg_response_time: float
     avg_response_time_trend: TrendInfo
+    avg_response_time_target: Optional[float] = None  # From KpiPlan.response_time_target
 
     # SLA Compliance Rate (% leads responded within SLA target hours)
     sla_compliance_rate: float = 0.0
