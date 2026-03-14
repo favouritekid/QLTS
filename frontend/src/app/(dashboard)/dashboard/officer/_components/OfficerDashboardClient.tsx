@@ -44,7 +44,7 @@ import {
   CurrentMonthSnapshot,
   KpiSummaryBanner,
 } from "@/components/officer/dashboard";
-import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
+import { DashboardDateProvider, useDashboardDate } from "@/contexts/DashboardDateContext";
 import { useDashboardStats, useOfficerKpiPlan, type DashboardScope, type EnhancedOfficerStats } from "@/hooks/useDashboardStats";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -191,22 +191,34 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   }, [navRouter]);
 
   // === Enrollment pace benchmark (from KPI plan, for PerformanceChart summary) ===
+  // Only meaningful when the dashboard date range includes the current month.
+  // When viewing historical/custom ranges outside current month, hide the benchmark.
+  const { dateRange: dashDateRange } = useDashboardDate();
   const enrollmentPace = useMemo(() => {
     if (!kpiPlanQuery.data) return null;
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
+    // Guard: only show when date range includes today
+    if (dashDateRange?.from && dashDateRange?.to) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const from = new Date(dashDateRange.from);
+      from.setHours(0, 0, 0, 0);
+      const to = new Date(dashDateRange.to);
+      to.setHours(23, 59, 59, 999);
+      if (today < from || today > to) return null;
+    }
     const monthData = kpiPlanQuery.data.months.find((m) => m.month === currentMonth);
     if (!monthData) return null;
     const target = monthData.enrollment_target;
     const actual = monthData.enrollment_actual ?? 0;
     const remaining = target - actual;
     if (remaining <= 0) return { pace: 0, onTrack: true, label: `${actual}/${target}` };
-    // Remaining calendar days in month
     const lastDay = new Date(now.getFullYear(), currentMonth, 0).getDate();
     const daysLeft = Math.max(lastDay - now.getDate(), 1);
     const pace = remaining / daysLeft;
     return { pace, onTrack: actual >= target * (now.getDate() / lastDay), label: `${actual}/${target}` };
-  }, [kpiPlanQuery.data]);
+  }, [kpiPlanQuery.data, dashDateRange]);
 
   // === DATA TRANSFORMERS ===
   const performanceTrends = useMemo(() => (stats?.performance_trends ?? []).map((t) => ({

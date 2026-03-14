@@ -22,7 +22,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush, prefetch: vi.fn() }),
 }));
 
-// Dynamic mock: identify which component dynamic() loads via loader.toString()
+// Dynamic mock: identify by loader.toString(), capture PerformanceChart props
+let perfChartProps: Record<string, any> = {};
 vi.mock("next/dynamic", () => ({
   default: (loader: any) => {
     const src = loader.toString();
@@ -30,7 +31,8 @@ vi.mock("next/dynamic", () => ({
     if (src.includes("FunnelChart")) testId = "funnel-chart";
     else if (src.includes("FunnelTable")) testId = "funnel-table";
     else if (src.includes("PerformanceChart")) testId = "performance-chart";
-    return function DynamicMock() {
+    return function DynamicMock(props: any) {
+      if (testId === "performance-chart") perfChartProps = props;
       return <div data-testid={testId} />;
     };
   },
@@ -52,16 +54,18 @@ vi.mock("@/lib/utils/vn-date", () => ({
   startOfMonthVN: () => "2026-03-01",
 }));
 
+// Mutable date context — tests can override mockDateContext to simulate historical ranges
+let mockDateContext = {
+  startDate: "2026-03-07",
+  endDate: "2026-03-13",
+  dateRange: { from: new Date(2026, 2, 7), to: new Date(2026, 2, 13) } as { from: Date; to: Date },
+  preset: "7d" as string,
+  setPreset: vi.fn(),
+  setCustomRange: vi.fn(),
+};
 vi.mock("@/contexts/DashboardDateContext", () => ({
   DashboardDateProvider: ({ children }: any) => <>{children}</>,
-  useDashboardDate: () => ({
-    startDate: "2026-03-07",
-    endDate: "2026-03-13",
-    dateRange: { from: new Date(2026, 2, 7), to: new Date(2026, 2, 13) },
-    preset: "7d",
-    setPreset: vi.fn(),
-    setCustomRange: vi.fn(),
-  }),
+  useDashboardDate: () => mockDateContext,
   DATE_PRESET_LABELS: { "7d": "7 ngày", "30d": "30 ngày", "this_month": "Tháng này", "custom": "Tùy chọn" },
   formatDateForAPI: (d: Date) => d.toISOString().slice(0, 10),
 }));
@@ -196,14 +200,27 @@ function setUrlSearch(search: string) {
 describe("OfficerDashboardClient", () => {
   let originalLocation: Location;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalLocation = window.location;
     mockPush.mockReset();
     headerProps = {};
     kpiGridProps = {};
     monthlyProps = {};
+    perfChartProps = {};
     (mockUser as any).role = "officer";
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: DASHBOARD_RESPONSE });
+    // Re-set officerApi mock (mockReset: true clears it between tests)
+    const { officerApi } = await import("@/lib/api/officer");
+    (officerApi.getMyKpiPlan as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    // Reset date context to current-month-inclusive range
+    mockDateContext = {
+      startDate: "2026-03-07",
+      endDate: "2026-03-13",
+      dateRange: { from: new Date(2026, 2, 7), to: new Date(2026, 2, 13) },
+      preset: "7d",
+      setPreset: vi.fn(),
+      setCustomRange: vi.fn(),
+    };
     setUrlSearch("");
   });
 
@@ -424,5 +441,30 @@ describe("OfficerDashboardClient", () => {
     setUrlSearch("");
     act(() => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await waitFor(() => expect(monthlyProps.expanded).toBe(false));
+  });
+
+  // =========================================================================
+  // Enrollment pace benchmark integration
+  // =========================================================================
+
+  it("passes enrollmentPace=null to PerformanceChart when no KPI plan data", async () => {
+    renderWithProviders();
+    await waitFor(() => expect(screen.getByTestId("performance-chart")).toBeInTheDocument());
+    // officerApi.getMyKpiPlan returns null → no pace
+    expect(perfChartProps.enrollmentPace).toBeNull();
+  });
+
+  it("passes enrollmentPace=null when date range is historical (today not in range)", async () => {
+    // Set date context to a past range that doesn't include today
+    mockDateContext = {
+      ...mockDateContext,
+      startDate: "2026-01-01",
+      endDate: "2026-01-31",
+      dateRange: { from: new Date(2026, 0, 1), to: new Date(2026, 0, 31) },
+      preset: "custom",
+    };
+    renderWithProviders();
+    await waitFor(() => expect(screen.getByTestId("performance-chart")).toBeInTheDocument());
+    expect(perfChartProps.enrollmentPace).toBeNull();
   });
 });
