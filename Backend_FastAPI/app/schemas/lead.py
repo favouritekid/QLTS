@@ -341,6 +341,10 @@ class LeadStatusUpdate(BaseModel):
         ...,
         description="Target consultation status ID (validated by FSM engine)"
     )
+    loss_reason_code: Optional[str] = Field(
+        None,
+        description="Required when transitioning to a final negative status"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 

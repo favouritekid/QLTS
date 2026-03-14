@@ -353,55 +353,55 @@ class AdmissionProfile(Base):
     approved_by: Mapped["User"] = relationship(
         "User",
         foreign_keys=[approved_by_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
     rejected_by: Mapped["User"] = relationship(
         "User",
         foreign_keys=[rejected_by_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
     # ✅ Revision request audit relationship
     revision_requested_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[revision_requested_by_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
     # ✅ Resubmit audit relationship
     resubmitted_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[resubmitted_by_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
     # ✅ Override audit relationship
     overridden_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[overridden_by_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
     # ✅ Confirmed by relationship
     confirmed_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[confirmed_by_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
     # ✅ Drop-out audit relationship
     dropped_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[dropped_by_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
     # ✅ FIX #8: Assignment relationship
     assigned_reviewer: Mapped["User"] = relationship(
         "User",
         foreign_keys=[assigned_reviewer_id],
-        lazy="select",
+        lazy="selectin",
         uselist=False
     )
 
