@@ -338,17 +338,22 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
 
   // ── Bulk actions ──────────────────────────────────────────────────────
   const handleBulkApprove = useCallback(async () => {
-    if (selectedIds.length === 0) return
-    await bulkApprove.mutateAsync({ profile_ids: selectedIds })
+    if (selectedProfiles.length === 0) return
+    await bulkApprove.mutateAsync({
+      items: selectedProfiles.map((p) => ({ profile_id: p.id, version: p.version ?? 1 })),
+    })
     clearSelection()
-  }, [selectedIds, bulkApprove, clearSelection])
+  }, [selectedProfiles, bulkApprove, clearSelection])
 
   const handleBulkReject = useCallback(async (reason: string) => {
-    if (selectedIds.length === 0) return
-    await bulkReject.mutateAsync({ profile_ids: selectedIds, reason })
+    if (selectedProfiles.length === 0) return
+    await bulkReject.mutateAsync({
+      items: selectedProfiles.map((p) => ({ profile_id: p.id, version: p.version ?? 1 })),
+      reason,
+    })
     clearSelection()
     setRejectDialogOpen(false)
-  }, [selectedIds, bulkReject, clearSelection])
+  }, [selectedProfiles, bulkReject, clearSelection])
 
   const handleBulkAssign = useCallback(async (officerId: number) => {
     if (selectedIds.length === 0) return
@@ -361,10 +366,14 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
     exportCsv.mutate({
       status: state.statusFilters.length > 0 ? state.statusFilters.join(",") : undefined,
       search: state.search || undefined,
+      major_id: state.majorFilter || undefined,
+      academic_year: state.academicYear || undefined,
+      degree_level: state.degreeLevelFilter || undefined,
+      payment_status: state.paymentStatusFilter || undefined,
       date_from: state.dateFrom || undefined,
       date_to: state.dateTo || undefined,
     })
-  }, [exportCsv, state.statusFilters, state.search, state.dateFrom, state.dateTo])
+  }, [exportCsv, state])
 
   const isAnyLoading = bulkApprove.isPending || bulkReject.isPending || bulkAssign.isPending || exportCsv.isPending
 

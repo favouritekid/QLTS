@@ -1048,10 +1048,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
     ) -> Optional[models.AdmissionConfirmationToken]:
         """
         Get confirmation token with profile and lead relationships loaded.
-        
+
         Args:
             token: Token string from URL
-            
+
         Returns:
             AdmissionConfirmationToken with profile.lead loaded, or None
         """
@@ -1062,6 +1062,34 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 joinedload(models.AdmissionConfirmationToken.profile)
                 .joinedload(models.AdmissionProfile.lead)
             )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_token_for_confirm(
+        self,
+        token: str,
+    ) -> Optional[models.AdmissionConfirmationToken]:
+        """
+        Get confirmation token with pessimistic lock on both token and profile.
+        Used exclusively by verify_and_confirm to prevent race conditions.
+
+        Args:
+            token: Token string from URL
+
+        Returns:
+            AdmissionConfirmationToken with profile + lead locked, or None
+        """
+        from sqlalchemy.orm import selectinload
+
+        stmt = (
+            select(models.AdmissionConfirmationToken)
+            .where(models.AdmissionConfirmationToken.token == token)
+            .options(
+                selectinload(models.AdmissionConfirmationToken.profile)
+                .selectinload(models.AdmissionProfile.lead)
+            )
+            .with_for_update()
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -1087,31 +1115,20 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             token_obj.locked_at = datetime.now(timezone.utc)
         await self.db.flush()
 
-    async def mark_token_confirmed(
+    async def mark_token_used(
         self,
         token_obj: models.AdmissionConfirmationToken,
-        confirmed_via: str = "magic_link"
     ) -> None:
         """
-        Mark token as used and update profile status to confirmed.
-        
+        Mark token as used (consumed). Does NOT change profile status.
+        Profile state transition is handled by the service layer.
+
         Args:
-            token_obj: Token to mark as confirmed
-            confirmed_via: Confirmation method (for analytics)
+            token_obj: Token to mark as used
         """
         from datetime import datetime, timezone
-        
-        now = datetime.now(timezone.utc)
-        
-        # Mark token as used
-        token_obj.confirmed_at = now
-        
-        # Update profile status and analytics fields
-        profile = token_obj.profile
-        profile.status = "confirmed"
-        profile.confirmed_at = now
-        profile.confirmed_via = confirmed_via
-        
+
+        token_obj.confirmed_at = datetime.now(timezone.utc)
         await self.db.flush()
 
     async def invalidate_existing_tokens(

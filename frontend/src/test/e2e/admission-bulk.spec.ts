@@ -369,9 +369,16 @@ test.describe("Admission Bulk Actions + Export", () => {
     expect(profileIds.length).toBeGreaterThanOrEqual(2);
     const idsToApprove = [profileIds[0], profileIds[1]];
 
+    // Fetch current versions for optimistic locking
+    const items = [];
+    for (const pid of idsToApprove) {
+      const profile = await (await page.request.get(`${API_URL}/api/admissions/${pid}`, { headers: adminHeaders })).json();
+      items.push({ profile_id: pid, version: profile.version });
+    }
+
     const resp = await page.request.post(`${API_URL}/api/admissions/bulk/approve`, {
       headers: adminHeaders,
-      data: { profile_ids: idsToApprove, notes: "Bulk approve E2E test" },
+      data: { items, notes: "Bulk approve E2E test" },
     });
     const bulkApproveBody = await resp.text();
     console.log(`Bulk approve response: ${resp.status()} ${bulkApproveBody.slice(0, 500)}`);
@@ -397,10 +404,17 @@ test.describe("Admission Bulk Actions + Export", () => {
     expect(profileIds.length).toBeGreaterThanOrEqual(3);
     const idsToReject = [profileIds[2]];
 
+    // Fetch current versions for optimistic locking
+    const rejectItems = [];
+    for (const pid of idsToReject) {
+      const profile = await (await page.request.get(`${API_URL}/api/admissions/${pid}`, { headers: adminHeaders })).json();
+      rejectItems.push({ profile_id: pid, version: profile.version });
+    }
+
     const resp = await page.request.post(`${API_URL}/api/admissions/bulk/reject`, {
       headers: adminHeaders,
       data: {
-        profile_ids: idsToReject,
+        items: rejectItems,
         reason: "Hồ sơ không đáp ứng điều kiện xét tuyển theo tiêu chí của đơn vị",
       },
     });

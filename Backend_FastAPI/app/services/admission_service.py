@@ -334,6 +334,69 @@ def _validate_personal_info(
     return missing_personal, validation_errors
 
 
+def _compute_completion_percent(
+    profile: models.AdmissionProfile,
+    documents: list = None,
+) -> int:
+    """
+    Compute completion_percent for a profile from step status weights.
+
+    Pure helper — no current_user needed. Runs validation helpers internally
+    but does NOT set any transient fields on the profile except completion_percent.
+
+    Args:
+        profile: AdmissionProfile with subject_scores and lead loaded
+        documents: Optional list of ProfileDocument
+
+    Returns:
+        Completion percentage (0-100)
+    """
+    applied_rules = profile.applied_rules or {}
+    gpa_error, _, _ = _validate_scores(profile, applied_rules)
+    doc_errors, _, _, _ = _validate_documents(profile, documents, applied_rules)
+    missing_personal, _ = _validate_personal_info(profile)
+
+    # Eligibility (simplified — mirrors _compute_frontend_fields logic)
+    has_any_validation_error = gpa_error or len(doc_errors) > 0 or len(missing_personal) > 0
+    is_ineligible = has_any_validation_error and profile.status not in ("approved", "enrolled")
+
+    cccd_error = not profile.citizen_id
+    personal_required = ["full_name", "phone", "citizen_id"]
+    personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
+    personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
+    personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
+    has_family = profile.family_info and len(profile.family_info) > 0
+    has_academic = profile.academic_history and len(profile.academic_history) > 0
+    has_any_scores = bool(profile.subject_scores) if hasattr(profile, "subject_scores") else False
+
+    docs_format_confirmed = True
+    if documents is not None:
+        for doc in documents:
+            if doc.status == "uploaded" and doc.file_path:
+                docs_format_confirmed = False
+                break
+
+    step_status = {
+        1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
+        2: "success" if has_family else "warning",
+        3: "success" if has_academic else "warning",
+        4: "error" if gpa_error else ("success" if has_any_scores else "warning"),
+        5: "error" if len(doc_errors) > 0 else ("warning" if not docs_format_confirmed else "success"),
+        6: "success",
+        7: "locked" if is_ineligible else "success",
+    }
+
+    step_weights = {1: 14, 2: 14, 3: 14, 4: 15, 5: 15, 6: 14, 7: 14}
+    completion = 0
+    for step_num, weight in step_weights.items():
+        state = step_status.get(step_num, "locked")
+        if state == "success":
+            completion += weight
+        elif state == "warning":
+            completion += int(weight * 0.5)
+    return min(100, completion)
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
@@ -566,33 +629,9 @@ def _compute_frontend_fields(
     profile.step_status = step_status
 
     # =========================================================================
-    # 6. COMPLETION PERCENT (Based on Step Status)
+    # 6. COMPLETION PERCENT (delegates to shared pure helper)
     # =========================================================================
-    # ✅ REFACTORED: Sync with step_status for consistency with UI sidebar
-    # Each step contributes equally: 7 steps = ~14% each
-    # "success" = full points, "warning" = partial points, "error"/"locked" = 0 points
-
-    step_weights = {
-        1: 14,  # Personal Info
-        2: 14,  # Family
-        3: 14,  # Academic History
-        4: 15,  # Scores (slightly higher priority)
-        5: 15,  # Documents (slightly higher priority)
-        6: 14,  # Tuition
-        7: 14,  # Final Review
-    }
-
-    completion_percent = 0
-    for step_num, weight in step_weights.items():
-        step_state = step_status.get(step_num, "locked")
-
-        if step_state == "success":
-            completion_percent += weight  # Full points
-        elif step_state == "warning":
-            completion_percent += int(weight * 0.5)  # Half points for partial completion
-        # "error" and "locked" contribute 0
-
-    profile.completion_percent = min(100, completion_percent)
+    profile.completion_percent = _compute_completion_percent(profile, documents)
     
     # =========================================================================
     # 7. DOCUMENTS CHECKLIST (for frontend display)
@@ -736,10 +775,11 @@ async def _create_admission_milestone_consultation(
     db: AsyncSession,
     lead: models.Lead,
     event: str,
-    actor: models.User,
+    actor: Optional[models.User] = None,
     profile_id: Optional[int] = None,
     student_code: Optional[str] = None,
     reason: Optional[str] = None,
+    fallback_officer_id: Optional[int] = None,
 ) -> None:
     """
     Create system consultation record for admission milestone.
@@ -818,9 +858,25 @@ async def _create_admission_milestone_consultation(
     )
 
     # Create SYSTEM consultation record
+    # Resolution order: actor > lead.assigned_officer > fallback_officer_id
+    officer_id = (
+        actor.id if actor
+        else lead.assigned_officer_id
+        or fallback_officer_id
+    )
+    if officer_id is None:
+        log.error(
+            "Cannot create milestone consultation: no officer resolvable",
+            lead_id=lead.id,
+            event=event,
+        )
+        raise BusinessRuleViolation(
+            "Hồ sơ chưa sẵn sàng để xử lý: không xác định được cán bộ phụ trách. "
+            "Vui lòng liên hệ nhà trường."
+        )
     system_consultation = models.Consultation(
         lead_id=lead.id,
-        officer_id=actor.id,
+        officer_id=officer_id,
         consultation_status_id=projection.consultation_status_id,
         consultation_date=datetime.now(timezone.utc),
         method="system",  # ✅ Special marker for auto-generated records
@@ -1504,7 +1560,64 @@ async def get_profiles(
         order=order,
     )
 
+    # Hydrate computed fields (same as detail API) using eager-loaded relations
+    for profile in profiles:
+        _calculate_and_update_totals(profile)
+        # documents already loaded via selectinload in get_filtered_with_count
+        docs = profile.documents if hasattr(profile, "documents") else None
+        if current_user:
+            _compute_frontend_fields(profile, current_user, docs)
+
     return profiles, total_count
+
+
+async def get_profiles_for_export(
+    db: AsyncSession,
+    current_user: models.User,
+    search: Optional[str] = None,
+    statuses: Optional[List[str]] = None,
+    major_ids: Optional[List[int]] = None,
+    academic_year: Optional[int] = None,
+    degree_level: Optional[str] = None,
+    payment_status: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> List[models.AdmissionProfile]:
+    """
+    Get profiles for CSV export — no page cap, lightweight hydration.
+
+    Only computes completion_percent (needed by CSV) via _calculate_and_update_totals.
+    Skips full _compute_frontend_fields (permissions, actions, step_status, etc.).
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    unit_filter, officer_filter = _resolve_idor_filters(current_user)
+
+    profiles, _ = await admission_repo.get_filtered_with_count(
+        skip=0,
+        limit=10_000,  # export cap
+        unit_id=unit_filter,
+        assigned_officer_id=officer_filter,
+        search=search,
+        statuses=statuses,
+        major_ids=major_ids,
+        academic_year=academic_year,
+        degree_level=degree_level,
+        payment_status=payment_status,
+        date_from=date_from,
+        date_to=date_to,
+        sort_by="created_at",
+        order="desc",
+    )
+
+    # Lightweight hydration: totals/GPA + completion_percent, no permissions/actions
+    for profile in profiles:
+        _calculate_and_update_totals(profile)
+        docs = profile.documents if hasattr(profile, "documents") else None
+        profile.completion_percent = _compute_completion_percent(profile, docs)
+
+    return profiles
 
 
 async def get_status_counts(
@@ -1542,17 +1655,42 @@ async def get_admission_stats(
     current_user: models.User,
     academic_year: Optional[int] = None,
 ) -> dict:
-    """Get aggregate statistics for admission profiles."""
+    """Get aggregate statistics for admission profiles with computed avg_completion."""
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
     unit_filter, officer_filter = _resolve_idor_filters(current_user)
 
-    return await admission_repo.get_aggregate_stats(
+    stats = await admission_repo.get_aggregate_stats(
         unit_id=unit_filter,
         assigned_officer_id=officer_filter,
         academic_year=academic_year,
     )
+
+    # Compute avg_completion over ALL profiles in scope (no sampling)
+    total = stats.get("total_profiles", 0)
+    if total > 0:
+        completion_sum = 0
+        fetched = 0
+        batch_size = 500
+        while fetched < total:
+            batch, _ = await admission_repo.get_filtered_with_count(
+                skip=fetched,
+                limit=batch_size,
+                unit_id=unit_filter,
+                assigned_officer_id=officer_filter,
+                academic_year=academic_year,
+            )
+            if not batch:
+                break
+            for p in batch:
+                _calculate_and_update_totals(p)
+                docs = p.documents if hasattr(p, "documents") else None
+                completion_sum += _compute_completion_percent(p, docs)
+            fetched += len(batch)
+        stats["avg_completion"] = round(completion_sum / fetched, 1) if fetched > 0 else 0.0
+
+    return stats
 
 
 async def get_academic_years(
@@ -1824,10 +1962,11 @@ async def update_profile(
             # Update snapshot rules/criteria if needed? 
             # No, scores are data, rules are config.
         
-        # Handle simple GPA (for hoc_ba w/o subjects) - Stored in JSONB 'applied_rules' or separate?
-        # Current requirement focuses on ProfileSubjectScore for Dynamic Scoring
-        # We can store raw GPA in applied_rules override or user data if needed, 
-        # but for now let's focus on Subject Scores.
+        # Handle GPA for gpa_only methods — persist to Lead.gpa
+        if "gpa" in scores_data and scores_data["gpa"] is not None:
+            gpa_value = float(scores_data["gpa"])
+            if profile.lead:
+                profile.lead.gpa = gpa_value
 
 
     # Update timestamp and increment version
@@ -1900,13 +2039,31 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     # Otherwise check if profile.subject_scores is loaded and populated.
     
     target_scores = scores if scores is not None else profile.subject_scores
-    
-    # STRICT RULE: Check required subject count
+
     applied_rules = profile.applied_rules or {}
+    method_type = applied_rules.get("method_type", "subject_based")
+
+    # GPA-only methods: use Lead.gpa directly, no subject scores needed
+    if method_type == "gpa_only":
+        gpa_value = float(profile.lead.gpa) if (profile.lead and profile.lead.gpa) else 0.0
+        profile.total_score = gpa_value
+        profile.average_score = gpa_value
+        scores_map = {s.subject.code: float(s.score) for s in target_scores} if target_scores else {}
+        profile.admission_scores = {
+            "subject_scores": scores_map,
+            "total_score": gpa_value,
+            "average_score": gpa_value,
+            "gpa": gpa_value,
+            "snapshot_score": None,
+        }
+        profile.snapshot_score = None
+        return
+
+    # STRICT RULE: Check required subject count
     required_count = applied_rules.get("required_subject_count") or 3
-    
+
     current_count = len(target_scores) if target_scores else 0
-    
+
     if current_count < required_count:
         # Incomplete scores -> Treat as 0.0 (Invalid)
         profile.total_score = 0.0
@@ -2074,98 +2231,111 @@ async def submit_and_evaluate(
     # Phase 6: Dynamic Admission Scoring Validation (Refactored)
     # ========================================
 
-    # Use AdmissionScoringService for robust validation (Best N, Min Score, etc.)
-    from .admission_scoring_service import AdmissionScoringService, ProfileStatus, SubjectSelectionMode, ScoringMethod
-    from app.models.admission_config import AdmissionCriteria
-    
-    # 1. Reconstruct Criteria from Snapshot (applied_rules)
-    # Note: applied_rules is a dict snapshot. We wrap it in a pseudo-model or Dict
-    # compatible with ScoringService if possible, or construct a temporary Criteria object.
-    # Since Service expects a model, we populate one.
+    method_type = applied_rules.get("method_type", "subject_based")
 
-    # ✅ FIX: Safe extraction of admission_method (can be string or dict in legacy data)
-    method_data = applied_rules.get("admission_method")
-    if isinstance(method_data, dict):
-        method_code = method_data.get("code", "SNAPSHOT")
+    if method_type == "gpa_only":
+        # =====================================================================
+        # GPA-Only Branch: validate using Lead.gpa, no subject scores required
+        # =====================================================================
+        gpa_value = float(profile.lead.gpa) if (profile.lead and profile.lead.gpa) else None
+        min_gpa = float(applied_rules.get("min_gpa") or 0)
+
+        if gpa_value is None:
+            errors.append("Chưa nhập GPA. Vui lòng nhập điểm trung bình trước khi nộp hồ sơ.")
+        elif min_gpa > 0 and gpa_value < min_gpa:
+            errors.append(
+                f"Điểm xét tuyển không đạt: GPA không đạt: {gpa_value:.2f} < {min_gpa}"
+            )
+            log.warning(
+                "GPA-only scoring validation failed",
+                profile_id=profile.id,
+                gpa=gpa_value,
+                min_gpa=min_gpa,
+            )
+        else:
+            log.info(
+                "GPA-only scoring validation passed",
+                profile_id=profile.id,
+                gpa=gpa_value,
+                min_gpa=min_gpa,
+            )
     else:
-        # applied_rules.admission_method is a string (e.g., "HOC_BA") - current schema
-        method_code = str(method_data) if method_data else "SNAPSHOT"
+        # =====================================================================
+        # Subject-Based / Combined Branch (existing logic)
+        # =====================================================================
 
-    snapshot_criteria = models.AdmissionCriteria(
-        code=method_code,
-        min_gpa=float(applied_rules.get("min_gpa", 0)) if applied_rules.get("min_gpa") else None,
-        min_score=float(applied_rules.get("min_score", 0)) if applied_rules.get("min_score") else None,
-        min_subject_score=float(applied_rules.get("min_subject_score", 0)) if applied_rules.get("min_subject_score") else None,
-        required_subject_count=applied_rules.get("required_subject_count"),
-        subject_selection_mode=applied_rules.get("subject_selection_mode", "fixed"),
-        scoring_method=applied_rules.get("scoring_method", "sum"),
-        # subject_group_mappings are tricky from snapshot.
-        # For Phase 1/2 we assume "fixed" mode or explicit "subject_groups" list in snapshot.
-    )
+        # Use AdmissionScoringService for robust validation (Best N, Min Score, etc.)
+        from .admission_scoring_service import AdmissionScoringService, ProfileStatus, SubjectSelectionMode, ScoringMethod
+        from app.models.admission_config import AdmissionCriteria
 
-    # 2. Get Scores
-    scores = await admission_repo.get_profile_scores(profile.id)
-    subject_scores_map = {s.subject.code: Decimal(str(s.score)) for s in scores}
-    
-    # 3. Resolve Allowed Subjects
-    # ✅ CRITICAL FIX: Strict validation - require allowed_subject_codes in snapshot
-    # This field is now mandatory (added in create_profile fix)
-    allowed_subjects = applied_rules.get("allowed_subject_codes")
+        # 1. Reconstruct Criteria from Snapshot (applied_rules)
+        # ✅ FIX: Safe extraction of admission_method (can be string or dict in legacy data)
+        method_data = applied_rules.get("admission_method")
+        if isinstance(method_data, dict):
+            method_code = method_data.get("code", "SNAPSHOT")
+        else:
+            method_code = str(method_data) if method_data else "SNAPSHOT"
 
-    if not allowed_subjects:
-        # ⚠️ Legacy Profile Compatibility Check
-        # If profile was created before the fix, fallback to all scored subjects
-        # but log a warning for admin attention
-        log.warning(
-            "Profile has incomplete snapshot - missing allowed_subject_codes. "
-            "Using fallback to all scored subjects (legacy compatibility). "
-            "This profile should be recreated for deterministic scoring.",
-            profile_id=profile.id,
-            lead_id=profile.lead_id,
-            snapshot_source=applied_rules.get("snapshot_source"),
+        snapshot_criteria = models.AdmissionCriteria(
+            code=method_code,
+            min_gpa=float(applied_rules.get("min_gpa", 0)) if applied_rules.get("min_gpa") else None,
+            min_score=float(applied_rules.get("min_score", 0)) if applied_rules.get("min_score") else None,
+            min_subject_score=float(applied_rules.get("min_subject_score", 0)) if applied_rules.get("min_subject_score") else None,
+            required_subject_count=applied_rules.get("required_subject_count"),
+            subject_selection_mode=applied_rules.get("subject_selection_mode", "fixed"),
+            scoring_method=applied_rules.get("scoring_method", "sum"),
         )
 
-        # TEMPORARY FALLBACK (for legacy profiles only)
-        # New profiles created after this fix will always have allowed_subject_codes
-        allowed_subjects = list(subject_scores_map.keys())
+        # 2. Get Scores
+        scores = await admission_repo.get_profile_scores(profile.id)
+        subject_scores_map = {s.subject.code: Decimal(str(s.score)) for s in scores}
+
+        # 3. Resolve Allowed Subjects
+        allowed_subjects = applied_rules.get("allowed_subject_codes")
 
         if not allowed_subjects:
-            raise BadRequest(
-                "Cannot evaluate profile: No subject scores found and snapshot has no subject whitelist. "
-                "Please add subject scores before submitting."
+            log.warning(
+                "Profile has incomplete snapshot - missing allowed_subject_codes. "
+                "Using fallback to all scored subjects (legacy compatibility). "
+                "This profile should be recreated for deterministic scoring.",
+                profile_id=profile.id,
+                lead_id=profile.lead_id,
+                snapshot_source=applied_rules.get("snapshot_source"),
             )
-    
-    # 4. Calculate Score using Engine
-    score_result = AdmissionScoringService.calculate_score(
-        criteria=snapshot_criteria,
-        subject_scores=subject_scores_map,
-        allowed_subjects=allowed_subjects,
-    )
-    
-    # 5. Handle Validation Results
-    if score_result.status != ProfileStatus.VALID:
-        # Collect failure reasons
-        for reason in score_result.failure_reasons:
-            errors.append(f"Điểm xét tuyển không đạt: {reason}")
-            
-        log.warning(
-            "Scoring validation failed",
-            profile_id=profile.id,
-            reasons=score_result.failure_reasons,
-            disqualification_codes=score_result.disqualification_codes
+            allowed_subjects = list(subject_scores_map.keys())
+
+            if not allowed_subjects:
+                raise BadRequest(
+                    "Cannot evaluate profile: No subject scores found and snapshot has no subject whitelist. "
+                    "Please add subject scores before submitting."
+                )
+
+        # 4. Calculate Score using Engine
+        score_result = AdmissionScoringService.calculate_score(
+            criteria=snapshot_criteria,
+            subject_scores=subject_scores_map,
+            allowed_subjects=allowed_subjects,
         )
-    else:
-        # Valid! Update profile with official calculated metrics
-        # (transient or persistent depending on design - here updating admission_scores JSON)
-        official_gpa = float(score_result.final_score) if score_result.final_score else 0.0
-        
-        # Log success
-        log.info(
-            "Scoring validation passed",
-            profile_id=profile.id,
-            final_score=official_gpa,
-            selected_subjects=score_result.selected_subjects
-        )
+
+        # 5. Handle Validation Results
+        if score_result.status != ProfileStatus.VALID:
+            for reason in score_result.failure_reasons:
+                errors.append(f"Điểm xét tuyển không đạt: {reason}")
+
+            log.warning(
+                "Scoring validation failed",
+                profile_id=profile.id,
+                reasons=score_result.failure_reasons,
+                disqualification_codes=score_result.disqualification_codes
+            )
+        else:
+            official_gpa = float(score_result.final_score) if score_result.final_score else 0.0
+            log.info(
+                "Scoring validation passed",
+                profile_id=profile.id,
+                final_score=official_gpa,
+                selected_subjects=score_result.selected_subjects
+            )
 
     # Validation 2: Check mandatory documents (using relational ProfileDocument)
     uploaded_docs = await admission_repo.get_uploaded_documents(profile.id)
@@ -3852,6 +4022,10 @@ async def confirm_enrollment(
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
 
+    # Invalidate stale magic-link tokens (profile leaving approved state)
+    from app.repositories import AdmissionRepository
+    await AdmissionRepository(db).invalidate_existing_tokens(profile.id)
+
     # ✅ PIPELINE SYNC: Create system consultation for confirmation milestone
     if profile.lead:
         await _create_admission_milestone_consultation(
@@ -3951,6 +4125,10 @@ async def override_profile(
     profile.override_reason = data["reason"]
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
+
+    # Invalidate stale magic-link tokens (profile leaving approved state)
+    from app.repositories import AdmissionRepository
+    await AdmissionRepository(db).invalidate_existing_tokens(profile.id)
 
     # ✅ PIPELINE SYNC: Create system consultation for override milestone
     if profile.lead:
@@ -4655,8 +4833,14 @@ async def get_token_info(
     if token_obj.profile and token_obj.profile.lead:
         profile_name = token_obj.profile.lead.full_name or profile_name
     
+    # Token is only valid if profile is still in approved state
+    profile_not_approved = (
+        token_obj.profile is not None
+        and token_obj.profile.status != "approved"
+    )
+
     return {
-        "valid": not (is_expired or is_locked or is_used),
+        "valid": not (is_expired or is_locked or is_used or profile_not_approved),
         "expired": is_expired,
         "locked": is_locked,
         "already_used": is_used,
@@ -4697,28 +4881,29 @@ async def verify_and_confirm(
     from datetime import datetime, timezone
     from app.config import settings
     from app.repositories import AdmissionRepository
-    
+
     repo = AdmissionRepository(db)
-    token_obj = await repo.get_token_by_value(token_value)
-    
+    # Pessimistic lock on token + profile to prevent concurrent confirms
+    token_obj = await repo.get_token_for_confirm(token_value)
+
     if not token_obj:
         raise ResourceNotFoundError("Invalid or expired confirmation link")
-    
+
     now = datetime.now(timezone.utc)
-    
+
     # Check token status
     if token_obj.confirmed_at is not None:
         raise BadRequest("This confirmation link has already been used")
-    
+
     if token_obj.locked_at is not None:
         raise BadRequest(
             "This confirmation link has been locked due to too many failed attempts. "
             "Please contact support for assistance."
         )
-    
+
     if token_obj.expires_at < now:
         raise BadRequest("This confirmation link has expired. Please request a new link.")
-    
+
     # Get profile and verify CCCD
     profile = token_obj.profile
     if not profile or not profile.citizen_id:
@@ -4754,16 +4939,74 @@ async def verify_and_confirm(
             f"Incorrect CCCD digits. {attempts_remaining} attempts remaining."
         )
     
-    # CCCD matches - confirm the profile!
-    await repo.mark_token_confirmed(token_obj, confirmed_via="magic_link")
-    
+    # CCCD matches — validate profile state before confirming
+    from .admission_state_machine import validate_transition
+
+    if profile.status != "approved":
+        log.warning(
+            "Magic-link confirm rejected: profile not in approved state",
+            profile_id=profile.id,
+            current_status=profile.status,
+            token_id=token_obj.id,
+        )
+        raise BadRequest(
+            "Liên kết xác nhận không còn hiệu lực. "
+            "Hồ sơ đã được xử lý hoặc trạng thái đã thay đổi."
+        )
+
+    try:
+        validate_transition(profile.status, "confirmed")
+    except ValueError as e:
+        raise BadRequest(str(e))
+
+    # STATE CHANGE — same semantics as confirm_enrollment
+    profile.status = "confirmed"
+    profile.confirmed_at = now
+    profile.confirmed_via = "magic_link"
+    profile.version += 1
+    profile.updated_at = now
+
+    # Mark token as consumed (no longer changes profile status)
+    await repo.mark_token_used(token_obj)
+
+    # PIPELINE SYNC: milestone consultation + lead sync
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_confirmed",
+            actor=None,  # public flow, no authenticated actor
+            profile_id=profile.id,
+            fallback_officer_id=profile.approved_by_id,
+        )
+
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=None,
+        reason="Applicant confirmed via magic link",
+    )
+
+    # Audit trail
+    from ..services import audit_service
+    await audit_service.log_status_change(
+        db, "AdmissionProfile", profile.id,
+        old_status="approved", new_status="confirmed",
+        actor_user_id=None,
+        reason="Magic-link confirmation",
+        source="magic_link",
+    )
+
+    await db.flush()
+
     log.info(
         "Admission confirmed via magic link",
         profile_id=profile.id,
         token_id=token_obj.id,
         confirmed_at=now.isoformat(),
     )
-    
+
     # Post-commit callback for notifications
     async def _notification_callback():
         log.info(
@@ -4771,7 +5014,7 @@ async def verify_and_confirm(
             profile_id=profile.id,
             lead_id=profile.lead_id,
         )
-    
+
     return profile, _notification_callback
 
 
@@ -4781,59 +5024,94 @@ async def verify_and_confirm(
 
 async def bulk_approve(
     db: AsyncSession,
-    profile_ids: List[int],
+    items: List[Dict[str, Any]],
     approver: models.User,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Bulk approve multiple admission profiles.
 
-    Security:
-    - Only Manager/Admin can approve
-    - IDOR: Verifies each profile is accessible to user
+    Uses the same business guards as single approve_profile:
+    - State machine validation
+    - Optimistic locking (version check per item)
+    - Application fee gate
+    - Milestone consultation + lead sync
+    - Audit trail
+
+    Each item that fails is skipped individually; does NOT rollback the batch.
 
     Args:
         db: Database session
-        profile_ids: List of profile IDs to approve
+        items: List of dicts with profile_id and version
         approver: User performing the approval
         notes: Optional approval notes
 
     Returns:
-        Dict with success_count, failed_count, failed_ids, errors, message
+        Dict with success_count, failed_count, failed_ids, errors, callbacks
     """
-    from app.repositories import AdmissionRepository
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from .admission_state_machine import validate_transition
+    from .lead_admission_sync import sync_lead_from_admission
+    from ..services import audit_service
 
     if approver.role not in [UserRole.ADMIN, UserRole.MANAGER]:
         raise PermissionDeniedError("Only Managers or Admins can approve profiles")
 
-    repo = AdmissionRepository(db)
     success_count = 0
     failed_ids = []
     errors: Dict[int, str] = {}
+    approved_profiles: List[models.AdmissionProfile] = []
 
-    for profile_id in profile_ids:
+    for item in items:
+        profile_id = item["profile_id"]
+        expected_version = item["version"]
         try:
-            # Get profile with IDOR check
-            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            # Pessimistic lock + eager load lead
+            stmt = (
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == profile_id)
+                .options(selectinload(models.AdmissionProfile.lead))
+                .with_for_update()
+            )
+            result = await db.execute(stmt)
+            profile = result.scalar_one_or_none()
+
             if not profile:
                 failed_ids.append(profile_id)
                 errors[profile_id] = "Profile not found"
                 continue
 
-            # IDOR check (3-tier: Admin=all, Manager=unit, Officer not allowed per Casbin)
-            if approver.role != UserRole.ADMIN:
-                if profile.lead.unit_id != approver.unit_id:
-                    failed_ids.append(profile_id)
-                    errors[profile_id] = "Profile not found"
-                    continue
+            # IDOR check
+            _check_idor_access(profile, approver)
 
-            # Check if profile can be approved (status must be submitted/resubmitted)
-            if profile.status not in ["submitted", "resubmitted"]:
+            # State machine validation
+            try:
+                validate_transition(profile.status, "approved")
+            except ValueError as e:
                 failed_ids.append(profile_id)
-                errors[profile_id] = f"Cannot approve profile with status '{profile.status}'"
+                errors[profile_id] = str(e)
                 continue
 
-            # Perform approval
+            # Optimistic locking
+            if expected_version != profile.version:
+                failed_ids.append(profile_id)
+                errors[profile_id] = (
+                    f"Version mismatch: expected {expected_version}, "
+                    f"actual {profile.version}. Refresh and retry."
+                )
+                continue
+
+            # Application fee gate
+            applied_rules = profile.applied_rules or {}
+            requires_fee = applied_rules.get("requires_application_fee", False)
+            fee_status = applied_rules.get("fee_status", "exempt")
+            if requires_fee and fee_status == "pending":
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Lệ phí xét tuyển chưa được thanh toán"
+                continue
+
+            # STATE CHANGE
             now = datetime.now(timezone.utc)
             _old_status = profile.status
             profile.status = "approved"
@@ -4841,11 +5119,27 @@ async def bulk_approve(
             profile.approved_by_id = approver.id
             profile.approval_notes = notes
             profile.version += 1
+            profile.updated_at = now
 
-            success_count += 1
+            # Milestone consultation
+            if profile.lead:
+                await _create_admission_milestone_consultation(
+                    db=db,
+                    lead=profile.lead,
+                    event="profile_approved",
+                    actor=approver,
+                    profile_id=profile.id,
+                )
+
+            # Lead sync
+            await sync_lead_from_admission(
+                db=db,
+                profile=profile,
+                changed_by_user_id=approver.id,
+                reason="Admission profile approved (bulk)",
+            )
 
             # Audit trail
-            from ..services import audit_service
             await audit_service.log_status_change(
                 db, "AdmissionProfile", profile.id,
                 old_status=_old_status, new_status="approved",
@@ -4853,6 +5147,12 @@ async def bulk_approve(
                 source="bulk_api",
             )
 
+            approved_profiles.append(profile)
+            success_count += 1
+
+        except ResourceNotFoundError:
+            failed_ids.append(profile_id)
+            errors[profile_id] = "Profile not found"
         except Exception as e:
             log.error("Bulk approve failed for profile", profile_id=profile_id, error=str(e))
             failed_ids.append(profile_id)
@@ -4865,62 +5165,91 @@ async def bulk_approve(
         "failed_count": len(failed_ids),
         "failed_ids": failed_ids,
         "errors": errors if errors else None,
-        "message": f"Approved {success_count} of {len(profile_ids)} profiles",
+        "message": f"Approved {success_count} of {len(items)} profiles",
+        "_approved_profiles": approved_profiles,
     }
 
 
 async def bulk_reject(
     db: AsyncSession,
-    profile_ids: List[int],
+    items: List[Dict[str, Any]],
     rejector: models.User,
     reason: str,
 ) -> Dict[str, Any]:
     """
     Bulk reject multiple admission profiles.
 
-    Security:
-    - Only Manager/Admin can reject
-    - IDOR: Verifies each profile is accessible to user
+    Uses the same business guards as single reject_profile:
+    - State machine validation
+    - Optimistic locking (version check per item)
+    - Milestone consultation + lead sync
+    - Audit trail
+
+    Each item that fails is skipped individually; does NOT rollback the batch.
 
     Args:
         db: Database session
-        profile_ids: List of profile IDs to reject
+        items: List of dicts with profile_id and version
         rejector: User performing the rejection
         reason: Rejection reason (required)
 
     Returns:
-        Dict with success_count, failed_count, failed_ids, errors, message
+        Dict with success_count, failed_count, failed_ids, errors, _rejected_profiles
     """
-    from app.repositories import AdmissionRepository
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from .admission_state_machine import validate_transition
+    from .lead_admission_sync import sync_lead_from_admission
+    from ..services import audit_service
 
     if rejector.role not in [UserRole.ADMIN, UserRole.MANAGER]:
         raise PermissionDeniedError("Only Managers or Admins can reject profiles")
 
-    repo = AdmissionRepository(db)
     success_count = 0
     failed_ids = []
     errors: Dict[int, str] = {}
+    rejected_profiles: List[models.AdmissionProfile] = []
 
-    for profile_id in profile_ids:
+    for item in items:
+        profile_id = item["profile_id"]
+        expected_version = item["version"]
         try:
-            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            # Pessimistic lock + eager load lead
+            stmt = (
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == profile_id)
+                .options(selectinload(models.AdmissionProfile.lead))
+                .with_for_update()
+            )
+            result = await db.execute(stmt)
+            profile = result.scalar_one_or_none()
+
             if not profile:
                 failed_ids.append(profile_id)
                 errors[profile_id] = "Profile not found"
                 continue
 
-            # IDOR check (3-tier: Admin=all, Manager=unit, Officer not allowed per Casbin)
-            if rejector.role != UserRole.ADMIN:
-                if profile.lead.unit_id != rejector.unit_id:
-                    failed_ids.append(profile_id)
-                    errors[profile_id] = "Profile not found"
-                    continue
+            # IDOR check
+            _check_idor_access(profile, rejector)
 
-            if profile.status not in ["submitted", "resubmitted"]:
+            # State machine validation
+            try:
+                validate_transition(profile.status, "rejected")
+            except ValueError as e:
                 failed_ids.append(profile_id)
-                errors[profile_id] = f"Cannot reject profile with status '{profile.status}'"
+                errors[profile_id] = str(e)
                 continue
 
+            # Optimistic locking
+            if expected_version != profile.version:
+                failed_ids.append(profile_id)
+                errors[profile_id] = (
+                    f"Version mismatch: expected {expected_version}, "
+                    f"actual {profile.version}. Refresh and retry."
+                )
+                continue
+
+            # STATE CHANGE
             now = datetime.now(timezone.utc)
             _old_status = profile.status
             profile.status = "rejected"
@@ -4928,11 +5257,28 @@ async def bulk_reject(
             profile.rejected_by_id = rejector.id
             profile.rejection_reason = reason
             profile.version += 1
+            profile.updated_at = now
 
-            success_count += 1
+            # Milestone consultation
+            if profile.lead:
+                await _create_admission_milestone_consultation(
+                    db=db,
+                    lead=profile.lead,
+                    event="profile_rejected",
+                    actor=rejector,
+                    profile_id=profile.id,
+                    reason=reason,
+                )
+
+            # Lead sync
+            await sync_lead_from_admission(
+                db=db,
+                profile=profile,
+                changed_by_user_id=rejector.id,
+                reason=f"Admission profile rejected (bulk): {reason[:50]}",
+            )
 
             # Audit trail
-            from ..services import audit_service
             await audit_service.log_status_change(
                 db, "AdmissionProfile", profile.id,
                 old_status=_old_status, new_status="rejected",
@@ -4941,6 +5287,12 @@ async def bulk_reject(
                 source="bulk_api",
             )
 
+            rejected_profiles.append(profile)
+            success_count += 1
+
+        except ResourceNotFoundError:
+            failed_ids.append(profile_id)
+            errors[profile_id] = "Profile not found"
         except Exception as e:
             log.error("Bulk reject failed for profile", profile_id=profile_id, error=str(e))
             failed_ids.append(profile_id)
@@ -4953,7 +5305,8 @@ async def bulk_reject(
         "failed_count": len(failed_ids),
         "failed_ids": failed_ids,
         "errors": errors if errors else None,
-        "message": f"Rejected {success_count} of {len(profile_ids)} profiles",
+        "message": f"Rejected {success_count} of {len(items)} profiles",
+        "_rejected_profiles": rejected_profiles,
     }
 
 
