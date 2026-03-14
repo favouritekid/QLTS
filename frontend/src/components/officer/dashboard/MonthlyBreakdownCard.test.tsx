@@ -340,24 +340,56 @@ describe("MonthlyBreakdownCard", () => {
     expect(screen.getByText("CT TV tháng")).toBeInTheDocument();
   });
 
-  it("shows actual conversion_rate when available (not plan target)", async () => {
+  it("conv cell shows actual/target pattern when actual exists", async () => {
     const user = userEvent.setup();
     render(<MonthlyBreakdownCard plan={makePlan()} />);
     await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
-    // Jan & Feb have conversion_rate_actual=18.5 → should show 18,5% (not plan 15,0%)
-    const actualValues = screen.getAllByText("18,5%");
-    expect(actualValues.length).toBe(2); // Jan + Feb
+    // Jan has conversion_rate_actual=18.5 → cell shows "18,5%/15,0%"
+    const cell = screen.getByTestId("conv-cell-1");
+    expect(cell.textContent).toContain("18,5%");
+    expect(cell.textContent).toContain("/15,0%");
   });
 
-  it("shows plan conversion_rate in muted style when no actual", async () => {
+  it("conv cell shows —/target when no actual", async () => {
     const user = userEvent.setup();
     render(<MonthlyBreakdownCard plan={makePlan()} />);
     await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
-    // Month 3+ has no actual → plan target shown in muted
-    // All 10 months without actual show 15,0% in muted spans
-    const allCells = screen.getAllByText("15,0%");
-    // At least one should be in a muted-colored span (plan fallback)
-    const mutedSpan = allCells.find(el => el.tagName === "SPAN" && el.className.includes("muted"));
-    expect(mutedSpan).toBeDefined();
+    // Month 3 has no actual → cell shows "—/15,0%"
+    const cell = screen.getByTestId("conv-cell-3");
+    expect(cell.textContent).toContain("—");
+    expect(cell.textContent).toContain("/15,0%");
+    // The "—" should be in muted span
+    const dash = cell.querySelector("span");
+    expect(dash?.className).toContain("muted");
+  });
+
+  it("win cell shows actual/target pattern when actual exists", async () => {
+    const user = userEvent.setup();
+    render(<MonthlyBreakdownCard plan={makePlan()} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    // Jan has win_rate_actual=35.0 → cell shows "35,0%/33,0%"
+    const cell = screen.getByTestId("win-cell-1");
+    expect(cell.textContent).toContain("35,0%");
+    expect(cell.textContent).toContain("/33,0%");
+  });
+
+  it("win cell shows —/target when no actual", async () => {
+    const user = userEvent.setup();
+    render(<MonthlyBreakdownCard plan={makePlan()} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    // Month 3 has no actual → cell shows "—/33,0%"
+    const cell = screen.getByTestId("win-cell-3");
+    expect(cell.textContent).toContain("—");
+    expect(cell.textContent).toContain("/33,0%");
+  });
+
+  it("legend explains conv/win actual vs chỉ tiêu pattern", async () => {
+    const user = userEvent.setup();
+    render(<MonthlyBreakdownCard plan={makePlan()} />);
+    await user.click(screen.getByRole("button", { name: /Kế hoạch theo tháng/i }));
+    const legend = screen.getByTestId("monthly-legend");
+    expect(legend.textContent).toContain("Conv%/Win%");
+    expect(legend.textContent).toContain("thực tế");
+    expect(legend.textContent).toContain("chỉ tiêu");
   });
 });

@@ -141,6 +141,9 @@ export function MonthlyBreakdownCard({ plan, isLoading, expanded: controlledExpa
               <span className="inline-block w-2 h-2 rounded-full bg-destructive" aria-hidden="true" />
               Cần cải thiện
             </span>
+            <span className="mx-1 text-border">|</span>
+            <span className="font-medium">Conv%/Win%:</span>
+            <span>thực tế<span className="text-muted-foreground/60">/chỉ tiêu</span></span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid="monthly-breakdown-table">
@@ -204,17 +207,25 @@ export function MonthlyBreakdownCard({ plan, isLoading, expanded: controlledExpa
                         )}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtNum(m.consultations_monthly_total)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {m.conversion_rate_actual != null
-                          ? fmtPct(m.conversion_rate_actual)
-                          : <span className="text-muted-foreground">{fmtPct(m.conversion_rate)}</span>
-                        }
+                      <td className="px-3 py-2 text-right tabular-nums" data-testid={`conv-cell-${m.month}`}>
+                        {m.conversion_rate_actual != null ? (
+                          <span>{fmtPct(m.conversion_rate_actual)}</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                        {m.conversion_rate != null && (
+                          <span className="text-muted-foreground">/{fmtPct(m.conversion_rate)}</span>
+                        )}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {m.win_rate_actual != null
-                          ? fmtPct(m.win_rate_actual)
-                          : <span className="text-muted-foreground">{fmtPct(m.win_rate)}</span>
-                        }
+                      <td className="px-3 py-2 text-right tabular-nums" data-testid={`win-cell-${m.month}`}>
+                        {m.win_rate_actual != null ? (
+                          <span>{fmtPct(m.win_rate_actual)}</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                        {m.win_rate != null && (
+                          <span className="text-muted-foreground">/{fmtPct(m.win_rate)}</span>
+                        )}
                       </td>
                     </tr>
                   );
