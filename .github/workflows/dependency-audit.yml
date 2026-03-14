@@ -44,7 +44,13 @@ jobs:
           echo "🔍 Auditing Python dependencies..."
           pip-audit -r requirements.txt --format json --output audit-results.json || true
 
-          # Parse results
+          # Parse results (handle missing output file)
+          if [ ! -f audit-results.json ]; then
+            echo "⚠️ pip-audit failed to produce output — treating as error"
+            pip-audit -r requirements.txt --desc || true
+            exit 1
+          fi
+
           VULNS=$(python -c "
           import json
           with open('audit-results.json') as f:
