@@ -15,6 +15,33 @@ Steps:
   1. Create table lead_phone_identity
   2. Create partial unique index uq_lead_phone_active
   3. Backfill from existing active leads (phone + phone2)
+
+KNOWN LIMITATIONS of this backfill (resolved by follow-up zm2s3t4u5v6w7):
+
+  - Uses ON CONFLICT DO NOTHING: if two active leads share the same raw
+    phone value (same-slot or cross-slot phone vs phone2), the second
+    insert is silently dropped — that lead becomes an orphan.
+  - Inserts raw phone values (not normalized): two phones that differ only
+    in format (+84901234567 vs 0901234567) are treated as distinct here
+    but would collide after normalization.
+  - The follow-up migration (zm2s3t4u5v6w7) audits for orphaned leads and
+    detects post-normalization conflicts, failing fast in both cases.
+
+PREFLIGHT (run before applying):
+  -- 1. Same-slot duplicates
+  SELECT phone, count(*) FROM lead
+    WHERE deleted_at IS NULL AND phone IS NOT NULL AND phone != ''
+    GROUP BY phone HAVING count(*) > 1;
+  SELECT phone2, count(*) FROM lead
+    WHERE deleted_at IS NULL AND phone2 IS NOT NULL AND phone2 != ''
+    GROUP BY phone2 HAVING count(*) > 1;
+
+  -- 2. Cross-slot duplicates (lead A phone = lead B phone2)
+  SELECT a.id AS lead_a, a.phone, b.id AS lead_b, b.phone2
+    FROM lead a JOIN lead b ON a.phone = b.phone2
+    WHERE a.deleted_at IS NULL AND b.deleted_at IS NULL AND a.id != b.id;
+
+  If any rows returned, resolve before running migration.
 """
 
 from typing import Sequence, Union

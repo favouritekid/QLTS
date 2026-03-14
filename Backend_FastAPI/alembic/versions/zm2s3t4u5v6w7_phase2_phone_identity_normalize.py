@@ -13,13 +13,40 @@ lead.phone / lead.phone2 values. Two problems:
      normalize_vietnam_phone() which strips separators and converts +84/84 → 0).
   B. ON CONFLICT DO NOTHING silently dropped rows when two active leads shared
      the same raw phone — those leads are now missing from lead_phone_identity.
+     This includes both same-slot duplicates (two leads with identical phone)
+     AND cross-slot duplicates (lead A phone = lead B phone2).
 
-This migration:
-  1. Audits for orphaned leads (active lead has phone/phone2 but no matching
-     identity row) — FAILS FAST with diagnostic output.
-  2. Detects normalization conflicts (two active rows would collide after
-     normalization) — FAILS FAST with diagnostic output.
-  3. Normalizes all phone_normalized values.
+This migration FAILS FAST in two cases:
+
+  Step 0 — Orphan audit:
+    Finds active leads whose (lead_id, slot) pair has no matching row in
+    lead_phone_identity. These are leads whose phone was dropped by
+    ON CONFLICT DO NOTHING because another lead already claimed that raw
+    phone value. Covers same-slot AND cross-slot duplicates.
+
+  Step 1 — Post-normalization conflict detection:
+    After the orphan audit passes, checks whether normalizing the existing
+    phone_normalized values would produce collisions (e.g. "+84901234567"
+    and "0901234567" both normalize to "0901234567"). This catches
+    duplicates that only become visible after format normalization.
+
+  Step 2 — Normalize:
+    If no conflicts, UPDATE phone_normalized with the normalized form.
+
+PREFLIGHT (run before applying — in addition to zl1r2s3t4u5v6 preflight):
+  -- Post-normalize duplicates across all active lead phones
+  WITH phones AS (
+    SELECT phone AS p FROM lead WHERE deleted_at IS NULL AND phone IS NOT NULL AND phone != ''
+    UNION ALL
+    SELECT phone2 FROM lead WHERE deleted_at IS NULL AND phone2 IS NOT NULL AND phone2 != ''
+  )
+  SELECT
+    REGEXP_REPLACE(REGEXP_REPLACE(p, '[\\s.\\-()/ ]', '', 'g'), '^(\\+?84)', '0') AS norm,
+    count(*)
+  FROM phones
+  GROUP BY norm HAVING count(*) > 1;
+
+  If any rows returned, resolve before running migration.
 """
 
 from typing import Sequence, Union

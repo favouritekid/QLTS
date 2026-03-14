@@ -354,6 +354,7 @@ async def calculate_lead_score(
         default_max_consultation_score = 25
         default_application_score = 30
         default_stale_penalty = 10
+        MAX_STALE_PENALTY = 50  # Hard cap — prevents config from wiping full score
         stale_threshold_days = 7
 
         score = 0
@@ -387,10 +388,38 @@ async def calculate_lead_score(
             gpa_multiplier = default_gpa_multiplier
             priority_locations = []
             location_bonus = default_location_bonus
-            
+
             consultation_score_weight = default_consultation_score
             max_consultation_score = default_max_consultation_score
             application_score = default_application_score
+            stale_penalty = default_stale_penalty
+
+        # Sanitize stale_penalty: must be a non-negative number within [0, MAX]
+        try:
+            stale_penalty = float(stale_penalty)
+            if stale_penalty < 0:
+                log.warning(
+                    "stale_penalty is negative, falling back to default",
+                    raw_value=stale_penalty,
+                    fallback=default_stale_penalty,
+                    unit_id=unit_id,
+                )
+                stale_penalty = default_stale_penalty
+            elif stale_penalty > MAX_STALE_PENALTY:
+                log.warning(
+                    "stale_penalty exceeds MAX_STALE_PENALTY, clamping",
+                    raw_value=stale_penalty,
+                    clamped_to=MAX_STALE_PENALTY,
+                    unit_id=unit_id,
+                )
+                stale_penalty = MAX_STALE_PENALTY
+        except (TypeError, ValueError):
+            log.warning(
+                "stale_penalty has invalid type, falling back to default",
+                raw_value=repr(stale_penalty),
+                fallback=default_stale_penalty,
+                unit_id=unit_id,
+            )
             stale_penalty = default_stale_penalty
 
         # --- Demographic Scoring ---

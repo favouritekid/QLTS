@@ -1148,7 +1148,7 @@ async def download_import_template(
         "1",  # unit_id - Replace with your actual unit ID
         "",   # offering_id - Optional
         "bachelor",  # high_school, bachelor, master, phd
-        "3.5",  # 0.0-4.0
+        "7.5",  # 0.0-10.0
         "Hà Nội"
     ]
 
@@ -1203,7 +1203,7 @@ async def download_import_template(
             "Organization Unit ID (required): Get from /api/organization-units",
             "Program Offering ID (optional): Get from /api/offerings",
             "Education level (optional): high_school, bachelor, master, phd",
-            "GPA (optional): 0.0-4.0 scale",
+            "GPA (optional): 0.0-10.0 scale",
             "Location (optional): City/Province"
         ]
 
