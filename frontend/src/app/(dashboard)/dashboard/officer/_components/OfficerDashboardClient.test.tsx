@@ -74,6 +74,10 @@ vi.mock("@/lib/api/client", () => ({
   api: { get: vi.fn() },
 }));
 
+vi.mock("@/lib/api/officer", () => ({
+  officerApi: { getMyKpiPlan: vi.fn().mockResolvedValue(null) },
+}));
+
 vi.mock("@/components/ui/skeleton", () => ({
   Skeleton: ({ className }: any) => <div className={className} />,
 }));

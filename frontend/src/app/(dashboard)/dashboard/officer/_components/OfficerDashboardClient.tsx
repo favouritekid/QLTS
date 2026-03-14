@@ -190,6 +190,24 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     }
   }, [navRouter]);
 
+  // === Enrollment pace benchmark (from KPI plan, for PerformanceChart summary) ===
+  const enrollmentPace = useMemo(() => {
+    if (!kpiPlanQuery.data) return null;
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const monthData = kpiPlanQuery.data.months.find((m) => m.month === currentMonth);
+    if (!monthData) return null;
+    const target = monthData.enrollment_target;
+    const actual = monthData.enrollment_actual ?? 0;
+    const remaining = target - actual;
+    if (remaining <= 0) return { pace: 0, onTrack: true, label: `${actual}/${target}` };
+    // Remaining calendar days in month
+    const lastDay = new Date(now.getFullYear(), currentMonth, 0).getDate();
+    const daysLeft = Math.max(lastDay - now.getDate(), 1);
+    const pace = remaining / daysLeft;
+    return { pace, onTrack: actual >= target * (now.getDate() / lastDay), label: `${actual}/${target}` };
+  }, [kpiPlanQuery.data]);
+
   // === DATA TRANSFORMERS ===
   const performanceTrends = useMemo(() => (stats?.performance_trends ?? []).map((t) => ({
     date: t.date,
@@ -373,6 +391,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
             trends={performanceTrends}
             dailyGoal={stats.kpis.consultations_target}
             teamAverage={scope === "personal" ? teamStats?.team_avg_consultations : undefined}
+            enrollmentPace={enrollmentPace}
           />
           {/* Funnel Visualization with View Toggle */}
           <div className="space-y-2">

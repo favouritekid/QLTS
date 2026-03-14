@@ -32,13 +32,24 @@ interface PerformanceTrend {
   lost?: number;
 }
 
+interface EnrollmentPaceInfo {
+  /** Enrollments needed per remaining day to hit monthly target */
+  pace: number;
+  /** Whether current pace is on track */
+  onTrack: boolean;
+  /** e.g. "5/12" */
+  label: string;
+}
+
 interface PerformanceChartProps {
   trends: PerformanceTrend[];
   dailyGoal?: number; // Optional daily consultations goal
   teamAverage?: number; // Optional team average for comparison
+  /** Monthly enrollment pace benchmark (shown in summary strip, not as chart line) */
+  enrollmentPace?: EnrollmentPaceInfo | null;
 }
 
-export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: PerformanceChartProps) {
+export function PerformanceChart({ trends, dailyGoal = 5, teamAverage, enrollmentPace }: PerformanceChartProps) {
   // Use global dashboard date context
   const { dateRange } = useDashboardDate();
 
@@ -242,15 +253,15 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
         </ResponsiveContainer>
         )}
 
-        {/* Summary Stats */}
+        {/* Summary Stats + Benchmarks */}
         <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t text-xs text-muted-foreground flex-wrap">
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full ring-2 ring-violet-500/20 bg-violet-500" />
-            <span>TB leads/ngày: {filteredTrends.length > 0 ? Math.round(totals.leads / filteredTrends.length) : 0}</span>
+            <span>Baseline leads: {filteredTrends.length > 0 ? Math.round(totals.leads / filteredTrends.length) : 0}/ngày</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full ring-2 ring-orange-500/20 bg-orange-500" />
-            <span>TB tư vấn/ngày: {avgConsultations}</span>
+            <span>TB tư vấn: {avgConsultations}/ngày</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full ring-2 ring-success-500/20 bg-success-500" />
@@ -264,6 +275,15 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full ring-2 ring-cyan-500/20 bg-cyan-500" />
               <span>TB team: {teamAverage}</span>
+            </div>
+          )}
+          {enrollmentPace && (
+            <div className="flex items-center gap-2" data-testid="enrollment-pace">
+              <div className={`h-2 w-2 rounded-full ring-2 ${enrollmentPace.onTrack ? "ring-success-500/20 bg-success-500" : "ring-warning-500/20 bg-warning-500"}`} />
+              <span>
+                Pace nhập học: {enrollmentPace.pace.toFixed(1)}/ngày
+                <span className="ml-1 text-[10px]">({enrollmentPace.label})</span>
+              </span>
             </div>
           )}
         </div>
