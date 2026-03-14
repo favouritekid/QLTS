@@ -42,12 +42,14 @@ jobs:
       - name: Run pip-audit
         run: |
           echo "🔍 Auditing Python dependencies..."
-          pip-audit -r requirements.txt --format json --output audit-results.json || true
+          # --ignore-vuln: ecdsa CVE-2024-23342 has no fix (maintainer considers side-channel out of scope)
+          pip-audit -r requirements.txt --format json --output audit-results.json \
+            --ignore-vuln CVE-2024-23342 || true
 
           # Parse results (handle missing output file)
           if [ ! -f audit-results.json ]; then
             echo "⚠️ pip-audit failed to produce output — treating as error"
-            pip-audit -r requirements.txt --desc || true
+            pip-audit -r requirements.txt --desc --ignore-vuln CVE-2024-23342 || true
             exit 1
           fi
 
@@ -63,7 +65,7 @@ jobs:
           echo "📊 Found $VULNS vulnerability(ies)"
 
           # Show human-readable output
-          pip-audit -r requirements.txt --desc || true
+          pip-audit -r requirements.txt --desc --ignore-vuln CVE-2024-23342 || true
 
           if [ "$VULNS" -gt "0" ]; then
             echo "⚠️ Vulnerabilities found in Python dependencies!"

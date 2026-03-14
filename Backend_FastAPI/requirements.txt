@@ -61,12 +61,12 @@ packaging==25.0
 paginate==0.5.7
 pandas==2.3.3
 passlib==1.7.4
-Pillow==12.1.0
+Pillow==12.1.1
 prometheus_client==0.23.1
 prompt_toolkit==3.0.52
 propcache==0.4.1
 psycopg2-binary==2.9.11
-pyasn1==0.6.1
+pyasn1==0.6.2
 pycasbin==2.4.0
 pycparser==2.23
 pydantic==2.12.5
