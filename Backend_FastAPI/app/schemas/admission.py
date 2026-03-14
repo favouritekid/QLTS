@@ -733,15 +733,27 @@ class AdmissionsPage(BaseModel):
 # BULK ACTION SCHEMAS
 # ==============================================================================
 
+class BulkApproveItem(BaseModel):
+    """Single item in a bulk approve request."""
+    profile_id: int = Field(..., description="Admission profile ID")
+    version: int = Field(..., ge=1, description="Current profile version for optimistic locking")
+
+
 class BulkApproveRequest(BaseModel):
     """Request schema for bulk approve action."""
-    profile_ids: List[int] = Field(..., min_length=1, max_length=100, description="List of profile IDs to approve")
+    items: List[BulkApproveItem] = Field(..., min_length=1, max_length=100, description="List of profiles to approve with their versions")
     notes: Optional[str] = Field(None, max_length=1000, description="Optional approval notes")
+
+
+class BulkRejectItem(BaseModel):
+    """Single item in a bulk reject request."""
+    profile_id: int = Field(..., description="Admission profile ID")
+    version: int = Field(..., ge=1, description="Current profile version for optimistic locking")
 
 
 class BulkRejectRequest(BaseModel):
     """Request schema for bulk reject action."""
-    profile_ids: List[int] = Field(..., min_length=1, max_length=100, description="List of profile IDs to reject")
+    items: List[BulkRejectItem] = Field(..., min_length=1, max_length=100, description="List of profiles to reject with their versions")
     reason: str = Field(..., min_length=10, max_length=1000, description="Rejection reason (required)")
 
 

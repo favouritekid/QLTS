@@ -893,8 +893,15 @@ export type DropStudentRequest = z.infer<typeof dropStudentRequestSchema>
  * Bulk Approve Request Schema
  * Used for POST /api/admissions/bulk/approve
  */
+export const bulkApproveItemSchema = z.object({
+  profile_id: z.number().int().positive(),
+  version: z.number().int().positive(),
+})
+
+export type BulkApproveItem = z.infer<typeof bulkApproveItemSchema>
+
 export const bulkApproveRequestSchema = z.object({
-  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  items: z.array(bulkApproveItemSchema).min(1).max(100),
   notes: z.string().max(1000).optional(),
 })
 
@@ -904,8 +911,15 @@ export type BulkApproveRequest = z.infer<typeof bulkApproveRequestSchema>
  * Bulk Reject Request Schema
  * Used for POST /api/admissions/bulk/reject
  */
+export const bulkRejectItemSchema = z.object({
+  profile_id: z.number().int().positive(),
+  version: z.number().int().positive(),
+})
+
+export type BulkRejectItem = z.infer<typeof bulkRejectItemSchema>
+
 export const bulkRejectRequestSchema = z.object({
-  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  items: z.array(bulkRejectItemSchema).min(1).max(100),
   reason: z.string().min(10, "Lý do từ chối phải có ít nhất 10 ký tự").max(1000),
 })
 

@@ -326,12 +326,36 @@ async def bulk_approve_admissions(
     try:
         result = await admission_service.bulk_approve(
             db=db,
-            profile_ids=body.profile_ids,
+            items=[item.model_dump() for item in body.items],
             approver=current_user,
             notes=body.notes,
         )
 
+        # Extract approved profiles before commit (for post-commit dispatch)
+        approved_profiles = result.pop("_approved_profiles", [])
+
         await db.commit()
+
+        # POST-COMMIT: Dispatch LEAD_STATUS_CHANGED + commission for each approved profile
+        for profile in approved_profiles:
+            if profile.lead_id:
+                await safe_dispatch(
+                    db=db,
+                    event=SystemEvents.LEAD_STATUS_CHANGED,
+                    payload={
+                        "lead_id": profile.lead_id,
+                        "lead_name": f"Profile #{profile.id}",
+                        "officer_id": current_user.id,
+                        "old_status": "submitted",
+                        "new_status": "sts09",
+                        "actor_id": current_user.id,
+                        "actor_name": current_user.full_name or current_user.username,
+                    },
+                    dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+                )
+                await safe_check_commission_on_status_change(
+                    db, profile.lead_id, "submitted", "sts09", current_user.id,
+                )
 
         return schemas.BulkActionResponse(**result)
 
@@ -365,12 +389,36 @@ async def bulk_reject_admissions(
     try:
         result = await admission_service.bulk_reject(
             db=db,
-            profile_ids=body.profile_ids,
+            items=[item.model_dump() for item in body.items],
             rejector=current_user,
             reason=body.reason,
         )
 
+        # Extract rejected profiles before commit (for post-commit dispatch)
+        rejected_profiles = result.pop("_rejected_profiles", [])
+
         await db.commit()
+
+        # POST-COMMIT: Dispatch LEAD_STATUS_CHANGED + commission for each rejected profile
+        for profile in rejected_profiles:
+            if profile.lead_id:
+                await safe_dispatch(
+                    db=db,
+                    event=SystemEvents.LEAD_STATUS_CHANGED,
+                    payload={
+                        "lead_id": profile.lead_id,
+                        "lead_name": f"Profile #{profile.id}",
+                        "officer_id": current_user.id,
+                        "old_status": "submitted",
+                        "new_status": "sts16",
+                        "actor_id": current_user.id,
+                        "actor_name": current_user.full_name or current_user.username,
+                    },
+                    dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+                )
+                await safe_check_commission_on_status_change(
+                    db, profile.lead_id, "submitted", "sts16", current_user.id,
+                )
 
         return schemas.BulkActionResponse(**result)
 
@@ -431,6 +479,9 @@ async def export_admissions_csv(
     status: str | None = Query(None, description="Filter by status (comma-separated)"),
     search: str | None = Query(None, description="Search by name, email, or citizen ID"),
     major_id: str | None = Query(None, description="Filter by major/program ID (comma-separated)"),
+    academic_year: int | None = Query(None, description="Filter by academic year"),
+    degree_level: str | None = Query(None, description="Filter by degree level"),
+    payment_status: str | None = Query(None, description="Filter by payment status"),
     date_from: datetime | None = Query(None, description="Filter from date"),
     date_to: datetime | None = Query(None, description="Filter to date"),
     db: AsyncSession = Depends(database.get_db),
@@ -445,21 +496,18 @@ async def export_admissions_csv(
     statuses = [s.strip() for s in status.split(",")] if status else None
     major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip().isdigit()] if major_id else None
 
-    # IDOR: Admin=all, Manager=unit, Officer=own assigned leads
-    # Pass current_user to service for proper scoping
-    # Get all profiles matching filters (no pagination for export)
-    profiles, _ = await admission_service.get_profiles(
+    # Export path: no page cap, lightweight hydration (only completion_percent)
+    profiles = await admission_service.get_profiles_for_export(
         db=db,
-        skip=0,
-        limit=10000,  # Max export limit
         current_user=current_user,
         search=search,
         statuses=statuses,
         major_ids=major_ids,
+        academic_year=academic_year,
+        degree_level=degree_level,
+        payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
-        sort_by="created_at",
-        order="desc",
     )
 
     # Create CSV in memory

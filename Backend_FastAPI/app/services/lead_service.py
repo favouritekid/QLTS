@@ -2967,6 +2967,11 @@ async def process_officer_action(
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot process action on a deleted lead.")
 
+            # ✅ FIX #5: Terminal guard — block reject/reassign on enrolled leads
+            terminal_guard = await check_terminal_status_guard(db, lead)
+            if terminal_guard.hard_block:
+                raise BusinessRuleViolation(detail=terminal_guard.reason)
+
             # ✅ FIX: Admin/Manager can reassign ANY lead, Officers can only reassign their own
             if not is_admin_or_manager and lead.assigned_officer_id != officer_id:
                 raise PermissionDeniedError(detail="You are not assigned to this lead.")
@@ -3767,17 +3772,28 @@ async def bulk_assign_leads(
         raise BadRequest(f"Officer {officer_id} is not available for assignment")
 
     # ✅ FIX: Manager can only bulk assign to officers in their unit
+    # Pre-compute allowed unit IDs for Manager scope check on leads
+    manager_allowed_unit_ids = None
     if assigner.role == UserRole.MANAGER:
         if officer.unit_id != assigner.unit_id:
             raise PermissionDeniedError(
                 "Manager chỉ có thể phân công lead cho officer trong đơn vị của mình."
             )
+        from app.repositories.organization_repository import OrganizationRepository
+        org_repo = OrganizationRepository(db)
+        manager_allowed_unit_ids = await org_repo.get_descendant_unit_ids(assigner.unit_id)
 
     assigned_lead_ids = []
     errors = []
 
     for lead_id in lead_ids:
         try:
+            # ✅ FIX #6: Manager unit scope check per lead
+            if manager_allowed_unit_ids is not None:
+                lead_obj = await db.get(models.Lead, lead_id)
+                if not lead_obj or lead_obj.unit_id not in manager_allowed_unit_ids:
+                    raise PermissionDeniedError("Lead không thuộc đơn vị của bạn.")
+
             # Assign lead using existing service function
             lead, _cb = await assign_lead_manually(db, lead_id, officer_id, assigner)
             assigned_lead_ids.append(lead.id)

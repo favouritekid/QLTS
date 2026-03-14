@@ -195,8 +195,8 @@ export function FunnelTable({
   const coreStages = sortedFunnel.filter(s => !s.is_final_stage);
   const outcomeStages = sortedFunnel.filter(s => s.is_final_stage);
 
-  // Calculate totals
-  const totalLeads = sortedFunnel.reduce((sum, s) => sum + s.lead_count, 0);
+  // Calculate totals (core stages only — outcome leads are already counted in core)
+  const totalLeads = coreStages.reduce((sum, s) => sum + s.lead_count, 0);
   const totalLostRevenue = sortedFunnel.reduce(
     (sum, s) => sum + (s.estimated_lost_revenue?.total_lost_revenue || 0),
     0

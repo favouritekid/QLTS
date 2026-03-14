@@ -140,8 +140,8 @@ class AdmissionCriteriaCreate(BaseModel):
     max_possible_score: Optional[float] = Field(None, ge=0, le=1500)
     conditions: Optional[str] = None
     required_subject_count: Optional[int] = Field(None, ge=1)
-    subject_selection_mode: Literal["fixed", "dynamic", "best_n", "any_n"] = "fixed"
-    scoring_method: Literal["sum", "avg"] = "sum"
+    subject_selection_mode: Literal["fixed", "best_n", "any_n"] = "fixed"
+    scoring_method: Literal["sum", "average", "weighted"] = "sum"
     subject_groups: List[int] = Field(
         default_factory=list,
         description="List of Subject Group IDs"

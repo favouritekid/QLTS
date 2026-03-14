@@ -16,6 +16,7 @@ from ..utils.csv_helpers import sanitize_csv_cell
 from ..services.notification_dispatcher import safe_dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..core.constants import UserRole
+from ..utils.exceptions import BusinessRuleViolation
 from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
@@ -1499,6 +1500,14 @@ async def update_lead_consultation_status(
         db=db,
         current_user=current_user
     )
+
+    # ✅ FIX #26: Enforce loss_reason_code for final negative transitions
+    if validated_status.is_final and validated_status.outcome_type == "negative":
+        if not status_update.loss_reason_code:
+            raise BusinessRuleViolation(
+                detail="loss_reason_code is required when transitioning to a final negative status"
+            )
+        lead.loss_reason_code = status_update.loss_reason_code
 
     # Store old status for history/notification
     old_status_id = lead.consultation_status_id
