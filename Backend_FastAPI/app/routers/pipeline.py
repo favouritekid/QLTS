@@ -13,6 +13,16 @@ from app.core.rate_limits import limiter, RateLimits
 router = APIRouter(tags=["Pipeline"])
 
 
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/loss-reasons", response_model=List[schemas.LossReason])
+async def get_loss_reasons(
+    request: Request,
+    current_user: models.User = CasbinAuth,
+):
+    """Get all loss reason codes (read-only taxonomy)."""
+    return pipeline_service.get_loss_reasons()
+
+
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/stages", response_model=List[schemas.PipelineStage])
 async def get_pipeline_stages(

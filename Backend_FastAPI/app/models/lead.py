@@ -2,7 +2,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, CheckConstraint, JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 
@@ -71,6 +71,12 @@ class Lead(Base):
     """Model cho học viên tiềm năng (Lead)."""
 
     __tablename__ = "lead"
+    __table_args__ = (
+        CheckConstraint(
+            "assignment_status IN ('pending', 'assigned', 'failed', 'reassign_pending')",
+            name="ck_lead_assignment_status",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     full_name = Column(String(255), nullable=False)

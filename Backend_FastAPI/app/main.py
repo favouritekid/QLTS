@@ -65,6 +65,7 @@ from .routers import (
     payments,  # ✅ FINANCE MODULE: Payment Processing
     pipeline,
     profile,
+    public_admissions,  # ✅ Public admissions portal API
     security,  # ✅ LOGIN SECURITY: Phase 5 - User response flow
     sessions,
     users
@@ -727,6 +728,7 @@ fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration 
 fastapi_app.include_router(kpi_planning.router)  # ✅ PHASE A6: KPI Planning Engine
 fastapi_app.include_router(kpi_setup.router)  # ✅ KPI Setup: Coverage Dashboard
 fastapi_app.include_router(meta.router)  # ✅ Public metadata (KPI catalog, no auth)
+fastapi_app.include_router(public_admissions.router)  # ✅ Public admissions portal (no auth)
 fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api")
 # ✅ FINANCE MODULE: Phase 4 - API Layer

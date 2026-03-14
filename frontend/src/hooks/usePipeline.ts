@@ -19,6 +19,7 @@ import type {
   AllowedTransition, // ✅ Import mới
   AllowedTransitionCreate,
 } from "@/types/pipeline.types";
+import type { LossReason } from "@/lib/loss-reasons";
 
 // =====================================================================
 // QUERY KEYS
@@ -30,6 +31,7 @@ export const pipelineKeys = {
   fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
+  lossReasons: () => [...pipelineKeys.all, "loss-reasons"] as const,
   // ✅ FSM v3.2: Cache by (currentStatusId, leadId)
   // leadId is required because phase is derived from lead's admission_profile
   // Different leads can be in different phases (consultation vs admission vs fee)
@@ -142,6 +144,31 @@ export function usePipelineStats(params?: PipelineQueryParams) {
     },
     staleTime: 1000 * 60, // 1 minute
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
+  });
+}
+
+// =====================================================================
+// QUERIES (READ) - LOSS REASONS
+// =====================================================================
+
+/**
+ * Get all loss reason codes from backend (single source of truth)
+ *
+ * Returns the canonical loss reason taxonomy. Cached aggressively (1 hour)
+ * since loss reasons rarely change. Components should use the static fallback
+ * from `@/lib/loss-reasons` while this query is loading.
+ *
+ * @example
+ * ```tsx
+ * const { data: lossReasons } = useLossReasons();
+ * ```
+ */
+export function useLossReasons() {
+  return useQuery<LossReason[], AxiosError<ApiErrorResponse>>({
+    queryKey: pipelineKeys.lossReasons(),
+    queryFn: () => pipelineApi.getLossReasons(),
+    staleTime: 1000 * 60 * 60, // 1 hour - rarely changes
+    gcTime: 1000 * 60 * 60 * 2, // 2 hours in cache
   });
 }
 

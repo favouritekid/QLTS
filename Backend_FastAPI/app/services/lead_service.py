@@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import case, func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -31,6 +32,21 @@ from ..core.events import SystemEvents
 from .notification_dispatcher import dispatch
 
 log = structlog.get_logger(__name__)
+
+
+def _handle_lead_integrity_error(exc: IntegrityError) -> None:
+    """Convert DB IntegrityError from lead unique indexes into DuplicateResourceError."""
+    detail = str(exc.orig) if exc.orig else str(exc)
+    if "uq_lead_email_unit_active" in detail:
+        raise DuplicateResourceError(
+            detail="Email này đã tồn tại trong đơn vị. (DB constraint)"
+        ) from exc
+    if "uq_lead_phone_active" in detail:
+        raise DuplicateResourceError(
+            detail="Số điện thoại này đã được sử dụng bởi lead khác. (DB constraint)"
+        ) from exc
+    # Re-raise unknown integrity errors
+    raise
 
 
 # =========================================================================
@@ -301,7 +317,7 @@ async def calculate_lead_score(
     Args:
         db: Database session
         lead_education_level: Education level of lead (high_school, bachelor, master, phd)
-        lead_gpa: GPA of lead (0.0-4.0)
+        lead_gpa: GPA of lead (0.0-10.0)
         lead_source: Source of lead (website, referral, social_media, etc.)
         lead_location: Location of lead
         unit_id: Organization unit ID (for unit-specific scoring config)
@@ -330,7 +346,7 @@ async def calculate_lead_score(
             "event": 25,
             "other": 5,
         }
-        default_gpa_multiplier = 10  # 4.0 GPA = 40 points
+        default_gpa_multiplier = 4  # 10.0 GPA × 4 = 40 points (0-10 scale)
         default_location_bonus = 20
         
         # Behavioral defaults
@@ -383,7 +399,7 @@ async def calculate_lead_score(
         if lead_education_level:
             score += education_scores.get(lead_education_level.lower(), 0)
 
-        # Calculate GPA score (0-4.0 scale)
+        # Calculate GPA score (0-10 scale)
         if lead_gpa is not None and lead_gpa > 0:
             gpa_score = min(int(lead_gpa * gpa_multiplier), 40)  # Cap at 40 points
             score += gpa_score
@@ -848,25 +864,7 @@ async def create_lead(
                 detail=f"Số điện thoại này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đơn vị: {unit_name} - Quản lý bởi: {officer_name}"
             )
 
-        # Check email duplicate WITHIN SAME UNIT (if email provided)
-        if lead_in.email:
-             # ✅ REFACTORED: Use LeadRepository for email check
-             existing_email_lead = await repo.check_email_conflict(
-                 email=lead_in.email, 
-                 unit_id=create_data["unit_id"]
-             )
-             
-             if existing_email_lead:
-                officer_name = "Chưa phân công"
-                if existing_email_lead.assigned_officer:
-                    officer_name = existing_email_lead.assigned_officer.full_name or "N/A"
-                
-                lead_name = existing_email_lead.full_name or "N/A"
-                lead_phone = existing_email_lead.phone or "N/A"
-                
-                raise DuplicateResourceError(
-                    detail=f"Email này đã tồn tại trong đơn vị. Lead: {lead_name} (SĐT: {lead_phone}) - Quản lý bởi: {officer_name}"
-                )
+        # NOTE: Email check moved AFTER distribution/routing below (P0 fix)
 
         # === NEW FEATURE: Shared Offering Distribution ===
         # If Lead has offering_id, determine target unit via distribution config
@@ -923,6 +921,23 @@ async def create_lead(
                         officer_status=ctv_officer.status if ctv_officer else "not_found",
                         officer_unit_id=ctv_officer.unit_id if ctv_officer else None,
                     )
+
+        # ✅ P0 FIX: Email check AFTER distribution/routing determines final unit_id
+        # Previously checked before distribution, so conflicts in target unit were missed
+        if lead_in.email:
+            existing_email_lead = await repo.check_email_conflict(
+                email=lead_in.email,
+                unit_id=create_data["unit_id"]
+            )
+            if existing_email_lead:
+                officer_name = "Chưa phân công"
+                if existing_email_lead.assigned_officer:
+                    officer_name = existing_email_lead.assigned_officer.full_name or "N/A"
+                lead_name = existing_email_lead.full_name or "N/A"
+                lead_phone = existing_email_lead.phone or "N/A"
+                raise DuplicateResourceError(
+                    detail=f"Email này đã tồn tại trong đơn vị. Lead: {lead_name} (SĐT: {lead_phone}) - Quản lý bởi: {officer_name}"
+                )
 
         # Calculate lead score before creating the lead
         calculated_score = await calculate_lead_score(
@@ -1013,8 +1028,24 @@ async def create_lead(
                     offering_name = offering_obj.offering_type
 
         # ✅ TRANSACTION FIX: Flush instead of commit
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            await db.rollback()
+            _handle_lead_integrity_error(exc)
         await db.refresh(db_lead)
+
+        # ✅ PR3: Register phone identities (DB-level uniqueness safety net)
+        try:
+            await repo.register_phone_identities(
+                lead_id=db_lead.id,
+                phone=db_lead.phone,
+                phone2=db_lead.phone2,
+            )
+            await db.flush()
+        except IntegrityError as exc:
+            await db.rollback()
+            _handle_lead_integrity_error(exc)
 
         # ✅ AUDIT LOG: Log lead creation
         await audit_service.log_created(
@@ -1423,6 +1454,20 @@ async def update_lead(
 
                     reassignment_triggered = True
 
+                    # ✅ P0 FIX: Re-check email uniqueness in NEW unit
+                    # Offering change → unit change → email might conflict in target unit
+                    if db_lead.email:
+                        email_conflict = await repo.check_email_conflict(
+                            email=db_lead.email,
+                            unit_id=new_target_unit_id,
+                            exclude_id=lead_id
+                        )
+                        if email_conflict:
+                            raise DuplicateResourceError(
+                                detail=f"Không thể chuyển đơn vị: Email '{db_lead.email}' đã tồn tại trong đơn vị đích. "
+                                       f"Lead: {email_conflict.full_name} (SĐT: {email_conflict.phone})"
+                            )
+
                     log.info(
                         "Lead auto-reassignment completed",
                         lead_id=lead_id,
@@ -1436,6 +1481,14 @@ async def update_lead(
 
             # ✅ OPTIMISTIC LOCKING: Increment version
             db_lead.version = (db_lead.version or 1) + 1
+
+            # ✅ PR3: Update phone identities when phone/phone2 changed
+            if phone_changed or phone2_changed:
+                await repo.update_phone_identities(
+                    lead_id=lead_id,
+                    phone=db_lead.phone,
+                    phone2=db_lead.phone2,
+                )
 
             # Thêm đối tượng vào session (đánh dấu là dirty)
             db.add(db_lead)
@@ -1501,6 +1554,9 @@ async def update_lead(
             log.info("Lead updated successfully within transaction", lead_id=lead_id)
             # Transaction sẽ commit khi ra khỏi `async with db.begin_nested()`
 
+        except IntegrityError as exc:
+            # ✅ PR3: Convert phone identity IntegrityError to DuplicateResourceError
+            _handle_lead_integrity_error(exc)
         except Exception as e:
             # Rollback tự động xảy ra khi có lỗi trong `async with`
             # Phân biệt giữa lỗi business logic và lỗi hệ thống
@@ -1576,12 +1632,18 @@ async def update_lead(
 
 async def add_consultation(
     db: AsyncSession, lead_id: int, officer_id: int, data: schemas.ConsultationCreate
-) -> models.Consultation:
+) -> tuple[models.Consultation, bool, str | None]:
     """
     Thêm consultation mới, cập nhật trạng thái Lead và ghi log lịch sử.
 
     CONCURRENCY SAFE: Uses SELECT ... FOR UPDATE to prevent race conditions
     when multiple requests try to update the same lead's pipeline_stage.
+
+    Returns:
+        tuple: (consultation, status_updated, terminal_guard_reason)
+        - consultation: The created Consultation object
+        - status_updated: Whether the lead status was actually updated
+        - terminal_guard_reason: Reason status was not updated (soft-terminal guard), or None
     """
     async with db.begin_nested():
         try:
@@ -1784,10 +1846,10 @@ async def add_consultation(
 
             # Thêm các đối tượng vào session
             db.add(new_consultation)
-            if new_status.updates_pipeline:
-                # ✅ M9: Increment version when lead state mutates via consultation
-                lead.version = (lead.version or 1) + 1
-                db.add(lead)  # Chỉ đánh dấu lead dirty nếu có thay đổi
+            # ✅ P0 FIX: Always increment version when consultation is created
+            # (previously only bumped when updates_pipeline=True)
+            lead.version = (lead.version or 1) + 1
+            db.add(lead)
 
             # Lấy trạng thái Lead mới
             new_state = _get_current_lead_state(lead)
@@ -1850,7 +1912,11 @@ async def add_consultation(
                 consultation_id=new_consultation.id,
                 officer_id=officer_id,
             )
-            return new_consultation  # Trả về consultation đã được refresh
+            # Return consultation + terminal guard diagnostics
+            # status_updated = actual lead-state mutation (compare before/after)
+            status_updated = old_state != new_state
+            terminal_reason = terminal_guard.reason if skip_status_update else None
+            return new_consultation, status_updated, terminal_reason
 
         except Exception as e:
             # Rollback tự động
@@ -1935,7 +2001,9 @@ async def assign_lead_manually(
                 reason=log_reason,
                 timestamp=datetime.now(timezone.utc),
             )
-            db.add(lead)  # Đánh dấu lead là dirty
+            # ✅ P0 FIX: Increment version on assignment change
+            lead.version = (lead.version or 1) + 1
+            db.add(lead)
             db.add(log_entry)
 
             # Lấy trạng thái mới
@@ -3317,30 +3385,48 @@ async def import_leads_from_file_content(
     initial_stage_id = initial_status_obj.stage_id
     initial_legacy_status = initial_status_obj.legacy_status or "new"
 
-    # ✅ REFACTORED: Use LeadRepository for batch email check
-    # We no longer stream everything. We extract emails from file first.
+    # ✅ REFACTORED: Use LeadRepository for batch email check (unit-scoped)
     repo = LeadRepository(db)
-    
+
     all_emails_in_file = set()
     if 'email' in df.columns:
         # Extract emails, lowercased
         raw_emails = df['email'].dropna().astype(str).tolist()
         all_emails_in_file = {e.strip().lower() for e in raw_emails if e.strip()}
-    
-    existing_emails_in_db = await repo.check_batch_email_conflict(list(all_emails_in_file))
+
+    # ✅ P0 FIX: Check email conflicts within target unit (not globally)
+    existing_emails_in_db = await repo.check_batch_email_conflict(
+        list(all_emails_in_file), unit_id=default_unit_id
+    )
     emails_in_current_file = set()
 
-    # ✅ FIX: Batch check for existing phones
+    # ✅ FIX: Batch check for existing phones (phone + phone2)
+    from app.utils.phone_helpers import normalize_vietnam_phone
     repo = LeadRepository(db)
     all_phones_in_file = set()
     if 'phone' in df.columns:
-        # Extract phones, handling potential non-string types
         raw_phones = df['phone'].dropna().astype(str).tolist()
-        # Basic cleaning (remove .0 if float conversion)
-        all_phones_in_file = {p.split(".")[0].strip() for p in raw_phones if p.strip()}
-    
+        for p in raw_phones:
+            cleaned = p.strip()
+            # Handle Excel float artifact: "901234567.0" → "901234567"
+            # Don't split on "." — that breaks dotted phones like "0901.234.567"
+            if cleaned.endswith(".0"):
+                cleaned = cleaned[:-2]
+            norm = normalize_vietnam_phone(cleaned) if cleaned else None
+            if norm:
+                all_phones_in_file.add(norm)
+    if 'phone2' in df.columns:
+        raw_phones2 = df['phone2'].dropna().astype(str).tolist()
+        for p in raw_phones2:
+            cleaned = p.strip()
+            if cleaned.endswith(".0"):
+                cleaned = cleaned[:-2]
+            norm = normalize_vietnam_phone(cleaned) if cleaned else None
+            if norm:
+                all_phones_in_file.add(norm)
+
     existing_phones_in_db = await repo.check_batch_phone_conflict(list(all_phones_in_file))
-    phones_in_current_file = set()
+    phones_in_current_file = set()  # Tracks normalized phones seen so far in this file
 
     # --- 4. Process each row ---
     for index, row in df.iterrows():
@@ -3355,11 +3441,27 @@ async def import_leads_from_file_content(
             cleaned_data["full_name"] = sanitize_csv_cell(str(row_data.get("full_name", "")).strip())
             cleaned_data["email"] = str(row_data.get("email", "")).strip()
 
-            # Special handling for 'phone': convert to string, remove ".0" if float
+            # Special handling for 'phone': convert to string, strip Excel float ".0"
             phone_val = row_data.get("phone")
-            cleaned_data["phone"] = (
-                str(phone_val).split(".")[0] if pd.notna(phone_val) else ""
-            )
+            if pd.notna(phone_val):
+                phone_str = str(phone_val).strip()
+                # Handle Excel float artifact: "901234567.0" → "901234567"
+                # Don't split on "." — that breaks dotted phones like "0901.234.567"
+                if phone_str.endswith(".0"):
+                    phone_str = phone_str[:-2]
+                cleaned_data["phone"] = phone_str
+            else:
+                cleaned_data["phone"] = ""
+
+            # ✅ Phase 2 cleanup: Extract phone2 if present in file
+            phone2_val = row_data.get("phone2")
+            if pd.notna(phone2_val):
+                phone2_str = str(phone2_val).strip()
+                if phone2_str.endswith(".0"):
+                    phone2_str = phone2_str[:-2]
+                cleaned_data["phone2"] = phone2_str if phone2_str else None
+            else:
+                cleaned_data["phone2"] = None
 
             cleaned_data["source"] = sanitize_csv_cell(str(row_data.get("source", "")).strip())
 
@@ -3426,12 +3528,26 @@ async def import_leads_from_file_content(
             if email_lower:
                 emails_in_current_file.add(email_lower)
 
-            # ✅ Phone Validation
-            phone_val = cleaned_data.get("phone")
-            if phone_val:
-                if phone_val in existing_phones_in_db or phone_val in phones_in_current_file:
-                     raise ValueError(f"Số điện thoại '{phone_val}' đã tồn tại trong hệ thống hoặc file này.")
-                phones_in_current_file.add(phone_val)
+            # ✅ Phone Validation (phone + phone2, normalized cross-slot)
+            phone_raw = cleaned_data.get("phone")
+            phone_norm = normalize_vietnam_phone(phone_raw) if phone_raw else None
+            phone2_raw = cleaned_data.get("phone2")
+            phone2_norm = normalize_vietnam_phone(phone2_raw) if phone2_raw else None
+
+            if phone_norm:
+                if phone_norm in existing_phones_in_db or phone_norm in phones_in_current_file:
+                    raise ValueError(f"SĐT '{phone_raw}' đã tồn tại trong hệ thống hoặc file này.")
+            if phone2_norm:
+                if phone2_norm in existing_phones_in_db or phone2_norm in phones_in_current_file:
+                    raise ValueError(f"SĐT phụ '{phone2_raw}' đã tồn tại trong hệ thống hoặc file này.")
+                if phone2_norm == phone_norm:
+                    raise ValueError(f"SĐT phụ '{phone2_raw}' trùng với SĐT chính.")
+
+            # Register normalized phones for cross-row dedup
+            if phone_norm:
+                phones_in_current_file.add(phone_norm)
+            if phone2_norm:
+                phones_in_current_file.add(phone2_norm)
 
             # ✅ Calculate Lead Score
             score = await calculate_lead_score(
@@ -3491,11 +3607,30 @@ async def import_leads_from_file_content(
                 if not batch:
                     continue
 
-                async with db.begin_nested():  # Start nested transaction
-                    # Insert batch and get IDs
-                    # ✅ REFACTORED: Use LeadRepository
-                    batch_ids = await repo.bulk_insert_leads(batch)
-                    created_lead_ids.extend(batch_ids)
+                try:
+                    async with db.begin_nested():  # Start nested transaction
+                        # Insert batch and get IDs
+                        batch_ids = await repo.bulk_insert_leads(batch)
+                        created_lead_ids.extend(batch_ids)
+
+                        # ✅ PR3: Register phone identities for each lead in batch
+                        for lead_dict, lead_id in zip(batch, batch_ids):
+                            await repo.register_phone_identities(
+                                lead_id=lead_id,
+                                phone=lead_dict.get("phone"),
+                                phone2=lead_dict.get("phone2"),
+                            )
+                except IntegrityError as exc:
+                    detail = str(exc.orig) if exc.orig else str(exc)
+                    log.warning("Batch insert IntegrityError", batch_offset=i, detail=detail)
+                    errors.append(
+                        schemas.LeadImportError(
+                            row_number=-1,
+                            error_message=f"Batch {i // batch_size + 1} bị trùng dữ liệu (email/phone): {detail[:200]}",
+                            row_data={},
+                        )
+                    )
+                    continue
 
                 log.info(
                     f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted."
@@ -3659,8 +3794,9 @@ async def bulk_update_pipeline_stage(
 ) -> dict:
     """
     Bulk update pipeline_stage_id for multiple leads (Admin only).
-    
+
     ✅ PHASE 8: Replaces db.get() in router with Repository pattern.
+    ✅ PR4: Returns skip diagnostics for leads that were not updated.
 
     Args:
         db: Database session
@@ -3671,33 +3807,59 @@ async def bulk_update_pipeline_stage(
     Returns:
         dict: {
             "message": str,
-            "updated_count": int
+            "updated_count": int,
+            "skipped": [{"lead_id": int, "reason": str}, ...]
         }
 
     Business Rules:
     - Only Admin can perform bulk updates
-    - Uses LeadRepository for data access
-    - Single UPDATE query for efficiency
+    - Skips deleted leads and leads already at target stage
+    - Returns detailed skip reasons per lead
     """
     # Admin-only check
     if updated_by.role != UserRole.ADMIN:
         raise PermissionDeniedError("Only Admin can bulk update pipeline stage")
-    
-    # Use LeadRepository for data access
+
     repo = LeadRepository(db)
-    updated_count = await repo.bulk_update_pipeline_stage(lead_ids, pipeline_stage_id)
-    
+    skipped: list[dict] = []
+
+    # Pre-fetch leads to determine which should be skipped
+    from sqlalchemy import select
+    stmt = select(models.Lead).where(models.Lead.id.in_(lead_ids))
+    result = await db.execute(stmt)
+    found_leads = {lead.id: lead for lead in result.scalars().all()}
+
+    # Identify skipped leads
+    updatable_ids: list[int] = []
+    for lid in lead_ids:
+        lead = found_leads.get(lid)
+        if lead is None:
+            skipped.append({"lead_id": lid, "reason": "Lead không tồn tại"})
+        elif lead.deleted_at is not None:
+            skipped.append({"lead_id": lid, "reason": "Lead đã bị xóa"})
+        elif lead.pipeline_stage_id == pipeline_stage_id:
+            skipped.append({"lead_id": lid, "reason": "Lead đã ở giai đoạn này"})
+        else:
+            updatable_ids.append(lid)
+
+    # Update only qualifying leads
+    updated_count = 0
+    if updatable_ids:
+        updated_count = await repo.bulk_update_pipeline_stage(updatable_ids, pipeline_stage_id)
+
     log.info(
         "Bulk pipeline stage update completed",
         total_requested=len(lead_ids),
         updated_count=updated_count,
+        skipped_count=len(skipped),
         pipeline_stage_id=pipeline_stage_id,
         updated_by_id=updated_by.id
     )
-    
+
     return {
         "message": f"Updated {updated_count} leads",
-        "updated_count": updated_count
+        "updated_count": updated_count,
+        "skipped": skipped,
     }
 
 
@@ -3786,6 +3948,10 @@ async def delete_lead(
 
             # Set deleted_at timestamp (soft delete)
             lead.deleted_at = deleted_timestamp
+
+            # ✅ PR3: Soft-delete phone identity rows (release phone numbers)
+            repo = LeadRepository(db)
+            await repo.unregister_phone_identities(lead_id)
 
             # Optionally update status to indicate deletion
             lead.status = "deleted"
@@ -3958,8 +4124,11 @@ async def restore_lead(
             # Clear deleted_at to restore the lead
             lead.deleted_at = None
 
+            # ✅ PR3: Restore phone identity rows (re-enforce uniqueness)
+            # IntegrityError will be caught by the outer except block
+            await repo.restore_phone_identities(lead_id)
+
             # ✅ H5: Restore status from latest non-deleted consultation (no hardcode "new")
-            repo = LeadRepository(db)
             latest_consultation = await repo.get_latest_consultation(lead_id)
             if latest_consultation and latest_consultation.consultation_status_id:
                 latest_status = await db.get(
@@ -4029,8 +4198,10 @@ async def restore_lead(
 
             return lead
 
-    except (ResourceNotFoundError, BusinessRuleViolation):
+    except (ResourceNotFoundError, BusinessRuleViolation, DuplicateResourceError):
         raise
+    except IntegrityError as exc:
+        _handle_lead_integrity_error(exc)
     except Exception as e:
         # ✅ M10: Removed redundant full-session rollback; begin_nested() handles savepoint rollback automatically
         log.error(

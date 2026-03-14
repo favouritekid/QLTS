@@ -43,6 +43,10 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: any[]) => args.filter(Boolean).join(" "),
 }));
 
+vi.mock("@/hooks/usePipeline", () => ({
+  useLossReasons: () => ({ data: undefined }),
+}));
+
 import { FunnelChart } from "./FunnelChart";
 
 const FUNNEL_WITH_VELOCITY = [

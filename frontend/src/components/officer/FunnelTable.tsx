@@ -30,6 +30,8 @@ import {
 // Note: Not using Collapsible inside table as it renders <div> which is invalid in <tbody>
 // Using conditional rendering with state instead
 import { cn } from "@/lib/utils";
+import { getLossReasonLabelMap } from "@/lib/loss-reasons";
+import { useLossReasons } from "@/hooks/usePipeline";
 import {
   ChevronDown,
   ChevronRight,
@@ -155,16 +157,6 @@ const formatVNDFull = (amount: number): string => {
   return new Intl.NumberFormat('vi-VN').format(amount) + ' ₫';
 };
 
-/** Loss reason labels */
-const LOSS_REASON_LABELS: Record<string, string> = {
-  PRICE_HIGH: "Học phí cao",
-  LOCATION_FAR: "Xa nhà",
-  CHOSE_COMPETITOR: "Chọn trường khác",
-  NO_CONTACT: "Không liên lạc được",
-  TIMING_BAD: "Chưa sẵn sàng",
-  OTHER: "Khác",
-};
-
 /** Suggestion type styles */
 const SUGGESTION_STYLES: Record<FunnelSuggestion["type"], { icon: string; color: string; bg: string }> = {
   bottleneck: { icon: "\u25B2", color: "text-red-600", bg: "bg-red-50 dark:bg-red-950/30" },
@@ -195,6 +187,8 @@ export function FunnelTable({
   const router = useRouter();
   const { startDate, endDate } = useDashboardDate();
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const { data: lossReasons } = useLossReasons();
+  const LOSS_REASON_LABELS = getLossReasonLabelMap(lossReasons);
 
   // Sort stages by order
   const sortedFunnel = [...funnel].sort((a, b) => a.stage_order - b.stage_order);

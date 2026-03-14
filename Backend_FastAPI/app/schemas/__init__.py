@@ -94,6 +94,7 @@ from .pipeline import (
     ConsultationStatusCreate,
     ConsultationStatusUpdate,
     FullPipeline,
+    LossReason,
     PipelineStage,
     PipelineStageBase,
     PipelineStageCreate,
@@ -114,6 +115,7 @@ from .lead import (
     Consultation,
     ConsultationBase,
     ConsultationCreate,
+    ConsultationCreateResult,
     ConsultationUpdate,
     Lead,
     LeadAction,
@@ -125,6 +127,8 @@ from .lead import (
     LeadsPage,
     LeadUpdate,
     LeadStatusUpdate,  # ✅ FSM v3.0: Status update schema
+    BulkStageSkippedItem,
+    BulkUpdateStageResult,
     TimelineItem,
     # Application schemas (Hồ sơ Tuyển sinh - Legacy)
     Application,

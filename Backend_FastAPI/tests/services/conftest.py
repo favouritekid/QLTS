@@ -144,46 +144,47 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
     )
     db.add(unit)
     
-    # Pipeline Stage
+    # Pipeline Stages — use real IDs that phase_manager recognizes
+    # PHASE_STAGES[CONSULTATION] expects stg01/stg02
     stage = models.PipelineStage(
-        id="SERVICE_TEST_STAGE",
-        name="Service Test Stage",
+        id="stg01",
+        name="Tư vấn (Test)",
         order=10
     )
     db.add(stage)
-    
-    # Initial Status (system default)
+
+    # Initial Status (system default) — must be in PHASE_STATUSES[CONSULTATION]
     initial_status = models.ConsultationStatus(
         id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
         name="New Lead (Test)",
         color_code="#0000FF",
-        stage_id="SERVICE_TEST_STAGE"
+        stage_id="stg01"
     )
     db.add(initial_status)
-    
-    # Additional status for transitions
+
+    # Additional status for transitions — use sts02 (in CONSULTATION phase whitelist)
     status_contacted = models.ConsultationStatus(
-        id="CONTACTED_TEST",
+        id="sts02",
         name="Contacted (Test)",
         color_code="#00FF00",
-        stage_id="SERVICE_TEST_STAGE",
+        stage_id="stg01",
         updates_pipeline=True
     )
     db.add(status_contacted)
-    
-    # Lost status
+
+    # Lost status — use stg02 (also in CONSULTATION phase)
     lost_stage = models.PipelineStage(
-        id="LOST_TEST_STAGE",
+        id="stg02",
         name="Lost Stage (Test)",
         order=999
     )
     db.add(lost_stage)
-    
+
     lost_status = models.ConsultationStatus(
         id=settings.DEFAULT_LOST_LEAD_STATUS_ID,
         name="Lost (Test)",
         color_code="#FF0000",
-        stage_id="LOST_TEST_STAGE"
+        stage_id="stg02"
     )
     db.add(lost_status)
     
@@ -509,7 +510,7 @@ async def commission_policy(
     seeded_dependencies: dict,
     admin_user: models.User,
 ) -> "models.CommissionPolicy":
-    """Active fixed commission policy linked to the CONTACTED_TEST status."""
+    """Active fixed commission policy linked to the contacted status (sts02)."""
     from app.models.commission import CommissionPolicy
     from datetime import date
     from decimal import Decimal

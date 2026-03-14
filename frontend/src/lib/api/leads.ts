@@ -17,7 +17,9 @@ import type {
   LeadListParams,
   Consultation,
   ConsultationCreate,
+  ConsultationCreateResult,
   ConsultationUpdate,
+  BulkUpdateStageResult,
   TimelineItem,
   LeadInsights,
 
@@ -184,8 +186,8 @@ export async function bulkAssignLeads(
  */
 export async function bulkUpdateLeadsStage(
   data: { lead_ids: number[]; pipeline_stage_id: string }
-): Promise<{ message: string; updated_count: number }> {
-  const response = await api.post<{ message: string; updated_count: number }>(
+): Promise<BulkUpdateStageResult> {
+  const response = await api.post<BulkUpdateStageResult>(
     '/api/leads/bulk-update-stage',
     data
   )
@@ -271,8 +273,8 @@ export async function performLeadAction(
 export async function addConsultation(
   leadId: number,
   data: ConsultationCreate
-): Promise<Consultation> {
-  const response = await api.post<Consultation>(
+): Promise<ConsultationCreateResult> {
+  const response = await api.post<ConsultationCreateResult>(
     `/api/leads/${leadId}/consultations`,
     data
   )

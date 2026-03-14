@@ -937,7 +937,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                               step="0.01"
                               min="0"
                               max="10"
-                              placeholder="3.5"
+                              placeholder="7.5"
                               {...field}
                               value={field.value ?? ""}
                               onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}

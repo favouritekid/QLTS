@@ -53,6 +53,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { TrendInfo } from "@/hooks/useDashboardStats";
+import { getLossReasonMap } from "@/lib/loss-reasons";
+import { useLossReasons } from "@/hooks/usePipeline";
 
 // ============================================================================
 // INTERFACES
@@ -104,16 +106,6 @@ const formatVND = (amount: number): string => {
 /** Format VND currency (full format with thousands separators) */
 const formatVNDFull = (amount: number): string => {
   return new Intl.NumberFormat('vi-VN').format(amount) + ' ₫';
-};
-
-/** Map loss reason codes to human-readable labels (Vietnamese) */
-const LOSS_REASON_LABELS: Record<string, { label: string; icon: string }> = {
-  PRICE_HIGH: { label: "Học phí", icon: "×" },
-  LOCATION_FAR: { label: "Xa nhà", icon: "×" },
-  CHOSE_COMPETITOR: { label: "Trường khác", icon: "→" },
-  NO_CONTACT: { label: "K.liên lạc", icon: "×" },
-  TIMING_BAD: { label: "Chưa sẵn sàng", icon: "•" },
-  OTHER: { label: "Khác", icon: "•" },
 };
 
 interface FunnelStage {
@@ -362,6 +354,8 @@ export function FunnelChart({
   const router = useRouter();
   const { startDate, endDate } = useDashboardDate();
   const [showStageDetails, setShowStageDetails] = useState(false);
+  const { data: lossReasons } = useLossReasons();
+  const LOSS_REASON_LABELS = useMemo(() => getLossReasonMap(lossReasons), [lossReasons]);
 
   // Merge user config with defaults — memoize to stabilize references
   const mergedConfig: FunnelConfig = useMemo(() => ({

@@ -776,7 +776,7 @@ async def restore_lead(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{lead_id}/consultations",
-    response_model=schemas.Consultation,
+    response_model=schemas.ConsultationCreateResult,
     status_code=status.HTTP_201_CREATED,
 )
 async def add_new_consultation(
@@ -789,7 +789,7 @@ async def add_new_consultation(
     """Thêm một ghi chú tư vấn mới cho Lead (Đã xác thực 2 lớp)."""
     # Service 'add_consultation' có logic check quyền sở hữu
     # nhưng check ở đây vẫn an toàn hơn
-    result = await lead_service.add_consultation(
+    consultation, status_updated, terminal_guard_reason = await lead_service.add_consultation(
         db, lead.id, current_user.id, consultation_in
     )
     await db.commit()
@@ -799,18 +799,22 @@ async def add_new_consultation(
         db=db,
         event=SystemEvents.CONSULTATION_CREATED,
         payload={
-            "consultation_id": result.id,
+            "consultation_id": consultation.id,
             "lead_id": lead.id,
             "officer_id": lead.assigned_officer_id,
-            "status_id": result.consultation_status_id or "",
+            "status_id": consultation.consultation_status_id or "",
             "actor_id": current_user.id,
             "actor_name": current_user.full_name or current_user.username,
             "unit_id": lead.unit_id,
         },
-        dedupe_key=f"consultation_created:{result.id}",
+        dedupe_key=f"consultation_created:{consultation.id}",
     )
 
-    return result
+    return schemas.ConsultationCreateResult(
+        consultation=schemas.Consultation.model_validate(consultation),
+        status_updated=status_updated,
+        terminal_guard_reason=terminal_guard_reason,
+    )
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -1301,7 +1305,11 @@ async def bulk_assign_leads(
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
-@router.post("/bulk-update-stage", status_code=status.HTTP_200_OK)
+@router.post(
+    "/bulk-update-stage",
+    response_model=schemas.BulkUpdateStageResult,
+    status_code=status.HTTP_200_OK,
+)
 async def bulk_update_leads_stage(
     request: Request,
     bulk_data: schemas.BulkUpdateStageSchema,
@@ -1310,7 +1318,7 @@ async def bulk_update_leads_stage(
 ):
     """
     (Admin only) Bulk update pipeline stage for multiple leads.
-    
+
     ✅ PHASE 8: Uses lead_service.bulk_update_pipeline_stage (Repository pattern).
 
     **Request Body:**

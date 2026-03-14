@@ -389,6 +389,20 @@ async def _init_schema_once():
                 "START WITH 1 INCREMENT BY 1"
             ))
 
+            # Create partial unique index for email per unit (matches Alembic migration)
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_email_unit_active "
+                "ON lead (lower(email), unit_id) "
+                "WHERE email IS NOT NULL AND deleted_at IS NULL"
+            ))
+
+            # Create partial unique index for phone identity (PR3: True Phone Identity)
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_phone_active "
+                "ON lead_phone_identity (phone_normalized) "
+                "WHERE deleted_at IS NULL"
+            ))
+
             if CasbinBase:
                 await conn.run_sync(CasbinBase.metadata.create_all)
                 await conn.execute(text("""

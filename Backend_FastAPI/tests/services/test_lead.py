@@ -539,6 +539,7 @@ class TestUpdateLead:
         """Test update_lead updates lead and logs history."""
         # Arrange
         class MockLeadUpdate:
+            version = None  # Optimistic locking - None = skip check
             def model_dump(self, **kwargs):
                 return {"full_name": "Updated Lead Name"}
         
@@ -568,6 +569,7 @@ class TestUpdateLead:
     ):
         """Test update_lead raises ResourceNotFoundError for non-existent ID."""
         class MockLeadUpdate:
+            version = None  # Optimistic locking - None = skip check
             def model_dump(self, **kwargs):
                 return {"full_name": "Test"}
         
@@ -587,6 +589,7 @@ class TestUpdateLead:
         original_email = seeded_lead.email
         
         class MockLeadUpdate:
+            version = None  # Optimistic locking - None = skip check
             def model_dump(self, **kwargs):
                 return {"full_name": "Partial Update Name"}  # Only update name
         
@@ -614,6 +617,7 @@ class TestUpdateLead:
         await db.commit()
         
         class MockLeadUpdate:
+            version = None  # Optimistic locking - None = skip check
             def model_dump(self, **kwargs):
                 return {"full_name": "Should Fail"}
         
@@ -632,6 +636,7 @@ class TestUpdateLead:
         """Test admin can update any lead, even if not assigned."""
         # seeded_lead is assigned to officer_user, not admin
         class MockLeadUpdate:
+            version = None  # Optimistic locking - None = skip check
             def model_dump(self, **kwargs):
                 return {"full_name": "Admin Updated"}
         
@@ -665,6 +670,7 @@ class TestUpdateLead:
         await db.flush()
         
         class MockLeadUpdate:
+            version = None  # Optimistic locking - None = skip check
             def model_dump(self, **kwargs):
                 return {"full_name": "Should Fail"}
         
@@ -905,6 +911,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 # Consultation model fields: method, notes, duration_minutes (no 'outcome')
@@ -922,10 +930,10 @@ class TestConsultation:
              patch("app.services.lead_service.pipeline_service.validate_status_transition", new_callable=AsyncMock) as mock_validate:
             mock_validate.return_value = True
             
-            consultation = await lead_service.add_consultation(
-                db, 
-                seeded_lead.id, 
-                officer_user.id, 
+            consultation, status_updated, terminal_reason = await lead_service.add_consultation(
+                db,
+                seeded_lead.id,
+                officer_user.id,
                 consult_in
             )
             await db.commit()
@@ -951,6 +959,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}
@@ -982,6 +992,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}
@@ -1014,6 +1026,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}
@@ -1023,9 +1037,9 @@ class TestConsultation:
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
              patch("app.services.lead_service.pipeline_service.validate_status_transition", new_callable=AsyncMock) as mock_validate:
             mock_validate.return_value = True
-            consultation = await lead_service.add_consultation(db, seeded_lead.id, officer_user.id, consult_in)
+            consultation, _, _ = await lead_service.add_consultation(db, seeded_lead.id, officer_user.id, consult_in)
             await db.commit()
-        
+
         # Act - delete the consultation
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock):
             result = await lead_service.delete_consultation(
@@ -1067,6 +1081,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}
@@ -1076,9 +1092,9 @@ class TestConsultation:
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
              patch("app.services.lead_service.pipeline_service.validate_status_transition", new_callable=AsyncMock) as mock:
             mock.return_value = True
-            consultation = await lead_service.add_consultation(db, seeded_lead.id, officer_user.id, consult_in)
+            consultation, _, _ = await lead_service.add_consultation(db, seeded_lead.id, officer_user.id, consult_in)
             await db.commit()
-        
+
         # Soft delete the lead
         await lead_service.delete_lead(db, seeded_lead.id, deleted_by=admin_user)
         await db.commit()
@@ -1111,6 +1127,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}
@@ -1120,9 +1138,9 @@ class TestConsultation:
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
              patch("app.services.lead_service.pipeline_service.validate_status_transition", new_callable=AsyncMock) as mock:
             mock.return_value = True
-            consultation = await lead_service.add_consultation(db, seeded_lead.id, officer_user.id, consult_in)
+            consultation, _, _ = await lead_service.add_consultation(db, seeded_lead.id, officer_user.id, consult_in)
             await db.commit()
-        
+
         # Act - update the consultation
         class MockConsultUpdate:
             def model_dump(self, **kwargs):
@@ -1171,6 +1189,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}
@@ -1181,11 +1201,11 @@ class TestConsultation:
         with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
              patch("app.services.lead_service.pipeline_service.validate_status_transition", new_callable=AsyncMock) as mock:
             mock.return_value = True
-            consultation = await lead_service.add_consultation(
+            consultation, _, _ = await lead_service.add_consultation(
                 db, seeded_lead.id, admin_user.id, consult_in
             )
             await db.commit()
-        
+
         assert consultation is not None
     
     async def test_add_consultation_non_assigned_officer_fails(
@@ -1218,6 +1238,8 @@ class TestConsultation:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}
@@ -1627,6 +1649,8 @@ class TestRevertStatus:
                 self.status_id = status_id
                 self.consultation_date = None
                 self.scheduled_at = None
+                self.loss_reason_code = None
+                self.loss_reason_note = None
             
             def model_dump(self, **kwargs):
                 return {"method": self.method, "notes": self.notes, "duration_minutes": self.duration_minutes}

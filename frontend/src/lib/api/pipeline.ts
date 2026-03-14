@@ -18,6 +18,7 @@ import type {
   AllowedTransitionCreate as AllowedTransitionCreateType,
 } from '@/types/pipeline.types'
 import type { Lead, SuccessResponse } from '@/types/lead.types'
+import type { LossReason } from '@/lib/loss-reasons'
 
 // ============================================
 // PIPELINE STAGE OPERATIONS (Public)
@@ -418,6 +419,27 @@ export async function deleteAllowedTransition(
 }
 
 // ============================================
+// LOSS REASONS (Read-only taxonomy)
+// ============================================
+
+/**
+ * Get all loss reason codes from backend (single source of truth)
+ *
+ * @example
+ * ```ts
+ * const reasons = await pipelineApi.getLossReasons()
+ * // Returns: [{ code: "PRICE_HIGH", label: "Học phí", icon: "💰", ... }, ...]
+ * ```
+ */
+export async function getLossReasons(): Promise<LossReason[]> {
+  const response = await api.get<LossReason[]>('/api/pipeline/loss-reasons')
+  return response.data
+}
+
+// Re-export LossReason type for convenience
+export type { LossReason } from '@/lib/loss-reasons'
+
+// ============================================
 // CACHE INVALIDATION
 // ============================================
 
@@ -447,6 +469,7 @@ export const pipelineApi = {
   getStages,
   getFullPipeline,
   getAllowedNextStatuses,
+  getLossReasons,
 
   // Admin: Stage Management
   createStage,

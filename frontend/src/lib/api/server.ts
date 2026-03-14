@@ -67,6 +67,12 @@ import type {
 import type { AdmissionProfileResponse, AdmissionsPage } from '@/lib/zod/admissions';
 import type { EnhancedOfficerStats } from '@/hooks/useDashboardStats';
 import type { CollaboratorsPage } from '@/types/collaborator.types';
+import type {
+  PublicAdmissionsDocumentsResponse,
+  PublicAdmissionsMethodsResponse,
+  PublicAdmissionsProgramsResponse,
+  PublicAdmissionsTuitionResponse,
+} from '@/types/public-admissions.types';
 
 // ============================================
 // CONFIGURATION
@@ -526,6 +532,28 @@ const admissions = {
 };
 
 // ============================================
+// PUBLIC ADMISSIONS API (SERVER-SIDE)
+// ============================================
+
+const publicAdmissions = {
+  async getProgramsCatalog(): Promise<PublicAdmissionsProgramsResponse> {
+    return serverFetch<PublicAdmissionsProgramsResponse>('/api/public/admissions/programs');
+  },
+
+  async getMethodsCatalog(): Promise<PublicAdmissionsMethodsResponse> {
+    return serverFetch<PublicAdmissionsMethodsResponse>('/api/public/admissions/methods');
+  },
+
+  async getDocumentsCatalog(): Promise<PublicAdmissionsDocumentsResponse> {
+    return serverFetch<PublicAdmissionsDocumentsResponse>('/api/public/admissions/documents');
+  },
+
+  async getTuitionCatalog(): Promise<PublicAdmissionsTuitionResponse> {
+    return serverFetch<PublicAdmissionsTuitionResponse>('/api/public/admissions/tuition');
+  },
+};
+
+// ============================================
 // TOP-LEVEL ENDPOINTS (User-facing)
 // ============================================
 
@@ -596,6 +624,7 @@ export const serverApi = {
   sessions,
   admissions,
   officer,
+  publicAdmissions,
 };
 
 /**

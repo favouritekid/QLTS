@@ -33,7 +33,7 @@ class TestCreatePolicy:
         data = {
             "name": "Fixed Policy A",
             "description": "500k per qualified lead",
-            "trigger_status_id": "CONTACTED_TEST",
+            "trigger_status_id": "sts02",
             "calculation_type": "fixed",
             "fixed_amount": Decimal("500000"),
             "effective_from": date(2025, 1, 1),
@@ -53,7 +53,7 @@ class TestCreatePolicy:
     async def test_create_percentage_policy(self, db: AsyncSession, admin_user):
         data = {
             "name": "Percentage Policy B",
-            "trigger_status_id": "CONTACTED_TEST",
+            "trigger_status_id": "sts02",
             "calculation_type": "percentage",
             "percentage": Decimal("5.50"),
             "effective_from": date(2025, 1, 1),
@@ -158,7 +158,7 @@ class TestCheckAndCreateCommission:
         """Lead without referrer_id -> no commission."""
         assert seeded_lead.referrer_id is None
         records, callback = await commission_service.check_and_create_commission(
-            db, seeded_lead.id, "CONTACTED_TEST", admin_user.id
+            db, seeded_lead.id, "sts02", admin_user.id
         )
         assert records == []
         assert callback is None
@@ -391,7 +391,7 @@ class TestCalculateAmount:
         """Percentage policy with no fee data returns 0."""
         policy = CommissionPolicy(
             name="Pct Policy",
-            trigger_status_id="CONTACTED_TEST",
+            trigger_status_id="sts02",
             calculation_type="percentage",
             percentage=Decimal("10.00"),
             effective_from=date(2025, 1, 1),
@@ -693,8 +693,8 @@ class TestSafeCheckCommissionOnStatusChange:
         await commission_service.safe_check_commission_on_status_change(
             db,
             seeded_lead.id,
-            old_status="CONTACTED_TEST",
-            new_status="CONTACTED_TEST",
+            old_status="sts02",
+            new_status="sts02",
             actor_id=admin_user.id,
         )
 
