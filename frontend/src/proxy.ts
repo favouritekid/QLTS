@@ -25,11 +25,14 @@ import { hasAdminAccess, hasFinanceAccess } from "@/lib/config/roles";
 /**
  * Public routes that don't require authentication
  */
-const PUBLIC_ROUTES = [
+const EXACT_PUBLIC_ROUTES = ["/"];
+
+const PUBLIC_ROUTE_PREFIXES = [
   "/login",
   "/register",
   "/forgot-password",
   "/reset-password",
+  "/tuyen-sinh",
 ];
 
 /**
@@ -65,7 +68,9 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
+  const isPublicRoute =
+    EXACT_PUBLIC_ROUTES.includes(pathname) ||
+    PUBLIC_ROUTE_PREFIXES.some((route) => pathname.startsWith(route));
   const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
   const isFinanceRoute = FINANCE_ROUTES.some((route) => pathname.startsWith(route));
 
@@ -205,4 +210,3 @@ export const config = {
     "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|manifest.json|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.svg|.*\\.gif).*)",
   ],
 };
-

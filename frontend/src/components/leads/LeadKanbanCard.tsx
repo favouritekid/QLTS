@@ -5,7 +5,7 @@ import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
-import { Mail, Phone, TrendingUp, User, Eye, GripVertical } from "lucide-react";
+import { Mail, Phone, TrendingUp, User, Eye } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -64,21 +64,12 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
   return (
     <div ref={setNodeRef} style={style}>
       <Card
-        className={`hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing ${
-          isDragging ? "shadow-lg ring-2 ring-primary" : ""
-        }`}
+        className="hover:shadow-md transition-shadow"
       >
         <CardContent className="p-3 space-y-2">
-          {/* Header with Drag Handle */}
+          {/* Header */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-start gap-2 flex-1 min-w-0">
-              <div
-                {...attributes}
-                {...listeners}
-                className="cursor-grab active:cursor-grabbing mt-1 flex-shrink-0"
-              >
-                <GripVertical className="h-4 w-4 text-muted-foreground" />
-              </div>
               <div className="flex-1 min-w-0">
                 <Link
                   href={`/leads/${lead.id}`}

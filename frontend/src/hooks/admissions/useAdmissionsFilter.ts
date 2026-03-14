@@ -84,10 +84,10 @@ const STATUS_TABS: ReadonlyArray<{
 }> = [
   { key: "all", statuses: [] },
   { key: "draft", statuses: ["draft"] },
-  { key: "pending", statuses: ["submitted", "resubmitted"] },
+  { key: "pending", statuses: ["submitted", "resubmitted", "revision_requested"] },
   { key: "approved", statuses: ["approved", "confirmed", "overridden"] },
   { key: "enrolled", statuses: ["enrolled"] },
-  { key: "rejected", statuses: ["rejected"] },
+  { key: "rejected", statuses: ["rejected", "withdrawn"] },
 ]
 
 const DEFAULT_FILTERS: StoredFilters = {

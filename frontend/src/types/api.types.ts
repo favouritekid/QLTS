@@ -63,6 +63,12 @@ export interface ApiErrorResponse {
   message?: string; // Hoặc dùng 'message' nếu backend trả về
 }
 
+// Một phần tử trong mảng detail của Pydantic validation error (422)
+export interface PydanticValidationError {
+  loc?: string[];
+  msg?: string;
+}
+
 // Schema for user registration - matches backend UserCreate
 // Note: confirm_password is validated on frontend only, not sent to backend
 export interface UserCreate {

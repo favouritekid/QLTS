@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within, waitFor } from "@/test/utils/test-ut
 import { ProgramOfferingPanel } from "./ProgramOfferingPanel";
 import * as UseProgramDataHooks from "@/hooks/admissions/useProgramData";
 import * as UseMasterDataHooks from "@/hooks/admissions/useMasterData";
+import { toast } from "sonner";
 
 // Mock the hooks
 vi.mock("@/hooks/admissions/useProgramData", () => ({
@@ -15,6 +16,15 @@ vi.mock("@/hooks/admissions/useProgramData", () => ({
 
 vi.mock("@/hooks/admissions/useMasterData", () => ({
   useOfferingTypes: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
 }));
 
 describe("ProgramOfferingPanel", () => {
@@ -193,5 +203,107 @@ describe("ProgramOfferingPanel", () => {
     await waitFor(() => {
       expect(mockDeleteMutate).toHaveBeenCalledWith(2);
     });
+  });
+
+  // ============================================
+  // BUG-07: offering_type included in create payload
+  // ============================================
+  it("BUG-07: create payload should include offering_type name string", async () => {
+    render(<ProgramOfferingPanel />);
+
+    // Open create dialog
+    const addButton = screen.getByText(/thêm mới|add new/i);
+    fireEvent.click(addButton);
+
+    const dialog = await screen.findByRole("dialog");
+    const withinDialog = within(dialog);
+
+    // Select Major Program & Offering Type via combobox triggers
+    const triggers = await withinDialog.findAllByRole("combobox");
+
+    // Select program
+    fireEvent.click(triggers[0]);
+    const majorOption = await screen.findByText("Công nghệ Thông tin (648)");
+    fireEvent.click(majorOption);
+
+    // Select offering type
+    fireEvent.click(triggers[1]);
+    const typeOption = await screen.findByText("Chính quy (CQ)");
+    fireEvent.click(typeOption);
+
+    // Fill required fields
+    fireEvent.change(withinDialog.getByLabelText(/duration|thời gian/i), { target: { value: "6" } });
+    fireEvent.change(withinDialog.getByLabelText(/total credits|tổng tín chỉ/i), { target: { value: "120" } });
+
+    // Submit
+    const submitButton = withinDialog.getByRole("button", { name: /create|thêm mới/i });
+    fireEvent.click(submitButton);
+
+    // Verify offering_type is the name string, not the ID
+    await waitFor(() => {
+      expect(mockCreateMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          offering_type: "Chính quy",
+        })
+      );
+    });
+
+    // Also verify offering_type is a string, not a number
+    const callArgs = mockCreateMutate.mock.calls[0][0];
+    expect(typeof callArgs.offering_type).toBe("string");
+  });
+
+  // ============================================
+  // BUG-08: identity fields disabled in edit mode
+  // ============================================
+  it("BUG-08: program_id and offering_type_id selects should be disabled in edit mode", async () => {
+    render(<ProgramOfferingPanel />);
+
+    // Click edit on first row
+    const row = screen.getByText("Công nghệ Thông tin").closest("tr");
+    const editButton = row?.querySelector("button");
+    fireEvent.click(editButton!);
+
+    // Wait for dialog
+    const dialog = await screen.findByRole("dialog");
+    const withinDialog = within(dialog);
+
+    // The program_id and offering_type_id Select triggers should be disabled
+    const programTrigger = withinDialog.getByRole("combobox", { name: /ngành đào tạo|program/i });
+    const typeTrigger = withinDialog.getByRole("combobox", { name: /hệ đào tạo|offering type/i });
+
+    expect(programTrigger).toBeDisabled();
+    expect(typeTrigger).toBeDisabled();
+  });
+
+  // ============================================
+  // BUG-27: validation before submit (missing required fields)
+  // ============================================
+  it("BUG-27: should not call create mutation when program and offering type are not selected", async () => {
+    render(<ProgramOfferingPanel />);
+
+    // Open create dialog
+    const addButton = screen.getByText(/thêm mới|add new/i);
+    fireEvent.click(addButton);
+
+    const dialog = await screen.findByRole("dialog");
+    const withinDialog = within(dialog);
+
+    // Fill only non-required fields (duration and credits)
+    fireEvent.change(withinDialog.getByLabelText(/duration|thời gian/i), { target: { value: "6" } });
+    fireEvent.change(withinDialog.getByLabelText(/total credits|tổng tín chỉ/i), { target: { value: "120" } });
+
+    // Submit without selecting program or offering type
+    const submitButton = withinDialog.getByRole("button", { name: /create|thêm mới/i });
+    fireEvent.click(submitButton);
+
+    // Wait a tick for async handlers to complete
+    await waitFor(() => {
+      // The create mutation should NOT have been called due to validation
+      expect(mockCreateMutate).not.toHaveBeenCalled();
+    });
+
+    // toast.error should have been called with validation message
+    expect(toast.error).toHaveBeenCalled();
   });
 });

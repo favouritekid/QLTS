@@ -72,6 +72,7 @@ __all__ = [
 
     # Drill-down IDOR (widget endpoints)
     "resolve_drill_down_officer_id",
+    "resolve_kpi_plan_officer_id",
 
     # Data Classes
     "OfficerDashboardScope",
@@ -560,6 +561,46 @@ class OfficerDashboardScope:
         self.requesting_user = requesting_user
 
 
+async def _validate_officer_target(
+    db: AsyncSession,
+    officer_id: int,
+    current_user: models.User,
+) -> models.User:
+    """
+    Shared helper: validate that officer_id points to an existing user with
+    role=officer, and that current_user is allowed to view them.
+
+    Used by both get_officer_dashboard_scope and resolve_drill_down_officer_id
+    to enforce identical security semantics.
+
+    Returns the validated target User on success.
+    Raises ResourceNotFoundError (404) on any failure — never leaks existence.
+    """
+    target = await db.get(models.User, officer_id)
+    if not target or target.role != UserRole.OFFICER:
+        raise ResourceNotFoundError(detail="Officer not found")
+
+    user_role = current_user.role
+
+    if user_role == UserRole.MANAGER:
+        if current_user.unit_id is None:
+            raise ResourceNotFoundError(detail="Officer not found")
+        from ..repositories.organization_repository import OrganizationRepository
+        org_repo = OrganizationRepository(db)
+        allowed_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+        if target.unit_id not in allowed_unit_ids:
+            raise ResourceNotFoundError(detail="Officer not found")
+
+    elif user_role == UserRole.ADMIN:
+        pass  # Admin can view any officer
+
+    else:
+        # Should not reach here — callers gate on role first.
+        raise ResourceNotFoundError(detail="Officer not found")
+
+    return target
+
+
 async def get_officer_dashboard_scope(
     scope: str = "personal",
     officer_id: int | None = None,
@@ -569,27 +610,18 @@ async def get_officer_dashboard_scope(
 ) -> OfficerDashboardScope:
     """
     Security Gateway for Officer Dashboard scoping.
-    
+
     Enforces role-based access to dashboard data:
     - Officers: Can only view personal data
-    - Managers: Can view team data (their unit only)
+    - Managers: Can view team data (their unit + descendant units)
     - Admins: Full access to all scopes and filters
     - All other roles: Denied (fail-closed)
-    
-    This dependency REPLACES inline role checks in router with centralized
-    security logic per MASTER_ARCHITECTURE.md Section 0.2.
-    
-    Args:
-        scope: "personal", "team", or "organization"
-        officer_id: Optional officer filter (requires manager/admin)
-        unit_id: Optional unit filter (requires admin)
-        
-    Returns:
-        OfficerDashboardScope with validated/sanitized parameters
-        
-    Raises:
-        HTTPException 400: Invalid scope value
-        PermissionDeniedError: Scope/filter not allowed for user's role
+
+    When officer_id is provided by manager/admin, target must:
+    - exist as a user
+    - have role "officer"
+    - be within the requester's scope (descendant units for manager)
+    Failures return 404 to avoid leaking resource existence.
     """
     # Validate scope value
     if scope not in ("personal", "team", "organization"):
@@ -597,9 +629,9 @@ async def get_officer_dashboard_scope(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid scope: {scope}. Must be 'personal', 'team', or 'organization'"
         )
-    
+
     user_role = current_user.role
-    
+
     # === OFFICER: Personal data only ===
     if user_role == UserRole.OFFICER:
         if scope != "personal":
@@ -607,22 +639,20 @@ async def get_officer_dashboard_scope(
                 detail="Officers can only view personal dashboard"
             )
         if officer_id is not None and officer_id != current_user.id:
-            raise PermissionDeniedError(
-                detail="Officers cannot view other officers' data"
-            )
+            # 404, not 403 — don't leak existence
+            raise ResourceNotFoundError(detail="Officer not found")
         if unit_id is not None:
             raise PermissionDeniedError(
                 detail="Officers cannot filter by unit"
             )
-        # Force personal scope
         return OfficerDashboardScope(
             scope="personal",
             officer_id=current_user.id,
             unit_id=None,
             requesting_user=current_user
         )
-    
-    # === MANAGER: Team or personal, own unit only ===
+
+    # === MANAGER: Team or personal, own unit hierarchy ===
     if user_role == UserRole.MANAGER:
         if scope == "organization":
             raise PermissionDeniedError(
@@ -632,24 +662,23 @@ async def get_officer_dashboard_scope(
             raise PermissionDeniedError(
                 detail="Managers cannot view data from other units"
             )
-        
-        # If filtering by officer, validate officer belongs to manager's unit
+
+        # If filtering by officer, validate via shared helper (role + scope)
         if officer_id is not None:
-            target_officer = await db.get(models.User, officer_id)
-            if not target_officer or target_officer.unit_id != current_user.unit_id:
-                raise PermissionDeniedError(
-                    detail="Officer not found in your unit"
-                )
-        
+            await _validate_officer_target(db, officer_id, current_user)
+
         return OfficerDashboardScope(
             scope=scope,
             officer_id=officer_id,
-            unit_id=current_user.unit_id,  # Always force manager's unit
+            unit_id=current_user.unit_id,
             requesting_user=current_user
         )
-    
-    # === ADMIN: Full access ===
+
+    # === ADMIN: Full access, but validate officer_id if provided ===
     if user_role == UserRole.ADMIN:
+        if officer_id is not None:
+            await _validate_officer_target(db, officer_id, current_user)
+
         return OfficerDashboardScope(
             scope=scope,
             officer_id=officer_id,
@@ -674,42 +703,77 @@ async def resolve_drill_down_officer_id(
 
     Returns a validated officer_id that the current user is allowed to view.
 
-    Rules:
-    - Officer: can only view own data. Any other officer_id → 404.
-    - Manager: can view own + officers in their unit. Out-of-scope → 404.
-    - Admin: can view any existing officer. Non-existent → 404.
+    When officer_id is None (no drill-down), returns current_user.id as default
+    context for highlight matching — no role validation needed.
+
+    When officer_id IS provided (explicit drill-down):
+    - Officer: self only. Any other → 404.
+    - Manager/Admin: target must exist, have role=officer, and be in scope.
+      Self-ID by a non-officer → 404 (manager/admin are not officers).
+      Manager scope = own unit + descendant units.
     - Other roles: denied (fail-closed).
 
     Returns 404 (not 403) per AUTHORIZATION_GUIDELINES — never leak resource existence.
     """
-    # No drill-down requested → return self
-    if officer_id is None or officer_id == current_user.id:
+    # No drill-down requested → return self as default (used for highlight matching)
+    if officer_id is None:
         return current_user.id
 
     user_role = current_user.role
 
     # === OFFICER: Self only ===
     if user_role == UserRole.OFFICER:
-        # Return 404 instead of 403 to avoid leaking existence
+        if officer_id == current_user.id:
+            return current_user.id
         raise ResourceNotFoundError(detail="Officer not found")
 
-    # === MANAGER: Own unit only ===
-    if user_role == UserRole.MANAGER:
-        target_officer = await db.get(models.User, officer_id)
-        if not target_officer or target_officer.unit_id != current_user.unit_id:
-            raise ResourceNotFoundError(detail="Officer not found")
-        return officer_id
-
-    # === ADMIN: Any existing officer ===
-    if user_role == UserRole.ADMIN:
-        target_officer = await db.get(models.User, officer_id)
-        if not target_officer:
-            raise ResourceNotFoundError(detail="Officer not found")
+    # === MANAGER / ADMIN: full validation (including self-ID) ===
+    if user_role in (UserRole.MANAGER, UserRole.ADMIN):
+        await _validate_officer_target(db, officer_id, current_user)
         return officer_id
 
     # === Fail-closed for unknown roles ===
     raise PermissionDeniedError(
         detail="Your role is not allowed to access officer data"
+    )
+
+
+async def resolve_kpi_plan_officer_id(
+    officer_id: int | None = None,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> int:
+    """
+    IDOR gate for /my-kpi-plan endpoint.
+
+    Differs from resolve_drill_down_officer_id because KPI plan retrieval
+    requires an actual officer target — not a "highlight matching" context.
+
+    - Officer: returns self (officer_id optional). Other officer → 404.
+    - Manager/Admin: officer_id is REQUIRED. Must point to a valid officer
+      in scope. Missing officer_id → 400 (BusinessRuleViolation).
+    - Other roles: fail-closed.
+    """
+    user_role = current_user.role
+
+    # === OFFICER: self only ===
+    if user_role == UserRole.OFFICER:
+        if officer_id is None or officer_id == current_user.id:
+            return current_user.id
+        raise ResourceNotFoundError(detail="Officer not found")
+
+    # === MANAGER / ADMIN: officer_id required ===
+    if user_role in (UserRole.MANAGER, UserRole.ADMIN):
+        if officer_id is None:
+            raise BusinessRuleViolation(
+                detail="officer_id is required when viewing another officer's KPI plan"
+            )
+        await _validate_officer_target(db, officer_id, current_user)
+        return officer_id
+
+    # === Fail-closed ===
+    raise PermissionDeniedError(
+        detail="Your role is not allowed to access officer KPI plans"
     )
 
 

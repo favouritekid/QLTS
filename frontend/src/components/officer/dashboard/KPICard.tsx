@@ -14,7 +14,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
-import { TrendingUp, TrendingDown, Minus, type LucideIcon } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Info, type LucideIcon } from "lucide-react";
 
 interface TrendInfo {
   value: number;
@@ -31,6 +31,21 @@ interface KPICardProps {
   icon: LucideIcon;
   onClick?: () => void;
   inverseTrend?: boolean;
+  /** Target value for comparison (e.g. "Mục tiêu: 33%"). Null = don't show. */
+  target?: number | null;
+  /** Raw numeric actual for target comparison (avoids locale parseFloat issues). */
+  actualValue?: number;
+  /** Unit suffix for target display (default: "%") */
+  targetUnit?: string;
+  /** If true, actual >= target is good. If false, actual <= target is good. Default: true */
+  higherIsBetter?: boolean;
+  /** If true, this metric is non-comparable (trend-only, no meaningful target). */
+  trendOnly?: boolean;
+}
+
+/** Determine if actual meets target. Equal-to-target is always success. */
+export function isTargetMet(actual: number, target: number, higherIsBetter: boolean): boolean {
+  return higherIsBetter ? actual >= target : actual <= target;
 }
 
 /** Format number with vi-VN locale, 1 decimal place */
@@ -50,6 +65,11 @@ export const KPICard = memo(function KPICard({
   icon: Icon,
   onClick,
   inverseTrend = false,
+  target,
+  actualValue,
+  targetUnit = "%",
+  higherIsBetter = true,
+  trendOnly = false,
 }: KPICardProps) {
   const TrendIcon =
     trend?.direction === "up"
@@ -84,6 +104,24 @@ export const KPICard = memo(function KPICard({
       <div className="text-2xl font-bold tracking-tight text-foreground">
         {value}
       </div>
+
+      {target != null && (
+        <p className={cn(
+          "text-xs mt-0.5",
+          isTargetMet(actualValue ?? parseFloat(String(value)), target, higherIsBetter)
+            ? "text-success-600 dark:text-success-500"
+            : "text-warning-600 dark:text-warning-500",
+        )}>
+          Mục tiêu: {formatViNumber(target)}{targetUnit}
+        </p>
+      )}
+
+      {trendOnly && target == null && (
+        <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-0.5">
+          <Info className="h-2.5 w-2.5" />
+          Chỉ theo dõi xu hướng
+        </p>
+      )}
 
       {subtitle && (
         <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>

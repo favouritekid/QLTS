@@ -14,11 +14,11 @@ import type {
   ConsultationStatusUpdate,
   FullPipeline,
   PipelineQueryParams,
-  MoveLeadPayload,
   AllowedTransition as AllowedTransitionType,
   AllowedTransitionCreate as AllowedTransitionCreateType,
 } from '@/types/pipeline.types'
 import type { Lead, SuccessResponse } from '@/types/lead.types'
+import type { LossReason } from '@/lib/loss-reasons'
 
 // ============================================
 // PIPELINE STAGE OPERATIONS (Public)
@@ -272,33 +272,6 @@ export async function deleteConsultationStatus(
 // ============================================
 
 /**
- * Move lead to different pipeline stage
- * Used for kanban drag-and-drop
- *
- * @throws {AxiosError} 404 if lead not found, 403 if no permission
- *
- * @example
- * ```ts
- * const updated = await pipelineApi.moveLeadToStage({
- *   lead_id: 123,
- *   from_stage_id: 'contacted',
- *   to_stage_id: 'consultation_scheduled',
- *   reason: 'Consultation booked for next week'
- * })
- * ```
- */
-export async function moveLeadToStage(data: MoveLeadPayload): Promise<Lead> {
-  const { lead_id, to_stage_id, reason } = data
-
-  const response = await api.put<Lead>(`/api/leads/${lead_id}`, {
-    pipeline_stage_id: to_stage_id,
-    ...(reason && { officer_summary: reason }),
-  })
-
-  return response.data
-}
-
-/**
  * Get leads in specific pipeline stage
  *
  * @example
@@ -446,6 +419,27 @@ export async function deleteAllowedTransition(
 }
 
 // ============================================
+// LOSS REASONS (Read-only taxonomy)
+// ============================================
+
+/**
+ * Get all loss reason codes from backend (single source of truth)
+ *
+ * @example
+ * ```ts
+ * const reasons = await pipelineApi.getLossReasons()
+ * // Returns: [{ code: "PRICE_HIGH", label: "Học phí", icon: "💰", ... }, ...]
+ * ```
+ */
+export async function getLossReasons(): Promise<LossReason[]> {
+  const response = await api.get<LossReason[]>('/api/pipeline/loss-reasons')
+  return response.data
+}
+
+// Re-export LossReason type for convenience
+export type { LossReason } from '@/lib/loss-reasons'
+
+// ============================================
 // CACHE INVALIDATION
 // ============================================
 
@@ -475,6 +469,7 @@ export const pipelineApi = {
   getStages,
   getFullPipeline,
   getAllowedNextStatuses,
+  getLossReasons,
 
   // Admin: Stage Management
   createStage,
@@ -494,7 +489,6 @@ export const pipelineApi = {
   deleteAllowedTransition,
 
   // Lead Pipeline Operations
-  moveLeadToStage,
   getLeadsInStage,
 
   // Admin: Revert

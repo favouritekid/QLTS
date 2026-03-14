@@ -76,7 +76,12 @@ export function BulkStageDialog({
       { lead_ids: leadIds, pipeline_stage_id: selectedStageId },
       {
         onSuccess: (data) => {
-          toast.success(`Đã đổi giai đoạn cho ${data.updated_count || count} lead`);
+          toast.success(`Đã đổi giai đoạn cho ${data.updated_count} lead`);
+          // ✅ PR4: Show skip diagnostics
+          if (data.skipped?.length > 0) {
+            const reasons = data.skipped.map(s => `#${s.lead_id}: ${s.reason}`).join("\n");
+            toast.warning(`${data.skipped.length} lead bị bỏ qua:\n${reasons}`, { duration: 8000 });
+          }
           setSelectedStageId("");
           onOpenChange(false);
           onSuccess?.(); // Notify parent to clear selection

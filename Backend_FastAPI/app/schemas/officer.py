@@ -109,7 +109,7 @@ class ActionableLists(BaseModel):
     stale: List[LeadPreview]
     upcoming: List[UpcomingConsultation]
 
-# 👇 Class gây lỗi đây, đảm bảo nó nằm ở đây
+# Main response model — must be defined after component schemas above
 class OfficerDashboardStats(BaseModel):
     status_overview: WorkloadStats
     performance_trends: List[TrendPoint]
@@ -156,6 +156,7 @@ class KPIStats(BaseModel):
     # Average response time (hours)
     avg_response_time: float
     avg_response_time_trend: TrendInfo
+    avg_response_time_target: Optional[float] = None  # From KpiPlan.response_time_target
 
     # SLA Compliance Rate (% leads responded within SLA target hours)
     sla_compliance_rate: float = 0.0
@@ -169,6 +170,12 @@ class KPIStats(BaseModel):
     consultations_avg_per_day: float = 0.0
     # Leads created in period that are still active (for period analysis)
     active_leads_in_period: int = 0
+
+    # Gap 1: Rate metric targets (populated only when comparable per catalog)
+    win_rate_target: Optional[float] = None
+    new_lead_conversion_rate_target: Optional[float] = None
+    sla_compliance_rate_target: Optional[float] = None
+    consultation_effectiveness_target: Optional[float] = None
 
     # Daily Quality KPIs (Phase D — spec §15.7)
     verified_consultations_daily: int = 0
@@ -250,7 +257,8 @@ class LeaderboardEntry(BaseModel):
     username: str
     full_name: str
     consultations: int
-    is_current_user: bool = False
+    is_current_user: bool = False  # True only for the actual logged-in user
+    is_focus_officer: bool = False  # True for the drill-down target (may differ from current user)
     rank_change: Optional[int] = None  # +2 = up 2 spots, -1 = down 1, None = new
 
 
@@ -274,3 +282,36 @@ class TeamStats(BaseModel):
     officer_rank_percentile: int  # Current officer's percentile rank (0-100)
     total_officers: int
     period_days: int = 30
+
+
+# =============================================================================
+# GAP 2: Monthly KPI Plan Breakdown (Officer self-tracking)
+# =============================================================================
+
+class OfficerPlanMonthSummary(BaseModel):
+    """Monthly breakdown row for officer KPI plan.
+
+    Fields suffixed _target are plan values. Fields suffixed _actual are
+    synced from real data.  Unsuffixed legacy fields kept for compatibility.
+    """
+    month: int
+    enrollment_target: int
+    enrollment_actual: Optional[int] = None
+    working_days: int
+    consultations_daily: Optional[int] = None          # plan target: daily consultations
+    consultations_actual_avg: Optional[float] = None   # actual: avg consultations/day (sync)
+    consultations_monthly_total: Optional[int] = None  # plan-derived: daily * working_days
+    conversion_rate: Optional[float] = None            # plan target (NOT actual)
+    conversion_rate_actual: Optional[float] = None     # actual conversion rate (sync)
+    win_rate: Optional[float] = None                   # plan target (NOT actual)
+    win_rate_actual: Optional[float] = None            # actual win rate (sync)
+
+
+class OfficerKpiPlanResponse(BaseModel):
+    """Officer KPI plan with monthly breakdown. Source = KpiPlanMonth actuals."""
+    fiscal_year: int
+    annual_target: int
+    achieved_ytd: int
+    progress_pct: float
+    months: List[OfficerPlanMonthSummary]
+    source: Literal["officer", "unit"]

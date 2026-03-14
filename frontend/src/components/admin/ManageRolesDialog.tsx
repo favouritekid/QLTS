@@ -11,6 +11,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -39,6 +49,7 @@ function capitalizeRole(role: string): string {
 
 export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialogProps) {
   const [selectedRole, setSelectedRole] = useState<string>("");
+  const [roleToRemove, setRoleToRemove] = useState<string | null>(null);
 
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
@@ -75,8 +86,8 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   const isPending = assignRoleMutation.isPending || removeRoleMutation.isPending;
   const isLoading = isLoadingRoles || isLoadingAvailableRoles;
 
-  // Primary role from user object
-  const primaryRole = `role:${user.role}`; // architecture-allow presentation
+  // Primary role from user object — defensive: handle both "admin" and "role:admin"
+  const primaryRole = user.role.startsWith("role:") ? user.role : `role:${user.role}`;
 
   // Additional roles are all roles except the primary role
   const additionalRoles = userRoles?.filter(role => role !== primaryRole) || [];
@@ -112,6 +123,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   );
 
   return (
+    <>
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[550px]">
         <DialogHeader>
@@ -161,7 +173,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => handleRemoveRole(role)}
+                        onClick={() => setRoleToRemove(role)}
                         disabled={isPending}
                       >
                         <X className="h-4 w-4" />
@@ -225,5 +237,35 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+      {/* Confirm role removal */}
+      <AlertDialog open={!!roleToRemove} onOpenChange={(open) => !open && setRoleToRemove(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xác nhận xóa vai trò</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn có chắc muốn xóa vai trò{" "}
+              <span className="font-semibold">
+                {roleToRemove ? capitalizeRole(roleToRemove.replace(/^role:/, "")) : ""}
+              </span>{" "}
+              khỏi người dùng <span className="font-semibold">{user.username}</span>?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (roleToRemove) {
+                  handleRemoveRole(roleToRemove);
+                  setRoleToRemove(null);
+                }
+              }}
+            >
+              Xóa vai trò
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

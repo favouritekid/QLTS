@@ -63,11 +63,18 @@ export function UserAssignmentDialog({
   unit,
 }: UserAssignmentDialogProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
   const [isAssigning, setIsAssigning] = useState(false);
   const initialSyncDone = useRef(false);
 
   const queryClient = useQueryClient();
+
+  // Debounce search query (300ms)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Fetch all users (not filtered by unit)
   const {
@@ -77,7 +84,7 @@ export function UserAssignmentDialog({
   } = useAdminUsersList({
     page: 1,
     page_size: 100, // Max allowed by backend
-    search: searchQuery || undefined,
+    search: debouncedSearch || undefined,
     status: "active", // Only active users
   });
 

@@ -198,7 +198,7 @@ describe("AnnualProgressCard", () => {
     expect(marker).toBeInTheDocument();
   });
 
-  it("falls back to linear expected when expected_progress_pct is null", () => {
+  it("falls back to seasonal expected when expected_progress_pct is null", () => {
     const { container } = render(
       <AnnualProgressCard
         progress={makeProgress({
@@ -209,8 +209,8 @@ describe("AnnualProgressCard", () => {
       />,
       { wrapper: createQueryWrapper() },
     );
-    // Linear: (12-6)/12*100 = 50%
-    const marker = container.querySelector('[title*="Tiến độ kỳ vọng: 50%"]');
+    // Seasonal: sum of DEFAULT_SEASONAL_WEIGHTS[0..5] = 0.040+0.033+0.050+0.060+0.073+0.127 = 0.383 → 38%
+    const marker = container.querySelector('[title*="Tiến độ kỳ vọng: 38%"]');
     expect(marker).toBeInTheDocument();
   });
 });

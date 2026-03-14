@@ -441,7 +441,7 @@ function FeeTable({ fees, onView, onWaive, onCancel, onRecalculate }: FeeTablePr
                   amount={fee.remaining_amount_formatted}
                   showCurrency={false}
                   className={cn(
-                    parseFloat(fee.remaining_amount_formatted.replace(/[^\d]/g, "")) > 0 &&
+                    parseFloat(fee.remaining_amount_formatted.replace(/[^\d.-]/g, "")) > 0 &&
                       "text-warning-600"
                   )}
                 />

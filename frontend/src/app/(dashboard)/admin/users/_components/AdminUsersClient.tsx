@@ -102,6 +102,8 @@ import type { UsersPage } from "@/types/api.types";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { TableEmptyState } from "@/components/common/EmptyState";
 
+const PAGE_SIZE = 10;
+
 interface AdminUsersClientProps {
   initialData: UsersPage; // ✅ Initial data from server
 }
@@ -120,6 +122,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
   const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [setPasswordDialogOpen, setSetPasswordDialogOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [setPasswordUser, setSetPasswordUser] = useState<User | null>(null);
   const [manageRolesDialogOpen, setManageRolesDialogOpen] = useState(false);
   const [manageRolesUser, setManageRolesUser] = useState<User | null>(null);
@@ -140,7 +143,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
   const { data, isLoading, error } = useAdminUsersList(
     {
       page,
-      page_size: 10,
+      page_size: PAGE_SIZE,
       search: search || undefined,
       role: roleFilter === "all" ? undefined : roleFilter,
       status: statusFilter === "all" ? undefined : statusFilter,
@@ -355,7 +358,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       rowSelection,
     },
     manualPagination: true,
-    pageCount: data ? Math.ceil(data.total_count / 10) : 0,
+    pageCount: data ? Math.ceil(data.total_count / PAGE_SIZE) : 0,
     getRowId: (row) => String(row.id), // Ensure consistent row ID for mobile/desktop selection
   });
 
@@ -433,6 +436,8 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
   };
 
   const handleExportCSV = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
     toast.info("Đang xuất CSV...");
 
     try {
@@ -468,6 +473,8 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     } catch (error) {
       console.error("Error exporting users CSV:", error);
       toast.error("Xuất CSV thất bại");
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -498,7 +505,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           <p className="text-muted-foreground text-sm sm:text-base">Quản lý người dùng, vai trò và quyền hạn.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleExportCSV} disabled={!data?.users.length}>
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleExportCSV} disabled={!data?.users.length || isExporting}>
             <Download className="mr-2 h-4 w-4" />
             <span className="hidden xs:inline">Xuất CSV</span>
             <span className="xs:hidden">Xuất</span>
@@ -720,10 +727,10 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       </div>
 
       {/* Pagination - Responsive: stack on mobile */}
-      {data && data.total_count > 10 && (
+      {data && data.total_count > PAGE_SIZE && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-muted-foreground text-xs sm:text-sm text-center sm:text-left">
-            Hiển thị {(page - 1) * 10 + 1}-{Math.min(page * 10, data.total_count)} / {data.total_count}
+            Hiển thị {(page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, data.total_count)} / {data.total_count}
           </div>
           <div className="flex gap-2 justify-center sm:justify-end">
             <Button
@@ -737,8 +744,8 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage((p) => Math.min(Math.ceil(data.total_count / 10), p + 1))}
-              disabled={page === Math.ceil(data.total_count / 10)}
+              onClick={() => setPage((p) => Math.min(Math.ceil(data.total_count / PAGE_SIZE), p + 1))}
+              disabled={page === Math.ceil(data.total_count / PAGE_SIZE)}
             >
               Sau
             </Button>

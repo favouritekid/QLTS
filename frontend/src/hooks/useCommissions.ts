@@ -123,6 +123,8 @@ export function useApproveCommission() {
     onSuccess: () => {
       toast.success("Đã duyệt hoa hồng")
       queryClient.invalidateQueries({ queryKey: commissionRecordKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ctvCommissionKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ctvCommissionKeys.stats })
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || "Lỗi duyệt hoa hồng")
@@ -137,6 +139,8 @@ export function useRejectCommission() {
     onSuccess: () => {
       toast.success("Đã từ chối hoa hồng")
       queryClient.invalidateQueries({ queryKey: commissionRecordKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ctvCommissionKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ctvCommissionKeys.stats })
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || "Lỗi từ chối hoa hồng")
@@ -151,6 +155,8 @@ export function usePayCommission() {
     onSuccess: () => {
       toast.success("Đã thanh toán hoa hồng")
       queryClient.invalidateQueries({ queryKey: commissionRecordKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ctvCommissionKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ctvCommissionKeys.stats })
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || "Lỗi thanh toán")

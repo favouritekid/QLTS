@@ -98,7 +98,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
           {lead.gpa !== null && lead.gpa !== undefined ? (
             <div>
               <label className="text-sm font-medium text-muted-foreground">GPA</label>
-              <p className="text-base font-semibold">{lead.gpa.toFixed(2)} / 4.0</p>
+              <p className="text-base font-semibold">{lead.gpa.toFixed(1)} / 10</p>
             </div>
           ) : (
             <div>

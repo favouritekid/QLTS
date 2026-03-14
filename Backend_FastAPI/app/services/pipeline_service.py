@@ -23,6 +23,25 @@ from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
+# ===============================================================
+# LOSS REASON TAXONOMY (Single Source of Truth)
+# ===============================================================
+
+LOSS_REASONS = [
+    {"code": "PRICE_HIGH", "label": "Học phí", "icon": "💰", "category": "price", "is_recoverable": True, "action_hint": "Xem xét chính sách học bổng/ưu đãi"},
+    {"code": "LOCATION_FAR", "label": "Xa nhà", "icon": "📍", "category": "logistics", "is_recoverable": True, "action_hint": "Hỗ trợ thông tin ký túc xá/di chuyển"},
+    {"code": "CHOSE_COMPETITOR", "label": "Trường khác", "icon": "🎓", "category": "competitor", "is_recoverable": False, "action_hint": "Phân tích USP và cải thiện pitch"},
+    {"code": "NO_CONTACT", "label": "K.liên lạc", "icon": "📞", "category": "contact", "is_recoverable": True, "action_hint": "Cải thiện quy trình follow-up"},
+    {"code": "TIMING_BAD", "label": "Chưa sẵn sàng", "icon": "⏰", "category": "timing", "is_recoverable": True, "action_hint": "Nurture leads chưa ready"},
+    {"code": "OTHER", "label": "Khác", "icon": "❓", "category": "other", "is_recoverable": True, "action_hint": "Phân tích và có chiến lược xử lý"},
+]
+
+
+def get_loss_reasons() -> list[dict]:
+    """Return the canonical loss reason taxonomy (read-only, no DB needed)."""
+    return LOSS_REASONS
+
+
 # --- ✅ Cache Key and TTL Configuration ---
 PIPELINE_STAGES_CACHE_KEY = "pipeline:all_stages"
 PIPELINE_STATUSES_CACHE_KEY = "pipeline:all_statuses"

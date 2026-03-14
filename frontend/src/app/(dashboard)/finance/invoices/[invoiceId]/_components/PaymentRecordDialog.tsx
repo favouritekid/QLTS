@@ -107,6 +107,11 @@ export function PaymentRecordDialog({
   })
 
   const onSubmit = async (values: PaymentFormValues) => {
+    const maxAmountNum = parseFloat(maxAmount.replace(/[^\d.-]/g, ""));
+    if (!isNaN(maxAmountNum) && values.amount > maxAmountNum) {
+      form.setError("amount", { message: `Số tiền không được vượt quá số dư (${maxAmount})` });
+      return;
+    }
     try {
       await createMutation.mutateAsync({
         invoiceId,

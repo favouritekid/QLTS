@@ -116,7 +116,11 @@ export const leadHandlers = [
       created_at: new Date().toISOString(),
     };
 
-    return HttpResponse.json(consultation, { status: 201 });
+    return HttpResponse.json({
+      consultation,
+      status_updated: true,
+      terminal_guard_reason: null,
+    }, { status: 201 });
   }),
 
   // Get lead timeline

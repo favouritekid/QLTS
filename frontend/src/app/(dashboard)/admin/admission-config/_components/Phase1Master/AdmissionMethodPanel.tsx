@@ -189,9 +189,9 @@ export function AdmissionMethodPanel() {
           <Input
             id="display_order"
             type="number"
-            value={formData.display_order || 1}
+            value={formData.display_order ?? 1}
             onChange={(e) =>
-              setFormData({ ...formData, display_order: parseInt(e.target.value) })
+              setFormData({ ...formData, display_order: e.target.value ? parseInt(e.target.value) : 1 })
             }
             min={1}
           />

@@ -43,6 +43,8 @@ export const ctvKeys = {
   stats: ["ctv", "stats"] as const,
 }
 
+const COLLABORATOR_STALE_TIME_MS = 1000 * 60 * 5
+
 // ============================================================================
 // ADMIN QUERIES
 // ============================================================================
@@ -51,7 +53,7 @@ export function useCollaborators(params?: Record<string, unknown>) {
   return useQuery<CollaboratorsPage>({
     queryKey: collaboratorKeys.list(params),
     queryFn: () => collaboratorsApi.getCollaborators(params as any),
-    staleTime: 1000 * 5,
+    staleTime: COLLABORATOR_STALE_TIME_MS,
   })
 }
 
@@ -67,7 +69,7 @@ export function useClaims(params?: Record<string, unknown>) {
   return useQuery<LeadClaimsPage>({
     queryKey: claimKeys.list(params),
     queryFn: () => collaboratorsApi.getClaims(params as any),
-    staleTime: 1000 * 5,
+    staleTime: COLLABORATOR_STALE_TIME_MS,
   })
 }
 
@@ -140,6 +142,8 @@ export function useReviewClaim() {
       toast.success("Đã xử lý claim")
       queryClient.invalidateQueries({ queryKey: claimKeys.lists() })
       queryClient.invalidateQueries({ queryKey: collaboratorKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ctvKeys.claims() })
+      queryClient.invalidateQueries({ queryKey: ctvKeys.stats })
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || "Lỗi xử lý claim")
@@ -155,6 +159,7 @@ export function useCTVProfile() {
   return useQuery<Collaborator>({
     queryKey: ctvKeys.profile,
     queryFn: collaboratorsApi.getMyProfile,
+    staleTime: COLLABORATOR_STALE_TIME_MS,
   })
 }
 
@@ -162,7 +167,7 @@ export function useCTVLeads(params?: Record<string, unknown>) {
   return useQuery<{ total_count: number; leads: LeadForCTV[] }>({
     queryKey: ctvKeys.leads(params),
     queryFn: () => collaboratorsApi.getMyLeads(params as any),
-    staleTime: 1000 * 5,
+    staleTime: COLLABORATOR_STALE_TIME_MS,
   })
 }
 
@@ -170,7 +175,7 @@ export function useCTVClaims(params?: Record<string, unknown>) {
   return useQuery<LeadClaimsPage>({
     queryKey: ctvKeys.claims(params),
     queryFn: () => collaboratorsApi.getMyClaims(params as any),
-    staleTime: 1000 * 5,
+    staleTime: COLLABORATOR_STALE_TIME_MS,
   })
 }
 
@@ -178,6 +183,7 @@ export function useCTVStats() {
   return useQuery<CollaboratorStats>({
     queryKey: ctvKeys.stats,
     queryFn: collaboratorsApi.getMyStats,
+    staleTime: COLLABORATOR_STALE_TIME_MS,
   })
 }
 

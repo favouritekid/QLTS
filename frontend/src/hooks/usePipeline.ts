@@ -16,10 +16,10 @@ import type {
   ConsultationStatusUpdate,
   FullPipeline,
   PipelineQueryParams,
-  MoveLeadPayload,
   AllowedTransition, // ✅ Import mới
   AllowedTransitionCreate,
 } from "@/types/pipeline.types";
+import type { LossReason } from "@/lib/loss-reasons";
 
 // =====================================================================
 // QUERY KEYS
@@ -31,6 +31,7 @@ export const pipelineKeys = {
   fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
+  lossReasons: () => [...pipelineKeys.all, "loss-reasons"] as const,
   // ✅ FSM v3.2: Cache by (currentStatusId, leadId)
   // leadId is required because phase is derived from lead's admission_profile
   // Different leads can be in different phases (consultation vs admission vs fee)
@@ -143,6 +144,31 @@ export function usePipelineStats(params?: PipelineQueryParams) {
     },
     staleTime: 1000 * 60, // 1 minute
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
+  });
+}
+
+// =====================================================================
+// QUERIES (READ) - LOSS REASONS
+// =====================================================================
+
+/**
+ * Get all loss reason codes from backend (single source of truth)
+ *
+ * Returns the canonical loss reason taxonomy. Cached aggressively (1 hour)
+ * since loss reasons rarely change. Components should use the static fallback
+ * from `@/lib/loss-reasons` while this query is loading.
+ *
+ * @example
+ * ```tsx
+ * const { data: lossReasons } = useLossReasons();
+ * ```
+ */
+export function useLossReasons() {
+  return useQuery<LossReason[], AxiosError<ApiErrorResponse>>({
+    queryKey: pipelineKeys.lossReasons(),
+    queryFn: () => pipelineApi.getLossReasons(),
+    staleTime: 1000 * 60 * 60, // 1 hour - rarely changes
+    gcTime: 1000 * 60 * 60 * 2, // 2 hours in cache
   });
 }
 
@@ -489,139 +515,6 @@ export function useDeleteConsultationStatus() {
 // =====================================================================
 // MUTATIONS - PIPELINE OPERATIONS
 // =====================================================================
-
-/**
- * Move a lead to a different pipeline stage (drag & drop)
- *
- * @example
- * ```tsx
- * const moveLead = useMoveLeadToStage();
- *
- * moveLead.mutate({
- *   lead_id: 123,
- *   to_stage_id: 'consultation_scheduled',
- *   reason: 'Consultation booked for tomorrow',
- * });
- * ```
- */
-export function useMoveLeadToStage() {
-  const queryClient = useQueryClient();
-
-  return useMutation<
-    Lead,
-    AxiosError<ApiErrorResponse>,
-    MoveLeadPayload,
-    {
-      previousLeadsInOldStage?: Lead[];
-      previousLeadsInNewStage?: Lead[];
-      previousFullPipeline?: FullPipeline;
-    }
-  >({
-    mutationFn: async (data) => {
-      return await pipelineApi.moveLeadToStage(data);
-    },
-
-    // Optimistic update for better UX
-    onMutate: async ({ lead_id, from_stage_id, to_stage_id }) => {
-      // Cancel outgoing queries
-      if (from_stage_id) {
-        await queryClient.cancelQueries({
-          queryKey: pipelineKeys.stageLeads(from_stage_id),
-        });
-      }
-      await queryClient.cancelQueries({
-        queryKey: pipelineKeys.stageLeads(to_stage_id),
-      });
-      await queryClient.cancelQueries({ queryKey: pipelineKeys.fullPipeline() });
-
-      // Snapshot previous data
-      const previousLeadsInOldStage = from_stage_id
-        ? queryClient.getQueryData<Lead[]>(pipelineKeys.stageLeads(from_stage_id))
-        : undefined;
-      const previousLeadsInNewStage = queryClient.getQueryData<Lead[]>(
-        pipelineKeys.stageLeads(to_stage_id)
-      );
-      const previousFullPipeline = queryClient.getQueryData<FullPipeline>(
-        pipelineKeys.fullPipeline()
-      );
-
-      // Optimistically update cache (remove from old stage, add to new stage)
-      if (previousLeadsInOldStage && from_stage_id) {
-        const leadToMove = previousLeadsInOldStage.find((l) => l.id === lead_id);
-        if (leadToMove) {
-          // Remove from old stage
-          queryClient.setQueryData<Lead[]>(
-            pipelineKeys.stageLeads(from_stage_id),
-            previousLeadsInOldStage.filter((l) => l.id !== lead_id)
-          );
-
-          // Add to new stage
-          if (previousLeadsInNewStage) {
-            queryClient.setQueryData<Lead[]>(pipelineKeys.stageLeads(to_stage_id), [
-              ...previousLeadsInNewStage,
-              { ...leadToMove, pipeline_stage_id: to_stage_id },
-            ]);
-          }
-        }
-      }
-
-      return {
-        previousLeadsInOldStage,
-        previousLeadsInNewStage,
-        previousFullPipeline,
-      };
-    },
-
-    // Rollback on error
-    onError: (err, { from_stage_id, to_stage_id }, context) => {
-      if (context?.previousLeadsInOldStage && from_stage_id) {
-        queryClient.setQueryData(
-          pipelineKeys.stageLeads(from_stage_id),
-          context.previousLeadsInOldStage
-        );
-      }
-      if (context?.previousLeadsInNewStage) {
-        queryClient.setQueryData(
-          pipelineKeys.stageLeads(to_stage_id),
-          context.previousLeadsInNewStage
-        );
-      }
-      if (context?.previousFullPipeline) {
-        queryClient.setQueryData(pipelineKeys.fullPipeline(), context.previousFullPipeline);
-      }
-
-      const detail = err.response?.data?.detail;
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e) => e.msg).join(", ")
-            : "Failed to move lead";
-      toast.error("Error", { description: message });
-    },
-
-    onSuccess: (updatedLead, { from_stage_id, to_stage_id }) => {
-      toast.success("Lead moved successfully!", {
-        description: `Moved to ${to_stage_id.replace(/_/g, " ")}`,
-      });
-
-      // Invalidate all relevant queries
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
-
-      if (from_stage_id) {
-        queryClient.invalidateQueries({
-          queryKey: pipelineKeys.stageLeads(from_stage_id),
-        });
-      }
-      queryClient.invalidateQueries({
-        queryKey: pipelineKeys.stageLeads(to_stage_id),
-      });
-    },
-  });
-}
 
 /**
  * Revert a lead to a previous stage

@@ -34,6 +34,8 @@ export interface StoredFilters {
   dateField: "created_at" | "last_consultation_at";
   scoreMin: number;
   scoreMax: number;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
 }
 
 export interface LeadsFilterState extends StoredFilters {
@@ -74,7 +76,7 @@ export interface UseLeadsFilterReturn {
 
 const LEADS_FILTERS_STORAGE_KEY = "leads_filters";
 // ✅ VERSIONING: Increment when StoredFilters schema changes
-const STORAGE_VERSION = 4;
+const STORAGE_VERSION = 5;
 
 interface VersionedStorage {
   version: number;
@@ -96,6 +98,8 @@ const DEFAULT_FILTERS: StoredFilters = {
   dateField: "created_at",
   scoreMin: 0,
   scoreMax: 100,
+  sortBy: "created_at",
+  sortOrder: "desc",
 };
 
 // =============================================================================
@@ -168,7 +172,9 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
     searchParams.get("to") ||
     searchParams.get("date_field") ||
     searchParams.get("score_min") ||
-    searchParams.get("score_max")
+    searchParams.get("score_max") ||
+    searchParams.get("sort_by") ||
+    searchParams.get("order")
   );
 }
 
@@ -190,6 +196,8 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
       : "created_at") as "created_at" | "last_consultation_at",
     scoreMin: parseInt(searchParams.get("score_min") || "0"),
     scoreMax: parseInt(searchParams.get("score_max") || "100"),
+    sortBy: searchParams.get("sort_by") || "created_at",
+    sortOrder: (searchParams.get("order") === "asc" ? "asc" : "desc") as "asc" | "desc",
   };
 }
 
@@ -243,8 +251,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const [dateField, setDateField] = useState<"created_at" | "last_consultation_at">(
     initialValues.dateField === "created_at" ? "created_at" : "last_consultation_at"
   );
-  const [sortBy, setSortBy] = useState("created_at");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [sortBy, setSortBy] = useState(initialValues.sortBy || "created_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">(initialValues.sortOrder || "desc");
 
   // ==========================================================================
   // EXTERNAL URL CHANGE DETECTION (e.g., navigation from dashboard)
@@ -320,6 +328,12 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (urlScoreMin !== scoreRange[0] || urlScoreMax !== scoreRange[1]) {
       setScoreRange([urlScoreMin, urlScoreMax]);
     }
+    if (urlFilters.sortBy && urlFilters.sortBy !== sortBy) {
+      setSortBy(urlFilters.sortBy);
+    }
+    if (urlFilters.sortOrder && urlFilters.sortOrder !== sortOrder) {
+      setSortOrder(urlFilters.sortOrder);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]); // Only trigger on searchParams change
 
@@ -356,6 +370,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       if (dateField !== "created_at") params.set("date_field", dateField);
       if (scoreRange[0] > 0) params.set("score_min", scoreRange[0].toString());
       if (scoreRange[1] < 100) params.set("score_max", scoreRange[1].toString());
+      if (sortBy !== "created_at") params.set("sort_by", sortBy);
+      if (sortOrder !== "desc") params.set("order", sortOrder);
 
       const queryString = params.toString();
       const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
@@ -376,7 +392,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   }, [
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField, scoreRange,
-    pathname,
+    sortBy, sortOrder, pathname,
   ]);
 
   // ==========================================================================
@@ -399,6 +415,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       dateField,
       scoreMin: scoreRange[0],
       scoreMax: scoreRange[1],
+      sortBy,
+      sortOrder,
     };
 
     // Save if any filter is active OR if not on page 1
@@ -416,17 +434,19 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       !!unitId ||
       dateFrom ||
       dateTo ||
-      hasScoreFilterActive;
+      hasScoreFilterActive ||
+      sortBy !== "created_at" ||
+      sortOrder !== "desc";
 
     if (shouldSave) {
       saveFiltersToStorage(filtersToSave);
     } else {
       clearFiltersFromStorage();
     }
-  // ✅ T7 FIX: Add scoreRange to dependency array
   }, [
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField, scoreRange,
+    sortBy, sortOrder,
   ]);
 
   // ==========================================================================

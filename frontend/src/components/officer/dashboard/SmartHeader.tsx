@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
   DropdownMenuRadioGroup,
@@ -29,8 +28,6 @@ import {
 } from "@/components/ui/select";
 import {
   Plus,
-  Phone,
-  Calendar,
   ChevronDown,
   Sparkles,
   Users,
@@ -46,7 +43,7 @@ import type { User as UserType } from "@/types/api.types";
 interface SmartHeaderProps {
   /** Whether officer reached daily goal (optional, for sparkle icon) */
   isGoalMet?: boolean;
-  onQuickAction?: (action: "new_lead" | "log_call" | "schedule") => void;
+  onQuickAction?: (action: "new_lead") => void;
   /** Current dashboard scope */
   scope?: DashboardScope;
   /** Callback when scope changes */
@@ -239,31 +236,11 @@ export function SmartHeader({
         {/* Date Range Filter */}
         <DateRangeFilter />
 
-        {/* Quick Actions */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" className="gap-1.5">
-              <Plus className="h-4 w-4" />
-              Thao tác
-              <ChevronDown className="h-3 w-3 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem onClick={() => onQuickAction?.("new_lead")}>
-              <Plus className="h-4 w-4 mr-2" />
-              Thêm Lead
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => onQuickAction?.("log_call")}>
-              <Phone className="h-4 w-4 mr-2" />
-              Ghi cuộc gọi
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onQuickAction?.("schedule")}>
-              <Calendar className="h-4 w-4 mr-2" />
-              Đặt lịch hẹn
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Quick Action */}
+        <Button size="sm" className="gap-1.5" onClick={() => onQuickAction?.("new_lead")}>
+          <Plus className="h-4 w-4" />
+          Thêm Lead
+        </Button>
       </div>
     </div>
   );

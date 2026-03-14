@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
+import { DEFAULT_SEASONAL_WEIGHTS } from "@/types/kpi-planning.types";
 import {
   Tooltip,
   TooltipContent,
@@ -181,13 +182,18 @@ export function AnnualProgressCard({ progress, className }: AnnualProgressCardPr
             value={Math.min(progress.progress_pct, 100)} 
             className="h-3"
           />
-          {/* Expected progress marker — prefer backend seasonal-aware value, fallback to linear */}
+          {/* Expected progress marker — prefer backend seasonal-aware value, fallback to seasonal weights */}
           {progress.status !== "completed" && (() => {
             const expectedPct = progress.expected_progress_pct != null
               ? progress.expected_progress_pct
               : (() => {
                   const monthsElapsed = 12 - progress.months_left;
-                  return monthsElapsed > 0 ? (monthsElapsed / 12) * 100 : 0;
+                  if (monthsElapsed <= 0) return 0;
+                  // Sum seasonal weights for elapsed months (cumulative)
+                  const cumulative = DEFAULT_SEASONAL_WEIGHTS
+                    .slice(0, monthsElapsed)
+                    .reduce((sum, w) => sum + w, 0);
+                  return cumulative * 100;
                 })();
             return (
               <div

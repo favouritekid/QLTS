@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
 from ..database import get_db
-from ..core.deps import CasbinAuth, OfficerDashboardScope, get_officer_dashboard_scope, resolve_drill_down_officer_id  # ✅ Phase 2.2
+from ..core.deps import CasbinAuth, OfficerDashboardScope, get_officer_dashboard_scope, resolve_drill_down_officer_id, resolve_kpi_plan_officer_id  # ✅ Phase 2.2
 from ..services import officer_service
 from app.core.rate_limits import limiter, RateLimits
 
@@ -215,6 +215,47 @@ async def get_team_stats(
         unit_id=resolved_unit_id,
     )
     return stats
+
+
+# =============================================================================
+# GAP 2: Monthly KPI Plan Breakdown
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/my-kpi-plan",
+    response_model=schemas.OfficerKpiPlanResponse | None,
+    summary="Get officer's monthly KPI plan breakdown"
+)
+async def get_my_kpi_plan(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, CasbinAuth],
+    validated_officer_id: Annotated[int, Depends(resolve_kpi_plan_officer_id)],
+    fiscal_year: int = None,
+):
+    """
+    Monthly KPI plan breakdown for self-tracking.
+    Officer sees own plan (or unit plan fallback).
+    Manager/admin can drill-down via officer_id param.
+
+    Returns:
+    - 200 + body: plan exists
+    - 200 + null: valid officer but no plan for this fiscal year
+    - 400: manager/admin called without officer_id
+    - 404: officer_id invalid / out of scope (IDOR)
+    """
+    from datetime import datetime as dt
+
+    if fiscal_year is None:
+        fiscal_year = dt.now().year
+
+    result = await officer_service.get_officer_kpi_plan(
+        db=db,
+        officer_id=validated_officer_id,
+        fiscal_year=fiscal_year,
+    )
+    return result
 
 
 # =============================================================================

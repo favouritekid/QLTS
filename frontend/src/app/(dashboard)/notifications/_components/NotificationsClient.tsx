@@ -148,6 +148,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
       {
         onSuccess: (data) => {
           setSelectedIds([]);
+          setBulkDeleteOpen(false);
           toast.success(`Đã xóa ${data.deleted} thông báo`);
         },
         onError: () => {
@@ -155,7 +156,6 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
         },
       }
     );
-    setBulkDeleteOpen(false);
   };
 
   const getNotificationIcon = (type: Notification["type"]) => {

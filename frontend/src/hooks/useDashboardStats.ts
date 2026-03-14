@@ -6,8 +6,8 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import { subDays, startOfDay, endOfDay } from "date-fns";
-import { useDashboardDate, formatDateForAPI } from "@/contexts/DashboardDateContext";
+import { useDashboardDate } from "@/contexts/DashboardDateContext";
+import { todayVN, subDaysVN } from "@/lib/utils/vn-date";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
 
@@ -24,6 +24,7 @@ export interface TrendInfo {
 export interface KPIStats {
   consultations_today: number;
   consultations_target: number;
+  is_unit_target?: boolean;
   consultations_trend: TrendInfo;
   active_leads: number;
   active_leads_in_period?: number;
@@ -34,11 +35,17 @@ export interface KPIStats {
   new_lead_conversion_rate_trend?: TrendInfo | null;
   avg_response_time: number;
   avg_response_time_trend: TrendInfo;
+  avg_response_time_target?: number | null;
   sla_compliance_rate: number;
   sla_compliance_rate_trend?: TrendInfo | null;
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
   consultations_avg_per_day?: number;
+  // Gap 1: Rate metric targets (null when not comparable)
+  win_rate_target?: number | null;
+  new_lead_conversion_rate_target?: number | null;
+  sla_compliance_rate_target?: number | null;
+  consultation_effectiveness_target?: number | null;
   // Phase D: Daily Quality KPIs
   verified_consultations_daily?: number;
   quality_rate_daily?: number | null;
@@ -294,13 +301,12 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
   const unitId = options?.unitId;
   const enabled = options?.enabled ?? true;
 
-  // Compute what SSR would have used (same logic as page.tsx getDefaultDateRange)
+  // Compute what SSR would have used (same VN timezone logic as page.tsx)
   const ssrDefault = useMemo(() => {
-    const today = new Date();
-    const from = subDays(today, 6);
+    const today = todayVN();
     return {
-      start: formatDateForAPI(startOfDay(from)),
-      end: formatDateForAPI(endOfDay(today)),
+      start: subDaysVN(today, 6),
+      end: today,
     };
   }, []); // Empty deps: only compute once on mount (matches SSR snapshot)
 
@@ -330,12 +336,12 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     enabled,
   });
 
-  // Fetch team stats (with date filter + drill-down officer)
+  // Fetch team stats only for personal scope (used for team avg comparison line)
   const teamStatsQuery = useQuery({
     queryKey: ["officer", "team-stats", startDate, endDate, officerId],
     queryFn: () => fetchTeamStats(startDate, endDate, officerId),
     staleTime: 300000,
-    enabled,
+    enabled: enabled && scope === "personal",
   });
 
   // Socket.IO integration for real-time updates
@@ -373,4 +379,35 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     error: dashboardQuery.error,
     refetch: dashboardQuery.refetch,
   };
+}
+
+
+// =============================================================================
+// GAP 2: Monthly KPI Plan Hook
+// =============================================================================
+
+import type { OfficerKpiPlanResponse, OfficerPlanMonthSummary } from "@/lib/api/officer";
+export type { OfficerKpiPlanResponse, OfficerPlanMonthSummary };
+
+export interface UseOfficerKpiPlanOptions {
+  fiscalYear: number;
+  officerId?: number;
+  enabled?: boolean;
+}
+
+export function useOfficerKpiPlan(options: UseOfficerKpiPlanOptions) {
+  const { fiscalYear, officerId, enabled = true } = options;
+
+  return useQuery<OfficerKpiPlanResponse | null>({
+    queryKey: ["officer", "kpi-plan", fiscalYear, officerId],
+    queryFn: async () => {
+      const { officerApi } = await import("@/lib/api/officer");
+      // Backend returns 200+null for "no plan" and 404 only for IDOR failures.
+      // All non-2xx errors (400, 404, 500) propagate to React Query error state.
+      return officerApi.getMyKpiPlan(fiscalYear, officerId);
+    },
+    enabled,
+    retry: false,
+    staleTime: 300_000, // 5 min
+  });
 }

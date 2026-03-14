@@ -256,6 +256,32 @@ export interface Consultation {
 }
 
 /**
+ * Response for POST create consultation — includes terminal guard info.
+ */
+export interface ConsultationCreateResult {
+  consultation: Consultation;
+  status_updated: boolean;
+  terminal_guard_reason: string | null;
+}
+
+/**
+ * Single skipped lead in bulk stage update.
+ */
+export interface BulkStageSkippedItem {
+  lead_id: number;
+  reason: string;
+}
+
+/**
+ * Response for bulk stage update with skip diagnostics.
+ */
+export interface BulkUpdateStageResult {
+  message: string;
+  updated_count: number;
+  skipped: BulkStageSkippedItem[];
+}
+
+/**
  * Consultation creation payload
  */
 export interface ConsultationCreate {

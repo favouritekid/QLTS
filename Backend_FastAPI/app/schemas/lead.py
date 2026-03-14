@@ -74,6 +74,18 @@ class Consultation(ConsultationBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ConsultationCreateResult(BaseModel):
+    """Response for POST create consultation — includes terminal guard info."""
+    consultation: Consultation
+    status_updated: bool = Field(
+        ..., description="Whether the lead status was actually updated"
+    )
+    terminal_guard_reason: Optional[str] = Field(
+        None,
+        description="Reason status was not updated (soft-terminal guard)"
+    )
+
+
 class AssignmentLog(BaseModel):
     id: int
     method: Optional[str] = None
@@ -223,7 +235,7 @@ class LeadCreate(LeadBase):
     - Integer: Directly assign to specified officer (skip auto-assignment)
     """
     education_level: Optional[str] = None
-    gpa: Optional[float] = None
+    gpa: Optional[float] = Field(None, ge=0.0, le=10.0, description="GPA on 0-10 scale")
     location: Optional[str] = None
     assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
     referrer_id: Optional[int] = None  # CTV referrer for source="referral"
@@ -244,9 +256,9 @@ class LeadUpdate(BaseModel):
     offering_id: Optional[int] = None
     consultation_status_id: Optional[str] = None
     education_level: Optional[str] = None
-    gpa: Optional[float] = None
+    gpa: Optional[float] = Field(None, ge=0.0, le=10.0, description="GPA on 0-10 scale")
     location: Optional[str] = None
-    officer_rating: Optional[int] = None
+    officer_rating: Optional[int] = Field(None, ge=1, le=5, description="Officer rating 1-5 stars")
     officer_summary: Optional[str] = None
     # Fit Score fields
     birth_year: Optional[int] = Field(None, ge=1900, le=2100)
@@ -406,6 +418,19 @@ class BulkUpdateStageSchema(BaseModel):
     """Schema for bulk updating leads pipeline stage."""
     lead_ids: List[int] = Field(..., min_length=1)
     pipeline_stage_id: str = Field(..., min_length=1)
+
+
+class BulkStageSkippedItem(BaseModel):
+    """Single skipped lead in bulk stage update."""
+    lead_id: int
+    reason: str
+
+
+class BulkUpdateStageResult(BaseModel):
+    """Response for bulk stage update with skip diagnostics."""
+    message: str
+    updated_count: int
+    skipped: List[BulkStageSkippedItem] = Field(default_factory=list)
 
 
 class BulkDeleteSchema(BaseModel):

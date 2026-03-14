@@ -10,6 +10,10 @@ from ..repositories import OfficerRepository
 from ..repositories.organization_repository import OrganizationRepository
 from .notification_dispatcher import dispatch
 from . import kpi_service
+from .pipeline_service import LOSS_REASONS
+
+# Build lookup from canonical loss reason source
+_LOSS_REASON_LOOKUP = {r["code"]: r for r in LOSS_REASONS}
 
 log = structlog.get_logger(__name__)
 
@@ -523,19 +527,14 @@ def generate_funnel_suggestions(
                 count = reason["count"]
                 pct = reason["percentage"]
 
-                # Map reason codes to actionable labels
-                reason_actions = {
-                    "PRICE_HIGH": ("học phí cao", "Xem xét chính sách học bổng/ưu đãi"),
-                    "LOCATION_FAR": ("xa nhà", "Hỗ trợ thông tin ký túc xá/di chuyển"),
-                    "CHOSE_COMPETITOR": ("chọn trường khác", "Phân tích USP và cải thiện pitch"),
-                    "NO_CONTACT": ("không liên lạc được", "Cải thiện quy trình follow-up"),
-                    "TIMING_BAD": ("chưa sẵn sàng", "Nurture leads chưa ready"),
-                }
-
-                reason_label, action_hint = reason_actions.get(
-                    reason_code,
-                    (reason_code.lower().replace("_", " "), "Phân tích và có chiến lược xử lý")
-                )
+                # Map reason codes to actionable labels (from canonical source)
+                reason_info = _LOSS_REASON_LOOKUP.get(reason_code)
+                if reason_info:
+                    reason_label = reason_info["label"].lower()
+                    action_hint = reason_info["action_hint"]
+                else:
+                    reason_label = reason_code.lower().replace("_", " ")
+                    action_hint = "Phân tích và có chiến lược xử lý"
 
                 suggestions.append({
                     "id": f"loss_reason_{reason_code}",
@@ -861,6 +860,20 @@ async def get_enhanced_dashboard_stats(
         effective_date=filter_end,
     )
 
+    # Gap 1: Resolve targets for comparable rate metrics (period_type must match catalog)
+    win_rate_target = await kpi_service.get_kpi_target(
+        db, "win_rate", officer_id, user.unit_id, "monthly",
+        effective_date=filter_end,
+    )
+    sla_compliance_rate_target = await kpi_service.get_kpi_target(
+        db, "sla_compliance_rate", officer_id, user.unit_id, "monthly",
+        effective_date=filter_end,
+    )
+    avg_response_time_target = await kpi_service.get_kpi_target(
+        db, "response_time_hours", officer_id, user.unit_id, "daily",
+        effective_date=filter_end,
+    )
+
     # Build enhanced response
     return {
         "kpis": {
@@ -877,11 +890,17 @@ async def get_enhanced_dashboard_stats(
             "new_lead_conversion_rate_trend": new_lead_conversion_trend,
             "avg_response_time": avg_response_time,
             "avg_response_time_trend": avg_response_trend,
+            "avg_response_time_target": avg_response_time_target,
             "sla_compliance_rate": sla_stats["rate"],
             "sla_compliance_rate_trend": sla_compliance_trend,
             "consultation_effectiveness": effectiveness_stats["effectiveness"],
             "consultation_effectiveness_trend": effectiveness_trend,
             "consultations_avg_per_day": round(consultations_avg, 1),
+            # Gap 1: Rate metric targets (only comparable ones populated)
+            "win_rate_target": win_rate_target,
+            "sla_compliance_rate_target": sla_compliance_rate_target,
+            "new_lead_conversion_rate_target": None,  # Not comparable (cohort vs funnel grain)
+            "consultation_effectiveness_target": None,  # Not comparable (funnel vs activity grain)
             # Phase D: Daily Quality KPIs
             "verified_consultations_daily": v_d,
             "quality_rate_daily": quality_rate,
@@ -1198,11 +1217,17 @@ async def get_aggregated_dashboard_stats(
             "new_lead_conversion_rate_trend": conversion_trend,
             "avg_response_time": agg_avg_response_time or 0,
             "avg_response_time_trend": response_time_trend,
+            "avg_response_time_target": None,  # Not meaningful for aggregated view
             "sla_compliance_rate": agg_sla_stats["rate"],
             "sla_compliance_rate_trend": sla_trend,
             "consultation_effectiveness": agg_effectiveness_stats["effectiveness"],
             "consultation_effectiveness_trend": eff_trend,
             "consultations_avg_per_day": avg_consultations_per_day,
+            # Gap 1: targets not applicable for aggregated (team/org) view
+            "win_rate_target": None,
+            "sla_compliance_rate_target": None,
+            "new_lead_conversion_rate_target": None,
+            "consultation_effectiveness_target": None,
         },
         # Must match WorkloadStats schema
         "status_overview": {
@@ -1246,11 +1271,16 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "new_lead_conversion_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "avg_response_time": 0,
             "avg_response_time_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "avg_response_time_target": None,
             "sla_compliance_rate": 0,
             "sla_compliance_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "consultation_effectiveness": 0,
             "consultation_effectiveness_trend": {"value": 0, "direction": "neutral", "comparison": ""},
             "consultations_avg_per_day": 0.0,
+            "win_rate_target": None,
+            "sla_compliance_rate_target": None,
+            "new_lead_conversion_rate_target": None,
+            "consultation_effectiveness_target": None,
         },
         # Must match WorkloadStats schema
         "status_overview": {
@@ -1426,29 +1456,33 @@ async def get_weekly_leaderboard(
     prev_ranks = {officer.id: rank for rank, officer in enumerate(prev_officers, 1)}
     
     # Build leaderboard with ranks
+    # Separate concepts: is_current_user = actual logged-in user,
+    # is_focus_officer = drill-down target (may differ when manager/admin drills)
+    requesting_user_id = requesting_user.id if requesting_user else officer_id
     leaderboard = []
     current_user_rank = None
     current_user_stats = None
-    
+
     for rank, officer in enumerate(all_officers, 1):
         prev_rank = prev_ranks.get(officer.id)
         # Calculate rank change: positive = improved, negative = dropped
         rank_change = (prev_rank - rank) if prev_rank else None
-        
+
         entry = {
             "rank": rank,
             "user_id": officer.id,
             "username": officer.username,
             "full_name": officer.full_name or officer.username,
             "consultations": officer.consultations or 0,
-            "is_current_user": officer.id == officer_id,
+            "is_current_user": officer.id == requesting_user_id,
+            "is_focus_officer": officer.id == officer_id,
             "rank_change": rank_change,  # +2 = up 2 spots, -1 = down 1 spot, None = new
         }
-        
+
         if officer.id == officer_id:
             current_user_rank = rank
             current_user_stats = entry
-        
+
         if rank <= limit:
             leaderboard.append(entry)
     
@@ -1456,7 +1490,7 @@ async def get_weekly_leaderboard(
     if current_user_rank and current_user_rank > limit and current_user_stats:
         leaderboard.append(current_user_stats)
     
-    # If current user has no consultations this week, add with 0 (officers only)
+    # If drill-down target has no consultations this week, add with 0 (officers only)
     if current_user_rank is None and requesting_user and requesting_user.role == "officer":
         user = await repo.get_officer_with_capacity(officer_id)
         if user:
@@ -1467,7 +1501,8 @@ async def get_weekly_leaderboard(
                 "username": user.username,
                 "full_name": user.full_name or user.username,
                 "consultations": 0,
-                "is_current_user": True,
+                "is_current_user": officer_id == requesting_user_id,
+                "is_focus_officer": True,
                 "rank_change": (prev_rank - (len(all_officers) + 1)) if prev_rank else None,
             })
             current_user_rank = len(all_officers) + 1
@@ -1638,4 +1673,113 @@ async def get_upcoming_activities(
         "dates_with_activities": list(dates_with_activities),
         "month": month,
         "year": year,
+    }
+
+
+# =============================================================================
+# GAP 2: Monthly KPI Plan Breakdown (Officer self-tracking)
+# =============================================================================
+
+async def get_officer_kpi_plan(
+    db: AsyncSession,
+    officer_id: int,
+    fiscal_year: int,
+) -> Dict[str, Any] | None:
+    """
+    Return monthly KPI plan breakdown for an officer.
+
+    Resolution order:
+    1. Officer's own active plan for fiscal_year
+    2. Fallback: unit plan (officer_id IS NULL) for the officer's unit
+
+    Monthly actuals come from KpiPlanMonth.actual_enrollments (source of truth).
+    Returns None if no plan exists at either level (NOT raise 404).
+    """
+    from app.repositories.kpi_planning_repository import KpiPlanningRepository
+    from app.utils.exceptions import ResourceNotFoundError
+
+    # Get officer's unit_id
+    repo = OfficerRepository(db)
+    user = await repo.get_officer_with_capacity(officer_id)
+    if not user:
+        raise ResourceNotFoundError("Officer not found")
+
+    planning_repo = KpiPlanningRepository(db)
+
+    # 1. Try officer-specific plan
+    source = "officer"
+    plan = await planning_repo.get_active_plan_by_scope(
+        unit_id=user.unit_id,
+        fiscal_year=fiscal_year,
+        officer_id=officer_id,
+        with_months=True,
+    )
+
+    # 2. Fallback to unit plan
+    if plan is None:
+        source = "unit"
+        plan = await planning_repo.get_active_plan_by_scope(
+            unit_id=user.unit_id,
+            fiscal_year=fiscal_year,
+            officer_id=None,
+            with_months=True,
+        )
+
+    if plan is None:
+        return None  # No plan exists — caller (router) returns null/204
+
+    # Build monthly summaries from plan.months
+    months_by_num = {m.month: m for m in plan.months}
+    month_summaries = []
+    achieved_ytd = 0
+
+    for month_num in range(1, 13):
+        pm = months_by_num.get(month_num)
+        if pm is None:
+            month_summaries.append({
+                "month": month_num,
+                "enrollment_target": 0,
+                "enrollment_actual": None,
+                "working_days": 0,
+                "consultations_daily": None,
+                "consultations_actual_avg": None,
+                "consultations_monthly_total": None,
+                "conversion_rate": None,
+                "win_rate": None,
+            })
+            continue
+
+        actual_enroll = int(pm.actual_enrollments) if pm.actual_enrollments is not None else None
+        if actual_enroll is not None:
+            achieved_ytd += actual_enroll
+
+        consult_daily = int(pm.consultations_daily) if pm.consultations_daily is not None else None
+        consult_actual_avg = float(pm.actual_consultations_avg) if pm.actual_consultations_avg is not None else None
+        working_days = int(pm.working_days) if pm.working_days is not None else 0
+        consult_monthly = (consult_daily * working_days) if consult_daily is not None else None
+
+        month_summaries.append({
+            "month": month_num,
+            "enrollment_target": int(pm.enrollment_target),
+            "enrollment_actual": actual_enroll,
+            "working_days": working_days,
+            "consultations_daily": consult_daily,
+            "consultations_actual_avg": consult_actual_avg,
+            "consultations_monthly_total": consult_monthly,  # plan-derived: daily * working_days
+            "conversion_rate": float(pm.conversion_rate) if pm.conversion_rate is not None else None,
+            "conversion_rate_actual": float(pm.actual_conversion_rate) if pm.actual_conversion_rate is not None else None,
+            "win_rate": float(pm.win_rate) if pm.win_rate is not None else None,
+            "win_rate_actual": float(pm.actual_win_rate) if pm.actual_win_rate is not None else None,
+        })
+
+    annual_target = int(plan.annual_enrollment_target)
+    progress_pct = (achieved_ytd / annual_target * 100) if annual_target > 0 else 0.0
+
+    return {
+        "fiscal_year": fiscal_year,
+        "annual_target": annual_target,
+        "achieved_ytd": achieved_ytd,
+        "progress_pct": round(progress_pct, 1),
+        "months": month_summaries,
+        "source": source,
     }

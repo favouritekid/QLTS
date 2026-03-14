@@ -214,6 +214,23 @@ class AllowedTransition(AllowedTransitionBase):
 
 
 # =====================================================================
+# LOSS REASON TAXONOMY
+# =====================================================================
+
+
+class LossReason(BaseModel):
+    """Loss reason taxonomy item (read-only reference data)."""
+    code: str
+    label: str
+    icon: str
+    category: str
+    is_recoverable: bool
+    action_hint: str = Field(default="", description="Suggested action for this loss reason")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =====================================================================
 # FULL PIPELINE SCHEMA
 # =====================================================================
 

@@ -536,6 +536,7 @@ export interface MajorProgramUpdate {
 export interface ProgramOfferingCreate {
   program_id: number;
   offering_type_id: number;
+  offering_type: string;
   duration_semesters?: number;
   total_credits?: number;
   scoring_rules?: ScoringRules;

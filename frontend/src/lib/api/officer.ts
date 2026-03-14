@@ -7,6 +7,7 @@ export interface LeaderboardEntry {
   full_name: string;
   consultations: number;
   is_current_user: boolean;
+  is_focus_officer?: boolean;
   rank_change?: number | null;
 }
 
@@ -105,4 +106,40 @@ export const officerApi = {
     const response = await api.post("/api/officer/availability", data);
     return response.data;
   },
+
+  getMyKpiPlan: async (fiscalYear: number, officerId?: number): Promise<OfficerKpiPlanResponse | null> => {
+    const params = new URLSearchParams({ fiscal_year: String(fiscalYear) });
+    if (officerId) params.append("officer_id", String(officerId));
+    const response = await api.get<OfficerKpiPlanResponse | null>(
+      `/api/officer/my-kpi-plan?${params}`
+    );
+    return response.data;
+  },
 };
+
+// =============================================================================
+// GAP 2: Monthly KPI Plan Types
+// =============================================================================
+
+export interface OfficerPlanMonthSummary {
+  month: number;
+  enrollment_target: number;
+  enrollment_actual: number | null;
+  working_days: number;
+  consultations_daily: number | null;           // plan target
+  consultations_actual_avg: number | null;      // actual (sync)
+  consultations_monthly_total: number | null;   // plan-derived: daily * working_days
+  conversion_rate: number | null;               // plan target
+  conversion_rate_actual: number | null;        // actual (sync)
+  win_rate: number | null;                      // plan target
+  win_rate_actual: number | null;               // actual (sync)
+}
+
+export interface OfficerKpiPlanResponse {
+  fiscal_year: number;
+  annual_target: number;
+  achieved_ytd: number;
+  progress_pct: number;
+  months: OfficerPlanMonthSummary[];
+  source: "officer" | "unit";
+}

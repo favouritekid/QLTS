@@ -116,7 +116,11 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
               <div>
                 <span className="text-muted-foreground block text-xs">Chế độ chọn môn</span>
                 <span className="font-medium">
-                  {path.criteria.subject_selection_mode === "fixed" ? "Cố định (Theo tổ hợp)" : "Linh hoạt (Best N)"}
+                  {path.criteria.subject_selection_mode === "fixed"
+                    ? "Cố định (Theo tổ hợp)"
+                    : path.criteria.subject_selection_mode === "best_n"
+                    ? "Linh hoạt (Best N)"
+                    : "Tùy chọn (Any N)"}
                 </span>
               </div>
               <div className="col-span-2">

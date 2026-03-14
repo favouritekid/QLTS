@@ -338,16 +338,20 @@ describe("useLeads Hook", () => {
         server.use(
           http.post(`${API_BASE_URL}/api/leads/:id/consultations`, async () => {
             return HttpResponse.json({
-              id: 1,
-              lead_id: 1,
-              consultation_date: "2025-01-15T10:00:00",
-              scheduled_at: "2025-01-15T10:00:00",
-              method: "in_person",
-              officer_id: 1,
-              notes: "Initial consultation",
-              consultation_status_id: "scheduled",
-              created_at: new Date().toISOString(),
-            } as Consultation);
+              consultation: {
+                id: 1,
+                lead_id: 1,
+                consultation_date: "2025-01-15T10:00:00",
+                scheduled_at: "2025-01-15T10:00:00",
+                method: "in_person",
+                officer_id: 1,
+                notes: "Initial consultation",
+                consultation_status_id: "scheduled",
+                created_at: new Date().toISOString(),
+              },
+              status_updated: true,
+              terminal_guard_reason: null,
+            });
           })
         );
 
@@ -367,7 +371,7 @@ describe("useLeads Hook", () => {
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
         expect(result.current.data).toBeDefined();
-        expect(result.current.data?.lead_id).toBe(1);
+        expect(result.current.data?.consultation.lead_id).toBe(1);
       });
     });
 

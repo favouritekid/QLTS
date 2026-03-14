@@ -136,7 +136,7 @@ export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
             </p>
             {filter === "all" && (
               <p className="text-xs text-muted-foreground mt-1">
-                Làm việc tốt lắm! 🎉
+                Làm việc tốt lắm!
               </p>
             )}
           </div>

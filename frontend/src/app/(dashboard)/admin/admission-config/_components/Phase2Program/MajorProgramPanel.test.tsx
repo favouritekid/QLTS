@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within, waitFor } from "@/test/utils/test-ut
 import { MajorProgramPanel } from "./MajorProgramPanel";
 import * as UseProgramDataHooks from "@/hooks/admissions/useProgramData";
 import * as UseMasterDataHooks from "@/hooks/admissions/useMasterData";
+import { toast } from "sonner";
 
 // Mock the hooks
 vi.mock("@/hooks/admissions/useProgramData", () => ({
@@ -14,6 +15,15 @@ vi.mock("@/hooks/admissions/useProgramData", () => ({
 
 vi.mock("@/hooks/admissions/useMasterData", () => ({
   useOrganizationUnits: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
 }));
 
 describe("MajorProgramPanel", () => {
@@ -183,5 +193,38 @@ describe("MajorProgramPanel", () => {
     await waitFor(() => {
       expect(mockDeleteMutate).toHaveBeenCalledWith(2);
     });
+  });
+
+  // ============================================
+  // BUG-26: unit_id validation on create
+  // ============================================
+  it("BUG-26: should not call create mutation when unit_id is not selected", async () => {
+    render(<MajorProgramPanel />);
+
+    // Open create dialog
+    const addButton = screen.getByText(/thêm mới|add new/i);
+    fireEvent.click(addButton);
+
+    const dialog = await screen.findByRole("dialog");
+    const withinDialog = within(dialog);
+
+    // Fill code and name but NOT unit_id
+    fireEvent.change(withinDialog.getByLabelText(/Mã ngành/i), { target: { value: "9990001" } });
+    fireEvent.change(withinDialog.getByLabelText(/Tên chương trình/i), { target: { value: "Test Program" } });
+
+    // Do NOT select a unit (unit_id remains null from initialFormData)
+
+    // Submit
+    const submitButton = withinDialog.getByRole("button", { name: /create|thêm mới/i });
+    fireEvent.click(submitButton);
+
+    // Wait for async validation to complete
+    await waitFor(() => {
+      // The create mutation should NOT have been called due to missing unit_id
+      expect(mockCreateMutate).not.toHaveBeenCalled();
+    });
+
+    // toast.error should have been called with the unit validation message
+    expect(toast.error).toHaveBeenCalledWith("Vui lòng chọn đơn vị quản lý");
   });
 });

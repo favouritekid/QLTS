@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Plus, Edit } from "lucide-react"
+import { todayVN } from "@/lib/utils/vn-date"
+import { SmartConsultationStatusSelector } from "@/components/common/selectors/SmartConsultationStatusSelector"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -250,13 +252,22 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
       percentage: undefined,
       unit_id: undefined,
       offering_id: undefined,
-      effective_from: new Date().toISOString().split("T")[0],
+      effective_from: todayVN(),
       effective_to: "",
       is_active: true,
     },
   })
 
   const calcType = form.watch("calculation_type")
+
+  // C13: Clear opposing field when switching calculation_type
+  useEffect(() => {
+    if (calcType === "fixed") {
+      form.setValue("percentage", undefined)
+    } else if (calcType === "percentage") {
+      form.setValue("fixed_amount", undefined)
+    }
+  }, [calcType, form])
 
   // Reset/pre-fill form when dialog opens or policy changes
   useEffect(() => {
@@ -282,7 +293,7 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
         calculation_type: "fixed",
         fixed_amount: undefined,
         percentage: undefined,
-        effective_from: new Date().toISOString().split("T")[0],
+        effective_from: todayVN(),
         effective_to: "",
         is_active: true,
       })
@@ -349,9 +360,15 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
               name="trigger_status_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Trigger Status ID <span className="text-destructive">*</span></FormLabel>
+                  <FormLabel>Trạng thái kích hoạt <span className="text-destructive">*</span></FormLabel>
                   <FormControl>
-                    <Input placeholder="VD: sts11" className="font-mono" {...field} />
+                    <SmartConsultationStatusSelector
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn trạng thái kích hoạt hoa hồng"
+                      variant="select"
+                      showOutcomeType
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -413,6 +430,8 @@ function PolicyDialog({ open, onOpenChange, policy }: PolicyDialogProps) {
                       <Input
                         type="number"
                         step="0.01"
+                        min="0"
+                        max="100"
                         placeholder="5.00"
                         {...field}
                         value={field.value ?? ""}

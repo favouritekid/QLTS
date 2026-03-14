@@ -194,14 +194,11 @@ export function useUpdatePathDocuments() {
     mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionPathDocumentUpsert[] }) => {
       return updatePathDocuments(pathId, data);
     },
-    onSuccess: (updatedPath, variables) => {
-      // Immediately update cache with fresh data to avoid stale prop issue
-      queryClient.setQueryData(admissionPathKeys.detail(variables.pathId), updatedPath)
-      // Invalidate documents query for this path
+    onSuccess: (_result, variables) => {
+      // Do NOT setQueryData for detail — result is ResolvedDocumentListResponse, not AdmissionPathResponse
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(variables.pathId) })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.documents(variables.pathId) })
-      // Invalidate related queries
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
     },
     onError: (error) => {
       console.error("useUpdatePathDocuments: Mutation error:", error);

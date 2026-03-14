@@ -130,7 +130,7 @@ export function useMarkAsRead() {
     },
     onSettled: () => {
       // Refetch to ensure sync with server
-      queryClient.invalidateQueries({ queryKey: notificationKeys.all });
+      queryClient.invalidateQueries({ queryKey: notificationKeys.all, refetchType: 'active' });
     },
   });
 }
@@ -191,7 +191,7 @@ export function useMarkAllAsRead() {
     },
     onSettled: () => {
       // Refetch to ensure sync with server
-      queryClient.invalidateQueries({ queryKey: notificationKeys.all });
+      queryClient.invalidateQueries({ queryKey: notificationKeys.all, refetchType: 'active' });
     },
   });
 }

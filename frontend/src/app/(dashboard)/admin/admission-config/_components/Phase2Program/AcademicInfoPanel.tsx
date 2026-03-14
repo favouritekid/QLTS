@@ -184,10 +184,15 @@ export function AcademicInfoPanel() {
 
   const handleConfirmDelete = async () => {
     if (pendingDeleteId !== null) {
-      await deleteMutation.mutateAsync(pendingDeleteId);
+      try {
+        await deleteMutation.mutateAsync(pendingDeleteId);
+      } catch {
+        // Error handling is done in the mutation hooks
+      } finally {
+        setDeleteConfirmOpen(false);
+        setPendingDeleteId(null);
+      }
     }
-    setDeleteConfirmOpen(false);
-    setPendingDeleteId(null);
   };
 
   const getOfferingDisplay = useCallback((offeringId: number) => {
@@ -217,7 +222,7 @@ export function AcademicInfoPanel() {
   }, [offerings]);
 
   const formatCurrency = (amount: number | undefined) => {
-    if (!amount) return "—";
+    if (amount == null) return "—";
     return new Intl.NumberFormat("vi-VN", {
       style: "currency",
       currency: "VND",
@@ -361,7 +366,7 @@ export function AcademicInfoPanel() {
                       </TableCell>
                       <TableCell>
                         <span className="text-sm font-medium">
-                          {item.annual_admission_quota || "—"}
+                          {item.annual_admission_quota ?? "—"}
                         </span>
                       </TableCell>
                       <TableCell>
@@ -483,7 +488,7 @@ export function AcademicInfoPanel() {
                   type="number"
                   value={formData.academic_year || ""}
                   onChange={(e) =>
-                    setFormData({ ...formData, academic_year: parseInt(e.target.value) })
+                    setFormData({ ...formData, academic_year: e.target.value ? parseInt(e.target.value) : 0 })
                   }
                   placeholder="vd: 2024"
                   min={2000}
@@ -509,7 +514,7 @@ export function AcademicInfoPanel() {
                   onChange={(e) =>
                     setFormData({
                       ...formData,
-                      tuition_fee_per_year: parseInt(e.target.value),
+                      tuition_fee_per_year: e.target.value ? parseInt(e.target.value) : undefined,
                     })
                   }
                   placeholder="e.g., 25000000"
@@ -531,7 +536,7 @@ export function AcademicInfoPanel() {
                   onChange={(e) =>
                     setFormData({
                       ...formData,
-                      annual_admission_quota: parseInt(e.target.value),
+                      annual_admission_quota: e.target.value ? parseInt(e.target.value) : undefined,
                     })
                   }
                   placeholder="e.g., 100"

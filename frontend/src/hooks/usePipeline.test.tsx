@@ -17,7 +17,6 @@ import {
   useCreateConsultationStatus,
   useUpdateConsultationStatus,
   useDeleteConsultationStatus,
-  useMoveLeadToStage,
   useRevertLeadStatus,
 } from "./usePipeline";
 import type {
@@ -325,78 +324,6 @@ describe("usePipeline Hook", () => {
   });
 
   describe("Mutations - Pipeline Operations", () => {
-    describe("useMoveLeadToStage", () => {
-      it("should move a lead to a different stage", async () => {
-        server.use(
-          http.put(`${API_BASE_URL}/api/leads/:id`, async () => {
-            return HttpResponse.json({
-              id: 1,
-              full_name: "Test Lead",
-              email: "test@example.com",
-              phone: "0909999999",
-              source: "website",
-              status: "contacted",
-              lead_score: 60,
-              unit_id: 1,
-              pipeline_stage_id: "contacted",
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            } as Lead);
-          })
-        );
-
-        const { result } = renderHook(() => useMoveLeadToStage(), {
-          wrapper: createWrapper(),
-        });
-
-        result.current.mutate({
-          lead_id: 1,
-          from_stage_id: "new_lead",
-          to_stage_id: "contacted",
-          reason: "Called and spoke with prospect",
-        });
-
-        await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-        expect(result.current.data).toBeDefined();
-        expect(result.current.data?.pipeline_stage_id).toBe("contacted");
-      });
-
-      it("should handle moving lead without from_stage_id", async () => {
-        server.use(
-          http.put(`${API_BASE_URL}/api/leads/:id`, async () => {
-            return HttpResponse.json({
-              id: 1,
-              full_name: "Test Lead",
-              email: "test@example.com",
-              phone: "0909999999",
-              source: "website",
-              status: "contacted",
-              lead_score: 60,
-              unit_id: 1,
-              pipeline_stage_id: "contacted",
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            } as Lead);
-          })
-        );
-
-        const { result } = renderHook(() => useMoveLeadToStage(), {
-          wrapper: createWrapper(),
-        });
-
-        result.current.mutate({
-          lead_id: 1,
-          from_stage_id: "new_lead",
-          to_stage_id: "contacted",
-        });
-
-        await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-        expect(result.current.data).toBeDefined();
-      });
-    });
-
     describe("useRevertLeadStatus", () => {
       it("should revert a lead to a previous stage", async () => {
         server.use(

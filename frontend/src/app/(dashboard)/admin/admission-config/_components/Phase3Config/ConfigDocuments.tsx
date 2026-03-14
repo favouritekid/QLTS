@@ -14,6 +14,7 @@ import { useUpdatePathDocuments, usePathDocuments } from "@/hooks/admissions/use
 import { useDocumentTypes } from "@/hooks/admissions/useMasterData";
 import { AdmissionPathResponse } from "@/lib/zod/admission-path";
 import type { DocumentType } from "../shared/types";
+import type { PydanticValidationError } from "@/types/api.types";
 
 interface ConfigDocumentsProps {
   path: AdmissionPathResponse;
@@ -73,16 +74,15 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
     if (checked) {
       // Add new or restore from initial
       const existing = initialSelections[typeId];
-      setModifications(prev => ({
-        ...prev,
-        [typeId]: existing ?? {
-          document_type_id: typeId,
-          is_mandatory: true,
-          requires_upload: true,
-          submission_format: null,
-          display_order: Object.keys(selections).length + 1
+      setModifications(prev => {
+        if (existing) {
+          // Re-enable: remove the null marker (restore from initial)
+          const { [typeId]: _, ...rest } = prev;
+          return rest;
         }
-      }));
+        const activeCount = Object.keys(initialSelections).length + Object.values(prev).filter(v => v !== null).length;
+        return { ...prev, [typeId]: { document_type_id: typeId, is_mandatory: true, requires_upload: true, submission_format: null, display_order: activeCount + 1 } };
+      });
     } else {
       // Mark as removed
       setModifications(prev => ({
@@ -108,9 +108,15 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
   const handleSave = async () => {
     const selectedCount = Object.keys(selections).length;
 
-    // Validation - at least one document should be selected
+    // Validation - at least one document should be selected (runs BEFORE dirty-check)
     if (selectedCount === 0) {
       toast.warning("Vui lòng chọn ít nhất một loại hồ sơ");
+      return;
+    }
+
+    // BUG-13: Skip API call if no modifications were made (avoids unnecessary fork/detachment)
+    if (Object.keys(modifications).length === 0) {
+      onFinish();
       return;
     }
 
@@ -136,8 +142,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
       let errorMessage = "Lưu thất bại. Vui lòng thử lại.";
 
       if (Array.isArray(errorDetail)) {
-        interface ValidationError { loc?: string[]; msg?: string }
-        errorMessage = errorDetail.map((e: ValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
+        errorMessage = errorDetail.map((e: PydanticValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
       } else if (typeof errorDetail === "string") {
         errorMessage = errorDetail;
       }

@@ -20,6 +20,8 @@ import {
   Trophy
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { format, parseISO } from "date-fns";
+import { vi } from "date-fns/locale";
 import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import { useWeeklyLeaderboard } from "@/hooks/officer/useWeeklyLeaderboard";
 
@@ -75,8 +77,8 @@ const getRankTrendIndicator = (rankChange: number | null | undefined) => {
   );
 };
 
-const getRankBg = (rank: number, isCurrentUser: boolean) => {
-  if (isCurrentUser) return "bg-primary/10 border-primary/30";
+const getRankBg = (rank: number, isHighlighted: boolean) => {
+  if (isHighlighted) return "bg-primary/10 border-primary/30";
   switch (rank) {
     case 1:
       return "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800";
@@ -137,12 +139,19 @@ export function WeeklyLeaderboard({ scope, unitId, officerId }: WeeklyLeaderboar
     return null;
   }
 
-  // Format date range for display
+  // Format date range for display (YYYY-MM-DD → dd/MM/yyyy vi-VN)
   const formatDateRange = () => {
-    if (data.week_end && data.week_start !== data.week_end) {
-      return `${data.week_start} → ${data.week_end}`;
+    try {
+      const startFormatted = format(parseISO(data.week_start), "dd/MM/yyyy", { locale: vi });
+      if (data.week_end && data.week_start !== data.week_end) {
+        const endFormatted = format(parseISO(data.week_end), "dd/MM/yyyy", { locale: vi });
+        return `${startFormatted} → ${endFormatted}`;
+      }
+      return startFormatted;
+    } catch {
+      // Graceful fallback if parse fails
+      return data.week_end ? `${data.week_start} → ${data.week_end}` : data.week_start;
     }
-    return data.week_start;
   };
 
   return (
@@ -182,36 +191,41 @@ export function WeeklyLeaderboard({ scope, unitId, officerId }: WeeklyLeaderboar
                 <div
                   className={cn(
                     "flex items-center gap-3 p-2.5 rounded-lg border transition-colors",
-                    getRankBg(entry.rank, entry.is_current_user)
+                    getRankBg(entry.rank, entry.is_current_user || !!entry.is_focus_officer)
                   )}
                 >
                   {/* Rank */}
                   <div className="w-6 flex items-center justify-center">
                     {getRankIcon(entry.rank)}
                   </div>
-                  
+
                   {/* Avatar placeholder - Fix: Handle empty full_name */}
                   <div className={cn(
                     "h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium",
-                    entry.is_current_user
+                    (entry.is_current_user || entry.is_focus_officer)
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted text-muted-foreground"
                   )}>
                     {(entry.full_name || entry.username || "??").slice(0, 2).toUpperCase()}
                   </div>
-                  
+
                   {/* Name */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className={cn(
                         "text-sm font-medium truncate",
-                        entry.is_current_user && "text-primary"
+                        (entry.is_current_user || entry.is_focus_officer) && "text-primary"
                       )}>
                         {entry.full_name}
                       </span>
                       {entry.is_current_user && (
                         <Badge variant="secondary" className="text-[10px] h-4 px-1">
                           Bạn
+                        </Badge>
+                      )}
+                      {entry.is_focus_officer && !entry.is_current_user && (
+                        <Badge variant="outline" className="text-[10px] h-4 px-1">
+                          Đang xem
                         </Badge>
                       )}
                     </div>

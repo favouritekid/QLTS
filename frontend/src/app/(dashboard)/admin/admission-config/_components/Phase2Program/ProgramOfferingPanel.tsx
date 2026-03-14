@@ -13,6 +13,7 @@
 "use client";
 
 import { BookOpen } from "lucide-react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -124,6 +125,10 @@ export function ProgramOfferingPanel() {
 
   const handleCreate = async (formData: ProgramOfferingFormValues) => {
     const ofFormData = formData;
+
+    if (!ofFormData.program_id) { toast.error("Vui lòng chọn ngành đào tạo"); return; }
+    if (!ofFormData.offering_type_id) { toast.error("Vui lòng chọn hệ đào tạo"); return; }
+
     const offeringType = offeringTypes.find((t: OfferingType) => t.id === ofFormData.offering_type_id);
     if (!offeringType) {
       throw new Error("Please select a valid offering type");
@@ -132,6 +137,7 @@ export function ProgramOfferingPanel() {
     const payload: ProgramOfferingCreate = {
       program_id: ofFormData.program_id || 0,
       offering_type_id: ofFormData.offering_type_id || 0,
+      offering_type: offeringType.name,
       duration_semesters: ofFormData.duration_semesters,
       total_credits: ofFormData.total_credits,
       is_active: ofFormData.is_active !== undefined ? ofFormData.is_active : true,
@@ -161,7 +167,7 @@ export function ProgramOfferingPanel() {
     _item: ProgramOffering | null,
     formData: ProgramOfferingFormValues,
     setFormData: (data: ProgramOfferingFormValues) => void,
-    _isEdit: boolean
+    isEdit: boolean
   ) => {
     const ofFormData = formData;
     
@@ -183,6 +189,7 @@ export function ProgramOfferingPanel() {
           <Select
             value={ofFormData.program_id?.toString() || ""}
             onValueChange={(value) => updateForm({ program_id: parseInt(value) })}
+            disabled={isEdit}
           >
             <SelectTrigger id="program_id">
               <SelectValue placeholder="Chọn ngành đào tạo" />
@@ -212,6 +219,7 @@ export function ProgramOfferingPanel() {
           <Select
             value={ofFormData.offering_type_id?.toString() || ""}
             onValueChange={(value) => updateForm({ offering_type_id: parseInt(value) })}
+            disabled={isEdit}
           >
             <SelectTrigger id="offering_type_id">
               <SelectValue placeholder="Chọn hệ đào tạo" />

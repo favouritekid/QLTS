@@ -5,7 +5,9 @@ import type { Config } from "tailwindcss";
 import animatePlugin from "tailwindcss-animate";
 
 const config: Config = {
-  // Content paths - explicit, no auto-detection
+  // Content paths - explicit, no auto-detection.
+  // Exclude tests/specs so Tailwind/Turbopack does not track files that
+  // are irrelevant to runtime CSS generation and may drift during watch sync.
   content: [
     "./src/app/**/*.{ts,tsx}",
     "./src/components/**/*.{ts,tsx}",
@@ -13,6 +15,8 @@ const config: Config = {
     "./src/hooks/**/*.{ts,tsx}",
     "./src/types/**/*.{ts,tsx}",
     "./src/constants/**/*.{ts,tsx}",
+    "!./src/**/*.test.{ts,tsx}",
+    "!./src/**/*.spec.{ts,tsx}",
   ],
 
   darkMode: ["class"],

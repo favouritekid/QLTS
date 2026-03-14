@@ -31,6 +31,8 @@ const STATUS_LABELS: Record<string, string> = {
   confirmed: "Đã xác nhận",
   enrolled: "Đã nhập học",
   overridden: "Đã override",
+  revision_requested: "Yêu cầu bổ sung",
+  withdrawn: "Đã rút hồ sơ",
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -42,6 +44,8 @@ const STATUS_COLORS: Record<string, string> = {
   confirmed: "emerald",
   enrolled: "blue",
   overridden: "purple",
+  revision_requested: "orange",
+  withdrawn: "gray",
 }
 
 // ============================================================================

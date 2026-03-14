@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { leadsApi } from "@/lib/api/leads"; // architecture-allow legacy
-import { getCollaborators } from "@/lib/api/collaborators";
+import { getCollaborators, getCollaborator } from "@/lib/api/collaborators";
 
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
@@ -236,8 +236,16 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
     },
   });
 
-  // State for CTV referrer popover
+  // State for CTV referrer popover + server-side search
   const [ctvPopoverOpen, setCtvPopoverOpen] = useState(false);
+  const [ctvSearch, setCtvSearch] = useState("");
+  const [ctvSearchDebounced, setCtvSearchDebounced] = useState("");
+
+  // Debounce CTV search input
+  useEffect(() => {
+    const timer = setTimeout(() => setCtvSearchDebounced(ctvSearch), 300);
+    return () => clearTimeout(timer);
+  }, [ctvSearch]);
 
   // Watch values for conditional rendering
   const selectedUnitId = form.watch("unit_id");
@@ -291,20 +299,32 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
       (u) => u.availability_status === "available" || u.availability_status === undefined
     ) || [];
 
-  // Fetch CTV list when source = "referral"
+  // Fetch CTV list when source = "referral" — server-side search
   const { data: ctvData, isLoading: isLoadingCtv } = useQuery({
-    queryKey: ["collaborators-for-referrer"],
-    queryFn: () => getCollaborators({ status: "active", limit: 100 }),
+    queryKey: ["collaborators-for-referrer", ctvSearchDebounced],
+    queryFn: () => getCollaborators({ status: "active", limit: 20, search: ctvSearchDebounced || undefined }),
     enabled: selectedSource === "referral",
     staleTime: 30000,
   });
 
   const availableCtv = ctvData?.collaborators || [];
 
-  // Clear referrer_id when source changes away from "referral"
+  // Fetch detail for selected CTV (edit mode: selected CTV may not be in search results)
+  const selectedReferrerId = form.watch("referrer_id");
+  const selectedCtvInList = availableCtv.find((c) => c.id === selectedReferrerId);
+  const { data: selectedCtvDetail } = useQuery({
+    queryKey: ["collaborator-detail", selectedReferrerId],
+    queryFn: () => getCollaborator(selectedReferrerId!),
+    enabled: !!selectedReferrerId && !selectedCtvInList && selectedSource === "referral",
+    staleTime: 60000,
+  });
+
+  // Clear referrer_id and search when source changes away from "referral"
   useEffect(() => {
     if (selectedSource !== "referral") {
       form.setValue("referrer_id", null);
+      setCtvSearch("");
+      setCtvSearchDebounced("");
     }
   }, [selectedSource, form]);
 
@@ -565,7 +585,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                   control={form.control}
                   name="referrer_id"
                   render={({ field }) => {
-                    const selectedCtv = availableCtv.find((c) => c.id === field.value);
+                    const selectedCtv = availableCtv.find((c) => c.id === field.value)
+                      || (selectedCtvDetail?.id === field.value ? selectedCtvDetail : undefined);
                     return (
                       <FormItem className="flex flex-col">
                         <FormLabel>
@@ -594,8 +615,12 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                             </FormControl>
                           </PopoverTrigger>
                           <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-                            <Command>
-                              <CommandInput placeholder="Tìm theo tên, SĐT, mã CTV…" />
+                            <Command shouldFilter={false}>
+                              <CommandInput
+                                placeholder="Tìm theo tên, SĐT, mã CTV…"
+                                value={ctvSearch}
+                                onValueChange={setCtvSearch}
+                              />
                               <CommandList>
                                 <CommandEmpty>
                                   {isLoadingCtv ? "Đang tải…" : "Không tìm thấy CTV"}
@@ -912,7 +937,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                               step="0.01"
                               min="0"
                               max="10"
-                              placeholder="3.5"
+                              placeholder="7.5"
                               {...field}
                               value={field.value ?? ""}
                               onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}

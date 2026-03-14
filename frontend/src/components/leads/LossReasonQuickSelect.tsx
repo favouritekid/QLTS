@@ -16,27 +16,14 @@ import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { AlertCircle } from "lucide-react";
+import { LOSS_REASONS as FALLBACK_LOSS_REASONS, getLossReasonLabel } from "@/lib/loss-reasons";
+import { useLossReasons } from "@/hooks/usePipeline";
+import type { LossReason } from "@/lib/loss-reasons";
 
-// =============================================================================
-// LOSS REASON DEFINITIONS
-// =============================================================================
-
-export interface LossReason {
-  code: string;
-  label: string;
-  icon: string;
-  category: "price" | "logistics" | "competitor" | "contact" | "timing" | "quality" | "financial" | "other";
-  isRecoverable: boolean;
-}
-
-export const LOSS_REASONS: LossReason[] = [
-  { code: "PRICE_HIGH", label: "Học phí", icon: "💰", category: "price", isRecoverable: true },
-  { code: "LOCATION_FAR", label: "Xa nhà", icon: "📍", category: "logistics", isRecoverable: true },
-  { code: "CHOSE_COMPETITOR", label: "Trường khác", icon: "🎓", category: "competitor", isRecoverable: false },
-  { code: "NO_CONTACT", label: "K.liên lạc", icon: "📞", category: "contact", isRecoverable: true },
-  { code: "TIMING_BAD", label: "Chưa sẵn sàng", icon: "⏰", category: "timing", isRecoverable: true },
-  { code: "OTHER", label: "Khác", icon: "❓", category: "other", isRecoverable: true },
-];
+// Re-export for backward compatibility (other components import from here)
+export type { LossReason } from "@/lib/loss-reasons";
+export { getLossReasonLabel } from "@/lib/loss-reasons";
+export const LOSS_REASONS = FALLBACK_LOSS_REASONS;
 
 // =============================================================================
 // COMPONENT
@@ -74,6 +61,8 @@ export function LossReasonQuickSelect({
   disabled = false,
   className,
 }: LossReasonQuickSelectProps) {
+  const { data: apiLossReasons } = useLossReasons();
+  const lossReasons = apiLossReasons ?? FALLBACK_LOSS_REASONS;
   const [localNote, setLocalNote] = useState(note);
 
   // Sync localNote when parent resets note prop (e.g., switching between statuses)
@@ -109,7 +98,7 @@ export function LossReasonQuickSelect({
 
       {/* Quick-select buttons grid */}
       <div className="grid grid-cols-3 gap-2">
-        {LOSS_REASONS.map((reason) => {
+        {lossReasons.map((reason) => {
           const isSelected = value === reason.code;
 
           return (
@@ -190,16 +179,6 @@ export function requiresLossReason(status: {
 } | null | undefined): boolean {
   if (!status) return false;
   return status.is_final === true && status.outcome_type === "negative";
-}
-
-// =============================================================================
-// HELPER: Get loss reason label by code
-// =============================================================================
-
-export function getLossReasonLabel(code: string | null | undefined): string {
-  if (!code) return "";
-  const reason = LOSS_REASONS.find((r) => r.code === code);
-  return reason ? `${reason.icon} ${reason.label}` : code;
 }
 
 export default LossReasonQuickSelect;

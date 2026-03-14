@@ -17,9 +17,10 @@ import {
   Clock,
   ShieldCheck,
   Target,
+  Info,
   type LucideIcon,
 } from "lucide-react";
-import { KPICard } from "./KPICard";
+import { KPICard, isTargetMet } from "./KPICard";
 import { Card } from "@/components/ui/card";
 import {
   Tooltip,
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useDashboardDate, DATE_PRESET_LABELS } from "@/contexts/DashboardDateContext";
+import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
 
 interface TrendInfo {
   value: number;
@@ -49,11 +51,17 @@ interface KPIStats {
   new_lead_conversion_rate_trend?: TrendInfo | null;
   avg_response_time: number;
   avg_response_time_trend: TrendInfo;
+  avg_response_time_target?: number | null;
   sla_compliance_rate: number;
   sla_compliance_rate_trend?: TrendInfo | null;
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
   consultations_avg_per_day?: number;
+  // Gap 1: Rate metric targets (null when not comparable)
+  win_rate_target?: number | null;
+  new_lead_conversion_rate_target?: number | null;
+  sla_compliance_rate_target?: number | null;
+  consultation_effectiveness_target?: number | null;
   // Phase D: Daily Quality KPIs
   verified_consultations_daily?: number;
   quality_rate_daily?: number | null;
@@ -98,9 +106,19 @@ interface StatItemProps {
   trend?: TrendInfo | null;
   inverseTrend?: boolean;
   onClick?: () => void;
+  /** Target value for comparison. Null = don't show. */
+  target?: number | null;
+  /** Raw numeric actual for target comparison. */
+  actualValue?: number;
+  /** Unit suffix for target display (default: "%") */
+  targetUnit?: string;
+  /** If true, actual >= target is good. Default: true */
+  higherIsBetter?: boolean;
+  /** If true, this metric is non-comparable (trend-only, no meaningful target). */
+  trendOnly?: boolean;
 }
 
-function StatItem({ icon: Icon, label, value, tooltip, trend, inverseTrend = false, onClick }: StatItemProps) {
+function StatItem({ icon: Icon, label, value, tooltip, trend, inverseTrend = false, onClick, target, actualValue, targetUnit = "%", higherIsBetter = true, trendOnly = false }: StatItemProps) {
   const TrendIcon =
     trend?.direction === "up"
       ? TrendingUp
@@ -137,6 +155,22 @@ function StatItem({ icon: Icon, label, value, tooltip, trend, inverseTrend = fal
             </span>
           )}
         </div>
+        {target != null && (
+          <p className={cn(
+            "text-[11px] mt-0.5",
+            isTargetMet(actualValue ?? parseFloat(value), target, higherIsBetter)
+              ? "text-success-600 dark:text-success-500"
+              : "text-warning-600 dark:text-warning-500",
+          )}>
+            Mục tiêu: {fmtPct(target)}{targetUnit}
+          </p>
+        )}
+        {trendOnly && target == null && (
+          <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-0.5">
+            <Info className="h-2.5 w-2.5" />
+            Xu hướng
+          </p>
+        )}
       </div>
     </div>
   );
@@ -193,10 +227,25 @@ const TOOLTIPS = {
 
 export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   const router = useRouter();
-  const { preset, dateRange } = useDashboardDate();
+  const { preset, dateRange, startDate, endDate } = useDashboardDate();
+  const { canShowTarget } = useKpiCatalog();
 
   const periodLabel = DATE_PRESET_LABELS[preset] || preset;
+
+  // Deep-link helpers: navigate to leads page with contextual filters
+  const buildLeadsUrl = (extra: Record<string, string> = {}) => {
+    const params: Record<string, string> = {};
+    if (startDate) params.from = startDate;
+    if (endDate) params.to = endDate;
+    Object.assign(params, extra);
+    const qs = new URLSearchParams(params).toString();
+    return qs ? `/leads?${qs}` : "/leads";
+  };
   const goToLeads = () => router.push("/leads");
+  const goConsultations = () => router.push(buildLeadsUrl({ date_field: "last_consultation_at" }));
+  const goActiveLeads = () => router.push(buildLeadsUrl({ status: "new,assigned,contacted,qualified" }));
+  const goWinRate = () => router.push(buildLeadsUrl({ status: "converted,unqualified,rejected" }));
+  const goConversion = () => router.push(buildLeadsUrl({ sort_by: "created_at", order: "desc" }));
 
   // Detect if today falls within the selected date range
   const today = new Date();
@@ -213,6 +262,16 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
     : fmtPct(kpis.consultations_avg_per_day ?? 0);
   const consultationsSubtitle = todayInRange ? "Mục tiêu hàng ngày" : periodLabel;
 
+  // Gap 1: Build dashboard range for catalog canShowTarget() comparison policy
+  const dashboardRange = dateRange?.from && dateRange?.to
+    ? { start: dateRange.from, end: dateRange.to }
+    : undefined;
+
+  // Gap 1: Use catalog comparison policy to gate target display
+  const winRateTarget = canShowTarget("win_rate", dashboardRange) ? kpis.win_rate_target : null;
+  const slaTarget = canShowTarget("sla_compliance_rate", dashboardRange) ? kpis.sla_compliance_rate_target : null;
+  const responseTimeTarget = canShowTarget("response_time_hours", dashboardRange) ? kpis.avg_response_time_target : null;
+
   return (
     <TooltipProvider delayDuration={300}>
       <div className="space-y-3">
@@ -226,9 +285,9 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               tooltip={TOOLTIPS.consultations}
               trend={kpis.consultations_trend}
               icon={Phone}
-              onClick={goToLeads}
+              onClick={goConsultations}
             />
-            {kpis.is_unit_target && (
+            {kpis.is_unit_target && todayInRange && (
               <span className="absolute bottom-1.5 left-3 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                 Chỉ tiêu tập thể phòng
               </span>
@@ -242,7 +301,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
             tooltip={TOOLTIPS.activeLeads}
             trend={kpis.active_leads_trend}
             icon={Users}
-            onClick={goToLeads}
+            onClick={goActiveLeads}
           />
 
           <KPICard
@@ -252,7 +311,9 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
             tooltip={TOOLTIPS.winRate}
             trend={kpis.win_rate_trend ?? undefined}
             icon={TrendingUp}
-            onClick={goToLeads}
+            onClick={goWinRate}
+            target={winRateTarget}
+            actualValue={kpis.win_rate}
           />
 
           <KPICard
@@ -262,7 +323,8 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
             tooltip={TOOLTIPS.conversion}
             trend={kpis.new_lead_conversion_rate_trend ?? undefined}
             icon={TrendingUp}
-            onClick={goToLeads}
+            onClick={goConversion}
+            trendOnly={true}
           />
         </div>
 
@@ -275,7 +337,9 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               value={`${fmtPct(kpis.sla_compliance_rate)}%`}
               tooltip={TOOLTIPS.sla}
               trend={kpis.sla_compliance_rate_trend}
-              onClick={goToLeads}
+              onClick={() => router.push(buildLeadsUrl())}
+              target={slaTarget}
+              actualValue={kpis.sla_compliance_rate}
             />
             <StatItem
               icon={Target}
@@ -283,7 +347,8 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               value={`${fmtPct(kpis.consultation_effectiveness)}%`}
               tooltip={TOOLTIPS.effectiveness}
               trend={kpis.consultation_effectiveness_trend}
-              onClick={goToLeads}
+              onClick={() => router.push(buildLeadsUrl())}
+              trendOnly={true}
             />
             <StatItem
               icon={Clock}
@@ -292,52 +357,84 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               tooltip={TOOLTIPS.responseTime}
               trend={kpis.avg_response_time_trend}
               inverseTrend={true}
-              onClick={goToLeads}
+              onClick={() => router.push(buildLeadsUrl())}
+              target={responseTimeTarget}
+              actualValue={kpis.avg_response_time}
+              targetUnit="h"
+              higherIsBetter={false}
             />
           </div>
         </Card>
 
-        {/* Tier 3: Daily Quality KPIs (Phase D) */}
-        <Card className="border bg-card">
-          <div className="px-4 py-2 border-b">
-            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Chất lượng tư vấn hôm nay
-            </h4>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-border">
-            <StatItem
-              icon={Target}
-              label="TV hợp lệ"
-              value={String(kpis.verified_consultations_daily ?? 0)}
-              tooltip="Số lead DISTINCT được tư vấn hợp lệ trong ngày (loại system, có pipeline update)"
-            />
-            <StatItem
-              icon={ShieldCheck}
-              label="Tỷ lệ chất lượng"
-              value={kpis.quality_rate_daily != null ? `${fmtPct(kpis.quality_rate_daily)}%` : "N/A"}
-              tooltip="TV hợp lệ / Tổng TV hôm nay × 100"
-            />
-            <StatItem
-              icon={Phone}
-              label="Cam kết follow-up"
-              value={kpis.followup_commitment_rate != null ? `${fmtPct(kpis.followup_commitment_rate)}%` : "N/A"}
-              tooltip="% tư vấn non-final có hẹn lịch follow-up"
-            />
-            <StatItem
-              icon={TrendingUp}
-              label="Tiến triển D+7"
-              value={kpis.progress_rate_d7 != null ? `${fmtPct(kpis.progress_rate_d7)}%` : "N/A"}
-              tooltip={`Tỷ lệ lead tiến triển trong 7 ngày${kpis.progress_rate_d7_date ? ` (dữ liệu ngày ${kpis.progress_rate_d7_date})` : ""}`}
-            />
-            <StatItem
-              icon={TrendingDown}
-              label="Tụt hạng D+3"
-              value={kpis.rollback_rate_d3 != null ? `${fmtPct(kpis.rollback_rate_d3)}%` : "N/A"}
-              tooltip={`Tỷ lệ lead tụt trạng thái trong 3 ngày${kpis.rollback_rate_d3_date ? ` (dữ liệu ngày ${kpis.rollback_rate_d3_date})` : ""}`}
-              inverseTrend={true}
-            />
-          </div>
-        </Card>
+        {/* Tier 3: Daily Quality KPIs (Phase D) — split into realtime + lagged */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Card 1: Realtime quality metrics */}
+          <Card className="border bg-card">
+            <div className="px-4 py-2 border-b">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Chất lượng hôm nay
+              </h4>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-border">
+              <StatItem
+                icon={Target}
+                label="TV hợp lệ"
+                value={String(kpis.verified_consultations_daily ?? 0)}
+                tooltip="Số lead DISTINCT được tư vấn hợp lệ trong ngày (loại system, có pipeline update)"
+              />
+              <StatItem
+                icon={ShieldCheck}
+                label="Tỷ lệ chất lượng"
+                value={kpis.quality_rate_daily != null ? `${fmtPct(kpis.quality_rate_daily)}%` : "N/A"}
+                tooltip="TV hợp lệ / Tổng TV hôm nay × 100"
+              />
+              <StatItem
+                icon={Phone}
+                label="Cam kết follow-up"
+                value={kpis.followup_commitment_rate != null ? `${fmtPct(kpis.followup_commitment_rate)}%` : "N/A"}
+                tooltip="% tư vấn non-final có hẹn lịch follow-up"
+              />
+            </div>
+          </Card>
+
+          {/* Card 2: Lagged metrics with data dates */}
+          <Card className="border bg-card">
+            <div className="px-4 py-2 border-b">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Kết quả trễ / hậu kiểm
+              </h4>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-border">
+              <div>
+                <StatItem
+                  icon={TrendingUp}
+                  label="Tiến triển D+7"
+                  value={kpis.progress_rate_d7 != null ? `${fmtPct(kpis.progress_rate_d7)}%` : "N/A"}
+                  tooltip={`Tỷ lệ lead tiến triển trong 7 ngày${kpis.progress_rate_d7_date ? ` (dữ liệu ngày ${kpis.progress_rate_d7_date})` : ""}`}
+                />
+                {kpis.progress_rate_d7_date && (
+                  <p className="text-[10px] text-muted-foreground text-center mt-[-4px] pb-1">
+                    DL: {kpis.progress_rate_d7_date.slice(8, 10)}/{kpis.progress_rate_d7_date.slice(5, 7)}
+                  </p>
+                )}
+              </div>
+              <div>
+                <StatItem
+                  icon={TrendingDown}
+                  label="Tụt hạng D+3"
+                  value={kpis.rollback_rate_d3 != null ? `${fmtPct(kpis.rollback_rate_d3)}%` : "N/A"}
+                  tooltip={`Tỷ lệ lead tụt trạng thái trong 3 ngày${kpis.rollback_rate_d3_date ? ` (dữ liệu ngày ${kpis.rollback_rate_d3_date})` : ""}`}
+                  inverseTrend={true}
+                />
+                {kpis.rollback_rate_d3_date && (
+                  <p className="text-[10px] text-muted-foreground text-center mt-[-4px] pb-1">
+                    DL: {kpis.rollback_rate_d3_date.slice(8, 10)}/{kpis.rollback_rate_d3_date.slice(5, 7)}
+                  </p>
+                )}
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
     </TooltipProvider>
   );

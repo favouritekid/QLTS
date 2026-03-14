@@ -14,12 +14,14 @@ import type {
   AssignLead,
   BulkAssignLeads,
   BulkAssignResult,
+  BulkUpdateStageResult,
   LeadAction,
   LeadImportResult,
   TimelineItem,
   LeadInsights,
   Consultation,
   ConsultationCreate,
+  ConsultationCreateResult,
   ConsultationUpdate,
 } from "@/types/lead.types";
 
@@ -550,7 +552,7 @@ export function useBulkUpdateLeadsStage() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    { message: string; updated_count: number },
+    BulkUpdateStageResult,
     AxiosError<ApiErrorResponse>,
     { lead_ids: number[]; pipeline_stage_id: string }
   >({
@@ -716,7 +718,7 @@ export function useAddConsultation() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    Consultation,
+    ConsultationCreateResult,
     AxiosError<ApiErrorResponse>,
     { leadId: number; data: ConsultationCreate }
   >({
@@ -724,8 +726,13 @@ export function useAddConsultation() {
       return await leadsApi.addConsultation(leadId, data);
     },
 
-    onSuccess: async (_consultation, { leadId }) => {
+    onSuccess: async (result, { leadId }) => {
       toast.success("Ghi nhận tư vấn thành công!");
+
+      // ✅ PR4: Warn when soft-terminal guard blocked status update
+      if (!result.status_updated && result.terminal_guard_reason) {
+        toast.warning(result.terminal_guard_reason, { duration: 6000 });
+      }
 
       // ✅ FIX: Invalidate queries with exact: true to prevent cascade
       // Using invalidateQueries instead of refetchQueries to let React Query

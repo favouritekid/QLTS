@@ -792,46 +792,34 @@ class LeadRepository(BaseRepository[models.Lead]):
 
     async def check_batch_phone_conflict(self, phones: list[str]) -> set[str]:
         """
-        Check which phones in the provided list already exist in DB.
-        Checks both phone and phone2 columns.
-        
+        Check which normalized phones in the provided list already exist in DB.
+        Queries the lead_phone_identity table (canonical source of truth)
+        instead of raw lead.phone/lead.phone2 columns.
+
         Args:
-            phones: List of phone numbers to check
-            
+            phones: List of normalized phone numbers to check
+
         Returns:
-            Set of phone numbers that already exist
+            Set of normalized phone numbers that already exist (active)
         """
         if not phones:
             return set()
-            
+
         # Filter out empty strings and duplicates from input
         valid_phones = {p for p in phones if p}
         if not valid_phones:
             return set()
-            
+
         query = (
-            select(models.Lead.phone, models.Lead.phone2)
+            select(models.LeadPhoneIdentity.phone_normalized)
             .where(
-                models.Lead.deleted_at.is_(None),
-                or_(
-                    models.Lead.phone.in_(valid_phones),
-                    models.Lead.phone2.in_(valid_phones)
-                )
+                models.LeadPhoneIdentity.deleted_at.is_(None),
+                models.LeadPhoneIdentity.phone_normalized.in_(valid_phones),
             )
         )
-        
+
         result = await self.db.execute(query)
-        rows = result.all()
-        
-        existing_phones = set()
-        for row in rows:
-            p1, p2 = row
-            if p1 in valid_phones:
-                existing_phones.add(p1)
-            if p2 in valid_phones:
-                existing_phones.add(p2)
-                
-        return existing_phones
+        return {row[0] for row in result.all()}
 
     async def check_email_conflict(
         self,
@@ -866,35 +854,36 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def check_batch_email_conflict(self, emails: list[str]) -> set[str]:
+    async def check_batch_email_conflict(
+        self, emails: list[str], unit_id: Optional[int] = None
+    ) -> set[str]:
         """
-        Check which emails in the provided list already exist in DB (Global check for now).
-        Note: If uniqueness is enforced per-unit, this might need unit_id context.
-        However, for bulk import, usually we want to know if it exists globally or we accept 
-        unit_id in the file. 
-        Current logic in service was: `existing_emails_in_db` (Global stream).
-        
+        Check which emails in the provided list already exist in DB.
+
         Args:
             emails: List of emails to check
-            
+            unit_id: If provided, only check within this unit (per-unit scope).
+                     If None, check globally (backward-compatible fallback).
+
         Returns:
-            Set of emails that already exist
+            Set of lowercased emails that already exist
         """
         if not emails:
             return set()
-            
+
         valid_emails = {e.lower() for e in emails if e}
         if not valid_emails:
             return set()
-            
-        query = (
-            select(models.Lead.email)
-            .where(
-                models.Lead.deleted_at.is_(None),
-                func.lower(models.Lead.email).in_(valid_emails)
-            )
-        )
-        
+
+        conditions = [
+            models.Lead.deleted_at.is_(None),
+            func.lower(models.Lead.email).in_(valid_emails),
+        ]
+        if unit_id is not None:
+            conditions.append(models.Lead.unit_id == unit_id)
+
+        query = select(models.Lead.email).where(*conditions)
+
         result = await self.db.execute(query)
         # Return lowercased emails for comparison
         return {row[0].lower() for row in result.all() if row[0]}
@@ -1360,4 +1349,115 @@ class LeadRepository(BaseRepository[models.Lead]):
             "converted_leads": converted,
         }
 
+    # =========================================================================
+    # PHONE IDENTITY METHODS (PR3: True Phone Identity Model)
+    # =========================================================================
+
+    async def register_phone_identities(
+        self,
+        lead_id: int,
+        phone: Optional[str],
+        phone2: Optional[str] = None,
+    ) -> None:
+        """
+        Insert phone identity rows for a lead.
+
+        Called after creating a lead. Inserts one row per non-null phone
+        into lead_phone_identity with deleted_at=NULL so the partial
+        unique index enforces system-wide uniqueness.
+
+        Args:
+            lead_id: Lead ID
+            phone: Primary phone (normalized)
+            phone2: Secondary phone (normalized, optional)
+        """
+        from app.utils.phone_helpers import normalize_vietnam_phone
+
+        for slot, raw_phone in [("phone", phone), ("phone2", phone2)]:
+            if not raw_phone:
+                continue
+            normalized = normalize_vietnam_phone(raw_phone) or raw_phone
+            identity = models.LeadPhoneIdentity(
+                lead_id=lead_id,
+                phone_normalized=normalized,
+                slot=slot,
+                deleted_at=None,
+            )
+            self.db.add(identity)
+
+    async def unregister_phone_identities(self, lead_id: int) -> None:
+        """
+        Soft-delete all phone identity rows for a lead.
+
+        Called when a lead is soft-deleted. Sets deleted_at on all
+        active identity rows so the partial unique index releases the
+        phone numbers for reuse.
+
+        Args:
+            lead_id: Lead ID
+        """
+        from sqlalchemy import update
+
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(models.LeadPhoneIdentity)
+            .where(
+                models.LeadPhoneIdentity.lead_id == lead_id,
+                models.LeadPhoneIdentity.deleted_at.is_(None),
+            )
+            .values(deleted_at=now)
+        )
+        await self.db.execute(stmt)
+
+    async def restore_phone_identities(self, lead_id: int) -> None:
+        """
+        Restore (un-soft-delete) phone identity rows for a lead.
+
+        Called when a lead is restored. Clears deleted_at so the partial
+        unique index re-enforces uniqueness. The caller must handle
+        IntegrityError if the phone is now taken by another lead.
+
+        Args:
+            lead_id: Lead ID
+        """
+        from sqlalchemy import update
+
+        stmt = (
+            update(models.LeadPhoneIdentity)
+            .where(
+                models.LeadPhoneIdentity.lead_id == lead_id,
+                models.LeadPhoneIdentity.deleted_at.isnot(None),
+            )
+            .values(deleted_at=None)
+        )
+        await self.db.execute(stmt)
+
+    async def update_phone_identities(
+        self,
+        lead_id: int,
+        phone: Optional[str],
+        phone2: Optional[str] = None,
+    ) -> None:
+        """
+        Replace all phone identity rows for a lead.
+
+        Called when phone or phone2 is updated. Hard-deletes existing
+        rows and inserts new ones so the partial unique index validates
+        the new values.
+
+        Args:
+            lead_id: Lead ID
+            phone: New primary phone (normalized)
+            phone2: New secondary phone (normalized, optional)
+        """
+        from sqlalchemy import delete
+
+        # Hard-delete old identity rows (they're an auxiliary index, not audit data)
+        stmt = delete(models.LeadPhoneIdentity).where(
+            models.LeadPhoneIdentity.lead_id == lead_id
+        )
+        await self.db.execute(stmt)
+
+        # Insert new identity rows
+        await self.register_phone_identities(lead_id, phone, phone2)
 
