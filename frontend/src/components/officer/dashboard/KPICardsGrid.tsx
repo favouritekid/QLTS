@@ -227,11 +227,25 @@ const TOOLTIPS = {
 
 export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   const router = useRouter();
-  const { preset, dateRange } = useDashboardDate();
+  const { preset, dateRange, startDate, endDate } = useDashboardDate();
   const { canShowTarget } = useKpiCatalog();
 
   const periodLabel = DATE_PRESET_LABELS[preset] || preset;
+
+  // Deep-link helpers: navigate to leads page with contextual filters
+  const buildLeadsUrl = (extra: Record<string, string> = {}) => {
+    const params: Record<string, string> = {};
+    if (startDate) params.from = startDate;
+    if (endDate) params.to = endDate;
+    Object.assign(params, extra);
+    const qs = new URLSearchParams(params).toString();
+    return qs ? `/leads?${qs}` : "/leads";
+  };
   const goToLeads = () => router.push("/leads");
+  const goConsultations = () => router.push(buildLeadsUrl({ date_field: "last_consultation_at" }));
+  const goActiveLeads = () => router.push(buildLeadsUrl({ status: "new,assigned,contacted,qualified" }));
+  const goWinRate = () => router.push(buildLeadsUrl({ status: "converted,unqualified,rejected" }));
+  const goConversion = () => router.push(buildLeadsUrl({ sort_by: "created_at", order: "desc" }));
 
   // Detect if today falls within the selected date range
   const today = new Date();
@@ -271,7 +285,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               tooltip={TOOLTIPS.consultations}
               trend={kpis.consultations_trend}
               icon={Phone}
-              onClick={goToLeads}
+              onClick={goConsultations}
             />
             {kpis.is_unit_target && todayInRange && (
               <span className="absolute bottom-1.5 left-3 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
@@ -287,7 +301,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
             tooltip={TOOLTIPS.activeLeads}
             trend={kpis.active_leads_trend}
             icon={Users}
-            onClick={goToLeads}
+            onClick={goActiveLeads}
           />
 
           <KPICard
@@ -297,7 +311,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
             tooltip={TOOLTIPS.winRate}
             trend={kpis.win_rate_trend ?? undefined}
             icon={TrendingUp}
-            onClick={goToLeads}
+            onClick={goWinRate}
             target={winRateTarget}
             actualValue={kpis.win_rate}
           />
@@ -309,7 +323,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
             tooltip={TOOLTIPS.conversion}
             trend={kpis.new_lead_conversion_rate_trend ?? undefined}
             icon={TrendingUp}
-            onClick={goToLeads}
+            onClick={goConversion}
             trendOnly={true}
           />
         </div>
@@ -323,7 +337,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               value={`${fmtPct(kpis.sla_compliance_rate)}%`}
               tooltip={TOOLTIPS.sla}
               trend={kpis.sla_compliance_rate_trend}
-              onClick={goToLeads}
+              onClick={() => router.push(buildLeadsUrl())}
               target={slaTarget}
               actualValue={kpis.sla_compliance_rate}
             />
@@ -333,7 +347,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               value={`${fmtPct(kpis.consultation_effectiveness)}%`}
               tooltip={TOOLTIPS.effectiveness}
               trend={kpis.consultation_effectiveness_trend}
-              onClick={goToLeads}
+              onClick={() => router.push(buildLeadsUrl())}
               trendOnly={true}
             />
             <StatItem
@@ -343,7 +357,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               tooltip={TOOLTIPS.responseTime}
               trend={kpis.avg_response_time_trend}
               inverseTrend={true}
-              onClick={goToLeads}
+              onClick={() => router.push(buildLeadsUrl())}
               target={responseTimeTarget}
               actualValue={kpis.avg_response_time}
               targetUnit="h"
