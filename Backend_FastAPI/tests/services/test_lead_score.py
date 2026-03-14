@@ -234,3 +234,59 @@ class TestStalePenaltyValidation:
             assert score == 35
         finally:
             patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_nan_stale_penalty_falls_back_to_default(self, mock_db):
+        """float('nan') → fallback to default (10), warning logged."""
+        patcher = _patch_repo(FakeScoringConfig({"stale_penalty": float("nan")}))
+        try:
+            with patch("app.services.lead_service.log") as mock_log:
+                score = await calculate_lead_score(
+                    mock_db,
+                    lead_education_level="bachelor",
+                    lead_source="website",
+                    unit_id=1,
+                    days_since_last_activity=30,
+                )
+                # 60 base - 10 (default fallback) = 50
+                assert score == 50
+                mock_log.warning.assert_called_once()
+                assert "non-finite" in mock_log.warning.call_args[0][0]
+        finally:
+            patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_nan_string_stale_penalty_falls_back_to_default(self, mock_db):
+        """String 'NaN' coerces to float nan → fallback to default."""
+        patcher = _patch_repo(FakeScoringConfig({"stale_penalty": "NaN"}))
+        try:
+            with patch("app.services.lead_service.log") as mock_log:
+                score = await calculate_lead_score(
+                    mock_db,
+                    lead_education_level="bachelor",
+                    lead_source="website",
+                    unit_id=1,
+                    days_since_last_activity=30,
+                )
+                assert score == 50
+                mock_log.warning.assert_called_once()
+        finally:
+            patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_inf_stale_penalty_falls_back_to_default(self, mock_db):
+        """float('inf') → fallback to default (10), warning logged."""
+        patcher = _patch_repo(FakeScoringConfig({"stale_penalty": float("inf")}))
+        try:
+            with patch("app.services.lead_service.log") as mock_log:
+                score = await calculate_lead_score(
+                    mock_db,
+                    lead_education_level="bachelor",
+                    lead_source="website",
+                    unit_id=1,
+                    days_since_last_activity=30,
+                )
+                assert score == 50
+                mock_log.warning.assert_called_once()
+        finally:
+            patcher.stop()

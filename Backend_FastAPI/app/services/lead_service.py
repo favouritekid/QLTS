@@ -394,10 +394,19 @@ async def calculate_lead_score(
             application_score = default_application_score
             stale_penalty = default_stale_penalty
 
-        # Sanitize stale_penalty: must be a non-negative number within [0, MAX]
+        # Sanitize stale_penalty: must be a finite non-negative number within [0, MAX]
         try:
+            import math
             stale_penalty = float(stale_penalty)
-            if stale_penalty < 0:
+            if not math.isfinite(stale_penalty):
+                log.warning(
+                    "stale_penalty is non-finite, falling back to default",
+                    raw_value=stale_penalty,
+                    fallback=default_stale_penalty,
+                    unit_id=unit_id,
+                )
+                stale_penalty = default_stale_penalty
+            elif stale_penalty < 0:
                 log.warning(
                     "stale_penalty is negative, falling back to default",
                     raw_value=stale_penalty,
