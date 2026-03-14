@@ -395,93 +395,91 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         </Alert>
       )}
 
-      {/* Row 1: Charts + Compact Info Cards */}
+      {/* Row 1: Actions + Operational (action-first, CRM pattern) */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
-        {/* Left — Analytics charts */}
-        <div className="grid gap-4 md:gap-6 md:grid-cols-2">
-          <PerformanceChart
-            trends={performanceTrends}
-            dailyGoal={stats.kpis.consultations_target}
-            teamAverage={scope === "personal" ? teamStats?.team_avg_consultations : undefined}
-            enrollmentPace={enrollmentPace}
-          />
-          {/* Funnel Visualization with View Toggle */}
-          <div className="space-y-2">
-            {/* View Mode Toggle */}
-            <div className="flex justify-end">
-              <div className="inline-flex items-center rounded-lg border bg-muted p-1 text-muted-foreground">
-                <button
-                  onClick={() => {
-                    setFunnelViewMode("chart");
-                    updateSearchParams({ funnel: null });
-                  }}
-                  className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                    funnelViewMode === "chart"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "hover:bg-background/50"
-                  }`}
-                >
-                  <BarChart3 className="h-4 w-4" />
-                  <span className="hidden sm:inline">Biểu đồ</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setFunnelViewMode("table");
-                    updateSearchParams({ funnel: "table" });
-                  }}
-                  className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                    funnelViewMode === "table"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "hover:bg-background/50"
-                  }`}
-                >
-                  <Table2 className="h-4 w-4" />
-                  <span className="hidden sm:inline">Bảng</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Funnel View */}
-            {funnelViewMode === "chart" ? (
-              <FunnelChart
-                funnel={salesFunnel}
-                netConversionTrend={funnelNetConversionTrend}
-                scope={scope}
-                unitId={selectedUnitId}
-                officerId={selectedOfficerId}
-                suggestions={funnelSuggestions}
-              />
-            ) : (
-              <FunnelTable
-                funnel={salesFunnel}
-                scope={scope}
-                unitId={selectedUnitId}
-                officerId={selectedOfficerId}
-                suggestions={funnelSuggestions}
-              />
-            )}
-          </div>
-        </div>
-
-        {/* Right — Compact info cards */}
-        <div className="space-y-4 md:space-y-6">
-          {(scope === "personal" || stats.annual_progress) && (
-            <AnnualProgressCard progress={stats.annual_progress} />
-          )}
+        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} officerId={selectedOfficerId} />
+        <div className="space-y-4">
           <WorkloadCard statusOverview={stats.status_overview} scope={scope} />
           <TodaySchedule scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
         </div>
       </div>
 
-      {/* Current Month Snapshot — quick glance before expanding full table */}
-      {shouldFetchKpiPlan && (
-        <CurrentMonthSnapshot
-          plan={kpiPlanQuery.data}
-          isLoading={kpiPlanQuery.isLoading}
+      {/* Row 2: Trend chart + Compact progress cards */}
+      <div className="grid gap-4 md:gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <PerformanceChart
+          trends={performanceTrends}
+          dailyGoal={stats.kpis.consultations_target}
+          teamAverage={scope === "personal" ? teamStats?.team_avg_consultations : undefined}
+          enrollmentPace={enrollmentPace}
         />
-      )}
+        <div className="space-y-4">
+          {(scope === "personal" || stats.annual_progress) && (
+            <AnnualProgressCard progress={stats.annual_progress} />
+          )}
+          {shouldFetchKpiPlan && (
+            <CurrentMonthSnapshot
+              plan={kpiPlanQuery.data}
+              isLoading={kpiPlanQuery.isLoading}
+            />
+          )}
+        </div>
+      </div>
 
-      {/* Gap 2: Monthly KPI Plan Breakdown (full-width, collapsed default) */}
+      {/* Row 3: Funnel (full-width — highest density component) */}
+      <div className="space-y-2">
+        <div className="flex justify-end">
+          <div className="inline-flex items-center rounded-lg border bg-muted p-1 text-muted-foreground">
+            <button
+              onClick={() => {
+                setFunnelViewMode("chart");
+                updateSearchParams({ funnel: null });
+              }}
+              className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                funnelViewMode === "chart"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "hover:bg-background/50"
+              }`}
+            >
+              <BarChart3 className="h-4 w-4" />
+              <span className="hidden sm:inline">Biểu đồ</span>
+            </button>
+            <button
+              onClick={() => {
+                setFunnelViewMode("table");
+                updateSearchParams({ funnel: "table" });
+              }}
+              className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                funnelViewMode === "table"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "hover:bg-background/50"
+              }`}
+            >
+              <Table2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Bảng</span>
+            </button>
+          </div>
+        </div>
+        {funnelViewMode === "chart" ? (
+          <FunnelChart
+            funnel={salesFunnel}
+            netConversionTrend={funnelNetConversionTrend}
+            scope={scope}
+            unitId={selectedUnitId}
+            officerId={selectedOfficerId}
+            suggestions={funnelSuggestions}
+          />
+        ) : (
+          <FunnelTable
+            funnel={salesFunnel}
+            scope={scope}
+            unitId={selectedUnitId}
+            officerId={selectedOfficerId}
+            suggestions={funnelSuggestions}
+          />
+        )}
+      </div>
+
+      {/* Row 4: Monthly KPI Plan (full-width, collapsed) */}
       {shouldFetchKpiPlan && (
         <>
           {kpiPlanQuery.error && !kpiPlanQuery.isLoading && (
@@ -507,13 +505,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         </>
       )}
 
-      {/* Row 2: Action Panels */}
-      <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
-        {/* Left — Action Insights (wider, more room for cards) */}
-        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} officerId={selectedOfficerId} />
-        {/* Right — Leaderboard */}
-        <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
-      </div>
+      {/* Row 5: Leaderboard (supplementary) */}
+      <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
     </div>
   );
 }
