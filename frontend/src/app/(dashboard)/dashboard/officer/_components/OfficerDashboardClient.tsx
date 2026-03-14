@@ -135,6 +135,11 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     () => getUrlParam("funnel") === "table" ? "table" : "chart"
   );
 
+  // Monthly breakdown expanded state — synced to URL
+  const [monthlyExpanded, setMonthlyExpanded] = useState<boolean>(
+    () => getUrlParam("monthly") === "expanded"
+  );
+
   // Restore filter state on browser back/forward.
   // URL is the source of truth: if a param is absent, reset to default.
   useEffect(() => {
@@ -151,6 +156,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       const rawOfficer = getUrlParam("officer");
       setSelectedOfficerId(rawOfficer ? parseInt(rawOfficer, 10) || null : null);
       setFunnelViewMode(getUrlParam("funnel") === "table" ? "table" : "chart");
+      setMonthlyExpanded(getUrlParam("monthly") === "expanded");
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
@@ -461,6 +467,11 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
           <MonthlyBreakdownCard
             plan={kpiPlanQuery.data}
             isLoading={kpiPlanQuery.isLoading}
+            expanded={monthlyExpanded}
+            onExpandedChange={(v) => {
+              setMonthlyExpanded(v);
+              updateSearchParams({ monthly: v ? "expanded" : null });
+            }}
           />
         </>
       )}

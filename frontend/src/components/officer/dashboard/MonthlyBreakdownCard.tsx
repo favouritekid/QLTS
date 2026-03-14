@@ -16,6 +16,9 @@ import type { OfficerKpiPlanResponse } from "@/lib/api/officer";
 interface MonthlyBreakdownCardProps {
   plan: OfficerKpiPlanResponse | null | undefined;
   isLoading?: boolean;
+  /** Controlled expanded state (synced to URL by parent). Falls back to internal state if omitted. */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 const MONTH_NAMES = [
@@ -55,8 +58,13 @@ const STATUS_COLORS = {
   behind: "text-destructive",
 } as const;
 
-export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardProps) {
-  const [expanded, setExpanded] = useState(false);
+export function MonthlyBreakdownCard({ plan, isLoading, expanded: controlledExpanded, onExpandedChange }: MonthlyBreakdownCardProps) {
+  const [internalExpanded, setInternalExpanded] = useState(false);
+  const expanded = controlledExpanded ?? internalExpanded;
+  const setExpanded = (v: boolean) => {
+    setInternalExpanded(v);
+    onExpandedChange?.(v);
+  };
 
   // Don't render if no plan or loading
   if (isLoading || !plan) return null;
@@ -81,7 +89,7 @@ export function MonthlyBreakdownCard({ plan, isLoading }: MonthlyBreakdownCardPr
       <CardHeader className="p-0">
         <button
           type="button"
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(!expanded)}
           className="flex items-center justify-between w-full px-4 py-3 text-left rounded-t-xl transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           aria-expanded={expanded}
           aria-label="Kế hoạch theo tháng"

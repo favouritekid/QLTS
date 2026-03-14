@@ -94,6 +94,7 @@ vi.mock("lucide-react", () => ({
 // Capture props passed to key sub-components
 let headerProps: Record<string, any> = {};
 let kpiGridProps: Record<string, any> = {};
+let monthlyProps: Record<string, any> = {};
 
 vi.mock("@/components/officer/dashboard", () => ({
   KPICardsGrid: (props: any) => {
@@ -103,7 +104,10 @@ vi.mock("@/components/officer/dashboard", () => ({
   ActionInsightsPanel: () => <div data-testid="action-insights" />,
   WeeklyLeaderboard: () => <div data-testid="leaderboard" />,
   AnnualProgressCard: () => <div data-testid="annual-progress" />,
-  MonthlyBreakdownCard: () => <div data-testid="monthly-breakdown" />,
+  MonthlyBreakdownCard: (props: any) => {
+    monthlyProps = props;
+    return <div data-testid="monthly-breakdown" />;
+  },
   CurrentMonthSnapshot: () => <div data-testid="current-month-snapshot" />,
   KpiSummaryBanner: () => <div data-testid="kpi-summary-banner" />,
   SmartHeader: (props: any) => {
@@ -193,6 +197,7 @@ describe("OfficerDashboardClient", () => {
     mockPush.mockReset();
     headerProps = {};
     kpiGridProps = {};
+    monthlyProps = {};
     (mockUser as any).role = "officer";
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: DASHBOARD_RESPONSE });
     setUrlSearch("");
@@ -374,9 +379,46 @@ describe("OfficerDashboardClient", () => {
   it("passes kpis including avg_response_time_target to KPICardsGrid", async () => {
     renderWithProviders();
     await waitFor(() => expect(screen.getByTestId("kpi-cards")).toBeInTheDocument());
-    // Assert the actual prop received by KPICardsGrid mock, not just the fixture
     expect(kpiGridProps.kpis).toBeDefined();
     expect(kpiGridProps.kpis.avg_response_time_target).toBe(4);
     expect(kpiGridProps.kpis.avg_response_time).toBe(2);
+  });
+
+  // =========================================================================
+  // URL state — monthly expanded
+  // =========================================================================
+
+  it("passes expanded=false to MonthlyBreakdownCard when URL has no monthly param", async () => {
+    setUrlSearch("");
+    renderWithProviders();
+    await waitFor(() => expect(screen.getByTestId("monthly-breakdown")).toBeInTheDocument());
+    expect(monthlyProps.expanded).toBe(false);
+  });
+
+  it("passes expanded=true to MonthlyBreakdownCard when URL has monthly=expanded", async () => {
+    setUrlSearch("?monthly=expanded");
+    renderWithProviders();
+    await waitFor(() => expect(screen.getByTestId("monthly-breakdown")).toBeInTheDocument());
+    expect(monthlyProps.expanded).toBe(true);
+  });
+
+  it("restores monthly expanded state from URL on popstate", async () => {
+    setUrlSearch("");
+    renderWithProviders();
+    await waitFor(() => expect(monthlyProps.expanded).toBe(false));
+
+    setUrlSearch("?monthly=expanded");
+    act(() => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    await waitFor(() => expect(monthlyProps.expanded).toBe(true));
+  });
+
+  it("clears monthly expanded on popstate when URL has no monthly param", async () => {
+    setUrlSearch("?monthly=expanded");
+    renderWithProviders();
+    await waitFor(() => expect(monthlyProps.expanded).toBe(true));
+
+    setUrlSearch("");
+    act(() => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    await waitFor(() => expect(monthlyProps.expanded).toBe(false));
   });
 });
