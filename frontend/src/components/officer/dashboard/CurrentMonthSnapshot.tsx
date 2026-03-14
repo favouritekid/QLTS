@@ -17,7 +17,7 @@ interface CurrentMonthSnapshotProps {
 }
 
 function fmtNum(n: number | null | undefined): string {
-  if (n == null) return "\u2014";
+  if (n == null) return "—";
   return n.toLocaleString("vi-VN", { maximumFractionDigits: 1 });
 }
 
@@ -77,12 +77,12 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
     <div className="space-y-2">
       <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
         <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
-        Th\u00e1ng {currentMonth}/{currentYear} \u2014 Ti\u1ebfn \u0111\u1ed9 hi\u1ec7n t\u1ea1i
+        Tháng {currentMonth}/{currentYear} — Tiến độ hiện tại
       </h3>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {/* 1. Enrollment this month */}
         <div className="rounded-lg border bg-card p-3">
-          <p className="text-xs text-muted-foreground mb-1">Nh\u1eadp h\u1ecdc th\u00e1ng</p>
+          <p className="text-xs text-muted-foreground mb-1">Nhập học tháng</p>
           <p className={cn("text-lg font-semibold tabular-nums", enrollMet ? "text-success-600 dark:text-success-500" : "text-warning-600 dark:text-warning-500")}>
             {fmtNum(monthData.enrollment_actual)}/{fmtNum(enrollTarget)}
           </p>
@@ -92,13 +92,13 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
             indicatorClassName={enrollMet ? "bg-success-500" : "bg-warning-500"}
           />
           <p className="text-[11px] text-muted-foreground mt-1">
-            {enrollPct}% ch\u1ec9 ti\u00eau
+            {enrollPct}% chỉ tiêu
           </p>
         </div>
 
         {/* 2. Avg consultations/day */}
         <div className="rounded-lg border bg-card p-3">
-          <p className="text-xs text-muted-foreground mb-1">TV trung b\u00ecnh/ng\u00e0y</p>
+          <p className="text-xs text-muted-foreground mb-1">TV trung bình/ngày</p>
           <p className={cn("text-lg font-semibold tabular-nums", cStatus && STATUS_COLORS[cStatus])}>
             {fmtNum(monthData.consultations_actual_avg)}
           </p>
@@ -112,7 +112,7 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
                 />
               )}
               <p className="text-[11px] text-muted-foreground mt-1">
-                M\u1ee5c ti\u00eau: {fmtNum(monthData.consultations_daily)}/ng\u00e0y
+                Mục tiêu: {fmtNum(monthData.consultations_daily)}/ngày
               </p>
             </>
           )}
@@ -120,7 +120,7 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
 
         {/* 3. Total consultations this month */}
         <div className="rounded-lg border bg-card p-3">
-          <p className="text-xs text-muted-foreground mb-1">T\u1ed5ng TV th\u00e1ng</p>
+          <p className="text-xs text-muted-foreground mb-1">Tổng TV tháng</p>
           <p className="text-lg font-semibold tabular-nums">
             {fmtNum(monthData.consultations_monthly_total)}
           </p>
@@ -128,14 +128,14 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
 
         {/* 4. Conversion rate */}
         <div className="rounded-lg border bg-card p-3">
-          <p className="text-xs text-muted-foreground mb-1">Conv% th\u00e1ng</p>
+          <p className="text-xs text-muted-foreground mb-1">Conv% tháng</p>
           <p className="text-lg font-semibold tabular-nums">
             {monthData.conversion_rate != null
               ? monthData.conversion_rate.toLocaleString("vi-VN", {
                   minimumFractionDigits: 1,
                   maximumFractionDigits: 1,
                 }) + "%"
-              : "\u2014"}
+              : "—"}
           </p>
         </div>
       </div>
