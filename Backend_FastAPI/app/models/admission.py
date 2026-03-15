@@ -16,7 +16,7 @@ Architecture:
 
 from datetime import date, datetime, timezone
 from typing import List, Optional
-from sqlalchemy import Boolean, CheckConstraint, Column, Date, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
@@ -43,6 +43,7 @@ class AdmissionProfile(Base):
     # ✅ Composite Unique Constraints
     __table_args__ = (
         UniqueConstraint('citizen_id', 'academic_year', name='uq_citizen_academic_year'),
+        Index('ix_admission_profile_citizen_year', 'citizen_id', 'academic_year'),
         CheckConstraint(
             "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn')",
             name="ck_admission_profile_status"
@@ -214,7 +215,7 @@ class AdmissionProfile(Base):
         comment="User ID who approved the profile (Manager/Admin)"
     )
     approval_notes: Mapped[str] = mapped_column(
-        String(1000),
+        Text,
         nullable=True,
         comment="Optional approval notes from Manager/Admin"
     )
@@ -233,7 +234,7 @@ class AdmissionProfile(Base):
         comment="User ID who rejected the profile (Manager/Admin)"
     )
     rejection_reason: Mapped[str] = mapped_column(
-        String(1000),
+        Text,
         nullable=True,
         comment="Rejection reason (required when rejecting)"
     )

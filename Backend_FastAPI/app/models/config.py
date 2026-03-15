@@ -285,6 +285,7 @@ class KpiConfig(Base):
     )
     source_plan_id = Column(
         Integer,
+        ForeignKey("kpi_plan.id", name="fk_kpi_config_source_plan", ondelete="SET NULL"),
         nullable=True,
         comment="FK to kpi_plan (constraint added in A1 after table creation)"
     )
@@ -329,6 +330,9 @@ class KpiConfig(Base):
             'kpi_code', 'unit_id', 'officer_id', 'effective_year', 'effective_month',
             postgresql_where=text("is_active = true"),
         ),
+        # Composite performance indexes (created by perf20260126001)
+        Index('ix_kpi_config_unit_code_period_active', 'unit_id', 'kpi_code', 'period_type', 'is_active'),
+        Index('ix_kpi_config_officer_code_period_active', 'officer_id', 'kpi_code', 'period_type', 'is_active'),
     )
 
     def __repr__(self):
@@ -428,6 +432,15 @@ class KpiTarget(Base):
             'unit_id', 'officer_id', 'kpi_code', 'fiscal_year',
             unique=True
         ),
+        # Partial unique (created by perf20260126001)
+        Index(
+            'ix_kpi_target_unique_combo',
+            'kpi_code', 'fiscal_year', 'unit_id', 'officer_id',
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        # Composite lookup (created by perf20260126001)
+        Index('ix_kpi_target_officer_code_year', 'officer_id', 'kpi_code', 'fiscal_year'),
     )
 
     def __repr__(self):
@@ -549,66 +562,10 @@ class ConfigSystemCategory(Base):
         return f"<ConfigSystemCategory {self.type}.{self.code}: {self.name}>"
 
 
-class ConfigSubjectGroup(Base):
-    """
-    DEPRECATED: This table is scheduled for removal.
-    
-    Use the relational model instead:
-    - Subject (app/models/admission_config/subject.py)
-    - SubjectGroup (app/models/admission_config/subject.py)
-    - SubjectGroupSubject (app/models/admission_config/subject.py)
-    
-    Migration script: scripts/seeds/migrate_to_relational_subject_groups.py
-    Drop migration: alembic/versions/drop_config_subject_group.py
-    
-    ---
-    
-    Cấu hình Tổ hợp môn xét tuyển (Subject Group Combinations).
-    
-    Stores standardized subject groups for admission scoring:
-    - A00: Toán - Lý - Hóa
-    - A01: Toán - Lý - Anh
-    - D01: Toán - Văn - Anh
-    - D07: Toán - Hóa - Anh
-    
-    Used to dynamically render score input fields on frontend.
-    """
-    __tablename__ = "config_subject_group"
-
-    id = Column(Integer, primary_key=True, index=True)
-    code = Column(
-        String(10),
-        unique=True,
-        nullable=False,
-        index=True,
-        comment="Mã tổ hợp (vd: 'A00', 'D01')"
-    )
-    name = Column(
-        String(100),
-        nullable=False,
-        comment="Tên hiển thị (vd: 'Toán - Lý - Hóa')"
-    )
-    subjects = Column(
-        JSON,
-        nullable=False,
-        comment="Danh sách môn học (vd: ['math', 'physics', 'chemistry'])"
-    )
-    display_order = Column(
-        Integer,
-        nullable=False,
-        default=0,
-        comment="Thứ tự hiển thị trong dropdown"
-    )
-    is_active = Column(
-        Boolean,
-        nullable=False,
-        default=True,
-        index=True,
-        comment="Soft delete flag"
-    )
-
-    def __repr__(self):
-        return f"<ConfigSubjectGroup {self.code}: {self.name}>"
+# ConfigSubjectGroup — REMOVED.
+# Table was dropped by migration drop_config_subject_group.py.
+# Replaced by relational models: Subject, SubjectGroup, SubjectGroupSubject
+# in app/models/admission_config/subject.py.
 
 
 # =============================================================================

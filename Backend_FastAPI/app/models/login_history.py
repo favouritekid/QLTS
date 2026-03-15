@@ -8,7 +8,7 @@ Following Architecture Guidelines:
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -26,6 +26,11 @@ class LoginHistory(Base):
     """
 
     __tablename__ = "login_history"
+    __table_args__ = (
+        # Composite indexes (created by perf20260126001)
+        Index('ix_login_history_user_response_loginat', 'user_id', 'user_response', 'login_at'),
+        Index('ix_login_history_user_ip_response', 'user_id', 'ip_address', 'user_response'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(

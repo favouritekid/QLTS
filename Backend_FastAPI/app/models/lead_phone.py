@@ -14,7 +14,7 @@ When a lead is soft-deleted, its phone identity rows are also soft-deleted.
 When a lead is restored, phone identities are restored (with conflict check).
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -30,8 +30,8 @@ class LeadPhoneIdentity(Base):
 
     __tablename__ = "lead_phone_identity"
     __table_args__ = (
-        # Partial unique index created in migration: WHERE deleted_at IS NULL
-        # See: alembic/versions/zl1r2s3t4u5v6_phase2_phone_identity.py
+        # Partial unique index (created by zl1r2s3t4u5v6)
+        Index('uq_lead_phone_active', 'phone_normalized', unique=True, postgresql_where=text('deleted_at IS NULL')),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)

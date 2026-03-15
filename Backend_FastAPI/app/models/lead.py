@@ -2,7 +2,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, CheckConstraint, JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, CheckConstraint, Index, JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 
@@ -76,6 +76,19 @@ class Lead(Base):
             "assignment_status IN ('pending', 'assigned', 'failed', 'reassign_pending')",
             name="ck_lead_assignment_status",
         ),
+        # Composite performance indexes (created by perf20260126001, opt20260125002)
+        Index('ix_lead_unit_status', 'unit_id', 'status'),
+        Index('ix_lead_unit_officer', 'unit_id', 'assigned_officer_id'),
+        Index('ix_lead_unit_stage', 'unit_id', 'pipeline_stage_id'),
+        Index('ix_lead_unit_consultation_status', 'unit_id', 'consultation_status_id'),
+        Index('ix_lead_unit_updated', 'unit_id', 'updated_at'),
+        Index('ix_lead_unit_status_deleted', 'unit_id', 'status', 'deleted_at'),
+        Index('ix_lead_deleted_score', 'deleted_at', 'lead_score'),
+        Index('ix_lead_officer_deleted_updated', 'assigned_officer_id', 'deleted_at', 'updated_at'),
+        Index('ix_lead_officer_status_deleted_activity', 'assigned_officer_id', 'status', 'deleted_at', 'next_activity_at', 'created_at'),
+        Index('ix_lead_officer_hot_deleted_lastconsult', 'assigned_officer_id', 'is_hot_lead', 'deleted_at', 'last_consultation_at'),
+        # Partial unique index (created by zj9p0q1r2s3t4)
+        Index('uq_lead_email_unit_active', text('lower(email)'), 'unit_id', unique=True, postgresql_where=text('email IS NOT NULL AND deleted_at IS NULL')),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -271,6 +284,13 @@ class Consultation(Base):
     """Model cho các buổi tư vấn."""
 
     __tablename__ = "consultation"
+    __table_args__ = (
+        # Composite performance indexes (created by opt20260125002, perf20260126001)
+        Index('ix_consultation_lead_date', 'lead_id', 'consultation_date'),
+        Index('ix_consultation_officer_date', 'officer_id', 'consultation_date'),
+        Index('ix_consultation_officer_deleted', 'officer_id', 'deleted_at'),
+        Index('ix_consultation_lead_status_deleted_scheduled', 'lead_id', 'consultation_status_id', 'deleted_at', 'scheduled_at'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, index=True)

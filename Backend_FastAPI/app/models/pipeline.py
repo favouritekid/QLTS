@@ -1,5 +1,5 @@
 # app/models/pipeline.py
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -110,6 +110,13 @@ class ConsultationStatus(Base):
     System statuses can only be set by backend, not UI.
     """
     __tablename__ = "consultation_status"
+    __table_args__ = (
+        # Indexes created by fsm20260125002, fsm20260125003
+        Index('ix_consultation_status_display_order', 'display_order'),
+        Index('ix_consultation_status_status_type', 'status_type'),
+        Index('ix_consultation_status_selectable_mode', 'selectable_mode'),
+        Index('ix_consultation_status_phase', 'phase'),
+    )
 
     id = Column(String(50), primary_key=True, comment="Unique status identifier")
     
@@ -328,6 +335,8 @@ class AllowedTransition(Base):
     )
 
     __table_args__ = (
-        # Ensure unique transitions - constraint defined in migration
+        # Indexes created by fsm20260125001
+        Index('ix_allowed_transitions_from_status_active', 'from_status_id', 'is_active'),
+        Index('ix_allowed_transitions_trigger_type', 'trigger_type'),
         {"comment": "Allowed status transitions for workflow validation"},
     )

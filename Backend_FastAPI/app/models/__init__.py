@@ -9,7 +9,7 @@ from .config import (
     ConfigDegreeLevel,
     ConfigDocumentType,
     ConfigOfferingType,
-    ConfigSubjectGroup,  # Phase 6: Admission Scoring
+    # ConfigSubjectGroup removed — table dropped, model removed from Base metadata
     ConfigSystemCategory,
     HolidayCalendar,  # A1: KPI Planning
     KpiConfig,
@@ -125,7 +125,7 @@ __all__ = [
     "ConfigDegreeLevel",
     "ConfigDocumentType",
     "ConfigOfferingType",
-    "ConfigSubjectGroup",  # Phase 6: Admission Scoring
+    # "ConfigSubjectGroup",  # REMOVED — table dropped, see config.py
     "ConfigSystemCategory",
     "HolidayCalendar",  # A1: KPI Planning
     "KpiConfig",
