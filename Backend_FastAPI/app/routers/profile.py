@@ -1,5 +1,6 @@
 # app/routers/profile.py
-from typing import Optional
+import structlog
+from typing import Callable, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import EmailStr, TypeAdapter, ValidationError  # <-- BỔ SUNG TypeAdapter
@@ -9,6 +10,8 @@ from .. import database, models, schemas
 from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..services import activity_service, user_service
 from app.core.rate_limits import limiter, RateLimits
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["Profile"])
 
@@ -20,14 +23,14 @@ async def log_profile_activity(
     action: str,
     resource_type: str,
     actor_id: Optional[int] = None,
+    target_user_id: Optional[int] = None,
+    resource_id: Optional[int] = None,
     description: Optional[str] = None,
     changes: Optional[dict] = None,
-) -> models.UserActivityLog:
+) -> Tuple[models.UserActivityLog, Callable]:
     """
-    Helper function to log profile activities with IP/UA extracted from request.
-
-    This replaces log_profile_activity() which was removed
-    to maintain service layer protocol independence.
+    Helper: extract IP/UA from request and delegate to activity_service.
+    Returns (activity_log, post_commit_callback) — caller must commit and run callback.
     """
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -37,6 +40,8 @@ async def log_profile_activity(
         action=action,
         resource_type=resource_type,
         actor_id=actor_id,
+        target_user_id=target_user_id,
+        resource_id=resource_id,
         description=description,
         changes=changes,
         ip_address=ip_address,
@@ -144,17 +149,22 @@ async def update_current_user_profile(
     await db.commit()
     await callback()
 
-    # Log activity
-    await log_profile_activity(
-        db=db,
-        request=request,
-        action="update_profile",
-        resource_type="user",
-        actor_id=current_user.id,
-        target_user_id=current_user.id,
-        resource_id=current_user.id,
-        description=f"User updated their own profile: {current_user.username}",
-        changes=changes if changes else None,
-    )
+    # Best-effort audit log — business change already committed above
+    try:
+        _activity_log, activity_callback = await log_profile_activity(
+            db=db,
+            request=request,
+            action="update_profile",
+            resource_type="user",
+            actor_id=current_user.id,
+            target_user_id=current_user.id,
+            resource_id=current_user.id,
+            description=f"User updated their own profile: {current_user.username}",
+            changes=changes if changes else None,
+        )
+        await db.commit()
+        await activity_callback()
+    except Exception:
+        log.error("Failed to persist audit log for profile update", user_id=current_user.id, exc_info=True)
 
     return updated_user

@@ -77,6 +77,11 @@ services:
           path: ./frontend/public
           target: /app/public
 
+        # Middleware → sync + restart dev server
+        - action: sync+restart
+          path: ./frontend/middleware.ts
+          target: /app/middleware.ts
+
         # Config files → sync + restart dev server
         - action: sync+restart
           path: ./frontend/next.config.ts

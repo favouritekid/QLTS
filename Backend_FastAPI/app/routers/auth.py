@@ -670,11 +670,9 @@ async def perform_change_password(
         db.add(current_user)
         log.info("Cleared password_reset_required flag", user_id=current_user.id)
 
-    # ✅ FIX: Commit the password change to DB
-    await db.commit()
-    await post_commit_callback()
-
-    # Invalidate all sessions after password change
+    # SECURITY: Invalidate all sessions BEFORE committing password change.
+    # If revocation fails, rollback so the old password stays active —
+    # fail-closed: no dangling sessions with a changed password.
     try:
         await user_service.invalidate_all_sessions(db, current_user)
         log.info(
@@ -682,29 +680,40 @@ async def perform_change_password(
             user_id=current_user.id,
         )
     except (CacheServiceError, UserServiceError) as e:
+        await db.rollback()
         log.critical(
-            "Failed to invalidate sessions after password change - SECURITY RISK",
+            "Failed to invalidate sessions — password change rolled back",
             user_id=current_user.id,
             error=e.detail,
             context=e.context,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to invalidate sessions after password change"
+            detail="Password change failed. Please try again later."
         )
     except Exception as e:
+        await db.rollback()
         log.critical(
-            "Failed to invalidate all sessions after password change",
+            "Failed to invalidate sessions — password change rolled back",
             user_id=current_user.id,
             error=str(e),
             exc_info=True,
         )
         raise HTTPException(
-            status_code=500,
-            detail="Password changed but failed to invalidate sessions. Please logout manually from all devices and contact support."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Password change failed. Please try again later."
         )
 
-    return None
+    # Session invalidation succeeded — now commit the password change
+    await db.commit()
+    await post_commit_callback()
+
+    # Clear auth cookies — forces browser to stop sending blacklisted tokens
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.delete_cookie(key="access_token", path="/", samesite="lax")
+    response.delete_cookie(key="refresh_token", path="/api", samesite="strict")
+    response.delete_cookie(key="csrf_token", path="/")
+    return response
 
 
 @router.post("/refresh")

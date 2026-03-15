@@ -221,11 +221,23 @@ api.interceptors.response.use(
         // ========================================
         processQueue(refreshError, null);
 
-        // Fallback Logout: Hard redirect to clear all state
-        // Using window.location.href is more reliable than dynamic imports
+        // Fallback Logout: Set logout flag to stop further API calls,
+        // call logout API to clear httpOnly cookies, then hard redirect.
         if (typeof window !== "undefined" && !publicPages.includes(currentPath)) {
-          console.log("[API Client] 🚪 Redirecting to login...");
-          window.location.href = "/login";
+          console.log("[API Client] 🚪 Session invalid — logging out...");
+          setApiLoggedOut(true);
+
+          // Clear Zustand auth store
+          try {
+            const { useAuthStore } = await import("@/lib/stores/auth.store");
+            useAuthStore.getState().logout();
+          } catch {
+            // Best-effort
+          }
+
+          // Redirect with force_login flag — middleware will clear stale
+          // httpOnly cookies that JS can't delete directly
+          window.location.href = "/login?force_login=true";
         }
 
         return Promise.reject(refreshError);

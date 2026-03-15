@@ -25,7 +25,7 @@ Breaking API Changes:
 from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 import io
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -83,12 +83,10 @@ async def log_admin_activity(
     resource_id: Optional[int] = None,
     description: Optional[str] = None,
     changes: Optional[dict] = None,
-) -> models.UserActivityLog:
+) -> Tuple[models.UserActivityLog, Callable]:
     """
-    Helper function to log admin activities with IP/UA extracted from request.
-
-    This duplicates the helper from admin.py for router independence.
-    Protocol-independent service (activity_service) handles actual logging.
+    Helper: extract IP/UA from request and delegate to activity_service.
+    Returns (activity_log, post_commit_callback) — caller must commit and run callback.
     """
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -192,17 +190,22 @@ async def create_new_user(
     await db.commit()
     await callback()
 
-    # Log activity
-    await log_admin_activity(
-        db=db,
-        request=request,
-        action="create_user",
-        resource_type="user",
-        actor_id=current_admin.id,
-        target_user_id=created_user.id,
-        resource_id=created_user.id,
-        description=f"Admin created new user: {created_user.username}",
-    )
+    # Best-effort audit log — business change already committed above
+    try:
+        _, log_callback = await log_admin_activity(
+            db=db,
+            request=request,
+            action="create_user",
+            resource_type="user",
+            actor_id=current_admin.id,
+            target_user_id=created_user.id,
+            resource_id=created_user.id,
+            description=f"Admin created new user: {created_user.username}",
+        )
+        await db.commit()
+        await log_callback()
+    except Exception:
+        log.error("Failed to persist audit log for create_user", user_id=created_user.id, exc_info=True)
 
     return created_user
 
@@ -445,7 +448,7 @@ async def bulk_user_action(
         action_desc += f" to {action_data.status}"
     action_desc += f" for {len(action_data.user_ids)} users"
 
-    await log_admin_activity(
+    _, log_callback = await log_admin_activity(
         db=db,
         request=request,
         action=f"bulk_{action_data.action}",
@@ -454,6 +457,8 @@ async def bulk_user_action(
         description=action_desc,
         changes={"user_ids": action_data.user_ids, "status": action_data.status} if action_data.status else {"user_ids": action_data.user_ids},
     )
+    await db.commit()
+    await log_callback()
 
     return {"detail": message}
 
@@ -552,20 +557,25 @@ async def sync_users(
     # Commit transaction (router responsibility)
     await db.commit()
 
-    # Log admin activity (HTTP/audit concern, not business logic)
-    await log_admin_activity(
-        db=db,
-        request=request,
-        action="sync_users",
-        resource_type="user",
-        actor_id=current_admin.id,
-        resource_id=None,
-        changes={
-            "synced_count": result["synced_count"],
-            "failed_count": result["failed_count"],
-            "user_ids": user_ids or "all"
-        }
-    )
+    # Best-effort audit log — business change already committed above
+    try:
+        _, log_callback = await log_admin_activity(
+            db=db,
+            request=request,
+            action="sync_users",
+            resource_type="user",
+            actor_id=current_admin.id,
+            resource_id=None,
+            changes={
+                "synced_count": result["synced_count"],
+                "failed_count": result["failed_count"],
+                "user_ids": user_ids or "all"
+            }
+        )
+        await db.commit()
+        await log_callback()
+    except Exception:
+        log.error("Failed to persist audit log for sync_users", exc_info=True)
 
     log.info(
         "User sync completed",
@@ -933,18 +943,24 @@ async def update_existing_user(
     await db.commit()
     await callback()
 
-    # Log activity
-    await log_admin_activity(
-        db=db,
-        request=request,
-        action="update_user",
-        resource_type="user",
-        actor_id=current_admin.id,
-        target_user_id=updated_user.id,
-        resource_id=updated_user.id,
-        description=f"Admin updated user: {updated_user.username}",
-        changes=changes if changes else None,
-    )
+    # Best-effort audit log — business change already committed above
+    try:
+        _, log_callback = await log_admin_activity(
+            db=db,
+            request=request,
+            action="update_user",
+            resource_type="user",
+            actor_id=current_admin.id,
+            target_user_id=updated_user.id,
+            resource_id=updated_user.id,
+            description=f"Admin updated user: {updated_user.username}",
+            changes=changes if changes else None,
+        )
+        await db.commit()
+        await log_callback()
+    except Exception:
+        await db.rollback()
+        log.error("Failed to persist audit log for update_user", user_id=updated_user.id, exc_info=True)
 
     # ✅ NOTIFICATION 2.0: Dispatch USER_ROLE_CHANGED if role or unit changed
     if "role" in changes or "unit_id" in changes:
@@ -1082,7 +1098,7 @@ async def delete_existing_user(
 
     # ⚠️ IMPORTANT: Log activity BEFORE deleting user to avoid FK constraint violation
     # The activity_log.target_user_id references user.id, so user must exist when logging
-    await log_admin_activity(
+    _, log_callback = await log_admin_activity(
         db=db,
         request=request,
         action="delete_user",
@@ -1095,6 +1111,9 @@ async def delete_existing_user(
 
     # Delete user AFTER logging (service handles cascading deletes)
     await user_service.delete_user(db, user_id)
+
+    await db.commit()
+    await log_callback()
 
     return None
 

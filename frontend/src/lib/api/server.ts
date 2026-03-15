@@ -29,6 +29,7 @@
  */
 
 import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import type {
   Lead,
   LeadsPage,
@@ -152,15 +153,27 @@ async function serverFetch<T>(
   }
 
   // Execute fetch
-  const response = await fetch(url.toString(), {
-    ...fetchOptions,
-    headers,
-    credentials: 'include', // Include cookies
-    cache: fetchOptions.cache || 'no-store', // Default: no cache for fresh data
-  });
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      ...fetchOptions,
+      headers,
+      credentials: 'include', // Include cookies
+      cache: fetchOptions.cache || 'no-store', // Default: no cache for fresh data
+    });
+  } catch (networkError) {
+    // Network error (ECONNREFUSED, DNS failure, timeout)
+    // Likely backend is restarting — throw descriptive error for error boundary
+    throw new Error(`Backend unavailable: ${networkError instanceof Error ? networkError.message : 'network error'}`);
+  }
 
   // Handle non-OK responses
   if (!response.ok) {
+    // 401 Unauthorized — token expired/blacklisted → redirect to login
+    if (response.status === 401) {
+      redirect('/login?force_login=true');
+    }
+
     const errorText = await response.text();
     let errorMessage: string;
 

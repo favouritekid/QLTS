@@ -19,7 +19,7 @@ Dependencies: role_service, activity_service (from PHASE 1), Casbin enforcer
 Complexity: HIGH (Casbin integration, atomic operations, policy validation)
 """
 
-from typing import List, Optional, Dict, Any
+from typing import Callable, List, Optional, Dict, Any, Tuple
 from datetime import datetime, timezone
 
 import casbin
@@ -75,12 +75,10 @@ async def log_admin_activity(
     resource_id: Optional[int] = None,
     description: Optional[str] = None,
     changes: Optional[dict] = None,
-) -> models.UserActivityLog:
+) -> Tuple[models.UserActivityLog, Callable]:
     """
-    Helper function to log admin activities with IP/UA extracted from request.
-
-    This duplicates the helper from admin.py for router independence.
-    Protocol-independent service (activity_service) handles actual logging.
+    Helper: extract IP/UA from request and delegate to activity_service.
+    Returns (activity_log, post_commit_callback) — caller must commit and run callback.
     """
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -97,6 +95,13 @@ async def log_admin_activity(
         ip_address=ip_address,
         user_agent=user_agent,
     )
+
+
+async def commit_and_log(db: AsyncSession, log_result: Tuple[models.UserActivityLog, Callable]):
+    """Router-layer helper: commit the activity log and run its post-commit callback."""
+    _, callback = log_result
+    await db.commit()
+    await callback()
 
 
 async def emit_policy_update(operation: str, data: dict):
@@ -190,8 +195,8 @@ async def add_new_policy(
         if result["errors"]:
             raise DuplicateResourceError(result["errors"][0])
 
-    # 2. Log activity to DB
-    await log_admin_activity(
+    # 2. Log activity to DB + commit
+    await commit_and_log(db, await log_admin_activity(
         db=db,
         request=request,
         action="add_policy",
@@ -203,10 +208,7 @@ async def add_new_policy(
             "object": policy_in.object,
             "action": policy_in.action,
         },
-    )
-
-    # 3. ✅ COMMIT TRANSACTION - Ensures audit log is persisted before event
-    await db.commit()
+    ))
 
     # 4. Emit socket event (error isolated via emit_policy_update)
     # Note: emit_policy_update already has try-except, so failures won't crash API
@@ -276,7 +278,7 @@ async def delete_policy(
         raise ResourceNotFoundError("Policy not found or could not be removed.")
 
     # 3. Log activity to DB
-    await log_admin_activity(
+    await commit_and_log(db, await log_admin_activity(
         db=db,
         request=request,
         action="remove_policy",
@@ -288,10 +290,7 @@ async def delete_policy(
             "object": policy_in.object,
             "action": policy_in.action,
         },
-    )
-
-    # 4. ✅ COMMIT TRANSACTION - Ensures audit log is persisted before event
-    await db.commit()
+    ))
 
     # 5. Emit socket event (error isolated via emit_policy_update)
     # Note: emit_policy_update already has try-except, so failures won't crash API
@@ -531,7 +530,7 @@ async def add_grouping_policy(
     await enforcer.save_policy()
 
     # Log activity
-    await log_admin_activity(
+    await commit_and_log(db, await log_admin_activity(
         db=db,
         request=request,
         action="add_grouping_policy",
@@ -543,7 +542,7 @@ async def add_grouping_policy(
             "parent_role": grouping.parent_role,
             "type": "grouping_policy",
         },
-    )
+    ))
 
     log.info(
         "Grouping policy added",
@@ -590,7 +589,7 @@ async def delete_grouping_policy(
     await enforcer.save_policy()
 
     # Log activity
-    await log_admin_activity(
+    await commit_and_log(db, await log_admin_activity(
         db=db,
         request=request,
         action="remove_grouping_policy",
@@ -602,7 +601,7 @@ async def delete_grouping_policy(
             "parent_role": grouping.parent_role,
             "type": "grouping_policy",
         },
-    )
+    ))
 
     log.info(
         "Grouping policy removed",
@@ -710,24 +709,11 @@ async def delete_role_atomic(
         # Execute post-commit side effects
         await post_commit()
         
-        # Log activity
-        await log_admin_activity(
-            db=db,
-            request=request,
-            action="delete_role_atomic",
-            resource_type="role",
-            actor_id=current_admin.id,
-            resource_id=None,
-            changes=result,
-        )
-
         log.info(
             "Role deleted atomically",
             admin_id=current_admin.id,
             role_name=role_name,
         )
-        
-        return result
 
     except Exception as e:
         # Rollback DB transaction
@@ -743,6 +729,21 @@ async def delete_role_atomic(
             detail="Failed to delete role. Please try again later.",
         )
 
+    # Best-effort audit log — delete already committed, don't fail the request
+    try:
+        await commit_and_log(db, await log_admin_activity(
+            db=db,
+            request=request,
+            action="delete_role_atomic",
+            resource_type="role",
+            actor_id=current_admin.id,
+            resource_id=None,
+            changes=result,
+        ))
+    except Exception:
+        log.error("Failed to persist audit log for role deletion", role_name=role_name, exc_info=True)
+
+    return result
 
 
 
@@ -818,7 +819,7 @@ async def apply_template_to_role(
 
     # Log activity
     if result.get("added", 0) > 0:
-        await log_admin_activity(
+        await commit_and_log(db, await log_admin_activity(
             db=db,
             request=request,
             action="apply_policy_template",
@@ -830,7 +831,7 @@ async def apply_template_to_role(
                 "role": template_req.role,
                 "policies_added": result.get("added", 0),
             },
-        )
+        ))
 
     return result
 
@@ -898,7 +899,7 @@ async def add_policies_batch(
 
     # Log activity for each added policy
     if result["added"] > 0:
-        await log_admin_activity(
+        await commit_and_log(db, await log_admin_activity(
             db=db,
             request=request,
             action="batch_add_policies",
@@ -910,7 +911,7 @@ async def add_policies_batch(
                 "skipped": result["skipped"],
                 "policies": [f"{p[0]} → {p[1]} → {p[2]}" for p in policies_tuples],
             },
-        )
+        ))
 
     return result
 
@@ -1285,7 +1286,7 @@ async def who_can_access_resource(
         warning = f"⚠️ Slow query ({execution_time_ms}ms). This is unusual for role-only lookup."
 
     # Log activity for audit trail
-    await log_admin_activity(
+    await commit_and_log(db, await log_admin_activity(
         db=db,
         request=request,
         action="permission_lookup",
@@ -1298,7 +1299,7 @@ async def who_can_access_resource(
             "results_count": len(allowed_subjects),
             "execution_time_ms": execution_time_ms,
         },
-    )
+    ))
 
     log.info(
         "Permission lookup completed",
@@ -1456,19 +1457,19 @@ async def toggle_role_feature(
         )
 
         # Log activity
-        await activity_service.log_activity(
+        await commit_and_log(db, await log_admin_activity(
             db=db,
-            actor_id=current_admin.id,
+            request=request,
             action="enable_feature",
-            description=f"Enabled feature '{feature_def['display_name']}' for {role_name}",
             resource_type="casbin_policy",
-            resource_id=None,
+            actor_id=current_admin.id,
+            description=f"Enabled feature '{feature_def['display_name']}' for {role_name}",
             changes={
                 "feature_id": request_data.feature_id,
                 "role": role_name,
                 "policies_added": result["added"],
-            }
-        )
+            },
+        ))
     else:
         # Disable feature: remove all policies
         result = await casbin_service.remove_policies_batch(
@@ -1478,19 +1479,19 @@ async def toggle_role_feature(
         )
 
         # Log activity
-        await activity_service.log_activity(
+        await commit_and_log(db, await log_admin_activity(
             db=db,
-            actor_id=current_admin.id,
+            request=request,
             action="disable_feature",
-            description=f"Disabled feature '{feature_def['display_name']}' for {role_name}",
             resource_type="casbin_policy",
-            resource_id=None,
+            actor_id=current_admin.id,
+            description=f"Disabled feature '{feature_def['display_name']}' for {role_name}",
             changes={
                 "feature_id": request_data.feature_id,
                 "role": role_name,
                 "policies_removed": result.get("removed", 0),
-            }
-        )
+            },
+        ))
 
     return result
 
@@ -1597,20 +1598,20 @@ async def refresh_role_from_template_endpoint(
     )
 
     if result.get("success"):
-        await activity_service.log_activity(
+        await commit_and_log(db, await log_admin_activity(
             db=db,
-            actor_id=current_admin.id,
+            request=request,
             action="refresh_role_from_template",
-            description=f"Refreshed {role_name} from template {template_id}",
             resource_type="casbin_policy",
-            resource_id=None,
+            actor_id=current_admin.id,
+            description=f"Refreshed {role_name} from template {template_id}",
             changes={
                 "role": role_name,
                 "template_id": template_id,
                 "policies_removed": result.get("policies_removed"),
                 "policies_added": result.get("policies_added"),
-            }
-        )
+            },
+        ))
 
     return result
 
@@ -1636,15 +1637,15 @@ async def sync_all_roles_from_templates_endpoint(
     result = await casbin_service.sync_all_roles_from_templates(dry_run=dry_run)
 
     if not dry_run:
-        await activity_service.log_activity(
+        await commit_and_log(db, await log_admin_activity(
             db=db,
-            actor_id=current_admin.id,
+            request=request,
             action="sync_all_roles_from_templates",
-            description="Synced all system roles from templates",
             resource_type="casbin_policy",
-            resource_id=None,
-            changes={"results": result}
-        )
+            actor_id=current_admin.id,
+            description="Synced all system roles from templates",
+            changes={"results": result},
+        ))
 
     return result
 

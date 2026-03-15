@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import Link from "next/link";
-import { AlertCircle, Clock, Info } from "lucide-react";
+import { AlertCircle, Clock, Eye, EyeOff, Info } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -111,6 +111,7 @@ export function LoginForm() {
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [sessionExpiredMsg, setSessionExpiredMsg] = useState<string | null>(null);
   const [mfaResetKey, setMfaResetKey] = useState(0);
+  const [showPassword, setShowPassword] = useState(false);
 
   const loginCountdown = useCountdown(60);
   const mfaCountdown = useCountdown(60);
@@ -299,17 +300,28 @@ export function LoginForm() {
                   </Link>
                 </div>
                 <FormControl>
-                  <Input
-                    type="password"
-                    placeholder="••••••••"
-                    autoComplete="current-password"
-                    disabled={isLoading || isLoginRateLimited}
-                    {...field}
-                    onChange={(e) => {
-                      field.onChange(e);
-                      if (loginError) resetLogin();
-                    }}
-                  />
+                  <div className="relative">
+                    <Input
+                      type={showPassword ? "text" : "password"}
+                      placeholder="••••••••"
+                      autoComplete="current-password"
+                      disabled={isLoading || isLoginRateLimited}
+                      {...field}
+                      onChange={(e) => {
+                        field.onChange(e);
+                        if (loginError) resetLogin();
+                      }}
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      className="text-muted-foreground hover:text-foreground absolute right-3 top-1/2 -translate-y-1/2"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </FormControl>
                 <FormMessage />
               </FormItem>
