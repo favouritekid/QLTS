@@ -42,12 +42,13 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import EmailStr
+from pydantic import EmailStr, TypeAdapter, ValidationError
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
 from app.config import settings
+from app.core import deps
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
 from app.services import activity_service, lead_service, user_service
