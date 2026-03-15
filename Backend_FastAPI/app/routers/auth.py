@@ -566,16 +566,11 @@ async def perform_password_reset(
         db, token=reset_data.token, new_password=reset_data.new_password
     )
 
-    # ✅ FIX: Commit the password change to DB
-    await db.commit()
-    await post_commit_callback()
-
-    # 🔐 SECURITY FIX: Invalidate all sessions after password reset
-    # This prevents session hijacking if attacker had compromised account
+    # SECURITY: Invalidate all sessions BEFORE committing password change.
+    # If revocation fails, rollback so old password stays active — fail-closed:
+    # no dangling sessions with a changed password.
     try:
         await user_service.invalidate_all_sessions(db, user)
-        # ✅ FIX: Refresh user object after session changes to avoid stale data
-        await db.refresh(user)
         log.warning(
             "All user sessions invalidated after password reset",
             user_id=user.id,
@@ -583,30 +578,39 @@ async def perform_password_reset(
             security_event="PASSWORD_RESET_SESSIONS_INVALIDATED",
         )
     except (CacheServiceError, UserServiceError) as e:
-        # ✅ PHASE 1: Catch custom exceptions from service layer
+        await db.rollback()
         log.critical(
-            "Failed to invalidate sessions after password reset - SECURITY RISK",
+            "Failed to invalidate sessions — password reset rolled back",
             user_id=user.id,
             error=e.detail,
             context=e.context,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to invalidate sessions after password reset"
+            detail="Password reset failed. Please try again later."
         )
     except Exception as e:
+        await db.rollback()
         log.critical(
-            "Failed to invalidate all sessions after password reset, "
-            "CRITICAL SECURITY RISK: attacker sessions may still be active!",
+            "Failed to invalidate sessions — password reset rolled back",
             user_id=user.id,
             error=str(e),
             exc_info=True,
         )
-        # ✅ NEW: Throw 500 to indicate failure (security-critical)
         raise HTTPException(
-            status_code=500,
-            detail="Password reset successful but failed to invalidate sessions. Please logout manually from all devices and contact support immediately."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Password reset failed. Please try again later."
         )
+
+    # Session invalidation succeeded — now commit password change
+    await db.commit()
+    await post_commit_callback()
+
+    # Refresh user object — may fail if session management detached it
+    try:
+        await db.refresh(user)
+    except Exception:
+        pass  # User data is already committed; stale ORM object is acceptable
 
     # 📧 Send confirmation email to notify user about password reset
     # This allows user to take action if they didn't initiate the reset
@@ -798,6 +802,24 @@ async def refresh_access_token(
 
                 if not user:
                     log.warning("User not found during refresh", username=username)
+                    raise credentials_exception
+
+                # SECURITY: Check user-level blacklist (set by invalidate_all_sessions
+                # on password change/reset). Without this, old refresh tokens could
+                # still rotate even after all sessions were invalidated.
+                try:
+                    is_user_blacklisted = await safe_redis_exists(f"user_blacklist:{user.id}")
+                    if is_user_blacklisted:
+                        log.warning(
+                            "Refresh blocked: user in global blacklist (password changed?)",
+                            user_id=user.id,
+                        )
+                        raise credentials_exception
+                except InvalidToken:
+                    raise
+                except Exception as e:
+                    log.error("Redis user blacklist check failed during refresh", error=str(e))
+                    # Fail-closed: if we can't verify, reject the refresh
                     raise credentials_exception
 
                 # (STEP 4: Validate JTI - Giữ nguyên)

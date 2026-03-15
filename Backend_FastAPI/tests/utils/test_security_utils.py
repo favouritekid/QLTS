@@ -236,10 +236,10 @@ def test_create_and_verify_password_reset_token_success():
 
     # --- Assertions Nội Dung Response (Token Payload - Gián tiếp qua verify) ---
     # Kiểm tra payload gián tiếp bằng cách verify token
-    verified_email = security.verify_password_reset_token(token)
-    assert (
-        verified_email == email
-    ), f"Expected verified email '{email}', got '{verified_email}'"
+    result = security.verify_password_reset_token(token)
+    assert result is not None, "Token verification should succeed"
+    assert result["email"] == email, f"Expected email '{email}', got '{result['email']}'"
+    assert "gen" in result, "Result should contain 'gen' field"
 
     # Decode thêm để kiểm tra scope và exp (nếu cần)
     try:

@@ -144,31 +144,30 @@ def create_refresh_token(
 # PASSWORD RESET TOKEN MANAGEMENT
 # =============================================================================
 
-def create_password_reset_token(email: str) -> str:
+def create_password_reset_token(email: str, generation: int = 1) -> str:
     """
     Create JWT token for password reset flow.
 
     Business Rules:
     - Short-lived (30 minutes)
-    - Contains email and password_reset scope
+    - Contains email, password_reset scope, and generation counter
+    - Generation counter invalidates older outstanding tokens
     - Single-use (should be invalidated after use)
 
     Args:
         email: User's email address
+        generation: Monotonic counter — only the latest generation is accepted
 
     Returns:
         Encoded JWT password reset token
-
-    Example:
-        >>> token = create_password_reset_token("user@example.com")
-        >>> # Send token via email to user
     """
     expire = datetime.now(timezone.utc) + timedelta(minutes=30)
 
     to_encode = {
         "exp": expire,
         "sub": email,
-        "scope": "password_reset"
+        "scope": "password_reset",
+        "gen": generation,
     }
 
     encoded_jwt = jwt.encode(
@@ -179,27 +178,20 @@ def create_password_reset_token(email: str) -> str:
     return encoded_jwt
 
 
-def verify_password_reset_token(token: str) -> Optional[str]:
+def verify_password_reset_token(token: str) -> Optional[Dict]:
     """
     Verify and decode password reset token.
 
     Business Rules:
     - Token must not be expired
     - Token must have password_reset scope
-    - Returns email if valid, None if invalid
+    - Returns payload dict with 'email' and 'gen' if valid, None if invalid
 
     Args:
         token: JWT password reset token string
 
     Returns:
-        User email if token is valid, None otherwise
-
-    Example:
-        >>> email = verify_password_reset_token(token)
-        >>> if email:
-        ...     # Allow user to reset password
-        >>> else:
-        ...     # Token invalid or expired
+        Dict with 'email' and 'gen' keys if valid, None otherwise
     """
     try:
         payload = jwt.decode(
@@ -213,7 +205,10 @@ def verify_password_reset_token(token: str) -> Optional[str]:
             return None
 
         email: str = payload.get("sub")
-        return email
+        if not email:
+            return None
+
+        return {"email": email, "gen": payload.get("gen", 1)}
 
     except JWTError:
         return None

@@ -76,13 +76,17 @@ class AccountLockoutService:
 
         except Exception as e:
             log.error(
-                "Failed to check account lockout in Redis",
+                "Failed to check account lockout in Redis — fail-closed",
                 username=username,
                 error=str(e),
                 exc_info=True,
             )
-            # Fail-open: Don't block login if Redis is down
-            return False, None
+            # SECURITY: Fail-closed for lockout checks.
+            # If we can't verify whether the account is locked, reject the
+            # login attempt. This prevents brute-force during Redis outages.
+            # Trade-off: legitimate users are temporarily blocked until Redis
+            # recovers — acceptable for a security-critical path.
+            return True, 60  # Treat as locked for 60s (retry soon)
 
     @staticmethod
     async def record_failed_attempt(
@@ -178,13 +182,14 @@ class AccountLockoutService:
 
         except Exception as e:
             log.error(
-                "Failed to record failed login attempt",
+                "Failed to record failed login attempt — fail-closed",
                 username=username,
                 error=str(e),
                 exc_info=True,
             )
-            # Fail-open: Don't block functionality if Redis is down
-            return False
+            # SECURITY: Fail-closed. If we can't track failed attempts,
+            # lock the account to prevent untracked brute-force.
+            return True
 
     @staticmethod
     async def reset_attempts(username: str):

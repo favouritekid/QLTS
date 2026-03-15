@@ -990,12 +990,16 @@ async def handle_forgot_password(db: AsyncSession, email_in: str):
             await pipe.execute()
 
     except Exception as e_redis:
-        # Fail-open (vẫn cho chạy) nhưng log lỗi
+        # SECURITY: Fail-closed for forgot-password throttling.
+        # If Redis is down, we can't verify rate limits, so block the request
+        # to prevent email flooding. The user sees the generic 202 response
+        # (no enumeration leak), they just won't receive an email.
         log.error(
-            "Failed to check/set email rate limit for forgot_password",
+            "Failed to check/set email rate limit for forgot_password — fail-closed",
             email=cleaned_email,
             error=str(e_redis),
         )
+        return  # Silently return (same as rate-limited response)
 
     # (Logic cũ tiếp tục)
     user = await get_user_by_email(db, email=email_in)
@@ -1006,7 +1010,27 @@ async def handle_forgot_password(db: AsyncSession, email_in: str):
     log.info(
         "User found for forgot password request. Sending reset email.", user_id=user.id
     )
-    token = create_password_reset_token(email=user.email)
+
+    # SECURITY: Invalidate any outstanding reset tokens for this user
+    # by bumping a per-user generation counter. Only the token issued with
+    # the latest generation will be accepted by reset_password().
+    gen_key = f"reset_gen:{user.id}"
+    try:
+        async with safe_redis_pipeline() as pipe:
+            pipe.incr(gen_key)
+            pipe.expire(gen_key, 1800)  # 30min — matches token expiry
+            results = await pipe.execute()
+        current_gen = int(results[0])
+    except Exception as e:
+        # SECURITY: Fail-closed. If we can't guarantee latest-token-only
+        # semantics, don't send the email. User sees generic 202 (no leak).
+        log.error(
+            "Failed to bump reset generation counter — email NOT sent (fail-closed)",
+            user_id=user.id, error=str(e),
+        )
+        return
+
+    token = create_password_reset_token(email=user.email, generation=current_gen)
     reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
 
     send_password_reset_email_task.delay(
@@ -1027,29 +1051,59 @@ async def reset_password(
         Tuple of (user, post_commit_callback)
     """
     try:
-        # ✅ SECURITY: Check if token was already used (single-use enforcement)
-        token_hash = hashlib.sha256(token.encode()).hexdigest()[:32]  # Unique hash per token
+        # SECURITY: Atomic single-use claim via SET NX.
+        # Only one request can claim a given token — all concurrent
+        # duplicates get NX=False and are rejected immediately.
+        token_hash = hashlib.sha256(token.encode()).hexdigest()[:32]
         used_key = f"reset_token_used:{token_hash}"
-        already_used = await safe_redis_get(used_key)
-        if already_used:
-            log.warning("Reset token reuse attempt blocked", token_prefix=token[:10])
+        try:
+            claimed = await redis_client.set(used_key, "1", nx=True, ex=1800)
+        except Exception as redis_err:
+            log.error("Redis SET NX failed for reset token claim — fail-closed",
+                      error=str(redis_err))
+            raise InvalidToken(detail="Unable to process reset. Please try again.")
+        if not claimed:
+            log.warning("Reset token reuse attempt blocked (SET NX)", token_prefix=token[:10])
             raise InvalidToken(detail="This reset link has already been used")
 
-        email = verify_password_reset_token(token)
-        if not email:
+        token_data = verify_password_reset_token(token)
+        if not token_data:
             log.warning(
                 "Invalid reset token attempt", token_prefix=token[:10]
-            )  # ✅ SỬA LỖI: Xóa `await`
+            )
             raise InvalidToken()
+
+        email = token_data["email"]
+        token_gen = token_data.get("gen", 1)
 
         user = await get_user_by_email(db, email=email)
         if not user:
             log.warning(
                 "Reset token for non-existent user", email=email
-            )  # ✅ SỬA LỖI: Xóa `await`
+            )
             raise ResourceNotFoundError(
                 detail="User associated with this token not found."
             )
+
+        # SECURITY: Verify token generation — only the latest reset link is valid
+        gen_key = f"reset_gen:{user.id}"
+        try:
+            current_gen_str = await safe_redis_get(gen_key)
+            current_gen = int(current_gen_str) if current_gen_str else None
+            if current_gen is not None and token_gen < current_gen:
+                log.warning(
+                    "Stale reset token rejected (superseded by newer request)",
+                    user_id=user.id,
+                    token_gen=token_gen,
+                    current_gen=current_gen,
+                )
+                raise InvalidToken(detail="This reset link has been superseded by a newer request")
+        except InvalidToken:
+            raise
+        except Exception as e:
+            # Redis down — fail-closed: reject token if we can't verify generation
+            log.error("Failed to verify reset token generation", user_id=user.id, error=str(e))
+            raise InvalidToken(detail="Unable to verify reset link. Please request a new one.")
 
         # ✅ SECURITY: Prevent resetting to the same password
         # Even in forgot-password flow, same password is a security risk
@@ -1075,14 +1129,15 @@ async def reset_password(
 
         db.add(user)
 
+        # Token already claimed atomically via SET NX at the top of this function.
+        # No additional Redis write needed here.
+
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
 
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            # ✅ SECURITY: Blacklist token after successful use (single-use enforcement)
-            await safe_redis_set(used_key, "1", ex=1800)  # 30 min (matches token expiry)
             log.info("User password reset successfully", user_id=user.id)
 
         return user, _post_commit
