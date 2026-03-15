@@ -321,7 +321,11 @@ export function AdmissionDetailClient({
   }
 
   const handleResubmit = () => {
-    resubmitMutation.mutate(undefined)
+    if (!vm?.version) {
+      toast.error("Không thể nộp lại: thiếu version")
+      return
+    }
+    resubmitMutation.mutate({ version: vm.version })
   }
 
   const handleEnroll = () => {

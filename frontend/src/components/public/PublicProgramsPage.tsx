@@ -81,11 +81,13 @@ function formatAcademicYears(years: number[]): string | null {
     return null
   }
 
-  if (years.length === 1) {
-    return `Năm ${years[0]}`
+  const sorted = [...years].sort((a, b) => a - b);
+
+  if (sorted.length === 1) {
+    return `Năm ${sorted[0]}`
   }
 
-  return `${years[years.length - 1]} - ${years[0]}`
+  return `${sorted[sorted.length - 1]} - ${sorted[0]}`
 }
 
 export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps) {

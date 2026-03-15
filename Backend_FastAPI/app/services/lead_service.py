@@ -4,6 +4,7 @@ from datetime import (
 )
 from typing import Callable, List, Optional, Tuple
 
+import math
 import structlog
 from sqlalchemy import case, func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +20,7 @@ from ..utils.exceptions import (
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
+    ValidationError,
 )
 from ..services import pipeline_service, distribution_service, audit_service
 from ..core.status_mapping import sync_lead_status_from_consultation
@@ -394,9 +396,26 @@ async def calculate_lead_score(
             application_score = default_application_score
             stale_penalty = default_stale_penalty
 
+        # Sanitize gpa_multiplier
+        try:
+            gpa_multiplier = float(gpa_multiplier)
+            if not math.isfinite(gpa_multiplier):
+                log.warning("gpa_multiplier non-finite, using default", raw=gpa_multiplier)
+                gpa_multiplier = default_gpa_multiplier
+        except (TypeError, ValueError):
+            gpa_multiplier = default_gpa_multiplier
+
+        # Sanitize location_bonus
+        try:
+            location_bonus = float(location_bonus)
+            if not math.isfinite(location_bonus):
+                log.warning("location_bonus non-finite, using default", raw=location_bonus)
+                location_bonus = default_location_bonus
+        except (TypeError, ValueError):
+            location_bonus = default_location_bonus
+
         # Sanitize stale_penalty: must be a finite non-negative number within [0, MAX]
         try:
-            import math
             stale_penalty = float(stale_penalty)
             if not math.isfinite(stale_penalty):
                 log.warning(
@@ -482,7 +501,7 @@ async def calculate_lead_score(
 
         return final_score
 
-    except Exception as e:
+    except (TypeError, ValueError, KeyError, AttributeError) as e:
         log.error(
             "Error calculating lead score, returning default 0",
             error=str(e),
@@ -1293,6 +1312,12 @@ async def update_lead(
                 new_phone = update_data.get("phone", db_lead.phone)
                 new_phone2 = update_data.get("phone2", db_lead.phone2)
 
+                # Cross-check: phone2 must not equal phone (same as bulk import)
+                if new_phone2 and new_phone and new_phone2 == new_phone:
+                    raise ValidationError(
+                        detail="Số điện thoại phụ không thể trùng với số điện thoại chính."
+                    )
+
                 # ✅ REFACTORED: Use Repository for global check (fixes unit-scope bug)
                 repo = LeadRepository(db)
                 dup_lead = await repo.check_phone_conflict(
@@ -1386,11 +1411,12 @@ async def update_lead(
                     lead_location=db_lead.location,
                     unit_id=db_lead.unit_id,
                 )
+                _old_lead_score = db_lead.lead_score
                 db_lead.lead_score = recalculated_score
                 log.info(
                     "Lead score recalculated on update",
                     lead_id=lead_id,
-                    old_score=db_lead.lead_score if not should_recalculate_score else "N/A",
+                    old_score=_old_lead_score,
                     new_score=recalculated_score,
                 )
 
@@ -2509,6 +2535,7 @@ async def restore_consultation(
                         lead.consultation_status_id = new_status.id
                         lead.pipeline_stage_id = new_status.stage_id
                         sync_lead_status_from_consultation(lead, new_status)
+                        lead.version = (lead.version or 1) + 1
                         db.add(lead)
 
                         log.info(
@@ -2802,6 +2829,7 @@ async def update_consultation(
                         lead.pipeline_stage_id = new_status.stage_id
                         # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
                         sync_lead_status_from_consultation(lead, new_status)
+                        lead.version = (lead.version or 1) + 1
                         db.add(lead)
                         status_changed = True
 
@@ -3245,6 +3273,7 @@ async def revert_last_status(
                     None  # Xóa assigned_at nếu revert về trạng thái không gán
                 )
 
+            lead.version = (lead.version or 1) + 1
             db.add(lead)  # Đánh dấu lead là dirty
 
             # Commit transaction
@@ -3619,6 +3648,7 @@ async def import_leads_from_file_content(
                 lead_dict["assigned_at"] = None
                 lead_dict["assignment_status"] = AssignmentStatus.PENDING
 
+            lead_dict["created_via"] = "import"
             leads_to_insert.append(lead_dict)
 
         except (ValueError, TypeError) as e:

@@ -241,7 +241,7 @@ export function useResubmitAdmission(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (data?: { notes?: string }) =>
+    mutationFn: (data: { version: number; notes?: string }) =>
       admissionsApi.resubmitAdmission(id, data),
     onSuccess: (data) => {
       if (data.status === 'resubmitted') {

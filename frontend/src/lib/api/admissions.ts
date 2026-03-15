@@ -157,11 +157,11 @@ export async function requestRevision(
  */
 export async function resubmitAdmission(
   id: number,
-  data?: { notes?: string }
+  data: { version: number; notes?: string }
 ): Promise<AdmissionProfileResponse> {
   const response = await api.post<AdmissionProfileResponse>(
     `/api/admissions/${id}/resubmit`,
-    data ?? {}
+    data
   )
   return response.data
 }

@@ -263,8 +263,10 @@ export function useCreateLead() {
         description: newLead.full_name,
       });
 
-      await queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' }),
+      ]);
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
@@ -459,16 +461,18 @@ export function useAssignLead() {
       return await leadsApi.assignLead(leadId, data);
     },
 
-    onSuccess: (updatedLead) => {
+    onSuccess: async (updatedLead) => {
       toast.success("Phân công lead thành công!", {
         description: `Đã phân công cho tư vấn viên #${updatedLead.assigned_officer_id}`,
       });
 
       // Invalidate queries
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' }),
+      ]);
     },
 
     onError: (error) => {
@@ -510,15 +514,17 @@ export function useBulkAssignLeads() {
       return await leadsApi.bulkAssignLeads(data);
     },
 
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       toast.success(`Phân công thành công ${result.successful}/${result.total} lead`);
       if (result.failed > 0) {
         toast.warning(`${result.failed} lead không thể phân công`);
       }
 
       // Invalidate lead lists and pipeline — don't wipe individual lead details
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' }),
+      ]);
     },
 
     onError: (error) => {
@@ -561,8 +567,10 @@ export function useBulkUpdateLeadsStage() {
     },
 
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' }),
+      ]);
     },
 
     onError: (error) => {
@@ -604,8 +612,10 @@ export function useBulkDeleteLeads() {
     },
 
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' }),
+      ]);
     },
 
     onError: (error) => {
@@ -651,7 +661,7 @@ export function usePerformLeadAction() {
       return await leadsApi.performLeadAction(leadId, data);
     },
 
-    onSuccess: (updatedLead, variables) => {
+    onSuccess: async (updatedLead, variables) => {
       const actionMessages: Record<string, string> = {
         reject: "Đã từ chối lead",
         convert: "Chuyển đổi lead thành công!",
@@ -665,17 +675,18 @@ export function usePerformLeadAction() {
       });
 
       // Invalidate queries
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' });
-
-      // ✅ FIX BUG-17: Invalidate workflow context so current_phase/allowed_statuses refresh
-      queryClient.invalidateQueries({
-        queryKey: workflowContextKeys.byLead(updatedLead.id),
-        exact: true,
-        refetchType: 'active',
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' }),
+        queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: 'active' }),
+        // ✅ FIX BUG-17: Invalidate workflow context so current_phase/allowed_statuses refresh
+        queryClient.invalidateQueries({
+          queryKey: workflowContextKeys.byLead(updatedLead.id),
+          exact: true,
+          refetchType: 'active',
+        }),
+      ]);
     },
 
     onError: (error, variables) => {

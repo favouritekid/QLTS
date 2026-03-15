@@ -254,9 +254,9 @@ export function PublicAdmissionsShell({ activePath, children }: PublicAdmissions
         </div>
 
         <div className={`${pageShellClass} mt-6 flex flex-wrap gap-2`}>
-          {Object.values(publicAdmissionsMedia).map((asset) => (
+          {Object.entries(publicAdmissionsMedia).map(([key, asset]) => (
             <a
-              key={asset.creditHref}
+              key={key}
               href={asset.creditHref}
               target="_blank"
               rel="noreferrer"

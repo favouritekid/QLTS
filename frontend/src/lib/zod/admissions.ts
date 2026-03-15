@@ -868,6 +868,20 @@ export const revisionRequestSchema = z.object({
 export type RevisionRequest = z.infer<typeof revisionRequestSchema>
 
 /**
+ * Resubmit Request Schema
+ * Mirrors backend: app/schemas/admissions.py -> ResubmitRequest
+ *
+ * Used when Officer resubmits a rejected/revision_requested admission profile.
+ * Requires version for optimistic locking. Optional notes about what was fixed.
+ */
+export const resubmitRequestSchema = z.object({
+  version: z.number().int().positive("Version must be a positive integer"),
+  notes: z.string().max(1000, "Ghi chú không được quá 1000 ký tự").trim().optional().nullable(),
+})
+
+export type ResubmitRequest = z.infer<typeof resubmitRequestSchema>
+
+/**
  * Drop Student Request Schema
  * Mirrors backend: app/schemas/admissions.py -> DropStudentRequest
  *

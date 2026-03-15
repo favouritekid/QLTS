@@ -11,7 +11,7 @@ This is the CENTRAL ENTITY for:
 - Activation control
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, UniqueConstraint, Numeric
+from sqlalchemy import CheckConstraint, Column, Integer, String, Boolean, ForeignKey, DateTime, UniqueConstraint, Numeric
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -106,7 +106,7 @@ class AdmissionPath(Base):
     application_fee = Column(
         Numeric(precision=12, scale=2),
         nullable=True,
-        default=0,
+        default=None,
         comment="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
     )
 
@@ -164,6 +164,10 @@ class AdmissionPath(Base):
         UniqueConstraint(
             "academic_info_id", "admission_method_id",
             name="uq_admission_path_offering_method"
+        ),
+        CheckConstraint(
+            "status IN ('draft','active','inactive','archived')",
+            name="ck_admission_path_status"
         ),
     )
 

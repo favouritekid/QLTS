@@ -120,7 +120,7 @@ export function BulkStageDialog({
                 <SelectValue placeholder="Chọn giai đoạn..." />
               </SelectTrigger>
               <SelectContent>
-                {pipelineStages.map((stage) => (
+                {pipelineStages.filter((stage) => !stage.is_final_stage).map((stage) => (
                   <SelectItem key={stage.id} value={stage.id}>
                     <div className="flex items-center gap-2">
                       <ColorDot color={sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id]} size="sm" />

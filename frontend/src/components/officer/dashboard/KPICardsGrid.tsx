@@ -158,7 +158,7 @@ function StatItem({ icon: Icon, label, value, tooltip, trend, inverseTrend = fal
         {target != null && (
           <p className={cn(
             "text-[11px] mt-0.5",
-            isTargetMet(actualValue ?? parseFloat(value), target, higherIsBetter)
+            isTargetMet(actualValue ?? Number(value.replace(/[^0-9.,-]/g, '').replace(',', '.')), target, higherIsBetter)
               ? "text-success-600 dark:text-success-500"
               : "text-warning-600 dark:text-warning-500",
           )}>

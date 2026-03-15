@@ -14,9 +14,9 @@ Architecture:
 - Model: Data structure + relationships
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
-from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
@@ -43,6 +43,14 @@ class AdmissionProfile(Base):
     # ✅ Composite Unique Constraints
     __table_args__ = (
         UniqueConstraint('citizen_id', 'academic_year', name='uq_citizen_academic_year'),
+        CheckConstraint(
+            "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn')",
+            name="ck_admission_profile_status"
+        ),
+        CheckConstraint(
+            "confirmed_via IN ('magic_link','admin_override','officer') OR confirmed_via IS NULL",
+            name="ck_admission_profile_confirmed_via"
+        ),
     )
 
     # Primary Key
@@ -94,6 +102,7 @@ class AdmissionProfile(Base):
         String(20),
         nullable=False,
         default="draft",
+        server_default="'draft'",
         index=True,
         comment="State: draft | approved | rejected | enrolled"
     )
@@ -103,7 +112,7 @@ class AdmissionProfile(Base):
     # =========================================================================
     
     full_name: Mapped[str] = mapped_column(String(255), nullable=True)
-    dob: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    dob: Mapped[date] = mapped_column(Date, nullable=True)
     gender: Mapped[str] = mapped_column(String(50), nullable=True, comment="Nam/Nữ/Khác")
     
     email: Mapped[str] = mapped_column(String(255), nullable=True)
@@ -140,6 +149,7 @@ class AdmissionProfile(Base):
         Integer,
         nullable=False,
         default=1,
+        server_default="1",
         comment="Optimistic locking version (incremented on update)"
     )
 

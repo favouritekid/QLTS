@@ -13,11 +13,11 @@ Architecture Compliance:
 - Field validators sanitize inputs at schema level
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional, Literal, Dict, Any
 import html
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
 
 # ==============================================================================
@@ -187,7 +187,7 @@ class AdmissionScoreSchema(BaseModel):
     model_config = ConfigDict(
         str_strip_whitespace=True,
         validate_assignment=True,
-        extra="allow"  # Allow extra fields for flexibility
+        extra="ignore"  # Ignore extra fields for safety
     )
 
 
@@ -306,8 +306,8 @@ class AdmissionProfileUpdate(BaseModel):
         pattern=r"^0\d{9,10}$",
         description="Phone number (10-11 digits starting with 0)"
     )
-    email: Optional[str] = Field(None, max_length=255)
-    dob: Optional[datetime] = Field(None, description="Date of birth")
+    email: Optional[EmailStr] = Field(None, max_length=255)
+    dob: Optional[date] = Field(None, description="Date of birth")
     gender: Optional[str] = Field(None, max_length=50)
     
     citizen_id: Optional[str] = Field(
@@ -398,8 +398,9 @@ class AdmissionProfileUpdate(BaseModel):
         # 2. Birth Date Logic
         # DOB must be reasonable (e.g., < Union Entry if both exist)
         # Typically Union entry is at age 15+
+        # Note: dob is date, union_entry_date is datetime — extract .date() for comparison
         if self.dob and self.union_entry_date:
-            if self.dob > self.union_entry_date:
+            if self.dob > self.union_entry_date.date():
                raise ValueError("Ngày sinh phải trước Ngày vào Đoàn")
 
         return self
@@ -515,7 +516,7 @@ class AdmissionProfileResponse(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
-    dob: Optional[datetime] = None
+    dob: Optional[date] = None
     gender: Optional[str] = None
     citizen_id: Optional[str] = None
     citizen_id_masked: Optional[str] = Field(
@@ -1030,6 +1031,11 @@ class ResubmitRequest(BaseModel):
     - Requires Officer or higher role
     - Optional notes about what was fixed
     """
+    version: int = Field(
+        ...,
+        ge=1,
+        description="REQUIRED: Current profile version for optimistic locking"
+    )
     notes: Optional[str] = Field(
         None,
         max_length=1000,

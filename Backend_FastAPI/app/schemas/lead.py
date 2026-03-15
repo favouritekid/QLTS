@@ -341,6 +341,11 @@ class LeadStatusUpdate(BaseModel):
         ...,
         description="Target consultation status ID (validated by FSM engine)"
     )
+    version: int = Field(
+        ...,
+        ge=1,
+        description="Current lead version for optimistic locking"
+    )
     loss_reason_code: Optional[str] = Field(
         None,
         description="Required when transitioning to a final negative status"

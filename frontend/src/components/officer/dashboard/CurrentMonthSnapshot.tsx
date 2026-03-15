@@ -61,7 +61,7 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
   // --- Stat 1: Enrollment ---
   const enrollActual = monthData.enrollment_actual ?? 0;
   const enrollTarget = monthData.enrollment_target;
-  const enrollPct = enrollTarget > 0 ? Math.round((enrollActual / enrollTarget) * 100) : 0;
+  const enrollPct = enrollTarget > 0 ? Math.min(100, Math.round((enrollActual / enrollTarget) * 100)) : 0;
   const enrollMet = enrollActual >= enrollTarget;
 
   // --- Stat 2: Avg consultations/day ---
@@ -106,7 +106,7 @@ export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotPr
             <>
               {monthData.consultations_actual_avg != null && (
                 <Progress
-                  value={Math.round((monthData.consultations_actual_avg / monthData.consultations_daily) * 100)}
+                  value={Math.min(100, Math.round((monthData.consultations_actual_avg / monthData.consultations_daily) * 100))}
                   className="h-1.5 mt-1.5"
                   indicatorClassName={cStatus ? PROGRESS_INDICATOR_COLORS[cStatus] : undefined}
                 />

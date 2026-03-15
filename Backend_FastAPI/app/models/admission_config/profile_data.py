@@ -7,7 +7,7 @@ Replaces JSON fields in AdmissionProfile:
 - documents_checklist → ProfileDocument
 """
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger
+from sqlalchemy import CheckConstraint, Column, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
@@ -65,6 +65,10 @@ class ProfileSubjectScore(Base):
         UniqueConstraint(
             "profile_id", "subject_id",
             name="uq_profile_subject_score"
+        ),
+        CheckConstraint(
+            "score >= 0 AND score <= 10",
+            name="ck_profile_subject_score_range"
         ),
     )
 
@@ -191,6 +195,10 @@ class ProfileDocument(Base):
         UniqueConstraint(
             "profile_id", "document_type_id",
             name="uq_profile_document"
+        ),
+        CheckConstraint(
+            "status IN ('missing','uploaded','verified','rejected','paper_submitted')",
+            name="ck_profile_document_status"
         ),
     )
 
@@ -331,6 +339,13 @@ class DocumentAuditLog(Base):
     # Relationships
     profile_document = relationship("ProfileDocument", backref="audit_logs")
     actor = relationship("User", foreign_keys=[actor_user_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('uploaded','verified','rejected','reset','paper_submitted','deleted')",
+            name="ck_document_audit_log_action"
+        ),
+    )
 
     def __repr__(self):
         return f"<DocumentAuditLog doc={self.profile_document_id} action={self.action} at={self.created_at}>"

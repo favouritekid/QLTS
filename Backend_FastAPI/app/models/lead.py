@@ -304,12 +304,10 @@ class Consultation(Base):
 
 
 class Application(Base):
-    """Model cho hồ sơ nhập học (Admission Profile).
-
-    Lưu trữ thông tin hồ sơ tuyển sinh của thí sinh, bao gồm:
-    - Ngành đào tạo, loại hình, phương thức xét tuyển
-    - Điểm xét tuyển và checklist hồ sơ (JSON)
-    - Trạng thái xử lý hồ sơ
+    """
+    DEPRECATED: Legacy admission model — do NOT use for new code.
+    Use AdmissionProfile (app/models/admission.py) instead.
+    This model maps to the 'application' table which may be dropped in a future migration.
     """
 
     __tablename__ = "application"

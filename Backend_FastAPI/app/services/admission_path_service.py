@@ -435,12 +435,20 @@ class AdmissionPathService:
             # We ignore shared groups completely to allow "deleting" default items
             for group in method_groups:
                 for item in group.items:
-                    doc_map[item.document_type_id] = (item, "method_override")
+                    existing = doc_map.get(item.document_type_id)
+                    if existing is None:
+                        doc_map[item.document_type_id] = (item, "method_override")
+                    elif item.is_mandatory and not existing[0].is_mandatory:
+                        doc_map[item.document_type_id] = (item, "method_override")
         else:
             # Case 2: No specific config -> Use Shared Defaults
             for group in shared_groups:
                 for item in group.items:
-                    doc_map[item.document_type_id] = (item, "shared")
+                    existing = doc_map.get(item.document_type_id)
+                    if existing is None:
+                        doc_map[item.document_type_id] = (item, "shared")
+                    elif item.is_mandatory and not existing[0].is_mandatory:
+                        doc_map[item.document_type_id] = (item, "shared")
         
         # Step 3: Build response
         resolved: List[ResolvedDocumentResponse] = []

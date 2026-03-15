@@ -100,7 +100,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     const urlScope = getUrlParam("scope");
     return urlScope && validScopes.includes(urlScope as DashboardScope)
       ? (urlScope as DashboardScope)
-      : null;
+      : resolvedScope;
   });
 
   // Track whether scope was initialized from URL (stable across renders)

@@ -161,7 +161,8 @@ export function MonthlyBreakdownCard({ plan, isLoading, expanded: controlledExpa
               <tbody>
                 {plan.months.map((m) => {
                   const isCurrent = isCurrentYear && m.month === currentMonth;
-                  const isFuture = isCurrentYear && m.month > currentMonth;
+                  const isFutureYear = plan.fiscal_year > currentYear;
+                  const isFuture = isFutureYear || (isCurrentYear && m.month > currentMonth);
                   const isOnTrack = m.enrollment_actual != null && m.enrollment_actual >= m.enrollment_target;
                   const isBehind = m.enrollment_actual != null && m.enrollment_actual < m.enrollment_target;
                   const cStatus = consultationStatus(m.consultations_daily, m.consultations_actual_avg);
@@ -172,7 +173,7 @@ export function MonthlyBreakdownCard({ plan, isLoading, expanded: controlledExpa
                       className={cn(
                         "border-b transition-colors",
                         isCurrent && "bg-primary/5 font-medium",
-                        isFuture && "text-muted-foreground/60",
+                        isFuture && "text-muted-foreground/60 opacity-50",
                         !isCurrent && !isFuture && "hover:bg-muted/20",
                       )}
                     >

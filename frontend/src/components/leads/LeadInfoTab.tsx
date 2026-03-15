@@ -186,7 +186,7 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
                 </label>
                 <div className="flex items-center gap-2">
                   <User aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
-                  <p className="text-base">Tư vấn viên #{lead.assigned_officer_id}</p>
+                  <p className="text-base">{lead.assigned_officer?.full_name ?? `TTV #${lead.assigned_officer_id}`}</p>
                 </div>
               </div>
               {lead.assigned_at && (

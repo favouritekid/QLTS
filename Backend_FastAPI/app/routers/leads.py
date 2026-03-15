@@ -1,6 +1,6 @@
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
@@ -16,7 +16,7 @@ from ..utils.csv_helpers import sanitize_csv_cell
 from ..services.notification_dispatcher import safe_dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..core.constants import UserRole
-from ..utils.exceptions import BusinessRuleViolation
+from ..utils.exceptions import BusinessRuleViolation, ConflictError
 from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
@@ -681,6 +681,7 @@ async def update_existing_lead(
 async def delete_lead(
     request: Request,
     lead_id: int,
+    lead: models.Lead = LeadAccessDep,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -1501,13 +1502,20 @@ async def update_lead_consultation_status(
         current_user=current_user
     )
 
+    # Optimistic locking: reject stale writes
+    if status_update.version != lead.version:
+        raise ConflictError(
+            f"Lead was modified by another user. "
+            f"Expected version {status_update.version}, actual {lead.version}. "
+            "Please refresh and try again."
+        )
+
     # ✅ FIX #26: Enforce loss_reason_code for final negative transitions
     if validated_status.is_final and validated_status.outcome_type == "negative":
         if not status_update.loss_reason_code:
             raise BusinessRuleViolation(
                 detail="loss_reason_code is required when transitioning to a final negative status"
             )
-        lead.loss_reason_code = status_update.loss_reason_code
 
     # Store old status for history/notification
     old_status_id = lead.consultation_status_id
@@ -1527,13 +1535,29 @@ async def update_lead_consultation_status(
         old_pipeline_stage_id=old_pipeline_stage_id,
         new_pipeline_stage_id=validated_status.stage_id,
         changed_by_user_id=current_user.id,
-        reason="Status updated via FSM-validated endpoint"
+        reason="Status updated via FSM-validated endpoint",
+        loss_reason_code=status_update.loss_reason_code,
     )
     db.add(history)
-    
-    # Flush before commit to get updated timestamp
-    await db.flush()
-    
+
+    # Atomic update conditioned on version to prevent race conditions
+    from sqlalchemy import update as sa_update
+    result = await db.execute(
+        sa_update(models.Lead)
+        .where(models.Lead.id == lead.id, models.Lead.version == status_update.version)
+        .values(
+            status=lead.status,
+            consultation_status_id=lead.consultation_status_id,
+            pipeline_stage_id=lead.pipeline_stage_id,
+            version=models.Lead.version + 1,
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+    if result.rowcount == 0:
+        raise ConflictError(
+            "Lead was modified concurrently. Please refresh and try again."
+        )
+
     # Commit transaction
     await db.commit()
     await db.refresh(lead)
