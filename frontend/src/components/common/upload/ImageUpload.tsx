@@ -53,7 +53,7 @@ export interface ImageUploadProps {
 // CONSTANTS
 // =============================================================================
 
-const DEFAULT_MAX_SIZE = 5 * 1024 * 1024; // 5MB
+const DEFAULT_MAX_SIZE = 2 * 1024 * 1024; // 2MB
 const DEFAULT_ACCEPT = "image/png,image/jpeg,image/jpg,image/webp";
 const DEFAULT_COMPRESSION_QUALITY = 0.8;
 const DEFAULT_MAX_DIMENSION = 1024;
@@ -176,22 +176,22 @@ export function ImageUpload({
       const ext = file.name.split('.').pop()?.toLowerCase();
       const allowedExtensions = ['png', 'jpg', 'jpeg', 'webp'];
       if (!ext || !allowedExtensions.includes(ext)) {
-        return "Chi chap nhan file PNG, JPG hoac WebP";
+        return "Chỉ chấp nhận file PNG, JPG hoặc WebP";
       }
 
       // Block SVG (XSS vector via embedded scripts)
       if (ext === 'svg' || file.type === 'image/svg+xml') {
-        return "File SVG khong duoc phep vi ly do bao mat";
+        return "File SVG không được phép vì lý do bảo mật";
       }
 
       if (file.size > maxSize) {
-        return `Anh qua lon. Kich thuoc toi da: ${Math.round(maxSize / 1024 / 1024)}MB`;
+        return `Ảnh quá lớn. Kích thước tối đa: ${Math.round(maxSize / 1024 / 1024)}MB`;
       }
 
       // MIME check (secondary defense)
       const acceptedTypes = accept.split(",").map((t) => t.trim());
       if (!acceptedTypes.includes(file.type)) {
-        return "Chi chap nhan file PNG, JPG hoac WebP";
+        return "Chỉ chấp nhận file PNG, JPG hoặc WebP";
       }
       return null;
     },

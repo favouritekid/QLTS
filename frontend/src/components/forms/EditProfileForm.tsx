@@ -91,16 +91,16 @@ export function EditProfileForm() {
       if (!file.type.startsWith("image/")) {
         form.setError("avatar", {
           type: "manual",
-          message: "Please select a valid image file",
+          message: "Vui lòng chọn tệp hình ảnh hợp lệ",
         });
         return;
       }
 
-      // Validate file size (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
+      // Validate file size (max 2MB)
+      if (file.size > 2 * 1024 * 1024) {
         form.setError("avatar", {
           type: "manual",
-          message: "Image size must be less than 5MB",
+          message: "Kích thước ảnh phải nhỏ hơn 2MB",
         });
         return;
       }
@@ -179,7 +179,7 @@ export function EditProfileForm() {
               <div className="space-y-1 text-center sm:text-left">
                 <p className="text-sm font-medium">Ảnh Đại Diện</p>
                 <p className="text-muted-foreground text-xs">
-                  Nhấn vào biểu tượng máy ảnh để tải ảnh đại diện mới. JPG, PNG hoặc GIF. Tối đa 5MB.
+                  Nhấn vào biểu tượng máy ảnh để tải ảnh đại diện mới. JPG, PNG hoặc GIF. Tối đa 2MB.
                 </p>
                 <input
                   ref={fileInputRef}

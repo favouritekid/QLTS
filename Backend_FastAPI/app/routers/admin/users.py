@@ -39,7 +39,7 @@ from fastapi import (
     Query,
     Request,
     UploadFile,
-    status,
+    status as http_status,
 )
 from fastapi.responses import StreamingResponse
 from pydantic import EmailStr, TypeAdapter, ValidationError
@@ -113,7 +113,7 @@ async def log_admin_activity(
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=http_status.HTTP_201_CREATED)
 async def create_new_user(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
@@ -170,7 +170,7 @@ async def create_new_user(
 
         if file_size > settings.MAX_AVATAR_CONTENT_LENGTH:
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB."
             )
 
@@ -685,7 +685,7 @@ async def import_leads_from_file(
             exc_info=True,
         )
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=http_status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to read uploaded file: {e}",
         )
     finally:
@@ -710,7 +710,7 @@ async def import_leads_from_file(
             error=str(e),
         )
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=http_status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
 
@@ -859,7 +859,7 @@ async def update_existing_user(
                 raise ValueError("Skills must be a JSON list of strings")
         except (json.JSONDecodeError, ValueError) as e:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f'Invalid format for skills. Must be a JSON string of a list (e.g., \'["skill1", "skill2"]\'): {e}',
             )
     # Chỉ xử lý email nếu được cung cấp và không rỗng
@@ -874,7 +874,7 @@ async def update_existing_user(
                 existing_user = await user_service.get_user_by_email(db, valid_email)
                 if existing_user:
                     raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
+                        status_code=http_status.HTTP_409_CONFLICT,
                         detail="Email already registered by another user",
                     )
             update_dict["email"] = valid_email
@@ -882,7 +882,7 @@ async def update_existing_user(
         except ValidationError as e:
             error_detail = e.errors()[0].get("msg", "Invalid email format")
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid email format: {cleaned_email}. Error: {error_detail}",
             )
         # (Thêm HTTPException nếu raise từ logic check DB)
@@ -914,7 +914,7 @@ async def update_existing_user(
 
         if file_size > settings.MAX_AVATAR_CONTENT_LENGTH:
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB."
             )
 

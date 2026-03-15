@@ -204,11 +204,11 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         return;
       }
 
-      // Validate file size (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
+      // Validate file size (max 2MB)
+      if (file.size > 2 * 1024 * 1024) {
         form.setError("avatar", {
           type: "manual",
-          message: "Kích thước ảnh phải nhỏ hơn 5MB",
+          message: "Kích thước ảnh phải nhỏ hơn 2MB",
         });
         return;
       }
@@ -299,7 +299,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
               <div className="flex-1 space-y-1">
                 <p className="text-sm font-medium">Ảnh đại diện</p>
                 <p className="text-muted-foreground text-xs">
-                  JPG, PNG hoặc GIF. Tối đa 5MB.
+                  JPG, PNG hoặc GIF. Tối đa 2MB.
                 </p>
                 <input
                   ref={fileInputRef}
