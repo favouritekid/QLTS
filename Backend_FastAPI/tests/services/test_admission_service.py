@@ -12,6 +12,7 @@ Uses real database via fixtures (no mocking).
 """
 
 import random
+import uuid
 import pytest
 from datetime import datetime, timezone
 from httpx import AsyncClient
@@ -35,12 +36,13 @@ async def create_test_lead(
     assigned_officer_id: int = None,
 ) -> int:
     """Create a test lead for admission profile."""
+    unique = uuid.uuid4().hex[:12]
     async with AsyncSessionLocal() as session:
         async with session.begin():
             lead = models.Lead(
-                full_name="Test Applicant Service",
+                full_name=f"Test Applicant Service {unique}",
                 phone=f"090{random.randint(1000000, 9999999)}",
-                email=f"test_svc_{datetime.now().timestamp():.0f}@example.com",
+                email=f"test_svc_{unique}@example.com",
                 source="website",
                 unit_id=unit_id,
                 assigned_officer_id=assigned_officer_id,
@@ -127,10 +129,11 @@ async def setup_admission_api_data(
             await session.flush()
 
             # 6. Lead
+            lead_unique = uuid.uuid4().hex[:12]
             lead = models.Lead(
-                full_name="Service API Test Lead",
+                full_name=f"Service API Test Lead {lead_unique}",
                 phone=f"090{random.randint(1000000, 9999999)}",
-                email=f"svc_api_{datetime.now().timestamp():.0f}@test.com",
+                email=f"svc_api_{lead_unique}@test.com",
                 source="website",
                 unit_id=unit_id,
                 assigned_officer_id=officer_id,

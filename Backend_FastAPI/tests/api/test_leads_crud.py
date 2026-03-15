@@ -71,7 +71,7 @@ async def seed_lead_dependencies(setup_test_database):
         "phase": "consultation",
         "updates_pipeline": True,
         "legacy_status": "new",  # Required by StatusHelper.get_initial_status()
-        "is_final_status": False,  # Required by StatusHelper.get_initial_status()
+        "is_final": False,  # Required by StatusHelper.get_initial_status()
     }
 
     # 3. Định nghĩa Status sts02 (Contacted - for consultation test)
@@ -361,8 +361,10 @@ async def test_add_consultation_success_officer(
 
     # 1. Assert Response (Mong đợi 201) - Giữ nguyên
     assert response.status_code == 201, f"Resp: {response.text}"
-    consult_resp_data = response.json()
-    assert isinstance(consult_resp_data, dict)
+    resp_data = response.json()
+    assert isinstance(resp_data, dict)
+    # Response wraps consultation data in 'consultation' key
+    consult_resp_data = resp_data.get("consultation", resp_data)
     assert "id" in consult_resp_data
     consultation_id = consult_resp_data["id"]
     assert consult_resp_data.get("method") == consultation_payload["method"]

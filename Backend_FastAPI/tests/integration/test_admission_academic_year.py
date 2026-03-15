@@ -10,6 +10,7 @@ Tests the multi-year admission support feature:
 Uses real database via fixtures.
 """
 
+import uuid
 import pytest
 from datetime import datetime, timezone
 from httpx import AsyncClient
@@ -28,17 +29,19 @@ pytestmark = pytest.mark.asyncio
 # ==============================================================================
 
 
-async def create_test_lead(unit_id: int, offering_id: int = None) -> int:
+async def create_test_lead(unit_id: int, offering_id: int = None, assigned_officer_id: int = None) -> int:
     """Create a test lead for admission profile."""
+    unique = uuid.uuid4().hex[:12]
     async with AsyncSessionLocal() as session:
         async with session.begin():
             lead = models.Lead(
-                full_name=f"Test Lead {datetime.now().timestamp():.0f}",
+                full_name=f"Test Lead {unique}",
                 phone="0901234500",
-                email=f"test_{datetime.now().timestamp():.0f}@example.com",
+                email=f"test_{unique}@example.com",
                 source="website",
                 unit_id=unit_id,
                 offering_id=offering_id,
+                assigned_officer_id=assigned_officer_id,
             )
             session.add(lead)
             await session.flush()
@@ -192,15 +195,16 @@ class TestAcademicYearConstraint:
         API response should include academic_year field.
         """
         unit_id = seed_lead_dependencies["unit_id"]
-        
-        # Create profile via direct insert
-        lead_id = await create_test_lead(unit_id)
+        officer_id = officer_user_in_db["id"]
+
+        # Create profile via direct insert (assign lead to officer for IDOR access)
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_id)
         profile = await create_admission_profile_direct(
             lead_id=lead_id,
             citizen_id="111122223333",
             academic_year=2025,
         )
-        
+
         headers = await get_auth_headers(client, officer_user_in_db)
         
         # GET profile via API

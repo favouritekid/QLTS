@@ -255,22 +255,22 @@ class SecurityConstants:
 class TestPipelineData:
     """Dữ liệu mẫu cho pipeline stages và statuses."""
 
-    STAGE_A = {"id": "STAGE_A", "name": "Stage A", "order": 10}
-    STAGE_B = {"id": "STAGE_B", "name": "Stage B", "order": 20}
+    STAGE_A = {"id": "stage_a", "name": "Stage A", "order": 10}
+    STAGE_B = {"id": "stage_b", "name": "Stage B", "order": 20}
     STAGE_C = {
-        "id": "STAGE_C",
+        "id": "stage_c",
         "name": "Stage C (No Status)",
         "order": 30,
     }  # Stage không có status
 
     STATUS_A1 = {
-        "id": "STATUS_A1",
+        "id": "status_a1",
         "name": "Status A1",
         "color_code": "#AAAAAA",
         "stage_id": STAGE_A["id"],
     }
     STATUS_B1 = {
-        "id": "STATUS_B1",
+        "id": "status_b1",
         "name": "Status B1",
         "color_code": "#BBBBBB",
         "stage_id": STAGE_B["id"],
@@ -329,6 +329,6 @@ class TestConfigData:
 
 # Thêm các hằng số ID không tồn tại
 NON_EXISTENT_ID = 99999
-NON_EXISTENT_STAGE_ID = "NO_STAGE"
-NON_EXISTENT_STATUS_ID = "NO_STATUS"
+NON_EXISTENT_STAGE_ID = "no_stage"
+NON_EXISTENT_STATUS_ID = "no_status"
 NON_EXISTENT_LEAD_ID = 88888  # Bổ sung ID lead không tồn tại
