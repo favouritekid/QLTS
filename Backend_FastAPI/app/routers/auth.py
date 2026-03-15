@@ -566,6 +566,10 @@ async def perform_password_reset(
         db, token=reset_data.token, new_password=reset_data.new_password
     )
 
+    # Cache identifiers before any rollback — ORM object may expire after rollback
+    user_id = user.id
+    user_email = user.email
+
     # SECURITY: Invalidate all sessions BEFORE committing password change.
     # If revocation fails, rollback so old password stays active — fail-closed:
     # no dangling sessions with a changed password.
@@ -573,15 +577,15 @@ async def perform_password_reset(
         await user_service.invalidate_all_sessions(db, user)
         log.warning(
             "All user sessions invalidated after password reset",
-            user_id=user.id,
-            email=user.email,
+            user_id=user_id,
+            email=user_email,
             security_event="PASSWORD_RESET_SESSIONS_INVALIDATED",
         )
     except (CacheServiceError, UserServiceError) as e:
         await db.rollback()
         log.critical(
             "Failed to invalidate sessions — password reset rolled back",
-            user_id=user.id,
+            user_id=user_id,
             error=e.detail,
             context=e.context,
         )
@@ -593,7 +597,7 @@ async def perform_password_reset(
         await db.rollback()
         log.critical(
             "Failed to invalidate sessions — password reset rolled back",
-            user_id=user.id,
+            user_id=user_id,
             error=str(e),
             exc_info=True,
         )
@@ -668,11 +672,14 @@ async def perform_change_password(
         new_password=password_data.new_password,
     )
 
+    # Cache identifier before any rollback — ORM object may expire after rollback
+    current_user_id = current_user.id
+
     # C2 SECURITY FIX: Clear password_reset_required flag after password change
     if hasattr(current_user, 'password_reset_required') and current_user.password_reset_required:
         current_user.password_reset_required = False
         db.add(current_user)
-        log.info("Cleared password_reset_required flag", user_id=current_user.id)
+        log.info("Cleared password_reset_required flag", user_id=current_user_id)
 
     # SECURITY: Invalidate all sessions BEFORE committing password change.
     # If revocation fails, rollback so the old password stays active —
@@ -681,13 +688,13 @@ async def perform_change_password(
         await user_service.invalidate_all_sessions(db, current_user)
         log.info(
             "All user sessions invalidated after password change",
-            user_id=current_user.id,
+            user_id=current_user_id,
         )
     except (CacheServiceError, UserServiceError) as e:
         await db.rollback()
         log.critical(
             "Failed to invalidate sessions — password change rolled back",
-            user_id=current_user.id,
+            user_id=current_user_id,
             error=e.detail,
             context=e.context,
         )
@@ -699,7 +706,7 @@ async def perform_change_password(
         await db.rollback()
         log.critical(
             "Failed to invalidate sessions — password change rolled back",
-            user_id=current_user.id,
+            user_id=current_user_id,
             error=str(e),
             exc_info=True,
         )

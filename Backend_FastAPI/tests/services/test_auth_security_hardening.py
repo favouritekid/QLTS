@@ -313,3 +313,39 @@ class TestForgotPasswordThrottlingFailClosed:
 
         # Token should NOT have been created (gen bump failed → no email)
         mock_token.assert_not_called()
+
+
+# =============================================================================
+# 5. REFRESH ENDPOINT — USER BLACKLIST CHECK
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestRefreshBlockedByUserBlacklist:
+    """Refresh endpoint must reject requests when user is in global blacklist."""
+
+    async def test_refresh_rejected_when_user_blacklisted(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict,
+    ):
+        """After user_blacklist is set, /auth/refresh must return 401."""
+        from app.database import safe_redis_set
+
+        # Login to get valid tokens
+        login_res = await client.post("/api/auth/login", data={
+            "username": regular_user_in_db["username"],
+            "password": regular_user_in_db["password"],
+        })
+        assert login_res.status_code == 200
+        user_data = login_res.json().get("user", {})
+        user_id = user_data.get("id")
+        assert user_id is not None
+
+        # Simulate password change invalidation: set user_blacklist
+        await safe_redis_set(f"user_blacklist:{user_id}", "1", ex=3600)
+
+        # Attempt refresh — should be blocked
+        refresh_res = await client.post("/api/auth/refresh")
+        assert refresh_res.status_code == 401, \
+            f"Refresh should be blocked when user is blacklisted, got {refresh_res.status_code}"
