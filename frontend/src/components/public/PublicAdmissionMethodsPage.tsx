@@ -63,13 +63,13 @@ export default function PublicAdmissionMethodsPage({ catalog }: PublicAdmissionM
         asset="documentsDesk"
         captionTitle={
           liveCatalog
-            ? "Trang này đã nối dữ liệu thật cho AdmissionMethod và SubjectGroup ở các lộ trình public"
-            : "Trang này đang là seeded content nhưng đã bám logic AdmissionMethod, SubjectGroup và ConfigDocumentType"
+            ? "Phương thức xét tuyển đang áp dụng cho các lộ trình tuyển sinh hiện hành"
+            : "Thông tin phương thức xét tuyển tham khảo"
         }
         captionDescription={
           liveCatalog
-            ? "Public site hiện chỉ hiển thị các phương thức và tổ hợp đang gắn với admission path active, visibility public. Checklist hồ sơ chi tiết đã được tách sang trang hồ sơ để dùng contract public riêng."
-            : "Khi public API sẵn sàng, từng nhóm nội dung tại đây có thể nối sang phương thức xét tuyển, tổ hợp và checklist hồ sơ thực tế mà không cần đổi bố cục."
+            ? "Chỉ các phương thức và tổ hợp đang được áp dụng cho lộ trình tuyển sinh công khai mới hiển thị tại đây."
+            : "Danh mục đang được cập nhật. Vui lòng quay lại sau hoặc liên hệ phòng tuyển sinh để biết thêm chi tiết."
         }
         highlights={heroHighlights}
         actions={[
@@ -266,7 +266,7 @@ export default function PublicAdmissionMethodsPage({ catalog }: PublicAdmissionM
           <SectionHeading
             eyebrow="Documents"
             title="Checklist hồ sơ nên chia theo từng giai đoạn, không dồn vào một danh sách dài"
-            description="Khối này giữ vai trò teaser để người dùng hiểu mạch chuẩn bị hồ sơ. Checklist chi tiết theo hệ đào tạo và phương thức hiện đã được tách sang trang hồ sơ dùng contract public riêng."
+            description="Mỗi phương thức có bộ hồ sơ riêng. Xem checklist đầy đủ theo hệ đào tạo và phương thức tại trang hồ sơ."
           />
 
           <div className="grid gap-4 lg:grid-cols-3">

@@ -140,13 +140,13 @@ export default function PublicDocumentsPage({ catalog }: PublicDocumentsPageProp
         asset="documentsDesk"
         captionTitle={
           liveCatalog
-            ? "Trang này đã nối checklist hồ sơ thật từ DocumentGroup và ConfigDocumentType"
-            : "Bố cục trang hồ sơ đã sẵn sàng để nối document groups của backend"
+            ? "Checklist hồ sơ theo hệ đào tạo và phương thức xét tuyển hiện hành"
+            : "Danh mục hồ sơ cần chuẩn bị tham khảo"
         }
         captionDescription={
           liveCatalog
-            ? "Checklist đang được resolve theo đúng nghiệp vụ hiện tại: hồ sơ chung theo hệ đào tạo và override riêng theo phương thức khi backend có cấu hình method-specific."
-            : "Khi public API sẵn sàng, trang này sẽ hiển thị hồ sơ theo hệ đào tạo và phương thức mà không cần thay bố cục."
+            ? "Hồ sơ chung theo hệ đào tạo và yêu cầu riêng theo từng phương thức xét tuyển được cập nhật theo danh mục tuyển sinh hiện hành."
+            : "Danh mục đang được cập nhật. Vui lòng quay lại sau hoặc liên hệ phòng tuyển sinh để biết thêm chi tiết."
         }
         highlights={heroHighlights}
         actions={[

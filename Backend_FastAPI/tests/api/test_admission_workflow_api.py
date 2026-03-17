@@ -104,8 +104,8 @@ async def _submit(client: AsyncClient, h: dict, lead_id: int, method_id: int) ->
 
     v = (await client.get(ADM(pid), headers=h)).json()["version"]
     sr = await client.post(ACT(pid, "submit"), json={"version": v}, headers=h)
-    if sr.status_code != 200:
-        # Get validation errors for debugging
+    sr_body = sr.json()
+    if sr.status_code != 200 or sr_body.get("status") != "submitted":
         profile_debug = (await client.get(ADM(pid), headers=h)).json()
         raise AssertionError(
             f"Submit failed ({sr.status_code}): {sr.text[:300]}\n"
@@ -113,9 +113,8 @@ async def _submit(client: AsyncClient, h: dict, lead_id: int, method_id: int) ->
             f"  validation_errors: {profile_debug.get('validation_errors', [])[:3]}\n"
             f"  docs: {[(d['code'], d['status']) for d in profile_debug.get('documents_checklist', [])]}"
         )
-    result = sr.json()
-    assert result["status"] == "submitted", f"Submit returned status={result['status']}, expected submitted"
-    return result
+    # Submit may return {status, message} not full profile — re-fetch
+    return (await client.get(ADM(pid), headers=h)).json()
 
 
 async def _fast_enroll(client: AsyncClient, pid: int):
@@ -125,7 +124,7 @@ async def _fast_enroll(client: AsyncClient, pid: int):
     await client.post(ACT(pid, "approve"), json={"notes": "OK", "version": v}, headers=ah)
     ah = await _admin(client)
     v = await _ver(client, ah, pid)
-    await client.post(ACT(pid, "override"), json={"reason": "O", "version": v}, headers=ah)
+    await client.post(ACT(pid, "override"), json={"reason": "E2E override for enrollment test", "version": v}, headers=ah)
     ah = await _admin(client)
     v = await _ver(client, ah, pid)
     await client.post(ACT(pid, "finalize"), json={"version": v}, headers=ah)
@@ -185,15 +184,18 @@ async def test_submit_approve_override_finalize_enrolled(client, officer_user_in
 
     ah = await _admin(client); v = await _ver(client, ah, pid)
     r = await client.post(ACT(pid, "approve"), json={"notes": "OK", "version": v}, headers=ah)
-    assert r.status_code == 200 and r.json()["status"] == "approved"
+    assert r.status_code == 200, f"Approve failed ({r.status_code}): {r.text[:300]}"
+    assert r.json()["status"] == "approved"
 
     ah = await _admin(client); v = await _ver(client, ah, pid)
-    r = await client.post(ACT(pid, "override"), json={"reason": "Override", "version": v}, headers=ah)
-    assert r.status_code == 200 and r.json()["status"] == "overridden"
+    r = await client.post(ACT(pid, "override"), json={"reason": "E2E test override for enrollment flow", "version": v}, headers=ah)
+    assert r.status_code == 200, f"Override failed ({r.status_code}): {r.text[:300]}"
+    assert r.json()["status"] == "overridden"
 
     ah = await _admin(client); v = await _ver(client, ah, pid)
     r = await client.post(ACT(pid, "finalize"), json={"version": v}, headers=ah)
-    assert r.status_code == 200 and r.json()["status"] == "enrolled"
+    assert r.status_code == 200, f"Finalize failed ({r.status_code}): {r.text[:300]}"
+    assert r.json()["status"] == "enrolled"
 
 
 @pytest.mark.asyncio
@@ -203,7 +205,7 @@ async def test_submit_reject_resubmit_revision_resubmit_approve(client, officer_
     pid = p["id"]
 
     ah = await _admin(client); v = await _ver(client, ah, pid)
-    assert (await client.post(ACT(pid, "reject"), json={"reason": "Bad", "version": v}, headers=ah)).json()["status"] == "rejected"
+    assert (await client.post(ACT(pid, "reject"), json={"reason": "Documents insufficient for admission", "version": v}, headers=ah)).json()["status"] == "rejected"
 
     oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, pid)
     assert (await client.post(ACT(pid, "resubmit"), json={"notes": "Fixed", "version": v}, headers=oh)).json()["status"] == "resubmitted"
@@ -257,7 +259,7 @@ async def test_officer_cannot_override(client, officer_user_in_db, adm_lead, adm
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
     oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
-    assert (await client.post(ACT(p["id"], "override"), json={"reason": "No", "version": v}, headers=oh)).status_code == 403
+    assert (await client.post(ACT(p["id"], "override"), json={"reason": "Officer override attempt denied", "version": v}, headers=oh)).status_code == 403
 
 
 @pytest.mark.asyncio
@@ -267,41 +269,63 @@ async def test_officer_cannot_finalize(client, officer_user_in_db, adm_lead, adm
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
-    await client.post(ACT(p["id"], "override"), json={"reason": "O", "version": v}, headers=ah)
+    await client.post(ACT(p["id"], "override"), json={"reason": "E2E override for enrollment test", "version": v}, headers=ah)
     oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
     assert (await client.post(ACT(p["id"], "finalize"), json={"version": v}, headers=oh)).status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_approve_stale_version(client, officer_user_in_db, adm_lead, adm_config):
+    """Approve with stale version returns 409 (ConflictError)."""
     oh = await _officer(client, officer_user_in_db)
     p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
     ah = await _admin(client); stale = await _ver(client, ah, p["id"])
-    await client.post(ACT(p["id"], "approve"), json={"notes": "1st", "version": stale}, headers=ah)
+    # Reject to change version while keeping profile in a state where approve is valid later
+    await client.post(ACT(p["id"], "reject"), json={"reason": "Reject to bump version for test", "version": stale}, headers=ah)
+    # Resubmit so we're back in a state where approve is valid (resubmitted → approved)
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
+    await client.post(ACT(p["id"], "resubmit"), json={"notes": "Resubmit for stale test", "version": v}, headers=oh)
+    # Approve with stale version from submitted era — transition valid but version wrong
     ah = await _admin(client)
-    assert (await client.post(ACT(p["id"], "approve"), json={"notes": "2nd", "version": stale}, headers=ah)).status_code in [400, 409]
+    r = await client.post(ACT(p["id"], "approve"), json={"notes": "Stale approve", "version": stale}, headers=ah)
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.text[:200]}"
 
 
 @pytest.mark.asyncio
 async def test_request_revision_stale_version(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
     p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    # Get stale version at submitted state
     ah = await _admin(client); stale = await _ver(client, ah, p["id"])
-    await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": stale}, headers=ah)
+    # Reject to change version (submitted → rejected is valid)
+    await client.post(ACT(p["id"], "reject"), json={"reason": "Reject to bump version for test", "version": stale}, headers=ah)
+    # Resubmit (officer) to get back to a state where request-revision is valid
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
+    await client.post(ACT(p["id"], "resubmit"), json={"notes": "Resubmit", "version": v}, headers=oh)
+    # Now request-revision with stale version from submitted era
     ah = await _admin(client)
-    assert (await client.post(ACT(p["id"], "request-revision"), json={"reason": "Stale revision test reason here", "version": stale}, headers=ah)).status_code in [400, 409]
+    r = await client.post(ACT(p["id"], "request-revision"), json={"reason": "Stale revision test reason here", "version": stale}, headers=ah)
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.text[:200]}"
 
 
 @pytest.mark.asyncio
 async def test_resubmit_stale_version(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
     p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    # Reject first
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
-    await client.post(ACT(p["id"], "reject"), json={"reason": "Bad", "version": v}, headers=ah)
+    await client.post(ACT(p["id"], "reject"), json={"reason": "Documents insufficient for admission", "version": v}, headers=ah)
+    # Get stale version at rejected state
     oh = await _officer(client, officer_user_in_db); stale = await _ver(client, oh, p["id"])
+    # Resubmit with correct version
     await client.post(ACT(p["id"], "resubmit"), json={"notes": "1st", "version": stale}, headers=oh)
+    # Reject again to get back to rejectable state
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "reject"), json={"reason": "Reject again for stale test", "version": v}, headers=ah)
+    # Resubmit with stale version (from first rejected state)
     oh = await _officer(client, officer_user_in_db)
-    assert (await client.post(ACT(p["id"], "resubmit"), json={"notes": "2nd", "version": stale}, headers=oh)).status_code in [400, 409]
+    r = await client.post(ACT(p["id"], "resubmit"), json={"notes": "Stale attempt", "version": stale}, headers=oh)
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.text[:200]}"
 
 
 @pytest.mark.asyncio
@@ -315,7 +339,8 @@ async def test_drop_stale_version(client, officer_user_in_db, adm_lead, adm_conf
             pr = (await s.execute(select(models.AdmissionProfile).where(models.AdmissionProfile.id == p["id"]))).scalar_one()
             pr.version += 1
     ah = await _admin(client)
-    assert (await client.post(ACT(p["id"], "drop"), json={"reason": "Stale drop test reason text", "version": stale}, headers=ah)).status_code in [400, 409]
+    r = await client.post(ACT(p["id"], "drop"), json={"reason": "Stale drop test reason text here", "version": stale}, headers=ah)
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.text[:200]}"
 
 
 @pytest.mark.asyncio

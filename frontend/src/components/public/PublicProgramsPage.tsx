@@ -104,12 +104,12 @@ export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps)
     : ["Bậc học rõ ràng", "Nhóm ngành dễ duyệt", "Gợi ý hệ đào tạo"]
 
   const heroCaptionTitle = hasLiveCatalog
-    ? "Trang này đã nối sang public API cho MajorProgram, ProgramOffering và OfferingAcademicInfo"
-    : "Nội dung seeded đã bám đúng tư duy tổ chức dữ liệu của backend"
+    ? "Danh mục chương trình đào tạo đang tuyển sinh"
+    : "Thông tin chương trình đào tạo tham khảo"
 
   const heroCaptionDescription = hasLiveCatalog
-    ? "Danh mục đang lấy từ dữ liệu đã công bố trên backend. Chỉ những ngành, hệ đào tạo và thông tin năm học đã publish mới được đưa ra public site."
-    : "Hiện tại đây là dữ liệu tham chiếu để test UI public. Khi có public API, trang có thể map trực tiếp sang MajorProgram, ProgramOffering và OfferingAcademicInfo."
+    ? "Chỉ những ngành, hệ đào tạo và thông tin năm học đã được công bố chính thức mới hiển thị trên trang này."
+    : "Danh mục đang được cập nhật. Vui lòng quay lại sau hoặc liên hệ phòng tuyển sinh để biết thêm chi tiết."
 
   return (
     <PublicAdmissionsShell activePath="/tuyen-sinh/nganh-hoc">

@@ -139,13 +139,13 @@ export default function PublicTuitionAidPage({ catalog }: PublicTuitionAidPagePr
         asset="scholarshipAward"
         captionTitle={
           liveCatalog
-            ? "Bố cục này đã nối học phí public và policy ưu đãi đang active trên backend"
-            : "Bố cục này sẵn sàng để nối OfferingAcademicInfo và các policy tài chính sau này"
+            ? "Học phí và chính sách ưu đãi đang áp dụng cho năm tuyển sinh hiện hành"
+            : "Thông tin học phí và hỗ trợ tài chính tham khảo"
         }
         captionDescription={
           liveCatalog
-            ? "Public site hiện đang đọc dữ liệu từ học phí đã publish theo offering và các tuition discount policy active được liên kết. Timeline thanh toán và FAQ vẫn đang giữ seeded content để chờ contract public riêng."
-            : "Hiện tại dữ liệu vẫn là seeded content để test luồng public. Về sau có thể map sang học phí theo năm, ưu đãi đầu vào và các chính sách hỗ trợ thực tế."
+            ? "Mức học phí theo hệ đào tạo và các chính sách giảm học phí, học bổng đang được áp dụng cho các chương trình đã công bố."
+            : "Danh mục đang được cập nhật. Vui lòng quay lại sau hoặc liên hệ phòng tuyển sinh để biết thêm chi tiết."
         }
         highlights={heroHighlights}
         actions={[
@@ -256,13 +256,13 @@ export default function PublicTuitionAidPage({ catalog }: PublicTuitionAidPagePr
             eyebrow={livePolicies.length > 0 ? "Live Policies" : "Scholarships"}
             title={
               livePolicies.length > 0
-                ? "Các chính sách ưu đãi học phí đang active và được liên kết với dữ liệu public"
-                : "Học bổng đầu vào và hỗ trợ tài chính nên ở cạnh học phí"
+                ? "Chính sách ưu đãi học phí đang áp dụng"
+                : "Học bổng đầu vào và hỗ trợ tài chính"
             }
             description={
               livePolicies.length > 0
-                ? "Khối này đang lấy từ tuition discount policies active được các academic info public tham chiếu tới. Cách hiển thị này giúp phụ huynh thấy ngay chính sách nào còn hiệu lực và giá trị ưu đãi ra sao."
-                : "Khi đặt sát học phí, phụ huynh sẽ dễ cân đối hơn. Đây cũng là cấu trúc rất hợp lý để về sau nối sang các policy miễn giảm hoặc ưu đãi học phí trong hệ thống."
+                ? "Các chính sách giảm học phí và học bổng đang được áp dụng cho các chương trình đã công bố tuyển sinh."
+                : "Thông tin học bổng, miễn giảm và hỗ trợ tài chính giúp phụ huynh và thí sinh dễ cân đối chi phí học tập."
             }
           />
 
@@ -341,7 +341,7 @@ export default function PublicTuitionAidPage({ catalog }: PublicTuitionAidPagePr
           <SectionHeading
             eyebrow="Payment Journey"
             title="Mốc chi phí nên được kể như một hành trình, không phải một khối văn bản"
-            description="Timeline thanh toán vẫn đang giữ seeded content để public site có trải nghiệm đầy đủ trong lúc backend chưa mở contract public riêng cho các mốc thanh toán và phí giữ chỗ."
+            description="Các mốc thanh toán quan trọng từ xác nhận nhập học đến hoàn tất học phí theo từng kỳ."
           />
 
           <div className="grid gap-4 lg:grid-cols-4">

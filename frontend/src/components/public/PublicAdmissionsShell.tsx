@@ -146,7 +146,7 @@ export function PublicAdmissionsPageHero({
           <article className="overflow-hidden rounded-[24px] border border-border/70 bg-card shadow-lg shadow-info-100/40 sm:rounded-[28px] animate-in fade-in zoom-in-95 duration-700">
             <DemoImage asset={heroAsset} eager className="aspect-[16/10] w-full object-cover" />
             <div className="space-y-2 p-4 sm:p-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Nội dung public tham chiếu</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Thông tin tuyển sinh</p>
               <h2 className="text-xl font-semibold tracking-tight font-display sm:text-2xl">{captionTitle}</h2>
               <p className="text-sm leading-6 text-muted-foreground">{captionDescription}</p>
             </div>
@@ -239,8 +239,7 @@ export function PublicAdmissionsShell({ activePath, children }: PublicAdmissions
           <div className="max-w-2xl">
             <p className="text-lg font-semibold tracking-tight font-display">QLTS Admissions</p>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Public site tuyển sinh được tách thành các lớp thông tin rõ ràng để sau này nối public API
-              cho chương trình, phương thức và học phí mà không cần đổi UI từ đầu.
+              Cổng thông tin tuyển sinh — tra cứu chương trình đào tạo, phương thức xét tuyển, học phí và lộ trình nhập học.
             </p>
           </div>
 

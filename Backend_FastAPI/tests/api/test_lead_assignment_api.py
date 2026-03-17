@@ -185,6 +185,7 @@ async def test_lead_assignment_lifecycle_end_to_end(
     admin_token_headers: dict,
     officer_user_in_db: dict,
     lead_assigned_to_officer: dict,
+    seed_lead_dependencies: dict,
 ):
     """
     End-to-end ownership lifecycle:
@@ -197,7 +198,32 @@ async def test_lead_assignment_lifecycle_end_to_end(
     """
     lead_id = lead_assigned_to_officer["id"]
 
-    # 1. Verify initial assignment (from fixture)
+    # 0. Test unassigned → assigned transition first
+    #    Create a separate unassigned lead via DB, then assign via API
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            unassigned = models.Lead(
+                full_name="Lifecycle Unassigned Lead",
+                phone="0902222333",
+                source="website",
+                unit_id=seed_lead_dependencies["unit_id"],
+                status="new",
+            )
+            session.add(unassigned)
+            await session.flush()
+            unassigned_id = unassigned.id
+
+    assign_new_res = await client.post(
+        LeadsURLs.ASSIGN(unassigned_id),
+        json={"officer_id": officer_user_in_db["id"]},
+        headers=admin_token_headers,
+    )
+    assert assign_new_res.status_code == 200, f"Initial assign failed: {assign_new_res.text}"
+    assigned_new = assign_new_res.json()
+    assert assigned_new["assigned_officer_id"] == officer_user_in_db["id"]
+    assert assigned_new["assignment_status"] == "assigned"
+
+    # 1. Verify fixture lead assignment (from fixture)
     assert lead_assigned_to_officer["assigned_officer_id"] == officer_user_in_db["id"]
 
     # Login officer inline (avoid fixture ordering conflict)
@@ -209,7 +235,19 @@ async def test_lead_assignment_lifecycle_end_to_end(
     officer_token = login_res.cookies.get("access_token")
     officer_headers = {"Authorization": f"Bearer {officer_token}"}
 
-    # 2. Check quota before reassign
+    # 2. Clear any stale assignment logs to ensure quota is fresh
+    officer_id = officer_user_in_db["id"]
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            from sqlalchemy import delete
+            await session.execute(
+                delete(models.AssignmentLog).where(
+                    models.AssignmentLog.officer_id == officer_id,
+                    models.AssignmentLog.method == "officer_reassign",
+                )
+            )
+
+    # 3. Check quota before reassign (should be fresh after cleanup)
     quota_before_res = await client.get(
         LeadsURLs.LEADS + "/my/reassign-quota",
         headers=officer_headers,
@@ -217,32 +255,28 @@ async def test_lead_assignment_lifecycle_end_to_end(
     assert quota_before_res.status_code == 200
     quota_before = quota_before_res.json()
     used_before = quota_before.get("used", 0)
+    assert quota_before.get("allowed", False), f"Quota should be available after cleanup: {quota_before}"
 
-    # 3. Officer reassigns
-    if quota_before.get("allowed", True):
-        reassign_res = await client.post(
-            LeadsURLs.ACTION(lead_id),
-            json={"action": "reassign", "reason": "E2E lifecycle test"},
-            headers=officer_headers,
-        )
-        assert reassign_res.status_code == 200, f"Reassign failed: {reassign_res.text}"
-        reassigned = reassign_res.json()
-        assert reassigned["assigned_officer_id"] is None
-        assert reassigned["assignment_status"] == "reassign_pending"
+    # 4. Officer reassigns (MUST succeed — no skip branch)
+    reassign_res = await client.post(
+        LeadsURLs.ACTION(lead_id),
+        json={"action": "reassign", "reason": "E2E lifecycle test"},
+        headers=officer_headers,
+    )
+    assert reassign_res.status_code == 200, f"Reassign failed: {reassign_res.text}"
+    reassigned = reassign_res.json()
+    assert reassigned["assigned_officer_id"] is None
+    assert reassigned["assignment_status"] == "reassign_pending"
 
-        # 4. Check quota after reassign
-        quota_after_res = await client.get(
-            LeadsURLs.LEADS + "/my/reassign-quota",
-            headers=officer_headers,
-        )
-        assert quota_after_res.status_code == 200
-        quota_after = quota_after_res.json()
-        assert quota_after["used"] >= used_before + 1
-        assert quota_after["remaining"] < quota_before.get("remaining", 999)
-    else:
-        # Quota exhausted from prior tests — skip reassign, still test re-assign
-        import warnings
-        warnings.warn("Officer reassign quota exhausted, skipping reassign step")
+    # 5. Check quota after reassign
+    quota_after_res = await client.get(
+        LeadsURLs.LEADS + "/my/reassign-quota",
+        headers=officer_headers,
+    )
+    assert quota_after_res.status_code == 200
+    quota_after = quota_after_res.json()
+    assert quota_after["used"] >= used_before + 1
+    assert quota_after["remaining"] < quota_before.get("remaining", 999)
 
     # 5. Re-login admin (officer login above replaced client cookies)
     from tests.fixtures.constants import TestUsers

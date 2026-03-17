@@ -221,7 +221,7 @@ export default function PublicAdmissionsLanding() {
           <SectionHeading
             eyebrow="Explore"
             title="Khám phá theo đúng nhóm thông tin mà thí sinh quan tâm nhất"
-            description="Các danh mục này vẫn bám taxonomy backend, nhưng trên public site chúng nên đóng vai trò định hướng tới trang chi tiết phù hợp."
+            description="Chọn danh mục bên dưới để xem thông tin chi tiết về chương trình, phương thức, hồ sơ và học phí."
           />
 
           <div className="grid gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -312,8 +312,8 @@ export default function PublicAdmissionsLanding() {
         <div className={`${pageShellClass} space-y-8 sm:space-y-10`}>
           <SectionHeading
             eyebrow="Fees & Support"
-            title="Học phí, hồ sơ và tư vấn nên được nối sang lớp nội dung chi tiết"
-            description="Ở landing page, các khối này chỉ cần đủ hấp dẫn để người dùng hiểu họ sẽ xem sâu hơn ở đâu tiếp theo."
+            title="Học phí, hồ sơ và tư vấn tuyển sinh"
+            description="Tìm hiểu chi phí học tập, chuẩn bị hồ sơ đúng cách và nhận hỗ trợ tư vấn trước khi nộp đơn."
           />
 
           <div className="grid gap-4 sm:gap-5 lg:grid-cols-3">
