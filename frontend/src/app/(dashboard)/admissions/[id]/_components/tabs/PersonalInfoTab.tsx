@@ -8,7 +8,7 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Combobox } from "@/components/ui/combobox"
 import { Separator } from "@/components/ui/separator"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { AddressMode } from "@/lib/api/administrative"
 import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
 import type { AdmissionProfileResponse, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
@@ -34,17 +34,20 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
   const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
 
-  // Address mode: local state with external sync on form.reset()
-  // - User switches mode via radio → setAddressMode (immediate)
-  // - form.reset() from version change → useEffect re-derives from server data
+  // Address mode: local state, re-derived when profile.version changes.
+  // Uses React's "adjusting state during render" pattern — no useEffect.
+  // See: https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
   const [addressMode, setAddressMode] = useState<AddressMode>(
     permanentDistrict ? "legacy" : "current",
   )
-
-  // Sync mode when profile.version changes (form.reset sets new permanentDistrict)
-  useEffect(() => {
-    setAddressMode(permanentDistrict ? "legacy" : "current")
-  }, [profile.version]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [prevVersion, setPrevVersion] = useState(profile.version)
+  if (prevVersion !== profile.version) {
+    setPrevVersion(profile.version)
+    const serverMode: AddressMode = permanentDistrict ? "legacy" : "current"
+    if (addressMode !== serverMode) {
+      setAddressMode(serverMode)
+    }
+  }
 
   return (
     <div className="space-y-6">

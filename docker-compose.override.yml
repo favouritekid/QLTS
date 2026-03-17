@@ -67,10 +67,11 @@ services:
         - action: sync
           path: ./frontend/src
           target: /app/src
-          ignore:
-            - "**/*.test.ts"
-            - "**/*.test.tsx"
-            - "**/__tests__/"
+
+        # Test config → sync (needed for `npm run test` inside container)
+        - action: sync
+          path: ./frontend/vitest.config.ts
+          target: /app/vitest.config.ts
 
         # Public assets → sync
         - action: sync
