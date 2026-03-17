@@ -2,8 +2,10 @@
  * E2E Test: Lead to Admission Complete Workflow
  *
  * Coverage:
- *   Phase 1: lead creation → 2 consultations (FSM transition) →
- *            UI list: verify status badge + stage badge from API (dynamic)
+ *   Phase 1: lead creation → admin assign → UI "Cán bộ" column verify →
+ *            officer reassign → API null+reassign_pending → UI "Chưa gán" →
+ *            admin re-assign → UI officer name returns →
+ *            2 consultations (FSM transition) → UI status+stage badge
  *   Phase 2: admission profile (fill + docs) → submit →
  *            UI list: verify "Chờ duyệt" badge
  *   Phase 3: admin approve → UI detail: verify "Đã duyệt"
@@ -76,6 +78,8 @@ let offeringId: number;
 let admissionMethodId: number;
 let initialStatusId: string;
 let secondStatusId: string;
+let officerUserId: number;
+let officerFullName: string;
 
 // Happy path (Phase 1-4)
 let leadId1: number;
@@ -294,8 +298,22 @@ test.describe("Lead to Admission Workflow", () => {
     const methodsBody = await methodsResp.json();
     admissionMethodId = (methodsBody.methods || methodsBody)[0].id;
 
+    // Discover officer user ID (for assign verification)
+    officerHeaders = await restoreCookies(page, officerCookies);
+    const meResp = await page.request.get(`${API_URL}/api/profile`, {
+      headers: officerHeaders,
+    });
+    expect(meResp.ok()).toBeTruthy();
+    const me = await meResp.json();
+    officerUserId = me.id;
+    officerFullName = me.full_name;
+    expect(officerUserId).toBeTruthy();
+    expect(officerFullName).toBeTruthy();
+    // Use officer's unit for lead creation (IDOR requires same unit)
+    if (me.unit_id) unitId = me.unit_id;
+
     console.log(
-      `Config: unit=${unitId} offering=${offeringId} method=${admissionMethodId} status=${initialStatusId}→${secondStatusId}`
+      `Config: unit=${unitId} offering=${offeringId} method=${admissionMethodId} status=${initialStatusId}→${secondStatusId} officer=${officerUserId}(${officerFullName})`
     );
   });
 
@@ -303,27 +321,147 @@ test.describe("Lead to Admission Workflow", () => {
   // PHASE 1: Lead → Consultation → UI Verify
   // =========================================================================
 
-  test.describe("Phase 1: Lead Management", () => {
-    test("1. Officer creates lead", async ({ page }) => {
-      officerHeaders = await restoreCookies(page, officerCookies);
+  test.describe("Phase 1: Lead Ownership + Consultation", () => {
+    test("1. Admin creates lead (unassigned)", async ({ page }) => {
+      // Admin creates lead WITHOUT offering_id, WITH unit_id → lead starts unassigned.
+      // This ensures test 2 covers a real unassigned→assigned transition.
+      // Per LeadCreate schema: admin without offering_id must provide unit_id.
+      adminHeaders = await restoreCookies(page, adminCookies);
       leadPhone1 = generatePhone();
       leadName1 = `E2E_Flow_${Date.now()}`;
 
       const resp = await page.request.post(`${API_URL}/api/leads`, {
-        headers: officerHeaders,
+        headers: adminHeaders,
         data: {
           full_name: leadName1,
           phone: leadPhone1,
           source: "walk_in",
-          offering_id: offeringId,
+          unit_id: unitId,
+          // No offering_id, no assigned_officer_id → lead created unassigned
         },
       });
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
-      leadId1 = (await resp.json()).id;
-      console.log(`Lead created: id=${leadId1}`);
+      if (!resp.ok() && resp.status() !== 201) {
+        throw new Error(
+          `Admin create lead failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`
+        );
+      }
+      const body = await resp.json();
+      leadId1 = body.id;
+      // Admin-created lead without assigned_officer_id → should be unassigned
+      expect(body.assigned_officer_id).toBeNull();
+      console.log(
+        `Lead created by admin: id=${leadId1}, assigned_officer_id=null`
+      );
     });
 
-    test("2. Officer adds consultation, status transitions", async ({
+    test("2. Admin assigns lead → UI shows officer in 'Cán bộ' column", async ({
+      page,
+    }) => {
+      // Admin assigns lead to officer
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const assignResp = await page.request.post(
+        `${API_URL}/api/leads/${leadId1}/assign`,
+        {
+          headers: adminHeaders,
+          data: { officer_id: officerUserId },
+        }
+      );
+      expect(assignResp.ok()).toBeTruthy();
+      const assignedLead = await assignResp.json();
+      expect(assignedLead.assigned_officer_id).toBe(officerUserId);
+      console.log(`Lead assigned to officer ${officerUserId}`);
+
+      // UI verify: officer name in "Cán bộ" column (LeadsTable.tsx:480)
+      await page.goto("/leads");
+      await page.waitForLoadState("networkidle");
+      const leadRow = page.locator("tr").filter({ hasText: leadName1 });
+      await expect(leadRow.first()).toBeVisible({ timeout: 15_000 });
+      await expect(leadRow.first()).toContainText(officerFullName);
+      console.log(`UI: Lead row shows officer "${officerFullName}"`);
+    });
+
+    test("3. Officer reassigns own lead → API null + UI 'Chưa gán'", async ({
+      page,
+    }) => {
+      // Officer reassigns via POST /api/leads/{id}/action
+      officerHeaders = await restoreCookies(page, officerCookies);
+      const reassignResp = await page.request.post(
+        `${API_URL}/api/leads/${leadId1}/action`,
+        {
+          headers: officerHeaders,
+          data: { action: "reassign", reason: "E2E: Testing reassign flow" },
+        }
+      );
+      expect(reassignResp.ok()).toBeTruthy();
+      const reassigned = await reassignResp.json();
+
+      // API verify: officer cleared, status = reassign_pending
+      expect(reassigned.assigned_officer_id).toBeNull();
+      expect(reassigned.assignment_status).toBe("reassign_pending");
+      console.log(
+        `Lead reassigned: officer=null, status=${reassigned.assignment_status}`
+      );
+
+      // UI verify: "Cán bộ" column shows "Chưa gán" fallback (LeadsTable.tsx:480)
+      // Need admin context to see reassigned lead (officer lost access after reassign)
+      adminHeaders = await restoreCookies(page, adminCookies);
+      await page.goto("/leads");
+      await page.waitForLoadState("networkidle");
+      const leadRow = page.locator("tr").filter({ hasText: leadName1 });
+      await expect(leadRow.first()).toBeVisible({ timeout: 15_000 });
+      // Officer name must NOT appear
+      await expect(leadRow.first()).not.toContainText(officerFullName);
+      // "Chưa gán" fallback must appear
+      await expect(leadRow.first()).toContainText("Chưa gán");
+      console.log('UI: Lead row shows "Chưa gán" (officer removed)');
+    });
+
+    test("4. Admin re-assigns lead → officer name returns", async ({
+      page,
+    }) => {
+      adminHeaders = await restoreCookies(page, adminCookies);
+
+      const assignResp = await page.request.post(
+        `${API_URL}/api/leads/${leadId1}/assign`,
+        {
+          headers: adminHeaders,
+          data: { officer_id: officerUserId },
+        }
+      );
+      expect(assignResp.ok()).toBeTruthy();
+      const lead = await assignResp.json();
+      expect(lead.assigned_officer_id).toBe(officerUserId);
+      console.log(`Lead re-assigned to officer ${officerUserId}`);
+
+      // UI verify: officer name back
+      await page.goto("/leads");
+      await page.waitForLoadState("networkidle");
+      const leadRow = page.locator("tr").filter({ hasText: leadName1 });
+      await expect(leadRow.first()).toBeVisible({ timeout: 15_000 });
+      await expect(leadRow.first()).toContainText(officerFullName);
+      console.log(`UI: Officer "${officerFullName}" back in lead row`);
+    });
+
+    test("5. Officer sets offering on lead (required for admission)", async ({
+      page,
+    }) => {
+      // Lead was created without offering_id for ownership test.
+      // Admission requires offering → update lead with offering_id now.
+      officerHeaders = await restoreCookies(page, officerCookies);
+      const resp = await page.request.put(
+        `${API_URL}/api/leads/${leadId1}`,
+        {
+          headers: officerHeaders,
+          data: { offering_id: offeringId },
+        }
+      );
+      expect(resp.ok()).toBeTruthy();
+      const lead = await resp.json();
+      expect(lead.offering_id).toBe(offeringId);
+      console.log(`Lead updated: offering_id=${offeringId}`);
+    });
+
+    test("6. Officer adds consultations, FSM status transitions", async ({
       page,
     }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
@@ -369,7 +507,7 @@ test.describe("Lead to Admission Workflow", () => {
       );
     });
 
-    test("3. UI: Lead visible in list with status badge from consultation", async ({
+    test("7. UI: Lead list shows status + stage badges", async ({
       page,
     }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
@@ -416,7 +554,7 @@ test.describe("Lead to Admission Workflow", () => {
   // =========================================================================
 
   test.describe("Phase 2: Admission Profile", () => {
-    test("4. Officer creates admission profile + fills data + uploads docs", async ({
+    test("8. Officer creates admission profile + fills data + uploads docs", async ({
       page,
     }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
@@ -432,7 +570,11 @@ test.describe("Lead to Admission Workflow", () => {
           },
         }
       );
-      expect(createResp.ok() || createResp.status() === 201).toBeTruthy();
+      if (!createResp.ok() && createResp.status() !== 201) {
+        throw new Error(
+          `Create profile failed (${createResp.status()}): ${(await createResp.text()).slice(0, 500)}`
+        );
+      }
       const profile = await createResp.json();
       profileId1 = profile.id;
       profileVersion1 = profile.version;
@@ -515,7 +657,7 @@ test.describe("Lead to Admission Workflow", () => {
       );
     });
 
-    test("5. Officer submits profile", async ({ page }) => {
+    test("9. Officer submits profile", async ({ page }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
       // Re-fetch current version (doc uploads may have changed it)
@@ -544,7 +686,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`Profile submitted: v=${profileVersion1}`);
     });
 
-    test(`6. UI: Profile shows "${LABEL.submitted}" in list`, async ({
+    test(`10. UI: Profile shows "${LABEL.submitted}" in list`, async ({
       page,
     }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
@@ -566,7 +708,7 @@ test.describe("Lead to Admission Workflow", () => {
   // =========================================================================
 
   test.describe("Phase 3: Manager Review", () => {
-    test("7. Admin approves profile", async ({ page }) => {
+    test("11. Admin approves profile", async ({ page }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
       // Re-fetch current version before approve (version may have changed from doc uploads)
@@ -595,7 +737,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`Profile approved: v=${profileVersion1}`);
     });
 
-    test(`8. UI: Detail page shows "${LABEL.approved}"`, async ({ page }) => {
+    test(`12. UI: Detail page shows "${LABEL.approved}"`, async ({ page }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
       await page.goto(`/admissions/${profileId1}`);
       await page.waitForLoadState("networkidle");
@@ -612,7 +754,7 @@ test.describe("Lead to Admission Workflow", () => {
   // =========================================================================
 
   test.describe("Phase 4: Override + Enroll", () => {
-    test("9. Admin overrides (approved → overridden)", async ({ page }) => {
+    test("13. Admin overrides (approved → overridden)", async ({ page }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
       // Re-fetch current version
@@ -636,7 +778,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`Profile overridden: v=${profileVersion1}`);
     });
 
-    test("10. Admin finalizes enrollment (overridden → enrolled)", async ({
+    test("14. Admin finalizes enrollment (overridden → enrolled)", async ({
       page,
     }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
@@ -659,7 +801,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`Enrolled: v=${profileVersion1}`);
     });
 
-    test(`11. UI: "${LABEL.enrolled}" visible, manager actions hidden`, async ({
+    test(`15. UI: "${LABEL.enrolled}" visible, manager actions hidden`, async ({
       page,
     }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
@@ -689,7 +831,7 @@ test.describe("Lead to Admission Workflow", () => {
   // =========================================================================
 
   test.describe("Phase 5: Rejection + Recovery", () => {
-    test("12. Create 2nd lead + profile + submit", async ({ page }) => {
+    test("16. Create 2nd lead + profile + submit", async ({ page }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
       leadName2 = `E2E_Reject_${Date.now()}`;
 
@@ -818,7 +960,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`2nd profile submitted: id=${profileId2}`);
     });
 
-    test("13. Admin rejects profile", async ({ page }) => {
+    test("17. Admin rejects profile", async ({ page }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
       // Re-fetch version
@@ -842,7 +984,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`Profile rejected: v=${profileVersion2}`);
     });
 
-    test(`14. UI: List shows "${LABEL.rejected}"`, async ({ page }) => {
+    test(`18. UI: List shows "${LABEL.rejected}"`, async ({ page }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
       await page.goto("/admissions");
       await page.waitForLoadState("networkidle");
@@ -853,7 +995,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`UI: 2nd profile shows "${LABEL.rejected}"`);
     });
 
-    test("15. Resubmit → revision request → resubmit again (3 transitions asserted)", async ({
+    test("19. Resubmit → revision request → resubmit again (3 transitions asserted)", async ({
       page,
     }) => {
       // Step A: Officer resubmits after rejection (rejected → resubmitted)
@@ -932,7 +1074,7 @@ test.describe("Lead to Admission Workflow", () => {
       console.log(`UI: "${LABEL.resubmitted}" badge confirmed`);
     });
 
-    test(`16. Admin approves recovered profile → UI "${LABEL.approved}"`, async ({
+    test(`20. Admin approves recovered profile → UI "${LABEL.approved}"`, async ({
       page,
     }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
