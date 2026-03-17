@@ -380,6 +380,15 @@ async def _init_schema_once():
             connect_args={"command_timeout": 60},
         )
         async with setup_engine.begin() as conn:
+            # Drop stale enum types that may conflict with create_all
+            # (SQLAlchemy Enum tracking + asyncpg type cache can cause duplicates)
+            await conn.execute(text("DROP TYPE IF EXISTS discount_type_enum CASCADE"))
+            await conn.execute(text("DROP TYPE IF EXISTS outcometype CASCADE"))
+            await conn.execute(text("DROP TYPE IF EXISTS statustype CASCADE"))
+            await conn.execute(text("DROP TYPE IF EXISTS selectablemode CASCADE"))
+            await conn.execute(text("DROP TYPE IF EXISTS triggertype CASCADE"))
+            await conn.execute(text("DROP TYPE IF EXISTS administrativenodelevel CASCADE"))
+
             await conn.run_sync(AppBase.metadata.create_all)
 
             # Create sequences not tracked by SQLAlchemy metadata
