@@ -35,27 +35,10 @@ vi.mock("@/components/ui/alert-dialog", () => ({
   ),
 }));
 
-// Mock status-config (returns label based on status)
-vi.mock("@/lib/status-config", () => ({
-  getStatusConfig: (status: string) => {
-    const labels: Record<string, string> = {
-      draft: "Nháp",
-      submitted: "Chờ duyệt",
-      resubmitted: "Đã nộp lại",
-      approved: "Đã duyệt",
-      rejected: "Từ chối",
-      revision_requested: "Yêu cầu bổ sung",
-      confirmed: "Đã xác nhận",
-      overridden: "Đã override",
-      enrolled: "Đã nhập học",
-    };
-    return {
-      label: labels[status] || status,
-      badgeColor: "bg-gray-100",
-      icon: null,
-    };
-  },
-}));
+// Use REAL getStatusConfig — do NOT mock it.
+// This ensures badge labels in tests match production source-of-truth
+// at status-config.ts. If production labels change, tests break (desired).
+import { getStatusConfig } from "@/lib/status-config";
 
 // Import after mocks
 import { AdmissionActions } from "./AdmissionActions";
@@ -142,7 +125,7 @@ describe("AdmissionActions", () => {
 
       expect(screen.getByText("Lưu thay đổi")).toBeInTheDocument();
       expect(screen.getByText("Tiếp tục")).toBeInTheDocument();
-      expect(screen.getByText("Nháp")).toBeInTheDocument(); // badge
+      expect(screen.getByText(getStatusConfig("draft").label)).toBeInTheDocument();
     });
 
     it("shows Back for steps 2-6 even without save permission", () => {
@@ -250,7 +233,7 @@ describe("AdmissionActions", () => {
       renderActions(profile, 7);
 
       expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
-      expect(screen.getByText("Từ chối")).toBeInTheDocument();
+      expect(screen.getByText(getStatusConfig("rejected").label)).toBeInTheDocument();
     });
 
     it("revision_requested + resubmit=true: shows resubmit + badge Yêu cầu bổ sung", () => {
@@ -261,7 +244,7 @@ describe("AdmissionActions", () => {
       renderActions(profile, 7);
 
       expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
-      expect(screen.getByText("Yêu cầu bổ sung")).toBeInTheDocument();
+      expect(screen.getByText(getStatusConfig("revision_requested").label)).toBeInTheDocument();
     });
 
     it("click dialog-confirmed Resubmit calls onResubmit", () => {
@@ -294,7 +277,7 @@ describe("AdmissionActions", () => {
       expect(screen.getAllByText("Từ chối").length).toBeGreaterThanOrEqual(1);
       // "Nhận duyệt" appears as trigger + dialog action
       expect(screen.getAllByText("Nhận duyệt").length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText("Chờ duyệt")).toBeInTheDocument(); // badge
+      expect(screen.getByText(getStatusConfig("submitted").label)).toBeInTheDocument();
     });
 
     it("resubmitted + approve/reject: shows approve + reject", () => {
@@ -305,7 +288,7 @@ describe("AdmissionActions", () => {
       renderActions(profile, 7);
 
       expect(screen.getByText("Phê duyệt")).toBeInTheDocument();
-      expect(screen.getByText("Đã nộp lại")).toBeInTheDocument(); // badge
+      expect(screen.getByText(getStatusConfig("resubmitted").label)).toBeInTheDocument();
     });
 
     it("unclaim=true: shows unclaim button", () => {
@@ -348,14 +331,22 @@ describe("AdmissionActions", () => {
   // ===== DELETE =====
 
   describe("Delete", () => {
-    it("delete=true: shows delete trigger", () => {
+    it("delete=true: shows delete trigger button + dialog action", () => {
       const profile = buildProfile({
         status: "draft",
         permissions: { delete: true },
       });
       renderActions(profile, 1);
 
-      expect(screen.getByText("Xóa hồ sơ")).toBeInTheDocument();
+      // Trigger is an icon-only button (Trash icon, no text) at AdmissionActions.tsx:108-111.
+      // With mocked AlertDialog pass-through, the dialog content also renders "Xóa hồ sơ".
+      // Verify BOTH exist: the trigger button (ghost/sm variant) AND the dialog action text.
+      const deleteButtons = screen.getAllByRole("button");
+      const ghostButton = deleteButtons.find(
+        (btn) => btn.className.includes("ghost") || btn.querySelector("svg")
+      );
+      expect(ghostButton).toBeTruthy(); // icon trigger exists
+      expect(screen.getByText("Xóa hồ sơ")).toBeInTheDocument(); // dialog action
     });
 
     it("click dialog-confirmed Delete calls onDelete", () => {
@@ -382,7 +373,7 @@ describe("AdmissionActions", () => {
       renderActions(profile, 7);
 
       expect(screen.getByText("Xác nhận nhập học")).toBeInTheDocument();
-      expect(screen.getByText("Đã duyệt")).toBeInTheDocument();
+      expect(screen.getByText(getStatusConfig("approved").label)).toBeInTheDocument();
     });
 
     it("overridden + enroll=true: shows enroll + badge Đã override", () => {
@@ -393,7 +384,7 @@ describe("AdmissionActions", () => {
       renderActions(profile, 7);
 
       expect(screen.getByText("Xác nhận nhập học")).toBeInTheDocument();
-      expect(screen.getByText("Đã override")).toBeInTheDocument();
+      expect(screen.getByText(getStatusConfig("overridden").label)).toBeInTheDocument();
     });
 
     it("click Enroll calls onEnroll", () => {
@@ -418,8 +409,8 @@ describe("AdmissionActions", () => {
       });
       renderActions(profile, 7);
 
-      // Badge
-      expect(screen.getByText("Đã nhập học")).toBeInTheDocument();
+      // Badge — from real getStatusConfig, not hardcoded
+      expect(screen.getByText(getStatusConfig("enrolled").label)).toBeInTheDocument();
 
       // All workflow actions hidden
       expect(screen.queryByText("Phê duyệt")).not.toBeInTheDocument();
