@@ -176,6 +176,97 @@ async def unassigned_lead(
 
 
 # =============================================================================
+# SCENARIO: LEAD ASSIGNMENT LIFECYCLE END-TO-END
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_lead_assignment_lifecycle_end_to_end(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    lead_assigned_to_officer: dict,
+):
+    """
+    End-to-end ownership lifecycle:
+      lead already assigned to officer (from fixture)
+      → verify initial assignment
+      → check quota before reassign
+      → officer reassigns (assert null + reassign_pending)
+      → check quota after reassign (used increased)
+      → admin re-assigns (assert back to officer)
+    """
+    lead_id = lead_assigned_to_officer["id"]
+
+    # 1. Verify initial assignment (from fixture)
+    assert lead_assigned_to_officer["assigned_officer_id"] == officer_user_in_db["id"]
+
+    # Login officer inline (avoid fixture ordering conflict)
+    login_res = await client.post(
+        AuthURLs.LOGIN,
+        data={"username": officer_user_in_db["username"], "password": officer_user_in_db["password"]},
+    )
+    assert login_res.status_code == 200, f"Officer login failed: {login_res.text}"
+    officer_token = login_res.cookies.get("access_token")
+    officer_headers = {"Authorization": f"Bearer {officer_token}"}
+
+    # 2. Check quota before reassign
+    quota_before_res = await client.get(
+        LeadsURLs.LEADS + "/my/reassign-quota",
+        headers=officer_headers,
+    )
+    assert quota_before_res.status_code == 200
+    quota_before = quota_before_res.json()
+    used_before = quota_before.get("used", 0)
+
+    # 3. Officer reassigns
+    if quota_before.get("allowed", True):
+        reassign_res = await client.post(
+            LeadsURLs.ACTION(lead_id),
+            json={"action": "reassign", "reason": "E2E lifecycle test"},
+            headers=officer_headers,
+        )
+        assert reassign_res.status_code == 200, f"Reassign failed: {reassign_res.text}"
+        reassigned = reassign_res.json()
+        assert reassigned["assigned_officer_id"] is None
+        assert reassigned["assignment_status"] == "reassign_pending"
+
+        # 4. Check quota after reassign
+        quota_after_res = await client.get(
+            LeadsURLs.LEADS + "/my/reassign-quota",
+            headers=officer_headers,
+        )
+        assert quota_after_res.status_code == 200
+        quota_after = quota_after_res.json()
+        assert quota_after["used"] >= used_before + 1
+        assert quota_after["remaining"] < quota_before.get("remaining", 999)
+    else:
+        # Quota exhausted from prior tests — skip reassign, still test re-assign
+        import warnings
+        warnings.warn("Officer reassign quota exhausted, skipping reassign step")
+
+    # 5. Re-login admin (officer login above replaced client cookies)
+    from tests.fixtures.constants import TestUsers
+    admin_login_res = await client.post(
+        AuthURLs.LOGIN,
+        data={"username": TestUsers.ADMIN["username"], "password": TestUsers.ADMIN["password"]},
+    )
+    assert admin_login_res.status_code == 200, f"Admin re-login failed: {admin_login_res.text}"
+    fresh_admin_token = admin_login_res.cookies.get("access_token")
+    fresh_admin_headers = {"Authorization": f"Bearer {fresh_admin_token}"}
+
+    # 6. Admin re-assigns back to same officer
+    reassign_back_res = await client.post(
+        LeadsURLs.ASSIGN(lead_id),
+        json={"officer_id": officer_user_in_db["id"]},
+        headers=fresh_admin_headers,
+    )
+    assert reassign_back_res.status_code == 200
+    final = reassign_back_res.json()
+    assert final["assigned_officer_id"] == officer_user_in_db["id"]
+    assert final["assignment_status"] == "assigned"
+
+
+# =============================================================================
 # SCENARIO 6: REJECT QUOTA RACE CONDITION (API Level)
 # =============================================================================
 

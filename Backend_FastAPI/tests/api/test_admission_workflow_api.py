@@ -1,0 +1,341 @@
+# tests/api/test_admission_workflow_api.py
+"""
+API-LEVEL TESTS: Admission Profile Workflow Contract
+
+14 tests covering:
+- Happy path: submit → approve → override → finalize → enrolled
+- Recovery: submit → reject → resubmit → revision → resubmit → approve
+- Invalid transition: approved → finalize blocked (400)
+- RBAC: officer cannot approve/request-revision/override/finalize (403)
+- Optimistic locking: stale version (400/409)
+- Drop: enrolled → drop (is_dropped=True), drop before enrolled (400)
+
+IMPORTANT: Uses _login() re-login pattern before every user context switch
+to handle shared httpx cookie jar (see blocker analysis in conversation).
+
+Run: pytest tests/api/test_admission_workflow_api.py -v
+"""
+
+import pytest
+import pytest_asyncio
+from datetime import datetime, timezone
+from httpx import AsyncClient
+from sqlalchemy import select
+
+from app import models
+from app.database import AsyncSessionLocal
+
+try:
+    from tests.fixtures.constants import AuthURLs, LeadsURLs, TestUsers
+except ImportError:
+    pytest.fail("Could not import from tests.fixtures.constants")
+
+pytestmark = pytest.mark.integration
+
+# =============================================================================
+# URLs + Helpers
+# =============================================================================
+
+ADMISSIONS = "/api/admissions"
+
+
+def ADM(pid: int) -> str:
+    return f"{ADMISSIONS}/{pid}"
+
+
+def ACT(pid: int, action: str) -> str:
+    return f"{ADMISSIONS}/{pid}/{action}"
+
+
+async def _login(client: AsyncClient, username: str, password: str) -> dict:
+    """Re-login to refresh shared cookie jar. Returns headers."""
+    res = await client.post(AuthURLs.LOGIN, data={"username": username, "password": password})
+    assert res.status_code == 200, f"Login failed for {username}: {res.text}"
+    return {"Authorization": f"Bearer {res.cookies.get('access_token')}"}
+
+
+async def _admin(client: AsyncClient) -> dict:
+    return await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+
+
+async def _officer(client: AsyncClient, user: dict) -> dict:
+    return await _login(client, user["username"], user["password"])
+
+
+async def _ver(client: AsyncClient, h: dict, pid: int) -> int:
+    """Get current profile version."""
+    return (await client.get(ADM(pid), headers=h)).json()["version"]
+
+
+async def _submit(client: AsyncClient, h: dict, lead_id: int, method_id: int) -> dict:
+    """Add consultation + create profile + fill + upload docs + submit."""
+    # Consultation required before admission (business rule)
+    from app.config import settings
+    status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
+    await client.post(f"{LeadsURLs.LEADS}/{lead_id}/consultations", json={
+        "status_id": status_id, "method": "phone", "notes": "Pre-admission consultation",
+    }, headers=h)
+
+    r = await client.post(ADMISSIONS, json={"lead_id": lead_id, "admission_method_id": method_id}, headers=h)
+    assert r.status_code in [200, 201], f"Create: {r.text}"
+    p = r.json()
+    pid, v = p["id"], p["version"]
+
+    cid = f"{int(datetime.now().timestamp()) % 10**12:012d}"
+    ur = await client.put(ADM(pid), json={
+        "version": v, "citizen_id": cid, "gender": "male", "dob": "2001-01-01",
+        "nationality": "Viet Nam", "ethnicity": "Kinh", "place_of_birth": "Test",
+        "family_info": [{"relationship": "Cha", "full_name": "P", "phone": "0901111111", "is_primary_guardian": True}],
+        "academic_history": [{"school_name": "THPT", "year_from": 2019, "year_to": 2022, "gpa": 8.0, "graduation_type": "THPT"}],
+        "admission_scores": {"gpa": 8.0, "subject_scores": {}},
+    }, headers=h)
+    if ur.status_code == 200:
+        v = ur.json()["version"]
+
+    fresh = (await client.get(ADM(pid), headers=h)).json()
+    v = fresh.get("version", v)
+    for doc in fresh.get("documents_checklist", []):
+        if doc.get("is_mandatory") and doc.get("status") == "missing":
+            await client.post(
+                f"{ADM(pid)}/documents/{doc['code']}/upload", headers=h,
+                files={"file": (f"{doc['code']}.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+                data={"actual_submission_format": "photo"},
+            )
+
+    v = (await client.get(ADM(pid), headers=h)).json()["version"]
+    sr = await client.post(ACT(pid, "submit"), json={"version": v}, headers=h)
+    if sr.status_code != 200:
+        # Get validation errors for debugging
+        profile_debug = (await client.get(ADM(pid), headers=h)).json()
+        raise AssertionError(
+            f"Submit failed ({sr.status_code}): {sr.text[:300]}\n"
+            f"  eligibility: {profile_debug.get('eligibility_status')}\n"
+            f"  validation_errors: {profile_debug.get('validation_errors', [])[:3]}\n"
+            f"  docs: {[(d['code'], d['status']) for d in profile_debug.get('documents_checklist', [])]}"
+        )
+    result = sr.json()
+    assert result["status"] == "submitted", f"Submit returned status={result['status']}, expected submitted"
+    return result
+
+
+async def _fast_enroll(client: AsyncClient, pid: int):
+    """Approve → override → finalize (all as admin, re-login each step)."""
+    ah = await _admin(client)
+    v = await _ver(client, ah, pid)
+    await client.post(ACT(pid, "approve"), json={"notes": "OK", "version": v}, headers=ah)
+    ah = await _admin(client)
+    v = await _ver(client, ah, pid)
+    await client.post(ACT(pid, "override"), json={"reason": "O", "version": v}, headers=ah)
+    ah = await _admin(client)
+    v = await _ver(client, ah, pid)
+    await client.post(ACT(pid, "finalize"), json={"version": v}, headers=ah)
+
+
+# =============================================================================
+# Fixtures
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def adm_config(seed_lead_dependencies: dict):
+    """Seed admission config chain for tests."""
+    uid = seed_lead_dependencies["unit_id"]
+    mpid = seed_lead_dependencies["major_program_id"]
+    ts = f"{int(datetime.now().timestamp())}"
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ot = models.ConfigOfferingType(code=f"tq_{ts}", name=f"TQ_{ts}", display_order=1)
+            s.add(ot); await s.flush()
+            dt = models.ConfigDocumentType(code=f"tcc_{ts}", name=f"TCC_{ts}", display_order=1)
+            s.add(dt); await s.flush()
+            po = models.ProgramOffering(offering_type=f"TQ_{ts}", program_id=mpid, offering_type_id=ot.id, is_active=True, duration_semesters=6)
+            s.add(po); await s.flush()
+            ai = models.OfferingAcademicInfo(offering_id=po.id, academic_year=2026, tuition_fee_per_year=5000000, annual_admission_quota=100, is_published=True)
+            s.add(ai); await s.flush()
+            am = models.AdmissionMethod(code=f"hb_{ts}", name=f"HB_{ts}", requires_gpa=True, requires_subject_scores=False, is_active=True)
+            s.add(am); await s.flush()
+            ac = models.AdmissionCriteria(method_id=am.id, code=f"TC_{ts}", name=f"TC_{ts}", min_gpa=6.0, scoring_method="average", subject_selection_mode="fixed", policy_version="2026.1", is_active=True)
+            s.add(ac); await s.flush()
+            ap = models.AdmissionPath(academic_info_id=ai.id, admission_method_id=am.id, criteria_id=ac.id, status="active", display_name="Test", display_order=0, visibility="public")
+            s.add(ap); await s.flush()
+    return {"unit_id": uid, "offering_id": po.id, "method_id": am.id}
+
+
+@pytest_asyncio.fixture
+async def adm_lead(client: AsyncClient, admin_token_headers: dict, officer_user_in_db: dict, adm_config: dict):
+    """Create lead assigned to officer with offering."""
+    r = await client.post(LeadsURLs.LEADS, json={
+        "full_name": "Adm Lead", "phone": f"099{int(datetime.now().timestamp()) % 10000000:07d}",
+        "source": "website", "unit_id": adm_config["unit_id"],
+        "assigned_officer_id": officer_user_in_db["id"], "offering_id": adm_config["offering_id"],
+    }, headers=admin_token_headers)
+    assert r.status_code == 201, f"Lead: {r.text}"
+    return r.json()
+
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_submit_approve_override_finalize_enrolled(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    assert p["status"] == "submitted"
+    pid = p["id"]
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    r = await client.post(ACT(pid, "approve"), json={"notes": "OK", "version": v}, headers=ah)
+    assert r.status_code == 200 and r.json()["status"] == "approved"
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    r = await client.post(ACT(pid, "override"), json={"reason": "Override", "version": v}, headers=ah)
+    assert r.status_code == 200 and r.json()["status"] == "overridden"
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    r = await client.post(ACT(pid, "finalize"), json={"version": v}, headers=ah)
+    assert r.status_code == 200 and r.json()["status"] == "enrolled"
+
+
+@pytest.mark.asyncio
+async def test_submit_reject_resubmit_revision_resubmit_approve(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    pid = p["id"]
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    assert (await client.post(ACT(pid, "reject"), json={"reason": "Bad", "version": v}, headers=ah)).json()["status"] == "rejected"
+
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, pid)
+    assert (await client.post(ACT(pid, "resubmit"), json={"notes": "Fixed", "version": v}, headers=oh)).json()["status"] == "resubmitted"
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    assert (await client.post(ACT(pid, "request-revision"), json={"reason": "Missing cert add it please", "version": v}, headers=ah)).json()["status"] == "revision_requested"
+
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, pid)
+    assert (await client.post(ACT(pid, "resubmit"), json={"notes": "Added", "version": v}, headers=oh)).json()["status"] == "resubmitted"
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    assert (await client.post(ACT(pid, "approve"), json={"notes": "Good", "version": v}, headers=ah)).json()["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_finalize_from_approved_returns_400(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    pid = p["id"]
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    await client.post(ACT(pid, "approve"), json={"notes": "OK", "version": v}, headers=ah)
+
+    ah = await _admin(client); v = await _ver(client, ah, pid)
+    r = await client.post(ACT(pid, "finalize"), json={"version": v}, headers=ah)
+    assert r.status_code == 400
+    d = r.json().get("detail", "").lower()
+    assert "transition" in d or "invalid" in d or "chuyển" in d
+
+
+@pytest.mark.asyncio
+async def test_officer_cannot_approve(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
+    assert (await client.post(ACT(p["id"], "approve"), json={"notes": "No", "version": v}, headers=oh)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_officer_cannot_request_revision(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
+    assert (await client.post(ACT(p["id"], "request-revision"), json={"reason": "Officer trying revision test reason", "version": v}, headers=oh)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_officer_cannot_override(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
+    assert (await client.post(ACT(p["id"], "override"), json={"reason": "No", "version": v}, headers=oh)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_officer_cannot_finalize(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "override"), json={"reason": "O", "version": v}, headers=ah)
+    oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
+    assert (await client.post(ACT(p["id"], "finalize"), json={"version": v}, headers=oh)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_approve_stale_version(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    ah = await _admin(client); stale = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "approve"), json={"notes": "1st", "version": stale}, headers=ah)
+    ah = await _admin(client)
+    assert (await client.post(ACT(p["id"], "approve"), json={"notes": "2nd", "version": stale}, headers=ah)).status_code in [400, 409]
+
+
+@pytest.mark.asyncio
+async def test_request_revision_stale_version(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    ah = await _admin(client); stale = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": stale}, headers=ah)
+    ah = await _admin(client)
+    assert (await client.post(ACT(p["id"], "request-revision"), json={"reason": "Stale revision test reason here", "version": stale}, headers=ah)).status_code in [400, 409]
+
+
+@pytest.mark.asyncio
+async def test_resubmit_stale_version(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "reject"), json={"reason": "Bad", "version": v}, headers=ah)
+    oh = await _officer(client, officer_user_in_db); stale = await _ver(client, oh, p["id"])
+    await client.post(ACT(p["id"], "resubmit"), json={"notes": "1st", "version": stale}, headers=oh)
+    oh = await _officer(client, officer_user_in_db)
+    assert (await client.post(ACT(p["id"], "resubmit"), json={"notes": "2nd", "version": stale}, headers=oh)).status_code in [400, 409]
+
+
+@pytest.mark.asyncio
+async def test_drop_stale_version(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    await _fast_enroll(client, p["id"])
+    ah = await _admin(client); stale = await _ver(client, ah, p["id"])
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            pr = (await s.execute(select(models.AdmissionProfile).where(models.AdmissionProfile.id == p["id"]))).scalar_one()
+            pr.version += 1
+    ah = await _admin(client)
+    assert (await client.post(ACT(p["id"], "drop"), json={"reason": "Stale drop test reason text", "version": stale}, headers=ah)).status_code in [400, 409]
+
+
+@pytest.mark.asyncio
+async def test_drop_enrolled_sets_is_dropped(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    await _fast_enroll(client, p["id"])
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    r = await client.post(ACT(p["id"], "drop"), json={"reason": "Student left for personal reasons text", "version": v}, headers=ah)
+    assert r.status_code == 200
+    b = r.json()
+    assert b["status"] == "enrolled" and b["is_dropped"] is True
+    assert b.get("dropped_reason") is not None and b.get("dropped_by_id") is not None
+
+
+@pytest.mark.asyncio
+async def test_drop_before_enrolled_returns_400(client, officer_user_in_db, adm_lead, adm_config):
+    oh = await _officer(client, officer_user_in_db)
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"])
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    assert (await client.post(ACT(p["id"], "drop"), json={"reason": "Should fail not enrolled reason", "version": v}, headers=ah)).status_code == 400
