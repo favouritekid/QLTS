@@ -442,8 +442,8 @@ export const STAGE_COLORS: Record<string, string> = {
   stg01: "#3B82F6", // Blue - Chưa tư vấn
   stg02: "#F59E0B", // Amber - Đang tư vấn
   stg03: "#8B5CF6", // Purple - Đã nộp hồ sơ
-  stg04: "#06B6D4", // Cyan - Chuẩn bị nhập học
-  stg05: "#10B981", // Emerald - Đã nộp học phí
+  stg04: "#06B6D4", // Cyan - Kết quả hồ sơ
+  stg05: "#10B981", // Emerald - Xử lý học phí
   stg06: "#22C55E", // Green - Đã nhập học
   stg07: "#EF4444", // Red - Không theo học
 

@@ -65,7 +65,7 @@ class FunnelSuggestion(BaseModel):
 
 class FunnelStage(BaseModel):
     stage_id: str                      # e.g. "stg05"
-    stage_name: str                    # e.g. "Đã nộp học phí"
+    stage_name: str                    # e.g. "Xử lý học phí"
     stage_order: int                   # For frontend sorting
     lead_count: int                    # Actual count at this stage
     is_final_stage: bool = False       # For separating outcomes

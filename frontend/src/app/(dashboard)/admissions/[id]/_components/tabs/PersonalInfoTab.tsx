@@ -8,7 +8,7 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Combobox } from "@/components/ui/combobox"
 import { Separator } from "@/components/ui/separator"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { AddressMode } from "@/lib/api/administrative"
 import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
 import type { AdmissionProfileResponse, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
@@ -34,10 +34,17 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
   const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
 
-  // Infer initial mode: has district → legacy, otherwise current
+  // Address mode: local state with external sync on form.reset()
+  // - User switches mode via radio → setAddressMode (immediate)
+  // - form.reset() from version change → useEffect re-derives from server data
   const [addressMode, setAddressMode] = useState<AddressMode>(
-    permanentDistrict ? "legacy" : "current"
+    permanentDistrict ? "legacy" : "current",
   )
+
+  // Sync mode when profile.version changes (form.reset sets new permanentDistrict)
+  useEffect(() => {
+    setAddressMode(permanentDistrict ? "legacy" : "current")
+  }, [profile.version]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">

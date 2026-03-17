@@ -154,8 +154,8 @@ ADMISSION_EVENT_PROJECTIONS = {
         admission_status="approved",
         consultation_status_id="sts09",
         consultation_name="Đủ điều kiện nhập học",  # Updated name
-        pipeline_stage_id="stg04",  # ✅ Move to "Chờ nhập học"
-        stage_name="Chờ nhập học",
+        pipeline_stage_id="stg04",  # ✅ Move to "Kết quả hồ sơ"
+        stage_name="Kết quả hồ sơ",
         system_note_template="[HỆ THỐNG] Hồ sơ xét tuyển đã được duyệt - Profile #{profile_id}",
         skip_if_converted=True,
     ),
@@ -164,14 +164,14 @@ ADMISSION_EVENT_PROJECTIONS = {
     # Admission Profile CONFIRMED (student confirms enrollment intent)
     # -------------------------------------------------------------------------
     # ⚠️ NOTE: This is an intent confirmation, not a pipeline milestone.
-    # Lead remains in "Chờ nhập học".
+    # Lead remains in "Kết quả hồ sơ".
     "profile_confirmed": AdmissionEventProjection(
         event="profile_confirmed",
         admission_status="confirmed",
         consultation_status_id="sts09",  # Stay at "Đủ điều kiện nhập học"
         consultation_name="Đủ điều kiện nhập học",  # Updated name
-        pipeline_stage_id="stg04",  # Stay at "Chờ nhập học"
-        stage_name="Chờ nhập học",
+        pipeline_stage_id="stg04",  # Stay at "Kết quả hồ sơ"
+        stage_name="Kết quả hồ sơ",
         system_note_template="[HỆ THỐNG] Học viên xác nhận ý định nhập học - Profile #{profile_id}",
         skip_if_converted=True,
     ),
@@ -186,8 +186,8 @@ ADMISSION_EVENT_PROJECTIONS = {
         admission_status="approved",  # Profile is approved, waiting for fee payment
         consultation_status_id="sts14",
         consultation_name="Chưa hoàn tất học phí",
-        pipeline_stage_id="stg05",  # Move to "Đã nộp học phí" stage (fee phase)
-        stage_name="Đã nộp học phí",
+        pipeline_stage_id="stg05",  # Move to "Xử lý học phí" stage (fee phase)
+        stage_name="Xử lý học phí",
         system_note_template="[HỆ THỐNG] Học phí đã được tính toán - Profile #{profile_id}, Số tiền: {amount} VND",
         skip_if_converted=True,
     ),
@@ -202,8 +202,8 @@ ADMISSION_EVENT_PROJECTIONS = {
         admission_status="confirmed",  # Profile is confirmed, fee cleared
         consultation_status_id="sts10",
         consultation_name="Đã hoàn tất học phí",
-        pipeline_stage_id="stg05",  # Stay in "Đã nộp học phí" stage
-        stage_name="Đã nộp học phí",
+        pipeline_stage_id="stg05",  # Stay in "Xử lý học phí" stage
+        stage_name="Xử lý học phí",
         system_note_template="[HỆ THỐNG] Học phí đã được thanh toán đầy đủ - Profile #{profile_id}, Mã GD: {transaction_id}",
         skip_if_converted=True,
     ),
@@ -217,8 +217,8 @@ ADMISSION_EVENT_PROJECTIONS = {
         admission_status="confirmed",  # Was confirmed but withdrew
         consultation_status_id="sts18",
         consultation_name="Đã hoàn học phí",
-        pipeline_stage_id="stg05",  # Stay in Fee stage
-        stage_name="Đã nộp học phí",
+        pipeline_stage_id="stg05",  # Stay in "Xử lý học phí" stage
+        stage_name="Xử lý học phí",
         system_note_template="[HỆ THỐNG] Học phí đã được hoàn trả - Profile #{profile_id}, Số tiền hoàn: {amount} VND",
         skip_if_converted=False,  # Allow transition even if converted (dropout)
     ),
@@ -232,8 +232,8 @@ ADMISSION_EVENT_PROJECTIONS = {
         admission_status="confirmed",  # Still confirmed, not yet enrolled
         consultation_status_id="sts10",
         consultation_name="Đã hoàn tất học phí",  # Updated name
-        pipeline_stage_id="stg05",  # Move to "Đã nộp học phí"
-        stage_name="Đã nộp học phí",
+        pipeline_stage_id="stg05",  # Move to "Xử lý học phí"
+        stage_name="Xử lý học phí",
         system_note_template="[HỆ THỐNG] Học viên đã hoàn tất học phí - Profile #{profile_id}",
         skip_if_converted=True,
     ),
@@ -260,8 +260,8 @@ ADMISSION_EVENT_PROJECTIONS = {
         admission_status="rejected",
         consultation_status_id="sts16",  # ✅ "Hồ sơ không đạt yêu cầu"
         consultation_name="Hồ sơ không đạt yêu cầu",  # Updated name
-        pipeline_stage_id="stg04",  # Move to "Chờ nhập học" (stg04)
-        stage_name="Chờ nhập học",
+        pipeline_stage_id="stg04",  # Move to "Kết quả hồ sơ" (stg04)
+        stage_name="Kết quả hồ sơ",
         system_note_template="[HỆ THỐNG] Hồ sơ không đạt yêu cầu - Profile #{profile_id}. Lý do: {reason}",
         skip_if_converted=True,
     ),
@@ -289,7 +289,7 @@ ADMISSION_EVENT_PROJECTIONS = {
         consultation_status_id="sts09",
         consultation_name="Đủ điều kiện nhập học",  # Updated name
         pipeline_stage_id="stg04",
-        stage_name="Chờ nhập học",
+        stage_name="Kết quả hồ sơ",
         system_note_template="[HỆ THỐNG] Hồ sơ được duyệt đặc biệt bởi Admin - Profile #{profile_id}. Lý do: {reason}",
         skip_if_converted=True,
     ),
@@ -341,8 +341,8 @@ ADMISSION_EVENT_PROJECTIONS = {
         admission_status="confirmed",  # Was confirmed but withdrew
         consultation_status_id="sts18",  # Changed to sts18 - "Đã hoàn học phí"
         consultation_name="Đã hoàn học phí",  # Updated name
-        pipeline_stage_id="stg05",  # Stay in Fee stage
-        stage_name="Đã nộp học phí",
+        pipeline_stage_id="stg05",  # Stay in "Xử lý học phí" stage
+        stage_name="Xử lý học phí",
         system_note_template="[HỆ THỐNG] Học viên đã hoàn học phí - Profile #{profile_id}",
         skip_if_converted=True,
     ),
