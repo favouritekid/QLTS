@@ -38,25 +38,25 @@ async def seed_admission_pipeline_data():
     consultation_status_id + pipeline_stage_id that MUST exist in DB.
     """
     stages = [
-        {"id": "stg01", "name": "Moi", "order": 1001},
+        {"id": "stg01", "name": "Chua tu van", "order": 1001},
         {"id": "stg02", "name": "Dang tu van", "order": 1002},
         {"id": "stg03", "name": "Da nop ho so", "order": 1003},
-        {"id": "stg04", "name": "Cho nhap hoc", "order": 1004},
-        {"id": "stg05", "name": "Da nop hoc phi", "order": 1005},
-        {"id": "stg06", "name": "Da nhap hoc", "order": 1006},
-        {"id": "stg07", "name": "Khong di hoc", "order": 1007},
+        {"id": "stg04", "name": "Ket qua ho so", "order": 1004},
+        {"id": "stg05", "name": "Xu ly hoc phi", "order": 1005},
+        {"id": "stg06", "name": "Da nhap hoc", "order": 1006, "is_final_stage": True},
+        {"id": "stg07", "name": "Khong di hoc", "order": 1007, "is_final_stage": True},
     ]
     statuses = [
-        {"id": "sts00", "name": "Chua lien he", "color_code": "#999999", "stage_id": "stg01"},
+        {"id": "sts00", "name": "Chua tiep can", "color_code": "#999999", "stage_id": "stg01"},
         {"id": "sts05", "name": "Hen lien he lai", "color_code": "#FFA500", "stage_id": "stg02"},
         {"id": "sts06", "name": "Dong y tu van", "color_code": "#00FF00", "stage_id": "stg02"},
-        {"id": "sts07", "name": "Da nop ho so", "color_code": "#0088FF", "stage_id": "stg03"},
+        {"id": "sts07", "name": "Da tiep nhan ho so", "color_code": "#0088FF", "stage_id": "stg03"},
         {"id": "sts09", "name": "Du dieu kien nhap hoc", "color_code": "#00CC00", "stage_id": "stg04"},
-        {"id": "sts10", "name": "Da nop hoc phi", "color_code": "#008800", "stage_id": "stg05"},
+        {"id": "sts10", "name": "Da hoan tat hoc phi", "color_code": "#008800", "stage_id": "stg05"},
         {"id": "sts11", "name": "Da nhap hoc", "color_code": "#006600", "stage_id": "stg06"},
-        {"id": "sts12", "name": "Khong di hoc", "color_code": "#CC0000", "stage_id": "stg07"},
-        {"id": "sts13", "name": "Dang xu ly", "color_code": "#FFCC00", "stage_id": "stg03"},
-        {"id": "sts14", "name": "Xac nhan nhap hoc", "color_code": "#009900", "stage_id": "stg05"},
+        {"id": "sts12", "name": "Ngung theo hoc", "color_code": "#CC0000", "stage_id": "stg07"},
+        {"id": "sts13", "name": "Da hoan tat le phi", "color_code": "#FFCC00", "stage_id": "stg03"},
+        {"id": "sts14", "name": "Chua hoan tat hoc phi", "color_code": "#009900", "stage_id": "stg05"},
         {"id": "sts16", "name": "Ho so khong dat", "color_code": "#FF0000", "stage_id": "stg04"},
         {"id": "sts18", "name": "Da hoan hoc phi", "color_code": "#008888", "stage_id": "stg05"},
     ]

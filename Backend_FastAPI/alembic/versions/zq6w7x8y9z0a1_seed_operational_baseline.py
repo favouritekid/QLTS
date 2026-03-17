@@ -8,7 +8,7 @@ Seeds the minimum data required for the system to operate:
 - Organization units (1 root + 3 departments)
 - Users (admin update + manager + 2 officers + accountant)
 - User unit assignments + Casbin role mappings
-- Pipeline stages (5) + Consultation statuses (16) + Allowed transitions (~25)
+- Pipeline stages (7: stg01-stg07) + Consultation statuses (20: sts00-sts19) + Allowed transitions (34)
 - Major programs (6) + Program offerings (8) + Academic info (8, year 2026)
 - Subjects (9) + Subject groups (7) + Subject-group mappings (21)
 - Admission methods (3) + Criteria (3) + Criteria-subject-group mappings
@@ -114,73 +114,105 @@ def upgrade() -> None:
 
     # =========================================================================
     # PHASE 3: Pipeline Stages + Consultation Statuses + Transitions
+    #
+    # Schema A (stg01-stg07 / sts00-sts19) — matches runtime code:
+    # - admission_event_mapping.py (Single Source of Truth)
+    # - phase_manager.py PHASE_STAGES / PHASE_STATUSES
+    # - officer_repository.py funnel queries
+    # - seed_data_template.xlsx sheets 10/10b/10c
+    #
+    # NOTE on sts08: phase=admission but stage_id=stg07 is intentional.
+    # Withdrawal is an admission outcome routed to terminal stage for funnel tracking.
     # =========================================================================
     conn.execute(text("""
         INSERT INTO pipeline_stage (id, name, "order", is_final_stage, color_code) VALUES
-        ('new',        'Mới',      0, false, '#3B82F6'),
-        ('contacted',  'Tiếp cận', 1, false, '#F59E0B'),
-        ('consulting', 'Tư vấn',   2, false, '#8B5CF6'),
-        ('evaluation', 'Đánh giá', 3, false, '#10B981'),
-        ('result',     'Kết quả',  4, true,  '#EF4444')
+        ('stg01', 'Chưa tư vấn',    1, false, '#3B82F6'),
+        ('stg02', 'Đang tư vấn',    2, false, '#F59E0B'),
+        ('stg03', 'Đã nộp hồ sơ',   3, false, '#8B5CF6'),
+        ('stg04', 'Kết quả hồ sơ',   4, false, '#06B6D4'),
+        ('stg05', 'Xử lý học phí',   5, false, '#10B981'),
+        ('stg06', 'Đã nhập học',     6, true,  '#22C55E'),
+        ('stg07', 'Không đi học',    7, true,  '#EF4444')
         ON CONFLICT (id) DO NOTHING
     """))
 
     conn.execute(text("""
         INSERT INTO consultation_status
-        (id, code, name, stage_id, color_code, outcome_type, is_final, status_type, selectable_mode, is_universal, updates_pipeline, counts_for_funnel, phase, display_order) VALUES
-        -- Stage: new
-        ('not_contacted',       'NOT_CONTACTED',       'Chưa liên lạc',              'new',        '#94A3B8', 'neutral',  false, 'transition', 'user',   false, true,  true,  'consultation', 10),
-        ('contact_failed',      'CONTACT_FAILED',      'Không liên lạc được',        'new',        '#EF4444', 'negative', false, 'transition', 'user',   false, true,  true,  'consultation', 20),
-        -- Stage: contacted
-        ('contacted_interested',     'CONTACTED_INTERESTED',     'Quan tâm',              'contacted',  '#22C55E', 'positive', false, 'transition', 'user',   false, true,  true,  'consultation', 30),
-        ('contacted_not_interested', 'CONTACTED_NOT_INTERESTED', 'Không quan tâm',        'contacted',  '#F97316', 'negative', false, 'transition', 'user',   false, true,  true,  'consultation', 40),
-        -- Stage: consulting
-        ('consulting_scheduled', 'CONSULTING_SCHEDULED', 'Hẹn tư vấn',              'consulting', '#A78BFA', 'neutral',  false, 'transition', 'user',   false, true,  true,  'consultation', 50),
-        ('consulting_done',      'CONSULTING_DONE',      'Đã tư vấn',               'consulting', '#6366F1', 'positive', false, 'transition', 'user',   false, true,  true,  'consultation', 60),
-        ('consulting_no_show',   'CONSULTING_NO_SHOW',   'Không đến',               'consulting', '#DC2626', 'negative', false, 'transition', 'user',   false, true,  true,  'consultation', 70),
-        -- Stage: evaluation
-        ('profile_created',   'PROFILE_CREATED',   'Đã tạo hồ sơ',   'evaluation', '#14B8A6', 'positive', false, 'transition', 'user',   false, true,  true,  'admission', 80),
-        ('profile_submitted', 'PROFILE_SUBMITTED', 'Đã nộp hồ sơ',   'evaluation', '#0EA5E9', 'positive', false, 'transition', 'user',   false, true,  true,  'admission', 90),
-        ('profile_approved',  'PROFILE_APPROVED',  'Hồ sơ được duyệt','evaluation', '#22C55E', 'positive', false, 'transition', 'role',   false, true,  true,  'admission', 100),
-        -- Stage: result (finals)
-        ('enrolled', 'ENROLLED', 'Đã nhập học', 'result', '#16A34A', 'positive', true,  'transition', 'role',   false, true,  true,  'enrolled',     110),
-        ('rejected', 'REJECTED', 'Từ chối',     'result', '#DC2626', 'negative', true,  'transition', 'role',   false, true,  true,  'consultation', 120),
-        ('lost',     'LOST',     'Mất lead',    'result', '#6B7280', 'negative', true,  'transition', 'role',   false, true,  true,  'consultation', 130),
-        -- Universal (no stage)
-        ('callback_requested', 'CALLBACK_REQUESTED', 'Yêu cầu gọi lại',  NULL, '#FBBF24', 'neutral',  false, 'activity', 'user',   true,  false, false, 'universal', 200),
-        ('info_sent',          'INFO_SENT',          'Đã gửi thông tin',  NULL, '#60A5FA', 'neutral',  false, 'activity', 'user',   true,  false, false, 'universal', 210),
-        ('duplicate_flagged',  'DUPLICATE_FLAGGED',  'Trùng lead',        NULL, '#F87171', 'negative', false, 'system',   'system', true,  false, false, 'universal', 220)
+        (id, code, name, stage_id, color_code, outcome_type, is_final, status_type,
+         selectable_mode, is_universal, updates_pipeline, counts_for_funnel, phase,
+         display_order, legacy_status)
+        VALUES
+        -- Consultation phase (stg01-stg02)
+        ('sts00', 'NOT_CONTACTED',        'Chưa tiếp cận',                  'stg01', '#9CA3AF', 'neutral',  false, 'transition', 'user',   false, true,  true,  'consultation', 0,   NULL),
+        ('sts02', 'CONTACTED',            'Đã kết nối liên hệ',            'stg01', '#38BDF8', 'neutral',  false, 'transition', 'user',   false, true,  true,  'consultation', 10,  'contacted'),
+        ('sts03', 'INTERESTED',           'Có nhu cầu tìm hiểu',          'stg02', '#FACC15', 'neutral',  false, 'transition', 'user',   false, true,  true,  'consultation', 20,  NULL),
+        ('sts04', 'CONSULT_REJECTED',     'Từ chối tư vấn',               'stg02', '#EF4444', 'negative', false, 'transition', 'user',   false, true,  true,  'consultation', 30,  NULL),
+        ('sts05', 'CALLBACK_LATER',       'Hẹn liên hệ lại',             'stg02', '#A78BFA', 'neutral',  false, 'transition', 'user',   false, true,  false, 'consultation', 40,  NULL),
+        ('sts06', 'CONSULT_ACCEPTED',     'Đồng ý tư vấn',               'stg02', '#22C55E', 'positive', false, 'transition', 'user',   false, true,  true,  'consultation', 50,  NULL),
+        -- Admission phase (stg03-stg04)
+        ('sts07', 'APPLICATION_RECEIVED', 'Đã tiếp nhận hồ sơ',          'stg03', '#FB923C', 'neutral',  false, 'transition', 'user',   false, true,  true,  'admission',    300, NULL),
+        ('sts17', 'APPLICATION_REVISION', 'Yêu cầu bổ sung hồ sơ',      'stg03', '#0EA5E9', 'neutral',  false, 'transition', 'user',   false, true,  true,  'admission',    310, NULL),
+        ('sts16', 'APPLICATION_REJECTED', 'Hồ sơ không đạt yêu cầu',    'stg04', '#B91C1C', 'negative', true,  'transition', 'role',   false, true,  true,  'admission',    320, NULL),
+        ('sts08', 'APPLICATION_WITHDRAWN','Không tiếp tục hồ sơ',        'stg07', '#DC2626', 'negative', true,  'transition', 'user',   false, true,  true,  'admission',    330, NULL),
+        ('sts13', 'APPLICATION_FEE_PAID', 'Đã hoàn tất lệ phí xét tuyển','stg03', '#4ADE80', 'positive', false, 'system',     'system', false, true,  true,  'admission',    340, NULL),
+        ('sts09', 'ELIGIBLE_FOR_ENROLLMENT','Đủ điều kiện nhập học',      'stg04', '#F97316', 'positive', false, 'system',     'system', false, true,  true,  'admission',    350, NULL),
+        -- Fee phase (stg05)
+        ('sts14', 'TUITION_PENDING',      'Chưa hoàn tất học phí',       'stg05', '#FBBF24', 'neutral',  false, 'transition', 'user',   false, true,  true,  'fee',          400, NULL),
+        ('sts10', 'TUITION_PAID',         'Đã hoàn tất học phí',         'stg05', '#16A34A', 'positive', false, 'system',     'system', false, true,  true,  'fee',          410, NULL),
+        ('sts18', 'TUITION_REFUNDED',     'Đã hoàn học phí',             'stg05', '#6B7280', 'negative', true,  'system',     'system', false, true,  true,  'fee',          420, NULL),
+        -- Enrolled phase (stg06-stg07)
+        ('sts11', 'ENROLLED',             'Đã xác nhận nhập học',        'stg06', '#15803D', 'positive', true,  'system',     'system', false, true,  true,  'enrolled',     500, NULL),
+        ('sts12', 'DROPPED_OUT',          'Ngừng theo học',              'stg07', '#7F1D1D', 'negative', true,  'transition', 'role',   false, true,  true,  'enrolled',     510, NULL),
+        -- Universal (no stage, activity-only)
+        ('sts01', 'NO_ANSWER',            'Không nghe máy',              NULL,    '#94A3B8', 'neutral',  false, 'activity',   'user',   true,  false, false, 'universal',    900, NULL),
+        ('sts15', 'NO_REPLY_MESSAGE',     'Nhắn tin không phản hồi',    NULL,    '#64748B', 'neutral',  false, 'activity',   'user',   true,  false, false, 'universal',    910, NULL),
+        ('sts19', 'CANCELLED',            'Đã hủy lịch hẹn',           NULL,    '#FF6B6B', 'neutral',  false, 'activity',   'user',   true,  false, false, 'universal',    920, NULL)
         ON CONFLICT (id) DO NOTHING
     """))
 
     conn.execute(text("""
-        INSERT INTO allowed_transitions (from_status_id, to_status_id, trigger_type, is_active, created_at, updated_at) VALUES
-        ('not_contacted', 'contacted_interested',     'user', true, NOW(), NOW()),
-        ('not_contacted', 'contact_failed',           'user', true, NOW(), NOW()),
-        ('not_contacted', 'contacted_not_interested', 'user', true, NOW(), NOW()),
-        ('not_contacted', 'lost',                     'role', true, NOW(), NOW()),
-        ('contact_failed', 'not_contacted',           'user', true, NOW(), NOW()),
-        ('contact_failed', 'contacted_interested',    'user', true, NOW(), NOW()),
-        ('contact_failed', 'lost',                    'role', true, NOW(), NOW()),
-        ('contacted_interested', 'consulting_scheduled', 'user', true, NOW(), NOW()),
-        ('contacted_interested', 'consulting_done',      'user', true, NOW(), NOW()),
-        ('contacted_interested', 'lost',                 'role', true, NOW(), NOW()),
-        ('contacted_not_interested', 'contacted_interested', 'user', true, NOW(), NOW()),
-        ('contacted_not_interested', 'lost',                 'role', true, NOW(), NOW()),
-        ('consulting_scheduled', 'consulting_done',    'user', true, NOW(), NOW()),
-        ('consulting_scheduled', 'consulting_no_show', 'user', true, NOW(), NOW()),
-        ('consulting_scheduled', 'lost',               'role', true, NOW(), NOW()),
-        ('consulting_no_show', 'consulting_scheduled', 'user', true, NOW(), NOW()),
-        ('consulting_done', 'profile_created',         'user', true, NOW(), NOW()),
-        ('consulting_done', 'lost',                    'role', true, NOW(), NOW()),
-        ('profile_created', 'profile_submitted',       'user', true, NOW(), NOW()),
-        ('profile_created', 'lost',                    'role', true, NOW(), NOW()),
-        ('profile_submitted', 'profile_approved',      'role', true, NOW(), NOW()),
-        ('profile_submitted', 'rejected',              'role', true, NOW(), NOW()),
-        ('profile_approved', 'enrolled',               'role', true, NOW(), NOW()),
-        ('profile_approved', 'rejected',               'role', true, NOW(), NOW()),
-        ('rejected', 'consulting_scheduled',           'role', true, NOW(), NOW()),
-        ('rejected', 'not_contacted',                  'role', true, NOW(), NOW())
+        INSERT INTO allowed_transitions
+        (from_status_id, to_status_id, trigger_type, required_phase, is_active, created_at, updated_at)
+        VALUES
+        -- Consultation phase: free movement within stg01-stg02
+        ('sts00', 'sts02', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts00', 'sts03', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts00', 'sts04', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts00', 'sts05', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts00', 'sts06', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts02', 'sts03', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts02', 'sts04', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts02', 'sts05', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts02', 'sts06', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts03', 'sts04', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts03', 'sts05', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts03', 'sts06', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts04', 'sts03', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts04', 'sts05', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts04', 'sts06', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts05', 'sts03', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts05', 'sts04', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts05', 'sts06', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts06', 'sts03', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts06', 'sts04', 'user', 'consultation', true, NOW(), NOW()),
+        ('sts06', 'sts05', 'user', 'consultation', true, NOW(), NOW()),
+        -- Consultation → Admission gate
+        ('sts06', 'sts07', 'system', 'admission', true, NOW(), NOW()),
+        -- Admission phase
+        ('sts07', 'sts08', 'user',   'admission', true, NOW(), NOW()),
+        ('sts07', 'sts09', 'system', 'admission', true, NOW(), NOW()),
+        ('sts07', 'sts13', 'system', 'admission', true, NOW(), NOW()),
+        ('sts07', 'sts16', 'role',   'admission', true, NOW(), NOW()),
+        ('sts07', 'sts17', 'user',   'admission', true, NOW(), NOW()),
+        ('sts13', 'sts09', 'system', 'admission', true, NOW(), NOW()),
+        ('sts17', 'sts07', 'user',   'admission', true, NOW(), NOW()),
+        -- Fee phase
+        ('sts09', 'sts14', 'system', 'fee',       true, NOW(), NOW()),
+        ('sts14', 'sts10', 'system', 'fee',       true, NOW(), NOW()),
+        ('sts14', 'sts18', 'system', 'fee',       true, NOW(), NOW()),
+        -- Enrolled phase
+        ('sts10', 'sts11', 'system', 'enrolled',  true, NOW(), NOW()),
+        ('sts11', 'sts12', 'role',   'enrolled',  true, NOW(), NOW())
         ON CONFLICT DO NOTHING
     """))
     print("  [seed] Phase 3: pipeline + statuses + transitions done")

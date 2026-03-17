@@ -775,13 +775,13 @@ async def seed_lead_dependencies(setup_test_database):
 
             # Admission pipeline stages + statuses (required by admission events)
             admission_stages = [
-                models.PipelineStage(id="stg01", name="Moi", order=1001),
+                models.PipelineStage(id="stg01", name="Chua tu van", order=1001),
                 models.PipelineStage(id="stg02", name="Dang tu van", order=1002),
                 models.PipelineStage(id="stg03", name="Da nop ho so", order=1003),
-                models.PipelineStage(id="stg04", name="Cho nhap hoc", order=1004),
-                models.PipelineStage(id="stg05", name="Da nop hoc phi", order=1005),
-                models.PipelineStage(id="stg06", name="Da nhap hoc", order=1006),
-                models.PipelineStage(id="stg07", name="Khong di hoc", order=1007),
+                models.PipelineStage(id="stg04", name="Ket qua ho so", order=1004),
+                models.PipelineStage(id="stg05", name="Xu ly hoc phi", order=1005),
+                models.PipelineStage(id="stg06", name="Da nhap hoc", order=1006, is_final_stage=True),
+                models.PipelineStage(id="stg07", name="Khong di hoc", order=1007, is_final_stage=True),
             ]
             session.add_all(admission_stages)
             await session.flush()
@@ -792,7 +792,7 @@ async def seed_lead_dependencies(setup_test_database):
                 models.ConsultationStatus(id="sts06", name="Dong y tu van", color_code="#00FF00", stage_id="stg02"),
                 models.ConsultationStatus(id="sts07", name="Da nop ho so", color_code="#0088FF", stage_id="stg03"),
                 models.ConsultationStatus(id="sts09", name="Du dieu kien nhap hoc", color_code="#00CC00", stage_id="stg04"),
-                models.ConsultationStatus(id="sts10", name="Da nop hoc phi", color_code="#008800", stage_id="stg05"),
+                models.ConsultationStatus(id="sts10", name="Da hoan tat hoc phi", color_code="#008800", stage_id="stg05"),
                 models.ConsultationStatus(id="sts11", name="Da nhap hoc", color_code="#006600", stage_id="stg06"),
                 models.ConsultationStatus(id="sts12", name="Khong di hoc", color_code="#CC0000", stage_id="stg07"),
                 models.ConsultationStatus(id="sts13", name="Dang xu ly", color_code="#FFCC00", stage_id="stg03"),
