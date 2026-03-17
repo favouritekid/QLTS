@@ -1,10 +1,15 @@
 # app/routers/administrative.py
 """
 API endpoints for administrative nodes (provinces, districts, wards).
-Supports adaptive 2-level/3-level address selection.
+
+Two explicit modes controlled by `mode` query parameter:
+- mode=current  →  34 provinces, 2-level (province → ward), post 01/07/2025
+- mode=legacy   →  63 provinces, 3-level (province → district → ward), pre 01/07/2025
 """
 
+from enum import Enum
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,61 +17,60 @@ from app import database, models
 from app.core import deps
 from app.repositories.administrative_repository import AdministrativeRepository
 from app.schemas.administrative import (
-    ProvinceResponse, 
-    DistrictResponse, 
+    ProvinceResponse,
+    DistrictResponse,
     WardResponse,
 )
+
+
+class AddressMode(str, Enum):
+    current = "current"
+    legacy = "legacy"
+
 
 router = APIRouter(prefix="/administrative", tags=["Administrative"])
 
 
 @router.get("/provinces", response_model=List[ProvinceResponse])
 async def get_provinces(
+    mode: AddressMode = Query(AddressMode.current, description="current = 34 tỉnh hiện hành; legacy = 63 tỉnh cũ"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ):
     """
-    Get all selectable province/city records.
+    Get provinces for a specific administrative era.
 
-    Returns current provinces plus historical legacy provinces that are still
-    needed for old 3-level household-address lookups.
+    - **mode=current**: 34 provinces effective from 01/07/2025 (QĐ 19/2025)
+    - **mode=legacy**: 63 provinces valid before 01/07/2025
     """
     repo = AdministrativeRepository(db)
-    provinces = await repo.get_provinces()
+    provinces = await repo.get_provinces(current=mode == AddressMode.current)
     return [
-        ProvinceResponse(
-            code=p.code,
-            name=p.name,
-            valid_from=p.valid_from,
-            valid_to=p.valid_to,
-            is_current=p.valid_to is None,
-        )
+        ProvinceResponse(code=p.code, name=p.name)
         for p in provinces
     ]
 
 
 @router.get("/districts", response_model=List[DistrictResponse])
 async def get_districts(
-    province_code: str = Query(..., description="Province code (e.g., '54' for Phú Yên)"),
+    province_code: str = Query(..., description="Legacy province code"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ):
     """
-    Get districts/counties under a province.
-    
-    Only returns districts for OLD (3-level) structure.
-    If province has no districts (2-level only), returns empty list.
-    
-    Frontend hint: If empty, skip district selection and go directly to wards.
+    Get districts under a legacy province (3-level structure).
+
+    Districts only exist in the legacy era. Current (2-level) provinces
+    have no districts — frontend should not call this endpoint in current mode.
     """
     repo = AdministrativeRepository(db)
     districts = await repo.get_districts_by_province(province_code)
     return [
         DistrictResponse(
-            code=d.code, 
+            code=d.code,
             name=d.name,
-            province_code=d.province_code
-        ) 
+            province_code=d.province_code,
+        )
         for d in districts
     ]
 
@@ -74,34 +78,32 @@ async def get_districts(
 @router.get("/wards", response_model=List[WardResponse])
 async def get_wards(
     province_code: str = Query(..., description="Province code"),
-    district_code: Optional[str] = Query(None, description="District code (optional for 2-level)"),
+    mode: AddressMode = Query(AddressMode.current, description="current = 2-cấp; legacy = 3-cấp"),
+    district_code: Optional[str] = Query(None, description="District code (required for legacy mode)"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ):
     """
-    Get wards/communes based on selection mode.
-    
-    **Adaptive Logic:**
-    - If `district_code` is provided: Returns wards under that district (3-level)
-    - If `district_code` is NULL: Returns wards directly under province (2-level)
-    
-    This allows the frontend to automatically adapt to user's selection flow.
+    Get wards/communes for a specific mode.
+
+    - **mode=current**: 2-level wards directly under province (district_code ignored)
+    - **mode=legacy**: 3-level wards under a specific district (district_code required)
     """
     repo = AdministrativeRepository(db)
-    
-    if district_code:
-        # 3-level: Wards under specific district
-        wards = await repo.get_wards_by_district(province_code, district_code)
-    else:
-        # 2-level: Wards directly under province
+
+    if mode == AddressMode.current:
         wards = await repo.get_wards_by_province(province_code)
-    
+    else:
+        if not district_code:
+            return []
+        wards = await repo.get_wards_by_district(province_code, district_code)
+
     return [
         WardResponse(
             code=w.code,
             name=w.name,
             province_code=w.province_code,
-            district_code=w.district_code
+            district_code=w.district_code,
         )
         for w in wards
     ]

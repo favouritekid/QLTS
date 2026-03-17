@@ -10,27 +10,25 @@ class AdministrativeNodeBase(BaseModel):
     """Base schema for administrative node."""
     code: str
     name: str
-    
+
     class Config:
         from_attributes = True
 
 
 class ProvinceResponse(AdministrativeNodeBase):
-    """Province response schema."""
-    valid_from: date
-    valid_to: Optional[date] = None
-    is_current: bool
+    """Province response — mode determines which era is returned."""
+    pass
 
 
 class DistrictResponse(AdministrativeNodeBase):
-    """District response schema with province reference."""
+    """District response (legacy 3-level only)."""
     province_code: str
 
 
 class WardResponse(AdministrativeNodeBase):
-    """Ward response schema."""
+    """Ward response."""
     province_code: str
-    district_code: Optional[str] = None  # NULL for 2-level structure
+    district_code: Optional[str] = None  # NULL for current 2-level
 
 
 class WardDetailResponse(WardResponse):
@@ -38,5 +36,4 @@ class WardDetailResponse(WardResponse):
     path: str
     valid_from: date
     valid_to: Optional[date] = None
-    # For 3-level lookup
     old_district_name: Optional[str] = None

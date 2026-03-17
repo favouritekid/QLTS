@@ -8,6 +8,8 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Combobox } from "@/components/ui/combobox"
 import { Separator } from "@/components/ui/separator"
+import { useState } from "react"
+import type { AddressMode } from "@/lib/api/administrative"
 import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
 import type { AdmissionProfileResponse, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
@@ -31,6 +33,11 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentProvince = useWatch({ control: form.control, name: "permanent_province" }) || ""
   const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
   const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
+
+  // Infer initial mode: has district → legacy, otherwise current
+  const [addressMode, setAddressMode] = useState<AddressMode>(
+    permanentDistrict ? "legacy" : "current"
+  )
 
   return (
     <div className="space-y-6">
@@ -221,6 +228,8 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               onProvinceChange={(value) => form.setValue("permanent_province", value)}
               onDistrictChange={(value) => form.setValue("permanent_district", value || "")}
               onWardChange={(value) => form.setValue("permanent_ward", value)}
+              mode={addressMode}
+              onModeChange={setAddressMode}
               disabled={!isEditable}
             />
         </CardContent>
