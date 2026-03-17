@@ -1,32 +1,35 @@
 id,from_status_id,to_status_id,trigger_type,required_phase,is_active,description
 1,sts00,sts02,user,consultation,true,Kết nối được
-2,sts00,sts04,user,consultation,true,Từ chối ngay
-3,sts02,sts03,user,consultation,true,Quan tâm
-4,sts02,sts05,user,consultation,true,Hẹn lại
-5,sts02,sts04,user,consultation,true,Không quan tâm
-6,sts05,sts03,user,consultation,true,Gọi lại có nhu cầu
-7,sts05,sts04,user,consultation,true,Gọi lại nhưng từ chối
-8,sts03,sts06,user,consultation,true,Đồng ý tư vấn
-9,sts03,sts04,user,consultation,true,Không tiếp tục
-10,sts06,sts07,user,admission,true,Tạo hồ sơ xét tuyển
-11,sts07,sts17,user,admission,true,Yêu cầu bổ sung
-12,sts17,sts07,user,admission,true,Bổ sung xong
-13,sts07,sts08,user,admission,true,Rút hồ sơ
-14,sts07,sts16,role,admission,true,Không đạt
-15,sts13,sts09,system,admission,true,Lệ phí hợp lệ
-16,sts09,sts14,system,fee,true,Chuyển sang thu học phí
-17,sts14,sts10,system,fee,true,Thanh toán thành công
-18,sts14,sts18,system,fee,true,Hoàn tiền
-19,sts10,sts11,system,enrolled,true,Nhập học
-20,sts11,sts12,role,enrolled,true,Ngừng học
-21,sts00,sts03,user,consultation,true,Quan tâm ngay từ đầu
-22,sts00,sts05,user,consultation,true,Hẹn gọi lại
-23,sts00,sts06,user,consultation,true,Đồng ý tư vấn ngay
-24,sts02,sts06,user,consultation,true,Đồng ý tư vấn
-25,sts05,sts06,user,consultation,true,Đồng ý sau khi gọi lại
-26,sts03,sts05,user,consultation,true,Hẹn gọi lại
-27,sts06,sts03,user,consultation,true,Quay lại quan tâm
-28,sts06,sts05,user,consultation,true,Hẹn lại
-29,sts06,sts04,user,consultation,true,Từ chối sau tư vấn
-30,sts10,sts18,system,fee,true,Hoàn tiền sau khi đã thanh toán
-31,sts09,sts10,system,fee,true,Miễn học phí (100% scholarship)
+2,sts00,sts03,user,consultation,true,Quan tâm ngay từ đầu
+3,sts00,sts04,user,consultation,true,Từ chối ngay
+4,sts00,sts05,user,consultation,true,Hẹn gọi lại
+5,sts00,sts06,user,consultation,true,Đồng ý tư vấn ngay
+6,sts02,sts03,user,consultation,true,Quan tâm
+7,sts02,sts04,user,consultation,true,Không quan tâm
+8,sts02,sts05,user,consultation,true,Hẹn lại
+9,sts02,sts06,user,consultation,true,Đồng ý tư vấn
+10,sts03,sts04,user,consultation,true,Không tiếp tục
+11,sts03,sts05,user,consultation,true,Hẹn gọi lại
+12,sts03,sts06,user,consultation,true,Đồng ý tư vấn
+13,sts04,sts03,user,consultation,true,Quan tâm lại sau từ chối
+14,sts04,sts05,user,consultation,true,Hẹn lại sau từ chối
+15,sts04,sts06,user,consultation,true,Đồng ý sau từ chối
+16,sts05,sts03,user,consultation,true,Gọi lại có nhu cầu
+17,sts05,sts04,user,consultation,true,Gọi lại nhưng từ chối
+18,sts05,sts06,user,consultation,true,Đồng ý sau khi gọi lại
+19,sts06,sts03,user,consultation,true,Quay lại quan tâm
+20,sts06,sts04,user,consultation,true,Từ chối sau tư vấn
+21,sts06,sts05,user,consultation,true,Hẹn lại
+22,sts06,sts07,system,admission,true,Tạo hồ sơ xét tuyển
+23,sts07,sts08,user,admission,true,Rút hồ sơ
+24,sts07,sts09,system,admission,true,Miễn lệ phí - đủ điều kiện
+25,sts07,sts13,system,admission,true,Thanh toán lệ phí xét tuyển
+26,sts07,sts16,role,admission,true,Không đạt
+27,sts07,sts17,user,admission,true,Yêu cầu bổ sung
+28,sts13,sts09,system,admission,true,Lệ phí hợp lệ
+29,sts17,sts07,user,admission,true,Bổ sung xong
+30,sts09,sts14,system,fee,true,Chuyển sang thu học phí
+31,sts14,sts10,system,fee,true,Thanh toán thành công
+32,sts14,sts18,system,fee,true,Hoàn tiền
+33,sts10,sts11,system,enrolled,true,Nhập học
+34,sts11,sts12,role,enrolled,true,Ngừng học

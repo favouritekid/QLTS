@@ -73,6 +73,7 @@ async def load_consultation_status_v3(db: AsyncSession, csv_path: str) -> int:
             updates_pipeline = row['updates_pipeline'].lower() == 'true'
             counts_for_funnel = row['counts_for_funnel'].lower() == 'true'
             display_order = int(row['display_order'])
+            legacy_status = (row.get('legacy_status') or '').strip() or None
 
             # Handle NULL stage_id for universal statuses
             stage_id = row['stage_id'] if row['stage_id'] != 'NULL' else None
@@ -93,8 +94,7 @@ async def load_consultation_status_v3(db: AsyncSession, csv_path: str) -> int:
                 display_order=display_order,
                 description=row['description'],
                 color_code=row['color_code'],
-                # legacy_status remove from CSV
-                legacy_status=None,
+                legacy_status=legacy_status,
                 # Deprecated fields (for backward compatibility)
                 is_final_status=is_final,
                 counts_for_kpi=counts_for_funnel,
@@ -164,8 +164,8 @@ async def validate_data(db: AsyncSession) -> bool:
     # Check 2: All transitions loaded
     result = await db.execute(select(models.AllowedTransition))
     transitions = result.scalars().all()
-    if len(transitions) != 21:  # Expected 21 transitions from v3
-        errors.append(f"Expected 21 allowed_transitions records, got {len(transitions)}")
+    if len(transitions) != 34:  # Expected 34 transitions from current seed workbook
+        errors.append(f"Expected 34 allowed_transitions records, got {len(transitions)}")
 
     # Check 3: All transitions have trigger_type
     for trans in transitions:

@@ -1,21 +1,21 @@
-id,code,name,phase,stage_id,status_type,selectable_mode,outcome_type,is_final,is_universal,updates_pipeline,counts_for_funnel,display_order,description,color_code
-sts00,NOT_CONTACTED,Chưa tiếp cận,consultation,stg01,transition,user,neutral,false,false,true,true,0,"Lead mới tạo, chưa có tương tác",#808080
-sts01,NO_ANSWER,Không nghe máy,universal,NULL,activity,user,neutral,false,true,false,false,900,"Gọi điện không bắt máy",#FF0000
-sts02,CONTACTED,Đã kết nối liên hệ,consultation,stg01,transition,user,neutral,false,false,true,true,10,"Đã liên hệ được",#0000FF
-sts03,INTERESTED,Có nhu cầu tìm hiểu,consultation,stg02,transition,user,neutral,false,false,true,true,20,"Lead có quan tâm",#008000
-sts04,CONSULT_REJECTED,Từ chối tư vấn,consultation,stg02,transition,user,negative,true,false,true,true,30,"Từ chối hoàn toàn",#FF0000
-sts05,CALLBACK_LATER,Hẹn liên hệ lại,consultation,stg02,transition,user,neutral,false,false,true,true,40,"Hẹn gọi lại",#FFA500
-sts06,CONSULT_ACCEPTED,Đồng ý tư vấn,consultation,stg02,transition,user,positive,false,false,true,true,50,"Đồng ý bước tư vấn",#008000
-sts07,APPLICATION_RECEIVED,Đã tiếp nhận hồ sơ,admission,stg03,transition,user,neutral,false,false,true,true,300,"Đã tạo hồ sơ xét tuyển",#0000FF
-sts17,APPLICATION_REVISION,Yêu cầu bổ sung hồ sơ,admission,stg03,transition,user,neutral,false,false,false,false,310,"Yêu cầu nộp thêm giấy tờ",#FFA500
-sts16,APPLICATION_REJECTED,Hồ sơ không đạt yêu cầu,admission,stg04,transition,role,negative,true,false,true,true,320,"Hồ sơ bị từ chối",#FF0000
-sts08,APPLICATION_WITHDRAWN,Không tiếp tục hồ sơ,admission,stg04,transition,user,negative,true,false,true,true,330,"Lead tự dừng",#808080
-sts13,APPLICATION_FEE_PAID,Đã hoàn tất lệ phí xét tuyển,admission,stg03,system,system,positive,false,false,false,false,340,"System ghi nhận thanh toán lệ phí",#008000
-sts09,ELIGIBLE_FOR_ENROLLMENT,Đủ điều kiện nhập học,admission,stg04,system,system,positive,false,false,true,true,350,"Hồ sơ được duyệt",#008000
-sts14,TUITION_PENDING,Chưa hoàn tất học phí,fee,stg05,transition,user,neutral,false,false,true,true,400,"Chưa đóng đủ học phí",#FFA500
-sts10,TUITION_PAID,Đã hoàn tất học phí,fee,stg05,system,system,positive,false,false,true,true,410,"Thanh toán học phí thành công",#008000
-sts18,TUITION_REFUNDED,Đã hoàn học phí,fee,stg05,system,system,negative,true,false,true,false,420,"Hoàn tiền học phí",#FF0000
-sts11,ENROLLED,Đã xác nhận nhập học,enrolled,stg06,system,system,positive,true,false,true,true,500,"Chính thức trở thành sinh viên",#008000
-sts12,DROPPED_OUT,Ngừng theo học,enrolled,stg07,transition,role,negative,true,false,true,true,510,"Sinh viên thôi học",#FF0000
-sts15,NO_REPLY_MESSAGE,Nhắn tin không phản hồi,universal,NULL,activity,user,neutral,false,true,false,false,910,"Có gửi tin nhưng không phản hồi",#808080
-sts19,CANCELLED,Đã hủy lịch hẹn,universal,NULL,activity,user,neutral,false,true,false,false,920,"Lịch hẹn tư vấn bị hủy",#FF6B6B
+id,code,name,phase,stage_id,status_type,selectable_mode,outcome_type,is_final,is_universal,updates_pipeline,counts_for_funnel,display_order,description,color_code,legacy_status
+sts00,NOT_CONTACTED,Chưa tiếp cận,consultation,stg01,transition,user,neutral,false,false,true,true,0,"Lead mới tạo, chưa có tương tác",#9CA3AF,
+sts02,CONTACTED,Đã kết nối liên hệ,consultation,stg01,transition,user,neutral,false,false,true,true,10,Đã liên hệ được,#38BDF8,contacted
+sts03,INTERESTED,Có nhu cầu tìm hiểu,consultation,stg02,transition,user,neutral,false,false,true,true,20,Lead có quan tâm,#FACC15,
+sts04,CONSULT_REJECTED,Từ chối tư vấn,consultation,stg02,transition,user,negative,false,false,true,true,30,Từ chối hoàn toàn,#EF4444,
+sts05,CALLBACK_LATER,Hẹn liên hệ lại,consultation,stg02,transition,user,neutral,false,false,true,false,40,Hẹn gọi lại,#A78BFA,
+sts06,CONSULT_ACCEPTED,Đồng ý tư vấn,consultation,stg02,transition,user,positive,false,false,true,true,50,Đồng ý bước tư vấn,#22C55E,
+sts07,APPLICATION_RECEIVED,Đã tiếp nhận hồ sơ,admission,stg03,transition,user,neutral,false,false,true,true,300,Đã tạo hồ sơ xét tuyển,#FB923C,
+sts17,APPLICATION_REVISION,Yêu cầu bổ sung hồ sơ,admission,stg03,transition,user,neutral,false,false,true,true,310,Yêu cầu nộp thêm giấy tờ,#0EA5E9,
+sts16,APPLICATION_REJECTED,Hồ sơ không đạt yêu cầu,admission,stg04,transition,role,negative,true,false,true,true,320,Hồ sơ bị từ chối,#B91C1C,
+sts08,APPLICATION_WITHDRAWN,Không tiếp tục hồ sơ,admission,stg07,transition,user,negative,true,false,true,true,330,Lead tự dừng,#DC2626,
+sts13,APPLICATION_FEE_PAID,Đã hoàn tất lệ phí xét tuyển,admission,stg03,system,system,positive,false,false,true,true,340,System ghi nhận thanh toán lệ phí,#4ADE80,
+sts09,ELIGIBLE_FOR_ENROLLMENT,Đủ điều kiện nhập học,admission,stg04,system,system,positive,false,false,true,true,350,Hồ sơ được duyệt,#F97316,
+sts14,TUITION_PENDING,Chưa hoàn tất học phí,fee,stg05,transition,user,neutral,false,false,true,true,400,Chưa đóng đủ học phí,#FBBF24,
+sts10,TUITION_PAID,Đã hoàn tất học phí,fee,stg05,system,system,positive,false,false,true,true,410,Thanh toán học phí thành công,#16A34A,
+sts18,TUITION_REFUNDED,Đã hoàn học phí,fee,stg05,system,system,negative,true,false,true,true,420,Hoàn tiền học phí,#6B7280,
+sts11,ENROLLED,Đã xác nhận nhập học,enrolled,stg06,system,system,positive,true,false,true,true,500,Chính thức trở thành sinh viên,#15803D,
+sts12,DROPPED_OUT,Ngừng theo học,enrolled,stg07,transition,role,negative,true,false,true,true,510,Sinh viên thôi học,#7F1D1D,
+sts01,NO_ANSWER,Không nghe máy,universal,NULL,activity,user,neutral,false,true,false,false,900,Gọi điện không bắt máy,#94A3B8,
+sts15,NO_REPLY_MESSAGE,Nhắn tin không phản hồi,universal,NULL,activity,user,neutral,false,true,false,false,910,Có gửi tin nhưng không phản hồi,#64748B,
+sts19,CANCELLED,Đã hủy lịch hẹn,universal,NULL,activity,user,neutral,false,true,false,false,920,Lịch hẹn tư vấn bị hủy,#FF6B6B,

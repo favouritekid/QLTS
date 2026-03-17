@@ -90,38 +90,38 @@ class TestCheckTerminalStatusGuard:
         """Create a mock final status with enrolled phase (HARD BLOCK)."""
         status = MagicMock()
         status.id = "sts11"
-        status.name = "Đã nhập học"
+        status.name = "Đã xác nhận nhập học"
         status.phase = "enrolled"
         status.is_final = True
         return status
 
     @pytest.fixture
-    def mock_status_final_reserved(self):
-        """Create a mock final status with enrolled phase for reserved (HARD BLOCK)."""
+    def mock_status_final_dropped_out(self):
+        """Create a mock final status with enrolled phase for dropout (HARD BLOCK)."""
         status = MagicMock()
         status.id = "sts12"
-        status.name = "Đã bảo lưu"
+        status.name = "Ngừng theo học"
         status.phase = "enrolled"
         status.is_final = True
         return status
 
     @pytest.fixture
-    def mock_status_final_rejected(self):
-        """Create a mock final status with admission phase (SOFT BLOCK)."""
+    def mock_status_final_withdrawn(self):
+        """Create a mock final withdrawn status with admission phase (SOFT BLOCK)."""
         status = MagicMock()
         status.id = "sts08"
-        status.name = "Từ chối"
+        status.name = "Không tiếp tục hồ sơ"
         status.phase = "admission"
         status.is_final = True
         return status
 
     @pytest.fixture
-    def mock_status_final_not_interested(self):
-        """Create a mock final status with consultation phase (SOFT BLOCK)."""
+    def mock_status_final_refunded(self):
+        """Create a mock final refunded status with fee phase (SOFT BLOCK)."""
         status = MagicMock()
-        status.id = "sts04"
-        status.name = "Không quan tâm"
-        status.phase = "consultation"
+        status.id = "sts18"
+        status.name = "Đã hoàn học phí"
+        status.phase = "fee"
         status.is_final = True
         return status
 
@@ -163,12 +163,12 @@ class TestCheckTerminalStatusGuard:
         assert result.current_status == mock_status_final_enrolled
 
     @pytest.mark.asyncio
-    async def test_reserved_final_status_hard_blocks(
-        self, mock_db, mock_lead_with_status, mock_status_final_reserved
+    async def test_dropped_out_final_status_hard_blocks(
+        self, mock_db, mock_lead_with_status, mock_status_final_dropped_out
     ):
-        """Reserved (Đã bảo lưu) + is_final status should HARD BLOCK."""
+        """Dropped out + is_final status should HARD BLOCK."""
         mock_lead_with_status.consultation_status_id = "sts12"
-        mock_db.get.return_value = mock_status_final_reserved
+        mock_db.get.return_value = mock_status_final_dropped_out
 
         result = await check_terminal_status_guard(mock_db, mock_lead_with_status)
 
@@ -177,33 +177,33 @@ class TestCheckTerminalStatusGuard:
         assert result.current_status.phase == "enrolled"
 
     @pytest.mark.asyncio
-    async def test_rejected_final_status_soft_blocks(
-        self, mock_db, mock_lead_with_status, mock_status_final_rejected
+    async def test_withdrawn_final_status_soft_blocks(
+        self, mock_db, mock_lead_with_status, mock_status_final_withdrawn
     ):
-        """Rejected (Từ chối) + is_final status should SOFT BLOCK."""
+        """Withdrawn + is_final status should SOFT BLOCK."""
         mock_lead_with_status.consultation_status_id = "sts08"
-        mock_db.get.return_value = mock_status_final_rejected
+        mock_db.get.return_value = mock_status_final_withdrawn
 
         result = await check_terminal_status_guard(mock_db, mock_lead_with_status)
 
         assert result.is_terminal is True
         assert result.hard_block is False  # Soft block
-        assert "terminal" in result.reason.lower() or "Từ chối" in result.reason
+        assert "terminal" in result.reason.lower() or "withdraw" in result.reason.lower()
         assert result.current_status.phase == "admission"
 
     @pytest.mark.asyncio
-    async def test_not_interested_final_status_soft_blocks(
-        self, mock_db, mock_lead_with_status, mock_status_final_not_interested
+    async def test_refunded_final_status_soft_blocks(
+        self, mock_db, mock_lead_with_status, mock_status_final_refunded
     ):
-        """Not Interested (Không quan tâm) + is_final status should SOFT BLOCK."""
-        mock_lead_with_status.consultation_status_id = "sts04"
-        mock_db.get.return_value = mock_status_final_not_interested
+        """Refunded + is_final status should SOFT BLOCK."""
+        mock_lead_with_status.consultation_status_id = "sts18"
+        mock_db.get.return_value = mock_status_final_refunded
 
         result = await check_terminal_status_guard(mock_db, mock_lead_with_status)
 
         assert result.is_terminal is True
         assert result.hard_block is False  # Soft block
-        assert result.current_status.phase == "consultation"
+        assert result.current_status.phase == "fee"
 
     @pytest.mark.asyncio
     async def test_missing_status_in_db_allows_operation(
@@ -225,12 +225,11 @@ class TestTerminalGuardIntegration:
     def terminal_statuses(self):
         """List of terminal statuses from consultation_status_v3.csv."""
         return [
-            {"id": "sts04", "name": "Không quan tâm", "phase": "consultation", "is_final": True},
-            {"id": "sts08", "name": "Từ chối", "phase": "admission", "is_final": True},
-            {"id": "sts11", "name": "Đã nhập học", "phase": "enrolled", "is_final": True},
-            {"id": "sts12", "name": "Đã bảo lưu", "phase": "enrolled", "is_final": True},
-            {"id": "sts16", "name": "Rút hồ sơ", "phase": "admission", "is_final": True},
-            {"id": "sts18", "name": "Từ chối nhập học", "phase": "admission", "is_final": True},
+            {"id": "sts08", "name": "Không tiếp tục hồ sơ", "phase": "admission", "is_final": True},
+            {"id": "sts11", "name": "Đã xác nhận nhập học", "phase": "enrolled", "is_final": True},
+            {"id": "sts12", "name": "Ngừng theo học", "phase": "enrolled", "is_final": True},
+            {"id": "sts16", "name": "Hồ sơ không đạt yêu cầu", "phase": "admission", "is_final": True},
+            {"id": "sts18", "name": "Đã hoàn học phí", "phase": "fee", "is_final": True},
         ]
 
     def test_enrolled_phase_statuses_should_hard_block(self, terminal_statuses):
@@ -249,7 +248,7 @@ class TestTerminalGuardIntegration:
             if s["phase"] != "enrolled" and s["is_final"]
         ]
 
-        assert len(non_enrolled_statuses) == 4  # sts04, sts08, sts16, sts18
+        assert len(non_enrolled_statuses) == 3  # sts08, sts16, sts18
         for status in non_enrolled_statuses:
             assert status["is_final"] is True
             # These should result in hard_block=False, is_terminal=True
