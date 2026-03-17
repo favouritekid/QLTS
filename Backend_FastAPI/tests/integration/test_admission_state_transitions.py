@@ -65,13 +65,21 @@ async def create_admission_profile(
     lead_id: int,
     status: str = "submitted",
     citizen_id: str = None,
+    approved_by_id: int = None,
 ) -> models.AdmissionProfile:
     """Create an admission profile in specified state."""
     if citizen_id is None:
         citizen_id = f"0{datetime.now().timestamp():.0f}"[:12]
-    
+
     async with AsyncSessionLocal() as session:
         async with session.begin():
+            # If status is approved+, ensure approved_by_id is set for milestone consultation
+            if approved_by_id is None and status in ("approved", "confirmed", "enrolled"):
+                result = await session.execute(
+                    select(models.Lead.assigned_officer_id).where(models.Lead.id == lead_id)
+                )
+                approved_by_id = result.scalar() or 1  # fallback to admin
+
             profile = models.AdmissionProfile(
                 lead_id=lead_id,
                 status=status,
@@ -79,6 +87,7 @@ async def create_admission_profile(
                 version=1,
                 applied_rules={"min_gpa": 6.0, "mandatory_docs": []},
                 academic_year=2025,  # FIXED: Required field
+                approved_by_id=approved_by_id,
             )
             session.add(profile)
             await session.flush()

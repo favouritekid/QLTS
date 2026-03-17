@@ -868,7 +868,7 @@ async def _create_admission_milestone_consultation(
         log.error(
             "Cannot create milestone consultation: no officer resolvable",
             lead_id=lead.id,
-            event=event,
+            admission_event=event,
         )
         raise BusinessRuleViolation(
             "Hồ sơ chưa sẵn sàng để xử lý: không xác định được cán bộ phụ trách. "
@@ -915,7 +915,7 @@ async def _create_admission_milestone_consultation(
         status_id=projection.consultation_status_id,
         status_name=projection.consultation_name,
         profile_id=profile_id,
-        actor_id=actor.id,
+        actor_id=actor.id if actor else None,
     )
 
 

@@ -26,12 +26,23 @@ async def get_provinces(
     current_user: models.User = Depends(deps.get_current_active_user),
 ):
     """
-    Get all provinces/cities.
-    Returns 63 provinces with TCTK codes.
+    Get all selectable province/city records.
+
+    Returns current provinces plus historical legacy provinces that are still
+    needed for old 3-level household-address lookups.
     """
     repo = AdministrativeRepository(db)
     provinces = await repo.get_provinces()
-    return [ProvinceResponse(code=p.code, name=p.name) for p in provinces]
+    return [
+        ProvinceResponse(
+            code=p.code,
+            name=p.name,
+            valid_from=p.valid_from,
+            valid_to=p.valid_to,
+            is_current=p.valid_to is None,
+        )
+        for p in provinces
+    ]
 
 
 @router.get("/districts", response_model=List[DistrictResponse])

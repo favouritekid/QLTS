@@ -17,7 +17,9 @@ class AdministrativeNodeBase(BaseModel):
 
 class ProvinceResponse(AdministrativeNodeBase):
     """Province response schema."""
-    pass
+    valid_from: date
+    valid_to: Optional[date] = None
+    is_current: bool
 
 
 class DistrictResponse(AdministrativeNodeBase):

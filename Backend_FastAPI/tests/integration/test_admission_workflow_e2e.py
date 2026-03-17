@@ -1231,9 +1231,11 @@ class TestLeadStatusSyncWorkflow:
         )
         await db.refresh(lead)
 
-        assert lead.consultation_status_id == "sts07", \
-            f"Expected sts07 after draft, got {lead.consultation_status_id}"
-        print(f"✅ Step 2: Profile draft → Lead status: {lead.consultation_status_id}")
+        # sync_lead_from_admission skips draft (milestone consultation handles it)
+        # Lead should remain at initial status
+        assert lead.consultation_status_id == admission_workflow_data["initial_status_id"], \
+            f"Expected initial status after draft (sync skips draft), got {lead.consultation_status_id}"
+        print(f"✅ Step 2: Profile draft → Lead status unchanged: {lead.consultation_status_id}")
 
         # =====================================================================
         # STEP 3: Submit Profile → still sts07

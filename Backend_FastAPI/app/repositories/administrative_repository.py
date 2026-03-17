@@ -15,7 +15,7 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
         super().__init__(db, AdministrativeNode)
     
     async def get_provinces(self) -> list[AdministrativeNode]:
-        """Get all unique provinces (current valid or permanent)."""
+        """Get one selectable province record per code, preserving legacy codes."""
         stmt = (
             select(AdministrativeNode)
             .where(AdministrativeNode.level == AdministrativeLevel.PROVINCE)

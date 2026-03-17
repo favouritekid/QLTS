@@ -10,6 +10,9 @@ import { api } from "./client";
 export interface Province {
   code: string;
   name: string;
+  valid_from: string;
+  valid_to: string | null;
+  is_current: boolean;
 }
 
 export interface District {
@@ -27,8 +30,8 @@ export interface Ward {
 
 export const administrativeApi = {
   /**
-   * Get all provinces/cities.
-   * Returns 63 provinces with TCTK codes.
+   * Get all selectable provinces/cities, including legacy province codes
+   * needed for historical 3-level household-address lookup.
    */
   getProvinces: async (): Promise<Province[]> => {
     const { data } = await api.get<Province[]>(`/api/administrative/provinces`);

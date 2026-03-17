@@ -68,11 +68,13 @@ PHASE_STATUSES: dict[LeadPhase, Set[str]] = {
 # sts19: CANCELLED (Đã hủy lịch hẹn)
 UNIVERSAL_STATUSES: Set[str] = {"sts01", "sts15", "sts19"}
 
-# System-only statuses - cannot be selected by regular users
-SYSTEM_ONLY_STATUSES: Set[str] = {"sts10", "sts11", "sts12", "sts13", "sts18"}
+# System-only statuses - cannot be selected manually (set by system events only)
+# Must match DB consultation_status.selectable_mode = 'system'
+SYSTEM_ONLY_STATUSES: Set[str] = {"sts09", "sts10", "sts11", "sts13", "sts18"}
 
 # Role-based statuses - only Manager/Admin can select
-ROLE_BASED_STATUSES: Set[str] = {"sts09", "sts16"}
+# Must match DB consultation_status.selectable_mode = 'role'
+ROLE_BASED_STATUSES: Set[str] = {"sts12", "sts16"}
 
 # Phase → allowed stages mapping
 PHASE_STAGES: dict[LeadPhase, Set[str]] = {

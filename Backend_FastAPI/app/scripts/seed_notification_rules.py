@@ -154,11 +154,11 @@ async def seed_notification_rules():
             # Create rule
             rule = models.NotificationRule(
                 event=event_name,
-                title_template=config.template.get("title", ""),
-                message_template=config.template.get("message", ""),
-                notification_type=config.notification_type,
+                title_template=config.template[0] if isinstance(config.template, (list, tuple)) else config.template.get("title", ""),
+                message_template=config.template[1] if isinstance(config.template, (list, tuple)) else config.template.get("message", ""),
+                notification_type=config.notification_type.value if hasattr(config.notification_type, 'value') else str(config.notification_type),
                 link_template=config.link_template,
-                channels=config.channels,
+                channels=[ch.value if hasattr(ch, 'value') else str(ch) for ch in config.channels],
                 recipient_config=recipient_config,
                 condition=None,  # No conditions in hardcoded registry
                 enabled=True,

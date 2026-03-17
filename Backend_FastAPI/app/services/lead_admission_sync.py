@@ -149,6 +149,24 @@ async def sync_lead_from_admission(
         )
         return False
 
+    # Guard: verify DB consultation_status.stage_id matches admission_event_mapping.
+    # This detects silent drift between code projections and DB seed data.
+    # Logs ERROR (triggers monitoring alerts) but does NOT raise — allows operation
+    # to proceed with DB-authoritative value to avoid blocking runtime.
+    _event_key = f"profile_{profile.status}"
+    _projection = get_projection(_event_key)
+    if _projection and new_status.stage_id != _projection.pipeline_stage_id:
+        log.error(
+            "STAGE DRIFT DETECTED: DB consultation_status.stage_id does not match "
+            "admission_event_mapping projection. Seed data may be out of sync with code. "
+            "Proceeding with DB value but this MUST be investigated.",
+            status_id=target_status_id,
+            db_stage_id=new_status.stage_id,
+            expected_stage_id=_projection.pipeline_stage_id,
+            admission_status=profile.status,
+            event_key=_event_key,
+        )
+
     # Update lead fields
     lead.consultation_status_id = target_status_id
     lead.pipeline_stage_id = new_status.stage_id
