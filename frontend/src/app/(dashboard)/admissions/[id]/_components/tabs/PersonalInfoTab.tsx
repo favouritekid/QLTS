@@ -3,15 +3,15 @@
 import { UseFormReturn, useWatch } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Combobox } from "@/components/ui/combobox"
-import { Separator } from "@/components/ui/separator"
+
 import { useState } from "react"
 import type { AddressMode } from "@/lib/api/administrative"
 import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
-import type { AdmissionProfileResponse, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
 import { format } from "date-fns" // Optional if needed for display, but input date handles ISO
 
@@ -37,13 +37,16 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   // Address mode: local state, re-derived when profile.version changes.
   // Uses React's "adjusting state during render" pattern — no useEffect.
   // See: https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  //
+  // IMPORTANT: Derive from profile prop (always fresh), NOT from useWatch
+  // (which may still reflect old form values before useEffect calls form.reset).
   const [addressMode, setAddressMode] = useState<AddressMode>(
-    permanentDistrict ? "legacy" : "current",
+    profile.permanent_district ? "legacy" : "current",
   )
   const [prevVersion, setPrevVersion] = useState(profile.version)
   if (prevVersion !== profile.version) {
     setPrevVersion(profile.version)
-    const serverMode: AddressMode = permanentDistrict ? "legacy" : "current"
+    const serverMode: AddressMode = profile.permanent_district ? "legacy" : "current"
     if (addressMode !== serverMode) {
       setAddressMode(serverMode)
     }

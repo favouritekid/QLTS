@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { useRouter } from "next/navigation"
+
 import { toast } from "sonner"
 
 import {
@@ -77,7 +77,7 @@ export function AdmissionDetailClient({
   // =========================================================================
   // 1. Data Fetching via ViewModel (T3.3 - Architecture Compliant)
   // =========================================================================
-  const { data: vm, isLoading } = useAdmissionViewModel(profileId, {
+  const { data: vm } = useAdmissionViewModel(profileId, {
     initialData,
     staleTime: 0, // Phase 4 Fix: Always refetch on invalidate for realtime badge updates
   })
@@ -193,7 +193,8 @@ export function AdmissionDetailClient({
         version: vm.version ?? 1,
       })
     }
-  }, [vm?.version, form]) // Use version as stable change indicator
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally sync on version only, not full vm
+  }, [vm?.version, form])
 
   // Phase 3: Sync backend validation_errors to RHF field errors
   // Trigger on vm.version change (stable indicator of backend updates)

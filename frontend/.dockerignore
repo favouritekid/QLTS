@@ -19,14 +19,10 @@ playwright-report
 .git
 .gitignore
 
-# Tests
-src/test
+# E2E tests (Playwright — run externally, not inside container)
 tests
-*.test.ts
-*.test.tsx
 *.spec.ts
 *.spec.tsx
-vitest.config.*
 playwright.config.*
 
 # Documentation
