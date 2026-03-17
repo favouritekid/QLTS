@@ -223,6 +223,82 @@ describe("LeadsTable", () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Render contract: stage, status, officer columns (Phase 2 coverage)
+  // ---------------------------------------------------------------------------
+
+  it("should render pipeline_stage.name badge in row", async () => {
+    const lead = makeLead({
+      id: 100,
+      full_name: "Stage Test Lead",
+      pipeline_stage: { id: "stg02", name: "Đang tư vấn", color_code: "#F59E0B" } as Lead["pipeline_stage"],
+    });
+
+    render(<LeadsTable {...defaultProps} leads={[lead]} />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText("Stage Test Lead")).toBeInTheDocument();
+    });
+
+    // LeadsTable.tsx:436-454 renders pipeline_stage.name via Badge
+    expect(screen.getByText("Đang tư vấn")).toBeInTheDocument();
+  });
+
+  it("should render consultation_status.name badge in row", async () => {
+    const lead = makeLead({
+      id: 101,
+      full_name: "Status Test Lead",
+      consultation_status: { id: "sts03", name: "Có nhu cầu tìm hiểu", color_code: "#FACC15", color: "#FACC15" } as Lead["consultation_status"],
+    });
+
+    render(<LeadsTable {...defaultProps} leads={[lead]} />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText("Status Test Lead")).toBeInTheDocument();
+    });
+
+    // LeadsTable.tsx:460-473 renders consultation_status.name via DynamicColorBadge
+    expect(screen.getByText("Có nhu cầu tìm hiểu")).toBeInTheDocument();
+  });
+
+  it("should render assigned_officer.full_name in row", async () => {
+    const lead = makeLead({
+      id: 102,
+      full_name: "Officer Test Lead",
+      assigned_officer: { id: 18, full_name: "Nguyễn Văn A" } as Lead["assigned_officer"],
+    });
+
+    render(<LeadsTable {...defaultProps} leads={[lead]} />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText("Officer Test Lead")).toBeInTheDocument();
+    });
+
+    // LeadsTable.tsx:480 renders assigned_officer.full_name
+    expect(screen.getByText("Nguyễn Văn A")).toBeInTheDocument();
+  });
+
+  it("should render 'Chưa gán' when no assigned_officer", async () => {
+    const lead = makeLead({
+      id: 103,
+      full_name: "Unassigned Lead",
+      assigned_officer: null as Lead["assigned_officer"],
+    });
+
+    render(<LeadsTable {...defaultProps} leads={[lead]} />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText("Unassigned Lead")).toBeInTheDocument();
+    });
+
+    // LeadsTable.tsx:480 fallback when no officer assigned
+    expect(screen.getByText("Chưa gán")).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Existing tests: selection identity and reset
+  // ---------------------------------------------------------------------------
+
   it("should reset selection when sort changes", async () => {
     const leadA = makeLead({ id: 10, full_name: "Alice" });
     const leadB = makeLead({ id: 20, full_name: "Bob" });
