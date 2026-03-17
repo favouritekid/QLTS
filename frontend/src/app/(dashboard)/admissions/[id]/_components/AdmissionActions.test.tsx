@@ -338,15 +338,15 @@ describe("AdmissionActions", () => {
       });
       renderActions(profile, 1);
 
-      // Trigger is an icon-only button (Trash icon, no text) at AdmissionActions.tsx:108-111.
-      // With mocked AlertDialog pass-through, the dialog content also renders "Xóa hồ sơ".
-      // Verify BOTH exist: the trigger button (ghost/sm variant) AND the dialog action text.
-      const deleteButtons = screen.getAllByRole("button");
-      const ghostButton = deleteButtons.find(
-        (btn) => btn.className.includes("ghost") || btn.querySelector("svg")
+      // Both trigger (aria-label) and dialog action (text) match "Xóa hồ sơ"
+      const deleteButtons = screen.getAllByRole("button", { name: /xóa hồ sơ/i });
+      expect(deleteButtons.length).toBeGreaterThanOrEqual(2); // trigger + dialog action
+
+      // Trigger is icon-only: has aria-label but no text child
+      const trigger = deleteButtons.find(
+        (btn) => btn.getAttribute("aria-label") === "Xóa hồ sơ"
       );
-      expect(ghostButton).toBeTruthy(); // icon trigger exists
-      expect(screen.getByText("Xóa hồ sơ")).toBeInTheDocument(); // dialog action
+      expect(trigger).toBeTruthy();
     });
 
     it("click dialog-confirmed Delete calls onDelete", () => {

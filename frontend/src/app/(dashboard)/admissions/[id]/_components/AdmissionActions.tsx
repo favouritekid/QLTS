@@ -106,7 +106,7 @@ export function AdmissionActions({
           {can('delete') && onDelete && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="ghost" size="sm" disabled={isDeleting}>
+                <Button variant="ghost" size="sm" disabled={isDeleting} aria-label="Xóa hồ sơ">
                   {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash className="w-4 h-4" />}
                 </Button>
               </AlertDialogTrigger>
