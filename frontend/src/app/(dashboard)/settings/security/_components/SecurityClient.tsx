@@ -184,11 +184,8 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
       (item) => item.is_suspicious && !item.user_response
     ) || [];
 
-  const suspiciousIds = new Set(suspiciousLogins.map((item) => item.id));
-
-  // Section 3: exclude pending suspicious items (already shown in Section 1)
-  const historyItems =
-    loginHistoryData?.items.filter((item) => !suspiciousIds.has(item.id)) || [];
+  // Section 3: full audit trail (read-only, no exclusions)
+  const historyItems = loginHistoryData?.items || [];
 
   const isSessionsLoading =
     revokeSessionMutation.isPending || revokeAllOthersMutation.isPending;

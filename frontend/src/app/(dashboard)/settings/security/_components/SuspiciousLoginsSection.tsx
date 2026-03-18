@@ -1,10 +1,14 @@
 // src/app/(dashboard)/settings/security/_components/SuspiciousLoginsSection.tsx
 "use client";
 
-import { ShieldAlert } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronUp, ShieldAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { LoginHistoryCard } from "./LoginHistoryCard";
 import type { LoginHistoryItem } from "@/types/security";
+
+const INITIAL_VISIBLE = 3;
 
 interface SuspiciousLoginsSectionProps {
   items: LoginHistoryItem[];
@@ -17,7 +21,13 @@ export function SuspiciousLoginsSection({
   onConfirm,
   onSecure,
 }: SuspiciousLoginsSectionProps) {
+  const [expanded, setExpanded] = useState(false);
+
   if (items.length === 0) return null;
+
+  const visibleItems = expanded ? items : items.slice(0, INITIAL_VISIBLE);
+  const hasMore = items.length > INITIAL_VISIBLE;
+  const hiddenCount = items.length - INITIAL_VISIBLE;
 
   return (
     <section className="space-y-3">
@@ -30,12 +40,11 @@ export function SuspiciousLoginsSection({
           Phát hiện {items.length} đăng nhập đáng ngờ
         </AlertTitle>
         <AlertDescription className="text-warning-700">
-          Vui lòng xem xét các đăng nhập bên dưới và xác nhận xem đó có phải là
-          bạn không.
+          Vui lòng xem xét và xác nhận xem đó có phải là bạn không.
         </AlertDescription>
       </Alert>
 
-      {items.map((item) => (
+      {visibleItems.map((item) => (
         <LoginHistoryCard
           key={item.id}
           item={item}
@@ -43,6 +52,26 @@ export function SuspiciousLoginsSection({
           onSecure={onSecure}
         />
       ))}
+
+      {hasMore && (
+        <Button
+          variant="outline"
+          className="border-warning-300 text-warning-700 hover:bg-warning-50 w-full"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="mr-2 h-4 w-4" />
+              Thu gọn
+            </>
+          ) : (
+            <>
+              <ChevronDown className="mr-2 h-4 w-4" />
+              Xem thêm {hiddenCount} đăng nhập đáng ngờ
+            </>
+          )}
+        </Button>
+      )}
     </section>
   );
 }
