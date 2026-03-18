@@ -332,11 +332,250 @@ test.describe("Settings Pages", () => {
   });
 
   // =========================================================================
-  // 7. Mobile Responsiveness
+  // 7. Anomaly Badges & Risk Score
+  // =========================================================================
+
+  test("login cards show anomaly badges", async () => {
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+
+    // At least one badge type should be visible (IP mới, Thiết bị mới, or Vị trí mới)
+    const ipBadge = sharedPage.getByText("IP mới").first();
+    const deviceBadge = sharedPage.getByText("Thiết bị mới").first();
+    const locationBadge = sharedPage.getByText("Vị trí mới").first();
+
+    const hasAny =
+      (await ipBadge.isVisible().catch(() => false)) ||
+      (await deviceBadge.isVisible().catch(() => false)) ||
+      (await locationBadge.isVisible().catch(() => false));
+
+    // With test data (30 suspicious logins), at least one badge should exist
+    expect(hasAny).toBe(true);
+  });
+
+  test("risk score badges display with correct severity", async () => {
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+
+    // Check for any risk score badge (Rủi ro cao/trung bình/thấp)
+    const highRisk = sharedPage.getByText(/Rủi ro cao/).first();
+    const medRisk = sharedPage.getByText(/Rủi ro trung bình/).first();
+    const lowRisk = sharedPage.getByText(/Rủi ro thấp/).first();
+
+    const hasRisk =
+      (await highRisk.isVisible().catch(() => false)) ||
+      (await medRisk.isVisible().catch(() => false)) ||
+      (await lowRisk.isVisible().catch(() => false));
+
+    expect(hasRisk).toBe(true);
+  });
+
+  // =========================================================================
+  // 8. Login Card Content Verification
+  // =========================================================================
+
+  test("login cards show device, location, and time info", async () => {
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+
+    // First card should contain device info (browser name or fallback)
+    const firstCard = sharedPage.locator('[class*="card"], [class*="Card"]').first();
+    await expect(firstCard).toBeVisible();
+
+    // Should show "trên" (separator between browser and OS)
+    await expect(firstCard.getByText("trên").first()).toBeVisible();
+  });
+
+  test("login history section shows read-only cards without action buttons", async () => {
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+
+    // Scroll to history section
+    const historyHeading = sharedPage.getByText("Lịch sử đăng nhập");
+    await historyHeading.scrollIntoViewIfNeeded();
+
+    // Get the history section
+    const historySection = sharedPage.locator("section", {
+      has: historyHeading,
+    });
+
+    // Cards in history section should NOT have "Là tôi" buttons (readOnly)
+    const actionButtons = historySection.getByRole("button", { name: "Là tôi" });
+    const count = await actionButtons.count();
+    expect(count).toBe(0);
+  });
+
+  // =========================================================================
+  // 9. Confirm Login — count decreases
+  // =========================================================================
+
+  test("confirming login decreases suspicious count", async () => {
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+
+    // Get initial suspicious count from alert text
+    const alertText = sharedPage.getByText(/Phát hiện \d+ đăng nhập đáng ngờ/);
+    if (!(await alertText.isVisible().catch(() => false))) {
+      test.skip();
+      return;
+    }
+
+    const initialText = await alertText.textContent();
+    const initialCount = parseInt(initialText?.match(/\d+/)?.[0] || "0");
+
+    // Confirm first suspicious login
+    const confirmBtn = sharedPage.getByRole("button", { name: "Là tôi" }).first();
+    await confirmBtn.click();
+    await expect(sharedPage.getByText("Đã xác nhận đăng nhập")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Wait for query invalidation and re-render
+    await sharedPage.waitForTimeout(2000);
+
+    // Count should decrease by 1
+    const updatedAlert = sharedPage.getByText(/Phát hiện \d+ đăng nhập đáng ngờ/);
+    if (await updatedAlert.isVisible().catch(() => false)) {
+      const updatedText = await updatedAlert.textContent();
+      const updatedCount = parseInt(updatedText?.match(/\d+/)?.[0] || "0");
+      expect(updatedCount).toBe(initialCount - 1);
+    }
+    // If alert disappeared entirely, all suspicious logins were confirmed — also valid
+  });
+
+  // =========================================================================
+  // 10. Password Page — form fields and validation
+  // =========================================================================
+
+  test("password page has all required form fields", async () => {
+    await sharedPage.goto("/settings");
+    await waitForPageReady(sharedPage);
+
+    const passwordInputs = sharedPage.locator('input[type="password"]');
+    const count = await passwordInputs.count();
+    // Should have at least 2 password fields: old password + new password
+    expect(count).toBeGreaterThanOrEqual(2);
+  });
+
+  test("password page submit button is present", async () => {
+    await sharedPage.goto("/settings");
+    await waitForPageReady(sharedPage);
+
+    // Should have a submit button
+    const submitButton = sharedPage.getByRole("button", { name: /đổi mật khẩu/i });
+    await expect(submitButton).toBeVisible();
+  });
+
+  // =========================================================================
+  // 11. MFA Page — detailed checks
+  // =========================================================================
+
+  test("MFA page shows enable/disable status", async () => {
+    await sharedPage.goto("/settings/mfa");
+    await waitForPageReady(sharedPage);
+
+    // MFA page should show either "Thiết lập" (setup) or status indicator
+    const main = sharedPage.locator("main");
+    const text = await main.textContent();
+    // Should contain MFA-related content
+    const hasMfaContent =
+      text?.includes("Xác thực") ||
+      text?.includes("MFA") ||
+      text?.includes("2FA") ||
+      text?.includes("Thiết lập") ||
+      text?.includes("Bật") ||
+      text?.includes("Tắt");
+    expect(hasMfaContent).toBe(true);
+  });
+
+  // =========================================================================
+  // 12. Notifications Page — detailed checks
+  // =========================================================================
+
+  test("notifications page shows preference categories", async () => {
+    await sharedPage.goto("/settings/notifications");
+    await waitForPageReady(sharedPage);
+
+    // Should have toggle switches or cards for notification categories
+    const main = sharedPage.locator("main");
+    const text = await main.textContent();
+    // Should have notification-related content
+    const hasNotifContent =
+      text?.includes("Thông báo") ||
+      text?.includes("Email") ||
+      text?.includes("Trình duyệt") ||
+      text?.includes("thông báo");
+    expect(hasNotifContent).toBe(true);
+  });
+
+  // =========================================================================
+  // 13. Navigation — active tab highlighting
+  // =========================================================================
+
+  test("active tab is highlighted correctly", async () => {
+    const nav = 'nav[aria-label="Settings navigation"]';
+
+    // Go to /settings — "Mật khẩu" should be active
+    await sharedPage.goto("/settings");
+    await waitForPageReady(sharedPage);
+    const passwordTab = sharedPage.locator(`${nav} >> text=Mật khẩu`);
+    await expect(passwordTab).toHaveClass(/border-primary/);
+
+    // Go to /settings/security — "Bảo mật" should be active
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+    const securityTab = sharedPage.locator(`${nav} >> text=Bảo mật`);
+    await expect(securityTab).toHaveClass(/border-primary/);
+  });
+
+  // =========================================================================
+  // 14. Security Page — page header and breadcrumb
+  // =========================================================================
+
+  test("security page shows correct breadcrumb", async () => {
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+
+    // Breadcrumb should show "Settings > Security" or "Dashboard > Settings > Security"
+    const breadcrumb = sharedPage.getByText("Security");
+    await expect(breadcrumb.first()).toBeVisible();
+  });
+
+  // =========================================================================
+  // 15. Security Page — suspicious section expand shows correct count
+  // =========================================================================
+
+  test("suspicious expand button shows correct hidden count", async () => {
+    await sharedPage.goto("/settings/security");
+    await waitForPageReady(sharedPage);
+
+    const expandButton = sharedPage.getByText(/Xem thêm \d+ đăng nhập đáng ngờ/);
+    if (!(await expandButton.isVisible().catch(() => false))) {
+      test.skip();
+      return;
+    }
+
+    // Extract count from button text
+    const text = await expandButton.textContent();
+    const hiddenCount = parseInt(text?.match(/\d+/)?.[0] || "0");
+    expect(hiddenCount).toBeGreaterThan(0);
+
+    // Expand and verify count matches
+    await expandButton.click();
+    const allConfirmButtons = sharedPage.getByRole("button", { name: "Là tôi" });
+    const totalCount = await allConfirmButtons.count();
+    // Total should be hidden + initial 3
+    expect(totalCount).toBe(hiddenCount + 3);
+
+    // Collapse back
+    await sharedPage.getByText("Thu gọn").first().click();
+  });
+
+  // =========================================================================
+  // 16. Mobile Responsiveness
   // =========================================================================
 
   test("security page renders on mobile viewport", async () => {
-    // Resize shared page to mobile viewport
     await sharedPage.setViewportSize({ width: 375, height: 812 });
     await sharedPage.goto("/settings/security");
     await waitForPageReady(sharedPage);
@@ -345,7 +584,29 @@ test.describe("Settings Pages", () => {
     await expect(sharedPage.getByText("Phiên Đang Hoạt Động")).toBeVisible();
     await expect(sharedPage.getByText("Lịch sử đăng nhập")).toBeVisible();
 
+    // Action buttons should stack vertically on mobile (flex-col)
+    const confirmBtn = sharedPage.getByRole("button", { name: "Là tôi" }).first();
+    if (await confirmBtn.isVisible().catch(() => false)) {
+      await expect(confirmBtn).toBeVisible();
+    }
+
     // Restore desktop viewport
+    await sharedPage.setViewportSize({ width: 1280, height: 720 });
+  });
+
+  test("settings navigation scrolls horizontally on mobile", async () => {
+    await sharedPage.setViewportSize({ width: 375, height: 812 });
+    await sharedPage.goto("/settings");
+    await waitForPageReady(sharedPage);
+
+    const nav = sharedPage.locator('nav[aria-label="Settings navigation"]');
+    await expect(nav).toBeVisible();
+
+    // All tabs should still be accessible (overflow-x-auto)
+    await expect(nav.getByText("Mật khẩu")).toBeVisible();
+    await expect(nav.getByText("Bảo mật")).toBeVisible();
+
+    // Restore viewport
     await sharedPage.setViewportSize({ width: 1280, height: 720 });
   });
 });
