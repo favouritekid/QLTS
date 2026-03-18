@@ -14,7 +14,7 @@ Global exception handlers in middleware/exception_handlers.py handle all errors.
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 

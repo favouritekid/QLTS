@@ -8,7 +8,7 @@ Handles all database access for login history.
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -73,10 +73,10 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
         """Get suspicious logins for a user."""
         filters = [
             self.model.user_id == user_id,
-            (
-                self.model.is_new_ip == True
-                | self.model.is_new_device == True
-                | self.model.is_new_location == True
+            or_(
+                self.model.is_new_ip == True,
+                self.model.is_new_device == True,
+                self.model.is_new_location == True,
             ),
         ]
         
@@ -134,7 +134,7 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
     async def check_device_seen_before(
         self,
         user_id: int,
-        device_fingerprint: str,
+        device_fingerprint: dict,
     ) -> bool:
         """
         Check if this device has been used before.

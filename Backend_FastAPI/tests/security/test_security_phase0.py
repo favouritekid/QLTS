@@ -352,11 +352,12 @@ class TestStaleLoginConfirmationFix:
         from app.services import login_history_service
         from app.repositories.login_history_repository import LoginHistoryRepository
         from app.repositories.trusted_device_repository import TrustedDeviceRepository
-        
+        from app.repositories.user_repository import UserRepository
+
         mock_db = AsyncMock(spec=AsyncSession)
         user_id = 1
         login_id = 100
-        
+
         mock_login = MagicMock(spec=models.LoginHistory)
         mock_login.id = login_id
         mock_login.user_id = user_id
@@ -366,18 +367,23 @@ class TestStaleLoginConfirmationFix:
         mock_login.browser = "Chrome"
         mock_login.os = "Windows"
         mock_login.device_type = "desktop"
-        
+
+        mock_user = MagicMock(spec=models.User)
+        mock_user.id = user_id
+        mock_user.password_reset_required = False
+
         mock_trusted_device = MagicMock(spec=models.TrustedDevice)
-        
+
         with patch.object(LoginHistoryRepository, 'get_by_id', return_value=mock_login):
             with patch.object(TrustedDeviceRepository, 'trust_device', return_value=mock_trusted_device):
-                # Act
-                result_login, callback = await login_history_service.confirm_login(
-                    mock_db, user_id, login_id, trust_device=True
-                )
-                
-                # Assert
-                assert result_login.user_response == "confirmed"
+                with patch.object(UserRepository, 'get_by_id', return_value=mock_user):
+                    # Act
+                    result_login, callback = await login_history_service.confirm_login(
+                        mock_db, user_id, login_id, trust_device=True
+                    )
+
+                    # Assert
+                    assert result_login.user_response == "confirmed"
     
     @pytest.mark.asyncio
     async def test_accepts_login_1_day_old(self):
@@ -386,11 +392,12 @@ class TestStaleLoginConfirmationFix:
         from app.services import login_history_service
         from app.repositories.login_history_repository import LoginHistoryRepository
         from app.repositories.trusted_device_repository import TrustedDeviceRepository
-        
+        from app.repositories.user_repository import UserRepository
+
         mock_db = AsyncMock(spec=AsyncSession)
         user_id = 1
         login_id = 100
-        
+
         mock_login = MagicMock(spec=models.LoginHistory)
         mock_login.id = login_id
         mock_login.user_id = user_id
@@ -400,18 +407,23 @@ class TestStaleLoginConfirmationFix:
         mock_login.browser = "Chrome"
         mock_login.os = "Windows"
         mock_login.device_type = "desktop"
-        
+
+        mock_user = MagicMock(spec=models.User)
+        mock_user.id = user_id
+        mock_user.password_reset_required = False
+
         mock_trusted_device = MagicMock(spec=models.TrustedDevice)
-        
+
         with patch.object(LoginHistoryRepository, 'get_by_id', return_value=mock_login):
             with patch.object(TrustedDeviceRepository, 'trust_device', return_value=mock_trusted_device):
-                # Act
-                result_login, callback = await login_history_service.confirm_login(
-                    mock_db, user_id, login_id, trust_device=True
-                )
-                
-                # Assert
-                assert result_login.user_response == "confirmed"
+                with patch.object(UserRepository, 'get_by_id', return_value=mock_user):
+                    # Act
+                    result_login, callback = await login_history_service.confirm_login(
+                        mock_db, user_id, login_id, trust_device=True
+                    )
+
+                    # Assert
+                    assert result_login.user_response == "confirmed"
 
 
 # ============================================================================

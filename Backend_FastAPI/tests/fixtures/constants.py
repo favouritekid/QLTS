@@ -84,6 +84,17 @@ class AdminURLs:
     AUDIT_LOGS_SUMMARY = f"{AUDIT_LOGS}/summary"
 
 
+class SecurityURLs:
+    """URLs cho module Security (login history, trusted devices)."""
+
+    LOGIN_HISTORY = "/api/security/login-history"
+    SUSPICIOUS_LOGINS = "/api/security/suspicious-logins"
+    CONFIRM_LOGIN = "/api/security/confirm-login"
+    SECURE_ACCOUNT = "/api/security/secure-account"
+    TRUSTED_DEVICES = "/api/security/trusted-devices"
+    TRUSTED_DEVICE_DETAIL = lambda device_id: f"/api/security/trusted-devices/{device_id}"
+
+
 class ProfileURLs:
     """URLs cho module Profile."""
 
