@@ -12,7 +12,7 @@ from app import models, schemas
 
 # Import các thành phần app
 from app.database import AsyncSessionLocal
-from app.main import app as imported_app_instance
+from app.main import fastapi_app as imported_app_instance
 
 # from app.security import get_password_hash # <<< KHÔNG CẦN NỮA
 # from casbin_async_sqlalchemy_adapter import CasbinRule # <<< KHÔNG CẦN NỮA
@@ -47,8 +47,10 @@ async def test_data_for_matrix(
     officer_user_in_db: dict,
     manager_user_in_db: dict,
     regular_user_in_db: dict,
+    seed_lead_dependencies: dict,
 ):
-    # ... (code fixture giữ nguyên) ...
+    # NOTE: OrganizationUnit, MajorProgram, stages, and statuses are already
+    # created by seed_lead_dependencies. Use its returned IDs for consistency.
     log.info("--- [FIXTURE] Seeding DEPENDENT data for matrix (Function Scope) ---")
     admin_id = admin_user_in_db["id"]
     officer_id = officer_user_in_db["id"]
@@ -57,30 +59,28 @@ async def test_data_for_matrix(
     log.debug(
         f"Using auto-generated IDs - Admin: {admin_id}, Officer: {officer_id}, Manager: {manager_id}, Regular: {regular_id}"
     )
-    unit1 = models.OrganizationUnit(**TestOrgData.UNIT_1)
-    major1 = models.Major(**TestOrgData.MAJOR_1)
-    stage_a = models.PipelineStage(**TestPipelineData.STAGE_A)
-    status_a1_data = TestPipelineData.STATUS_A1.copy()
-    status_a1_data["stage_id"] = stage_a.id
-    status_a1 = models.ConsultationStatus(**status_a1_data)
+    # Use IDs from seed_lead_dependencies to match what's actually in DB
+    unit_id = seed_lead_dependencies["unit_id"]
+    status_id = seed_lead_dependencies["status_a1_id"]
+    stage_id = seed_lead_dependencies["stage_id"]
+
     lead_data = TestLeadData.LEAD_1
     lead1 = models.Lead(
-        id=1,  # ID cố định cho Lead
+        id=1,
         full_name=lead_data["full_name"],
         email=lead_data["email"],
         phone=lead_data["phone"],
         source=lead_data["source"],
-        unit_id=unit1.id,
-        major_id=major1.id,
-        status=status_a1.id,
-        consultation_status_id=status_a1.id,
-        pipeline_stage_id=stage_a.id,
+        unit_id=unit_id,
+        status=status_id,
+        consultation_status_id=status_id,
+        pipeline_stage_id=stage_id,
         assigned_officer_id=officer_id,
     )
     lead_db_id = None
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            session.add_all([unit1, major1, stage_a, status_a1, lead1])
+            session.add(lead1)
             await session.flush()
             lead_db_id = lead1.id
             if not lead_db_id:
@@ -90,10 +90,10 @@ async def test_data_for_matrix(
         "lead_id": lead_db_id,
         "lead_id_str": str(lead_db_id),
         "consultation_id_str": "1",
-        "unit_id_str": str(unit1.id),
-        "major_id_str": str(major1.id),
-        "stage_id_str": stage_a.id,
-        "status_id_str": status_a1.id,
+        "unit_id_str": str(unit_id),
+        "major_id_str": str(seed_lead_dependencies["major_program_id"]),
+        "stage_id_str": stage_id,
+        "status_id_str": status_id,
         "admin_id": admin_id,
         "officer_id": officer_id,
         "manager_id": manager_id,

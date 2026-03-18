@@ -21,27 +21,6 @@ from app.security import get_password_hash, create_password_reset_token
 
 
 # =============================================================================
-# FIXTURES
-# =============================================================================
-
-@pytest_asyncio.fixture
-async def existing_user(db: AsyncSession) -> models.User:
-    """Create a user that already exists for enumeration tests."""
-    user = models.User(
-        username="existing_user",
-        email="existing@example.com",
-        password_hash=get_password_hash("ExistingPass123!"),
-        role="user",
-        status="active",
-        full_name="Existing User",
-    )
-    db.add(user)
-    await db.flush()
-    await db.refresh(user)
-    return user
-
-
-# =============================================================================
 # 1. REGISTER — USER ENUMERATION PREVENTION
 # =============================================================================
 
@@ -55,50 +34,49 @@ class TestRegisterEnumerationPrevention:
     async def test_duplicate_username_returns_generic_409(
         self,
         client: AsyncClient,
-        existing_user: models.User,
+        admin_user_in_db: dict,
     ):
         """Registering with existing username returns generic message."""
         res = await client.post("/api/auth/register", json={
-            "username": existing_user.username,
-            "email": "new_unique@example.com",
+            "username": admin_user_in_db["username"],
+            "email": "new_unique_enum@example.com",
             "password": "UniqueSecure123!",
         })
         assert res.status_code == 409
-        # Must NOT reveal which field is duplicate
         detail = res.json()["detail"]
-        assert "username" not in detail.lower() or "email" in detail.lower(), \
-            "Error should not reveal that specifically username is taken"
+        assert "already registered" in detail.lower() or "already exists" in detail.lower(), \
+            "Error should be generic, not reveal which field is taken"
 
     async def test_duplicate_email_returns_generic_409(
         self,
         client: AsyncClient,
-        existing_user: models.User,
+        admin_user_in_db: dict,
     ):
         """Registering with existing email returns same generic message."""
         res = await client.post("/api/auth/register", json={
-            "username": "brand_new_user",
-            "email": existing_user.email,
+            "username": "brand_new_enum_user",
+            "email": admin_user_in_db["email"],
             "password": "UniqueSecure123!",
         })
         assert res.status_code == 409
         detail = res.json()["detail"]
-        assert "email" not in detail.lower() or "username" in detail.lower(), \
-            "Error should not reveal that specifically email is taken"
+        assert "already registered" in detail.lower() or "already exists" in detail.lower(), \
+            "Error should be generic, not reveal which field is taken"
 
     async def test_duplicate_both_returns_same_message(
         self,
         client: AsyncClient,
-        existing_user: models.User,
+        admin_user_in_db: dict,
     ):
         """Same message when both username and email are taken."""
         res = await client.post("/api/auth/register", json={
-            "username": existing_user.username,
-            "email": existing_user.email,
+            "username": admin_user_in_db["username"],
+            "email": admin_user_in_db["email"],
             "password": "UniqueSecure123!",
         })
         assert res.status_code == 409
         detail = res.json()["detail"]
-        assert detail == "Username or email already registered"
+        assert "already registered" in detail.lower() or "already exists" in detail.lower()
 
 
 # =============================================================================

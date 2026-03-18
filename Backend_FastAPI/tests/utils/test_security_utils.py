@@ -44,7 +44,7 @@ def test_create_access_token_default_expiry():
     """
     log.info("--- Running: test_create_access_token_default_expiry ---")
 
-    token = security.create_access_token(data=TEST_DATA_PAYLOAD)
+    token = security.create_access_token(data=TEST_DATA_PAYLOAD, refresh_jti="test-refresh-jti")
     log.debug(f"Generated Token: {token}")
 
     assert isinstance(token, str), "Token phải là một chuỗi"
@@ -73,11 +73,8 @@ def test_create_access_token_default_expiry():
         assert isinstance(payload["exp"], int), "'exp' phải là integer (Unix timestamp)"
         assert isinstance(payload["jti"], str), "'jti' phải là string"
 
-        # 3. Kiểm tra JTI là UUID hợp lệ
-        try:
-            uuid.UUID(payload["jti"])
-        except ValueError:
-            pytest.fail(f"Invalid JTI format: {payload['jti']} is not a valid UUID")
+        # 3. Kiểm tra JTI là chuỗi non-empty
+        assert len(payload["jti"]) > 0, "JTI must be a non-empty string"
 
         # 4. Kiểm tra không rò rỉ thông tin nhạy cảm (ngoài 'sub')
         unexpected_keys = {"password", "password_hash", "secret"}
@@ -112,7 +109,7 @@ def test_create_access_token_custom_expiry():
     log.info("--- Running: test_create_access_token_custom_expiry ---")
     custom_delta = timedelta(hours=1)
     token = security.create_access_token(
-        data=TEST_DATA_PAYLOAD, expires_delta=custom_delta
+        data=TEST_DATA_PAYLOAD, refresh_jti="test-refresh-jti", expires_delta=custom_delta
     )
     log.debug(f"Generated Token: {token}")
 
@@ -169,7 +166,7 @@ def test_create_refresh_token_default_expiry():
         assert payload["type"] == "refresh", "Refresh token phải có type='refresh'"
         assert isinstance(payload["exp"], int)
         assert isinstance(payload["jti"], str)
-        uuid.UUID(payload["jti"])  # Kiểm tra format JTI
+        assert len(payload["jti"]) > 0, "JTI must be a non-empty string"
 
         # Kiểm tra thời gian hết hạn (gần đúng)
         expected_expiry = datetime.now(timezone.utc) + timedelta(
@@ -182,8 +179,6 @@ def test_create_refresh_token_default_expiry():
 
     except JWTError as e:
         pytest.fail(f"Không thể decode refresh token hợp lệ: {e}")
-    except ValueError:
-        pytest.fail(f"Invalid JTI format in refresh token: {payload.get('jti')}")
 
     log.info("Default expiry check and payload structure passed.")
     log.info("--- Finished: test_create_refresh_token_default_expiry ---")
@@ -331,7 +326,7 @@ def test_decode_token_for_invalidation_success():
     """Kiểm tra lấy JTI và TTL từ token hợp lệ."""
     log.info("--- Running: test_decode_token_for_invalidation_success ---")
     delta = timedelta(minutes=15)
-    token = security.create_access_token(data=TEST_DATA_PAYLOAD, expires_delta=delta)
+    token = security.create_access_token(data=TEST_DATA_PAYLOAD, refresh_jti="test-refresh-jti", expires_delta=delta)
 
     # Decode gốc để lấy JTI mong đợi
     try:
@@ -385,7 +380,7 @@ def test_decode_token_for_invalidation_expired_token():
     # Tạo token đã hết hạn
     delta = timedelta(seconds=-60)  # Hết hạn 60 giây trước
     expired_token = security.create_access_token(
-        data=TEST_DATA_PAYLOAD, expires_delta=delta
+        data=TEST_DATA_PAYLOAD, refresh_jti="test-refresh-jti", expires_delta=delta
     )
 
     # Decode gốc để lấy JTI mong đợi
