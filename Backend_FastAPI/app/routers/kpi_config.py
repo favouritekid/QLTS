@@ -65,8 +65,25 @@ class KpiConfigBase(BaseModel):
 
 
 class KpiConfigCreate(KpiConfigBase):
-    """Create KPI configuration."""
-    pass
+    """Create KPI configuration — validates against catalog."""
+
+    @model_validator(mode="after")
+    def validate_kpi_code_and_period(self) -> "KpiConfigCreate":
+        from app.services.kpi_catalog import METRIC_CATALOG, get_period_type
+
+        # Skip threshold configs (kpi_code starts with "threshold_")
+        if self.kpi_code.startswith("threshold_"):
+            return self
+        if self.kpi_code not in METRIC_CATALOG:
+            raise ValueError(
+                f"Unknown kpi_code '{self.kpi_code}'. "
+                f"Valid codes: {', '.join(METRIC_CATALOG.keys())}"
+            )
+        # Auto-correct period_type to match catalog
+        expected = get_period_type(self.kpi_code)
+        if self.period_type != expected:
+            self.period_type = expected
+        return self
 
 
 class KpiConfigUpdate(BaseModel):
@@ -97,11 +114,21 @@ class KpiTargetBase(BaseModel):
 
 
 class KpiTargetCreate(KpiTargetBase):
-    """Create annual KPI target.
+    """Create annual KPI target — validates against catalog.
     Note: unit_id is auto-resolved from officer's user record when officer_id
     is set but unit_id is omitted (handled in router).
     """
-    pass
+
+    @model_validator(mode="after")
+    def validate_kpi_code(self) -> "KpiTargetCreate":
+        from app.services.kpi_catalog import METRIC_CATALOG
+
+        if self.kpi_code not in METRIC_CATALOG:
+            raise ValueError(
+                f"Unknown kpi_code '{self.kpi_code}'. "
+                f"Valid codes: {', '.join(METRIC_CATALOG.keys())}"
+            )
+        return self
 
 
 class KpiTargetResponse(KpiTargetBase):

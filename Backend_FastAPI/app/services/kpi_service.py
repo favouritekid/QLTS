@@ -76,7 +76,7 @@ async def get_kpi_target(
     kpi_code: str,
     officer_id: Optional[int] = None,
     unit_id: Optional[int] = None,
-    period_type: str = "daily",
+    period_type: Optional[str] = None,
     effective_date: Optional[Any] = None,
 ) -> float:
     """
@@ -105,7 +105,7 @@ async def get_kpi_target_source_info(
     kpi_code: str,
     officer_id: Optional[int] = None,
     unit_id: Optional[int] = None,
-    period_type: str = "daily",
+    period_type: Optional[str] = None,
     effective_date: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
@@ -133,20 +133,24 @@ async def get_all_kpi_targets(
     db: AsyncSession,
     officer_id: Optional[int] = None,
     unit_id: Optional[int] = None,
+    effective_date: Optional[Any] = None,
 ) -> Dict[str, float]:
     """
     Get all configured KPI targets for an officer/unit.
-    
+
+    Catalog-driven: loops over METRIC_CATALOG instead of hardcoded DEFAULT_KPIS.
+    period_type derived from catalog via resolver (no hardcode).
+
     Returns dict of kpi_code -> target_value
     """
+    from .kpi_catalog import METRIC_CATALOG
+
     targets = {}
-    
-    for kpi_code in DEFAULT_KPIS.keys():
-        period_type = KPI_PERIOD_MAP.get(kpi_code, "monthly")
+    for kpi_code in METRIC_CATALOG:
         targets[kpi_code] = await get_kpi_target(
-            db, kpi_code, officer_id, unit_id, period_type
+            db, kpi_code, officer_id, unit_id,
+            effective_date=effective_date,
         )
-    
     return targets
 
 

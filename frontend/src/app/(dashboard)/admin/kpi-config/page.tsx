@@ -79,6 +79,9 @@ import { OrganizationUnit } from "@/types/organization.types";
 import { cn } from "@/lib/utils";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { TableEmptyState } from "@/components/common/EmptyState";
+import { KpiWorkflowStepper } from "./_components/KpiWorkflowStepper";
+import { KpiCatalogOverview } from "./_components/KpiCatalogOverview";
+import { ConfigConflictWarnings } from "./_components/ConfigConflictWarnings";
 
 // =============================================================================
 // TYPES
@@ -193,7 +196,7 @@ async function syncKpiTarget(id: number): Promise<SyncYTDResponse> {
 
 export default function KpiConfigPage() {
   const queryClient = useQueryClient();
-  const { getKpiOptions } = useKpiCatalog();
+  const { getKpiOptions, catalogMap, catalog } = useKpiCatalog();
   const KPI_CODES = getKpiOptions();
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -489,6 +492,8 @@ export default function KpiConfigPage() {
         </div>
       </div>
 
+      <KpiWorkflowStepper />
+
       <Alert>
         <Info className="h-4 w-4" />
         <AlertTitle>Nguyên tắc Thừa kế chỉ tiêu</AlertTitle>
@@ -515,6 +520,8 @@ export default function KpiConfigPage() {
           </AlertDescription>
         </Alert>
       )}
+
+      <KpiCatalogOverview catalog={catalog} catalogMap={catalogMap} />
 
       {/* Daily/Monthly Configs */}
       <Card>
@@ -857,9 +864,14 @@ export default function KpiConfigPage() {
               <Label>Mã KPI</Label>
               <Select
                 value={formData.kpi_code}
-                onValueChange={(v) =>
-                  setFormData({ ...formData, kpi_code: v })
-                }
+                onValueChange={(v) => {
+                  const entry = catalogMap.get(v);
+                  setFormData({
+                    ...formData,
+                    kpi_code: v,
+                    ...(entry ? { period_type: entry.period_type } : {}),
+                  });
+                }}
                 disabled={!!editingConfig}
               >
                 <SelectTrigger>
@@ -894,7 +906,7 @@ export default function KpiConfigPage() {
                 onValueChange={(v) =>
                   setFormData({ ...formData, period_type: v })
                 }
-                disabled={!!editingConfig}
+                disabled={!!editingConfig || !!catalogMap.get(formData.kpi_code)}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -987,6 +999,12 @@ export default function KpiConfigPage() {
                 </Select>
               </div>
             )}
+
+            <ConfigConflictWarnings
+              formData={formData}
+              isEditing={!!editingConfig}
+              catalogMap={catalogMap}
+            />
           </div>
           <DialogFooter>
             <Button

@@ -1,5 +1,5 @@
 # app/schemas/officer.py
-from typing import List, Optional, Literal
+from typing import Dict, List, Optional, Literal
 from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -171,11 +171,18 @@ class KPIStats(BaseModel):
     # Leads created in period that are still active (for period analysis)
     active_leads_in_period: int = 0
 
-    # Gap 1: Rate metric targets (populated only when comparable per catalog)
+    # Catalog-driven targets (comparable flag from METRIC_CATALOG)
     win_rate_target: Optional[float] = None
     new_lead_conversion_rate_target: Optional[float] = None
     sla_compliance_rate_target: Optional[float] = None
     consultation_effectiveness_target: Optional[float] = None
+
+    # All targets for frontend canShowTarget() gating
+    metric_targets: Optional[Dict[str, float]] = None
+
+    # Enrollments monthly (count of leads enrolled in period)
+    enrollments_monthly: int = 0
+    enrollments_monthly_target: Optional[float] = None
 
     # Daily Quality KPIs (Phase D — spec §15.7)
     verified_consultations_daily: int = 0

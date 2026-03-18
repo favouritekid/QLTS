@@ -722,8 +722,9 @@ async def get_enhanced_dashboard_stats(
         }
 
     # === 5. SLA COMPLIANCE RATE ===
+    # sla_hours resolved via all_targets below (catalog-driven, Step 0e)
     sla_hours = await kpi_service.get_kpi_target(
-        db, "response_time_hours", officer_id, user.unit_id, "daily",
+        db, "response_time_hours", officer_id, user.unit_id,
         effective_date=filter_end,
     )
     sla_stats = await repo.get_sla_compliance_stats(officer_id, filter_start, filter_end, sla_hours)
@@ -744,6 +745,13 @@ async def get_enhanced_dashboard_stats(
         "direction": "up" if eff_diff > 0 else "down" if eff_diff < 0 else "neutral",
         "comparison": f"vs {filter_days} ngày trước",
     }
+
+    # === 6b. ENROLLMENTS MONTHLY ===
+    from app.repositories.kpi_repository import KpiRepository
+    kpi_repo_for_enroll = KpiRepository(db)
+    enrollments_monthly = await kpi_repo_for_enroll.count_enrollments_in_period(
+        officer_id, filter_start, filter_end,
+    )
 
     # === 7. PRIORITY ACTIONS ===
     priority_actions = await _calculate_priority_actions(db, officer_id)
@@ -854,25 +862,22 @@ async def get_enhanced_dashboard_stats(
     d3_end = d3_start + timedelta(days=1)
     rollback_d3 = await repo.get_rollback_rate_d3(officer_id, d3_start, d3_end)
 
-    # P1: Get target with source info (is_unit_target flag)
+    # Catalog-driven: resolve ALL targets in one call (period_type derived from catalog)
+    from app.services.kpi_catalog import METRIC_CATALOG
+
+    all_targets = await kpi_service.get_all_kpi_targets(
+        db, officer_id, user.unit_id, effective_date=filter_end,
+    )
+
+    # P1: consultations_daily needs is_unit_target flag (special case)
     target_info = await kpi_service.get_kpi_target_source_info(
-        db, "consultations_daily", officer_id, user.unit_id, "daily",
+        db, "consultations_daily", officer_id, user.unit_id,
         effective_date=filter_end,
     )
 
-    # Gap 1: Resolve targets for comparable rate metrics (period_type must match catalog)
-    win_rate_target = await kpi_service.get_kpi_target(
-        db, "win_rate", officer_id, user.unit_id, "monthly",
-        effective_date=filter_end,
-    )
-    sla_compliance_rate_target = await kpi_service.get_kpi_target(
-        db, "sla_compliance_rate", officer_id, user.unit_id, "monthly",
-        effective_date=filter_end,
-    )
-    avg_response_time_target = await kpi_service.get_kpi_target(
-        db, "response_time_hours", officer_id, user.unit_id, "daily",
-        effective_date=filter_end,
-    )
+    def _target_or_none(code: str):
+        """Return target only for comparable metrics; None for non-comparable."""
+        return all_targets[code] if METRIC_CATALOG[code].comparison.comparable else None
 
     # Build enhanced response
     return {
@@ -890,17 +895,22 @@ async def get_enhanced_dashboard_stats(
             "new_lead_conversion_rate_trend": new_lead_conversion_trend,
             "avg_response_time": avg_response_time,
             "avg_response_time_trend": avg_response_trend,
-            "avg_response_time_target": avg_response_time_target,
+            "avg_response_time_target": _target_or_none("response_time_hours"),
             "sla_compliance_rate": sla_stats["rate"],
             "sla_compliance_rate_trend": sla_compliance_trend,
             "consultation_effectiveness": effectiveness_stats["effectiveness"],
             "consultation_effectiveness_trend": effectiveness_trend,
             "consultations_avg_per_day": round(consultations_avg, 1),
-            # Gap 1: Rate metric targets (only comparable ones populated)
-            "win_rate_target": win_rate_target,
-            "sla_compliance_rate_target": sla_compliance_rate_target,
-            "new_lead_conversion_rate_target": None,  # Not comparable (cohort vs funnel grain)
-            "consultation_effectiveness_target": None,  # Not comparable (funnel vs activity grain)
+            # Catalog-driven targets (comparable flag from METRIC_CATALOG)
+            "win_rate_target": _target_or_none("win_rate"),
+            "sla_compliance_rate_target": _target_or_none("sla_compliance_rate"),
+            "new_lead_conversion_rate_target": _target_or_none("conversion_rate"),
+            "consultation_effectiveness_target": _target_or_none("consultation_effectiveness"),
+            # All targets for frontend canShowTarget() gating
+            "metric_targets": all_targets,
+            # Enrollments monthly (leads at final stage in period)
+            "enrollments_monthly": enrollments_monthly,
+            "enrollments_monthly_target": _target_or_none("enrollments_monthly"),
             # Phase D: Daily Quality KPIs
             "verified_consultations_daily": v_d,
             "quality_rate_daily": quality_rate,
@@ -1142,9 +1152,9 @@ async def get_aggregated_dashboard_stats(
         # Using target_unit_id (manager's/admin's filter unit) is wrong for child-unit officers.
         oid_unit = await kpi_repo.get_user_unit_id(oid)
 
-        # consultations_daily: resolve via KpiConfig inheritance
+        # consultations_daily: resolve via KpiConfig inheritance (period_type from catalog)
         t = await kpi_service.get_kpi_target(
-            db, "consultations_daily", oid, oid_unit, "daily",
+            db, "consultations_daily", oid, oid_unit,
             effective_date=filter_end,
         )
         total_consultations_target += t

@@ -597,6 +597,34 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         )
         return result.scalar() or 0
 
+    async def count_enrollments_in_period(
+        self,
+        officer_id: int,
+        start_date,
+        end_date,
+    ) -> int:
+        """
+        Count enrollments for an officer within a date range.
+
+        Same triple-check join as count_enrollments_ytd but with arbitrary date range.
+        Used by officer dashboard for enrollments_monthly metric.
+        """
+        result = await self.db.execute(
+            select(func.count(models.Lead.id))
+            .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+            .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.PipelineStage.is_final_stage == True,
+                models.ConsultationStatus.counts_for_funnel == True,
+                models.ConsultationStatus.outcome_type == "positive",
+                models.Lead.deleted_at.is_(None),
+                models.Lead.updated_at >= start_date,
+                models.Lead.updated_at < end_date,
+            )
+        )
+        return result.scalar() or 0
+
     async def count_enrollments_ytd_batch(
         self,
         officer_ids: List[int],
