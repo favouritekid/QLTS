@@ -184,7 +184,11 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
       (item) => item.is_suspicious && !item.user_response
     ) || [];
 
-  const allLoginHistory = loginHistoryData?.items || [];
+  const suspiciousIds = new Set(suspiciousLogins.map((item) => item.id));
+
+  // Section 3: exclude pending suspicious items (already shown in Section 1)
+  const historyItems =
+    loginHistoryData?.items.filter((item) => !suspiciousIds.has(item.id)) || [];
 
   const isSessionsLoading =
     revokeSessionMutation.isPending || revokeAllOthersMutation.isPending;
@@ -225,12 +229,8 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
         isLoading={isSessionsLoading}
       />
 
-      {/* Section 3: Login history audit trail */}
-      <LoginHistorySection
-        items={allLoginHistory}
-        onConfirm={handleConfirmLogin}
-        onSecure={handleSecureClick}
-      />
+      {/* Section 3: Login history audit trail (excludes pending suspicious) */}
+      <LoginHistorySection items={historyItems} />
 
       {/* Secure account confirmation dialog */}
       <SecureAccountDialog

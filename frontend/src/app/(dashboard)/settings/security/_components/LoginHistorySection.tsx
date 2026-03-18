@@ -13,15 +13,9 @@ const INITIAL_VISIBLE = 5;
 
 interface LoginHistorySectionProps {
   items: LoginHistoryItem[];
-  onConfirm: (id: number) => void;
-  onSecure: (id: number) => void;
 }
 
-export function LoginHistorySection({
-  items,
-  onConfirm,
-  onSecure,
-}: LoginHistorySectionProps) {
+export function LoginHistorySection({ items }: LoginHistorySectionProps) {
   const [expanded, setExpanded] = useState(false);
 
   const visibleItems = expanded ? items : items.slice(0, INITIAL_VISIBLE);
@@ -49,12 +43,7 @@ export function LoginHistorySection({
       ) : (
         <>
           {visibleItems.map((item) => (
-            <LoginHistoryCard
-              key={item.id}
-              item={item}
-              onConfirm={onConfirm}
-              onSecure={onSecure}
-            />
+            <LoginHistoryCard key={item.id} item={item} readOnly />
           ))}
 
           {hasMore && (
