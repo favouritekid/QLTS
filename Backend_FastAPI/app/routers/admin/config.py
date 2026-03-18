@@ -284,7 +284,10 @@ async def create_distribution_rule(
     }
     ```
     """
-    return await config_service.create_distribution_rule(db, rule_in)
+    result, callback = await config_service.create_distribution_rule(db, rule_in)
+    await db.commit()
+    await callback()
+    return result
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -316,7 +319,10 @@ async def update_distribution_rule(
     }
     ```
     """
-    return await config_service.update_distribution_rule(db, rule.id, rule_in)
+    result, callback = await config_service.update_distribution_rule(db, rule.id, rule_in)
+    await db.commit()
+    await callback()
+    return result
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -348,7 +354,9 @@ async def delete_distribution_rule(
     - Cannot delete active rules (is_active=True)
     - Cannot delete rules currently in use by leads
     """
-    await config_service.delete_distribution_rule(db, rule.id)
+    _, callback = await config_service.delete_distribution_rule(db, rule.id)
+    await db.commit()
+    await callback()
     return None
 
 
