@@ -15,6 +15,7 @@ import {
   TrendingDown,
   Minus,
   Clock,
+  GraduationCap,
   ShieldCheck,
   Target,
   Info,
@@ -57,11 +58,15 @@ interface KPIStats {
   consultation_effectiveness: number;
   consultation_effectiveness_trend?: TrendInfo | null;
   consultations_avg_per_day?: number;
-  // Gap 1: Rate metric targets (null when not comparable)
+  // Catalog-driven targets (null when not comparable)
   win_rate_target?: number | null;
   new_lead_conversion_rate_target?: number | null;
   sla_compliance_rate_target?: number | null;
   consultation_effectiveness_target?: number | null;
+  metric_targets?: Record<string, number> | null;
+  // Enrollments monthly
+  enrollments_monthly?: number;
+  enrollments_monthly_target?: number | null;
   // Phase D: Daily Quality KPIs
   verified_consultations_daily?: number;
   quality_rate_daily?: number | null;
@@ -271,6 +276,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   const winRateTarget = canShowTarget("win_rate", dashboardRange) ? kpis.win_rate_target : null;
   const slaTarget = canShowTarget("sla_compliance_rate", dashboardRange) ? kpis.sla_compliance_rate_target : null;
   const responseTimeTarget = canShowTarget("response_time_hours", dashboardRange) ? kpis.avg_response_time_target : null;
+  const enrollmentsMonthlyTarget = canShowTarget("enrollments_monthly", dashboardRange) ? kpis.enrollments_monthly_target : null;
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -330,7 +336,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
 
         {/* Tier 2: Secondary Stats Strip — single card, responsive grid */}
         <Card className="border bg-card">
-          <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-border">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-border">
             <StatItem
               icon={ShieldCheck}
               label="Tuân thủ SLA"
@@ -362,6 +368,14 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               actualValue={kpis.avg_response_time}
               targetUnit="h"
               higherIsBetter={false}
+            />
+            <StatItem
+              icon={GraduationCap}
+              label="Nhập học"
+              value={String(kpis.enrollments_monthly ?? 0)}
+              tooltip="Số hồ sơ nhập học trong kỳ (final stage + positive outcome)"
+              target={enrollmentsMonthlyTarget}
+              actualValue={kpis.enrollments_monthly ?? 0}
             />
           </div>
         </Card>

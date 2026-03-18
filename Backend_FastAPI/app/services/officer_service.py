@@ -1233,11 +1233,14 @@ async def get_aggregated_dashboard_stats(
             "consultation_effectiveness": agg_effectiveness_stats["effectiveness"],
             "consultation_effectiveness_trend": eff_trend,
             "consultations_avg_per_day": avg_consultations_per_day,
-            # Gap 1: targets not applicable for aggregated (team/org) view
+            # Targets not applicable for aggregated (team/org) view
             "win_rate_target": None,
             "sla_compliance_rate_target": None,
             "new_lead_conversion_rate_target": None,
             "consultation_effectiveness_target": None,
+            "metric_targets": None,
+            "enrollments_monthly": 0,
+            "enrollments_monthly_target": None,
         },
         # Must match WorkloadStats schema
         "status_overview": {
@@ -1291,6 +1294,9 @@ def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
             "sla_compliance_rate_target": None,
             "new_lead_conversion_rate_target": None,
             "consultation_effectiveness_target": None,
+            "metric_targets": None,
+            "enrollments_monthly": 0,
+            "enrollments_monthly_target": None,
         },
         # Must match WorkloadStats schema
         "status_overview": {
