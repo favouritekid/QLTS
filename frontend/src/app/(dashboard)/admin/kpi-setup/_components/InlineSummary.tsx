@@ -135,7 +135,7 @@ export function InlineSummary({ report, isAdmin = false }: Props) {
             <div className="space-y-3">
               {warnings.map((warning, idx) => (
                 <div
-                  key={`${warning.reason_code}-${warning.entity_id ?? idx}`}
+                  key={`${warning.reason_code}-${warning.entity_id ?? "null"}-${idx}`}
                   className="flex items-start gap-3 rounded-md border p-3"
                 >
                   <WarningIcon code={warning.reason_code} />
