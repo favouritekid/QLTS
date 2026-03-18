@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api/client"; // architecture-allow legacy
+import { distributionRuleKeys } from "@/hooks/useDistributionRules";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 
@@ -112,7 +113,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin", "distribution-rules"] });
+      queryClient.invalidateQueries({ queryKey: distributionRuleKeys.all });
       toast.success(isEditing ? "Cập nhật thành công" : "Tạo mới thành công");
       onOpenChange(false);
     },
