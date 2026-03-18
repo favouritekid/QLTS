@@ -19,7 +19,7 @@ import type {
 } from "@/types/api.types";
 import React, { useEffect } from "react";
 import { AxiosError } from "axios";
-import { triggerBannerCheck } from "@/components/layouts/SecurityBanner";
+import { triggerBannerCheck, triggerSuspiciousLoginBanner } from "@/components/layouts/SecurityBanner";
 import { adminUsersKeys } from "@/hooks/useAdminUsers";
 
 /**
@@ -92,6 +92,9 @@ export function useAuth(options?: UseAuthOptions) {
         const locationInfo = login_notification.location || "Không rõ vị trí";
         const deviceInfo = login_notification.device || "Không rõ thiết bị";
 
+        // Trigger persistent suspicious login banner
+        triggerSuspiciousLoginBanner(1);
+
         toast.warning(
           `Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
           {
@@ -110,7 +113,7 @@ export function useAuth(options?: UseAuthOptions) {
                     console.error("[useAuth] Failed to mark notification as read:", err);
                   }
                 }
-                router.push("/settings/login-history");
+                router.push("/settings/security");
               },
             },
           }
@@ -152,6 +155,7 @@ export function useAuth(options?: UseAuthOptions) {
       toast.success("Đăng nhập thành công!");
 
       if (login_notification) {
+        triggerSuspiciousLoginBanner(1);
         toast.warning(
           `Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address}`,
           { duration: 15000 }

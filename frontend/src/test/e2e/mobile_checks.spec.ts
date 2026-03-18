@@ -20,8 +20,7 @@ test.describe('Mobile Responsiveness Checks', () => {
       { name: 'admissions_mobile', path: '/admissions' },
       { name: 'notifications_mobile', path: '/notifications' },
       { name: 'profile_mobile', path: '/profile' },
-      { name: 'settings_sessions_mobile', path: '/settings/sessions' },
-      { name: 'settings_login_history_mobile', path: '/settings/login-history' },
+      { name: 'settings_security_mobile', path: '/settings/security' },
     ];
 
     for (const pageItem of pagesToTest) {

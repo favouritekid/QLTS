@@ -8,8 +8,7 @@ import { cn } from "@/lib/utils";
 // Định nghĩa các tab điều hướng
 const navItems = [
   { name: "Mật khẩu", href: "/settings" },
-  { name: "Phiên đăng nhập", href: "/settings/sessions" },
-  { name: "Lịch sử đăng nhập", href: "/settings/login-history" },
+  { name: "Bảo mật", href: "/settings/security" },
   { name: "Xác thực 2 lớp", href: "/settings/mfa" },
   { name: "Thông báo", href: "/settings/notifications" },
 ];

@@ -14,8 +14,7 @@ test.describe('Mobile Responsiveness Checks Part 2', () => {
     // storageState (officer) applied by project config — navigate directly to pages
     // Settings routes only; /admin/* routes are covered by Mobile_Admin project
     const pagesToTest = [
-      { name: 'settings_sessions_mobile_p2', path: '/settings/sessions' },
-      { name: 'settings_login_history_mobile_p2', path: '/settings/login-history' },
+      { name: 'settings_security_mobile_p2', path: '/settings/security' },
     ];
 
     for (const pageItem of pagesToTest) {

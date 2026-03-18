@@ -91,8 +91,7 @@ const ADMIN_PAGES: PageEntry[] = [
   // Settings
   { name: "Settings", path: "/settings" },
   { name: "Settings MFA", path: "/settings/mfa" },
-  { name: "Settings Sessions", path: "/settings/sessions" },
-  { name: "Settings Login History", path: "/settings/login-history" },
+  { name: "Settings Security", path: "/settings/security" },
   { name: "Settings Notifications", path: "/settings/notifications" },
   // Other
   { name: "Profile", path: "/profile" },

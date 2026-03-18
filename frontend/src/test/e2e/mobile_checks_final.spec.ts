@@ -28,8 +28,7 @@ test.describe('Mobile Responsiveness Checks Final', () => {
       { name: 'notifications_mobile_final', path: '/notifications' },
       { name: 'profile_mobile_final', path: '/profile' },
       // Settings
-      { name: 'settings_sessions_mobile_final', path: '/settings/sessions' },
-      { name: 'settings_login_history_mobile_final', path: '/settings/login-history' },
+      { name: 'settings_security_mobile_final', path: '/settings/security' },
     ];
 
     for (const pageItem of pagesToTest) {

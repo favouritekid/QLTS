@@ -159,7 +159,7 @@ export function ChangePasswordForm() {
           {activeSessionsCount !== null && activeSessionsCount > 1 && (
             <p className="mt-2 text-sm">
               💡 Mẹo:{" "}
-              <Link href="/settings/sessions" className="underline font-medium hover:text-destructive-foreground">
+              <Link href="/settings/security" className="underline font-medium hover:text-destructive-foreground">
                 Xem các phiên đang hoạt động
               </Link>{" "}
               trước khi đổi mật khẩu để phát hiện đăng nhập đáng ngờ.
