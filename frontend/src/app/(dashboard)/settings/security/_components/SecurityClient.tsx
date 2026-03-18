@@ -1,9 +1,10 @@
 // src/app/(dashboard)/settings/security/_components/SecurityClient.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { triggerSuspiciousLoginBanner } from "@/components/layouts/SecurityBanner";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -189,6 +190,11 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
 
   const isSessionsLoading =
     revokeSessionMutation.isPending || revokeAllOthersMutation.isPending;
+
+  // ---- Sync SecurityBanner with suspicious count ----
+  useEffect(() => {
+    triggerSuspiciousLoginBanner(suspiciousLogins.length);
+  }, [suspiciousLogins.length]);
 
   return (
     <div className="max-w-4xl space-y-8">
