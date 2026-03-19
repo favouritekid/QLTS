@@ -221,6 +221,7 @@ backups/
 exports/
 *.dump
 migration_data/
+Documents/Seeding data/GitHistory/
 
 # ===================================
 # AI/Claude generated files
