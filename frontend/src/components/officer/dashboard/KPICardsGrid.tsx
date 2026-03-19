@@ -36,6 +36,7 @@ import type { KPIStats, TrendInfo } from "@/hooks/useDashboardStats";
 
 interface KPICardsGridProps {
   kpis: KPIStats;
+  isPersonalView?: boolean;
 }
 
 // =============================================================================
@@ -187,7 +188,7 @@ const TOOLTIPS = {
 // MAIN COMPONENT
 // =============================================================================
 
-export function KPICardsGrid({ kpis }: KPICardsGridProps) {
+export function KPICardsGrid({ kpis, isPersonalView = true }: KPICardsGridProps) {
   const router = useRouter();
   const { preset, dateRange, startDate, endDate } = useDashboardDate();
   const { canShowTarget } = useKpiCatalog();
@@ -337,8 +338,8 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
           </div>
         </Card>
 
-        {/* Tier 3: Daily Quality KPIs (Phase D) — split into realtime + lagged */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* Tier 3: Daily Quality KPIs (Phase D) — only for personal view */}
+        {isPersonalView && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {/* Card 1: Realtime quality metrics */}
           <Card className="border bg-card">
             <div className="px-4 py-2 border-b">
@@ -405,7 +406,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
               </div>
             </div>
           </Card>
-        </div>
+        </div>}
       </div>
     </TooltipProvider>
   );

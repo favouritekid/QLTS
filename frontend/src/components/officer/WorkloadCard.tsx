@@ -27,12 +27,13 @@ interface StatusOverview {
 interface WorkloadCardProps {
   statusOverview: StatusOverview;
   scope?: "personal" | "team" | "organization" | null;
+  isPersonalView?: boolean;
 }
 
 import { useOfficerAvailability } from "@/hooks/officer/useOfficerAvailability";
 
-export function WorkloadCard({ statusOverview, scope }: WorkloadCardProps) {
-  const isPersonalScope = !scope || scope === "personal";
+export function WorkloadCard({ statusOverview, scope, isPersonalView }: WorkloadCardProps) {
+  const isPersonalScope = isPersonalView ?? (!scope || scope === "personal");
 
   // Derive isAvailable directly from props - avoids unnecessary sync with useEffect
   // Local state only tracks optimistic update during mutation

@@ -98,11 +98,12 @@ interface ActionInsightsPanelProps {
   actions: PriorityAction[];
   scope?: "personal" | "team" | "organization" | null;
   officerId?: number | null;
+  isPersonalView?: boolean;
 }
 
-export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsightsPanelProps) {
+export function ActionInsightsPanel({ actions, scope, officerId, isPersonalView }: ActionInsightsPanelProps) {
   // When drilling into a specific officer, treat as personal scope for recommendations
-  const isPersonal = (!scope || scope === "personal") || officerId != null;
+  const isPersonal = isPersonalView ?? ((!scope || scope === "personal") || officerId != null);
 
   // --- Priority Actions state ---
   const [filter, setFilter] = useState<FilterType>("all");
@@ -211,13 +212,21 @@ export function ActionInsightsPanel({ actions, scope, officerId }: ActionInsight
             <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mb-3">
               <Target className="h-6 w-6 text-muted-foreground" />
             </div>
-            <p className="text-sm text-muted-foreground">
-              {filter === "all" ? "Không có hành động ưu tiên" : `Không có mục ${filterConfig[filter].label.toLowerCase()}`}
-            </p>
-            {filter === "all" && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Làm việc tốt lắm!
+            {!isPersonal ? (
+              <p className="text-sm text-muted-foreground">
+                Hành động ưu tiên chỉ khả dụng ở chế độ cá nhân
               </p>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  {filter === "all" ? "Không có hành động ưu tiên" : `Không có mục ${filterConfig[filter].label.toLowerCase()}`}
+                </p>
+                {filter === "all" && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Làm việc tốt lắm!
+                  </p>
+                )}
+              </>
             )}
           </div>
         ) : (

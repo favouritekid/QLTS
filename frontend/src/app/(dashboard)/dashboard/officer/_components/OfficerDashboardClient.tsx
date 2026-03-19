@@ -173,10 +173,13 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
 
   // === Gap 2: Monthly KPI Plan ===
   // personal → always fetch; team/org → only when drilled down to a specific officer
-  const currentFiscalYear = new Date().getFullYear();
+  // Derive fiscal year from dashboard date range end (not client clock)
+  // so that historical range views show the correct plan
+  const { endDate: dashEndDate, dateRange: dashDateRange } = useDashboardDate();
+  const fiscalYear = dashEndDate ? parseInt(dashEndDate.slice(0, 4), 10) : new Date().getFullYear();
   const shouldFetchKpiPlan = scope === "personal" || (!!scope && !!selectedOfficerId);
   const kpiPlanQuery = useOfficerKpiPlan({
-    fiscalYear: currentFiscalYear,
+    fiscalYear,
     officerId: selectedOfficerId ?? undefined,
     enabled: shouldFetchKpiPlan,
   });
@@ -193,7 +196,6 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   // === Enrollment pace benchmark (from KPI plan, for PerformanceChart summary) ===
   // Only meaningful when the dashboard date range includes the current month.
   // When viewing historical/custom ranges outside current month, hide the benchmark.
-  const { dateRange: dashDateRange } = useDashboardDate();
   const enrollmentPace = useMemo(() => {
     if (!kpiPlanQuery.data) return null;
     const now = new Date();
@@ -340,8 +342,24 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   const funnelSuggestions = stats.funnel_suggestions ?? [];
   const funnelNetConversionTrend = stats.funnel_net_conversion_trend ?? null;
 
+  // Effective personal view: backend returns personal data when drilling
+  // down into a specific officer from team/org scope (officer_service.py:972)
+  const effectivePersonalView = scope === "personal" || !!selectedOfficerId;
+
   // Calculate if daily goal is met for sparkle icon
-  const isGoalMet = stats.kpis.consultations_target > 0 &&
+  // Only meaningful when viewing a range that includes today
+  const todayInRange = (() => {
+    if (!dashDateRange?.from || !dashDateRange?.to) return true;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const from = new Date(dashDateRange.from);
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(dashDateRange.to);
+    to.setHours(23, 59, 59, 999);
+    return now >= from && now <= to;
+  })();
+  const isGoalMet = todayInRange &&
+    stats.kpis.consultations_target > 0 &&
     stats.kpis.consultations_today >= stats.kpis.consultations_target;
 
   return (
@@ -378,7 +396,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       />
 
       {/* KPI Cards Row */}
-      <KPICardsGrid kpis={stats.kpis} />
+      <KPICardsGrid kpis={stats.kpis} isPersonalView={effectivePersonalView} />
 
       {/* Empty Data Message */}
       {isEmptyData && (
@@ -397,9 +415,9 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
 
       {/* Row 1: Actions + Operational (action-first, CRM pattern) */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
-        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} officerId={selectedOfficerId} />
+        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} officerId={selectedOfficerId} isPersonalView={effectivePersonalView} />
         <div className="space-y-4">
-          <WorkloadCard statusOverview={stats.status_overview} scope={scope} />
+          <WorkloadCard statusOverview={stats.status_overview} scope={scope} isPersonalView={effectivePersonalView} />
           <TodaySchedule scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
         </div>
       </div>
@@ -409,7 +427,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         <PerformanceChart
           trends={performanceTrends}
           dailyGoal={stats.kpis.consultations_target}
-          teamAverage={scope === "personal" ? teamStats?.team_avg_consultations : undefined}
+          teamAverage={effectivePersonalView ? teamStats?.team_avg_consultations : undefined}
           enrollmentPace={enrollmentPace}
         />
         <div className="space-y-4">

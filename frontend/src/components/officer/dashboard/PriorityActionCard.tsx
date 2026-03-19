@@ -27,18 +27,9 @@ import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
 
-export interface PriorityAction {
-  id: string;
-  type: "hot_lead" | "overdue" | "scheduled" | "follow_up" | "new_lead";
-  priority: "urgent" | "high" | "medium";
-  lead_id: number;
-  lead_name: string;
-  lead_score?: number | null; // Can be null/undefined from backend
-  reason: string;
-  phone?: string;
-  days_since_contact?: number;
-  last_contact_at?: string;
-}
+// Canonical PriorityAction type lives in useDashboardStats.ts
+import type { PriorityAction } from "@/hooks/useDashboardStats";
+export type { PriorityAction };
 
 interface PriorityActionCardProps {
   action: PriorityAction;
@@ -165,7 +156,7 @@ export const PriorityActionCard = memo(function PriorityActionCard({
             aria-label="Chat Zalo"
             onClick={(e) => {
               e.preventDefault();
-              onZalo?.(action.lead_id, action.phone);
+              onZalo?.(action.lead_id, action.phone ?? undefined);
             }}
           >
             <MessageCircle className="h-3.5 w-3.5" />

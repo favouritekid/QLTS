@@ -76,7 +76,10 @@ export interface PriorityAction {
   lead_name: string;
   lead_score: number;
   reason: string;
+  due_at?: string | null;
   days_since_contact?: number;
+  phone?: string | null;
+  last_contact_at?: string | null;
 }
 
 export interface TrendPoint {
@@ -340,12 +343,15 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     enabled,
   });
 
-  // Fetch team stats only for personal scope (used for team avg comparison line)
+  // Fetch team stats when viewing personal-level data:
+  // - personal scope (own dashboard)
+  // - drill-down into specific officer from team/org scope
+  const isEffectivePersonalView = scope === "personal" || !!officerId;
   const teamStatsQuery = useQuery({
     queryKey: ["officer", "team-stats", startDate, endDate, officerId],
     queryFn: () => fetchTeamStats(startDate, endDate, officerId),
     staleTime: 300000,
-    enabled: enabled && scope === "personal",
+    enabled: enabled && isEffectivePersonalView,
   });
 
   // Socket.IO integration for real-time updates
