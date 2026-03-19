@@ -68,13 +68,47 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  const isAuthRoute =
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname.startsWith("/login/") ||
+    pathname.startsWith("/register/");
   const isPublicRoute =
     EXACT_PUBLIC_ROUTES.includes(pathname) ||
     PUBLIC_ROUTE_PREFIXES.some((route) => pathname.startsWith(route));
   const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
   const isFinanceRoute = FINANCE_ROUTES.some((route) => pathname.startsWith(route));
 
-  // Allow public routes without auth check
+  // Auth routes: redirect authenticated users to dashboard, handle force_login
+  if (isAuthRoute) {
+    // Force login: clear stale cookies (used by logout redirect)
+    const forceLogin = request.nextUrl.searchParams.get("force_login") === "true";
+    if (forceLogin) {
+      const response = NextResponse.next();
+      response.cookies.delete({ name: "access_token", path: "/" });
+      response.cookies.delete({ name: "refresh_token", path: "/api" });
+      response.cookies.delete({ name: "csrf_token", path: "/" });
+      return response;
+    }
+
+    const accessToken = request.cookies.get("access_token")?.value;
+    if (accessToken) {
+      const payload = decodeJWT(accessToken);
+      if (payload && !isTokenExpired(accessToken)) {
+        const defaultDashboard =
+          payload.role === "officer"
+            ? "/dashboard/officer"
+            : payload.role === "collaborator"
+              ? "/ctv"
+              : "/dashboard";
+        return NextResponse.redirect(new URL(defaultDashboard, request.url));
+      }
+    }
+    // Not authenticated or token invalid — allow access to login/register
+    return NextResponse.next();
+  }
+
+  // Allow other public routes without auth check
   if (isPublicRoute) {
     return NextResponse.next();
   }
@@ -169,23 +203,7 @@ export function proxy(request: NextRequest) {
   }
 
   // ========================================
-  // STEP 6: Redirect authenticated users from public pages
-  // ========================================
-
-  // If user is logged in and tries to access login page, redirect to dashboard
-  if (pathname === "/login" || pathname === "/register") {
-    // Role-based redirect after login
-    const defaultDashboard = payload.role === "officer"
-      ? "/dashboard/officer"
-      : payload.role === "collaborator"
-        ? "/ctv"
-        : "/dashboard";
-    console.log(`[Proxy] Redirecting authenticated user from ${pathname} to ${defaultDashboard}`);
-    return NextResponse.redirect(new URL(defaultDashboard, request.url));
-  }
-
-  // ========================================
-  // STEP 7: Allow access
+  // STEP 6: Allow access
   // ========================================
 
   console.log(`[Proxy] ✅ Access granted: ${pathname} (user: ${payload.sub}, role: ${payload.role})`);
