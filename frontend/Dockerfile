@@ -41,7 +41,8 @@ ARG NEXT_PUBLIC_SENTRY_DSN=
 ENV BACKEND_URL=http://backend:8000
 ENV BACKEND_INTERNAL_URL=http://backend:8000
 
-RUN npm run build
+# Use webpack for production build (Turbopack has NFT trace bug with middleware + standalone)
+RUN npx next build --webpack
 
 # --- Stage 3: Runner ---
 FROM node:20-alpine AS runner
