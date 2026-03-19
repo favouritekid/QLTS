@@ -30,6 +30,7 @@ const EXACT_PUBLIC_ROUTES = ["/"];
 const PUBLIC_ROUTE_PREFIXES = [
   "/login",
   "/register",
+  "/register-ctv",
   "/forgot-password",
   "/reset-password",
   "/tuyen-sinh",
