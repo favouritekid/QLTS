@@ -5,7 +5,36 @@ KPI Setup Coverage endpoint — auth, IDOR, and response shape tests.
 import pytest
 from httpx import AsyncClient
 
+from app import models
+from tests.conftest import AsyncSessionLocal
+
 KPI_SETUP_COVERAGE = "/api/admin/kpi-setup/coverage"
+
+
+@pytest.fixture
+async def seed_distribution_rule(seed_lead_dependencies: dict):
+    """Seed a ProgramOffering + OfferingDistributionConfig so the unit
+    appears in coverage report (which filters by distribution rules)."""
+    unit_id = seed_lead_dependencies["unit_id"]
+    program_id = seed_lead_dependencies["major_program_id"]
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            offering = models.ProgramOffering(
+                offering_type="Test Offering",
+                program_id=program_id,
+                is_active=True,
+            )
+            session.add(offering)
+            await session.flush()
+            dist_rule = models.OfferingDistributionConfig(
+                offering_id=offering.id,
+                unit_id=unit_id,
+                weight=1,
+                priority=1,
+                is_active=True,
+            )
+            session.add(dist_rule)
+    return {"unit_id": unit_id, "offering_id": offering.id}
 
 
 # =====================================================================
@@ -94,8 +123,9 @@ async def test_coverage_admin_sees_all_units(
     client: AsyncClient,
     admin_token_headers: dict,
     seed_lead_dependencies: dict,
+    seed_distribution_rule: dict,
 ):
-    """Admin (no unit_id) → response includes the seeded unit."""
+    """Admin (no unit_id) → response includes the seeded unit (with distribution rule)."""
     response = await client.get(
         KPI_SETUP_COVERAGE,
         params={"fiscal_year": 2026},
@@ -121,8 +151,9 @@ async def test_coverage_manager_sees_own_unit_only(
     manager_token_headers: dict,
     manager_user_in_db: dict,
     seed_lead_dependencies: dict,
+    seed_distribution_rule: dict,
 ):
-    """Manager with unit_id → only sees own unit's data."""
+    """Manager with unit_id → only sees own unit's data (with distribution rule)."""
     response = await client.get(
         KPI_SETUP_COVERAGE,
         params={"fiscal_year": 2026},
@@ -211,8 +242,9 @@ async def test_coverage_unit_shape(
     client: AsyncClient,
     admin_token_headers: dict,
     seed_lead_dependencies: dict,
+    seed_distribution_rule: dict,
 ):
-    """Each unit in response has correct shape."""
+    """Each unit in response has correct shape (requires distribution rule)."""
     response = await client.get(
         KPI_SETUP_COVERAGE,
         params={"fiscal_year": 2026},
