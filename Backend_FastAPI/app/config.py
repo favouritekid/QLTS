@@ -216,6 +216,13 @@ class Settings(BaseSettings):
         default=["admin", "manager"], validation_alias="MFA_ENFORCE_ROLES"
     )  # Roles that MUST enable MFA (OWASP ASVS 5.0)
 
+    # -- Docker self-hosted deployment --
+    # When True, skip TLS enforcement for DB/Redis connections.
+    # Use ONLY when PostgreSQL and Redis run on the same Docker network (no external exposure).
+    ALLOW_DOCKER_INTERNAL_NETWORK: bool = Field(
+        default=False, validation_alias="ALLOW_DOCKER_INTERNAL_NETWORK"
+    )
+
     def _validate_production_secrets(self):
         """Fail-fast validation for production environment secrets."""
         if self.APP_ENV != "production":
@@ -256,22 +263,25 @@ class Settings(BaseSettings):
                 "Use a remote database with proper credentials."
             )
 
-        # ✅ M2: Enforce TLS for DB connections in production
-        if "asyncpg://" in db_url_lower and "sslmode=" not in db_url_lower:
-            raise RuntimeError(
-                "CRITICAL: DATABASE_URL does not specify sslmode in production. "
-                "Add ?sslmode=require for encrypted connections. "
-                "Example: postgresql+asyncpg://user:pass@host/db?sslmode=require"
-            )
-
-        # ✅ M2: Enforce TLS for Redis connections in production
-        redis_urls = [self.REDIS_URL, self.CELERY_BROKER_URL, self.CELERY_RESULT_BACKEND_URL]
-        for url in redis_urls:
-            if url.startswith("redis://") and not url.startswith("rediss://"):
+        # ✅ M2: Enforce TLS for DB/Redis connections in production
+        # Skip when using Docker internal network (services on same bridge, no external exposure)
+        if not self.ALLOW_DOCKER_INTERNAL_NETWORK:
+            if "asyncpg://" in db_url_lower and "sslmode=" not in db_url_lower:
                 raise RuntimeError(
-                    f"CRITICAL: Redis URL uses unencrypted redis:// protocol in production: {url[:30]}... "
-                    "Use rediss:// for TLS-encrypted connections."
+                    "CRITICAL: DATABASE_URL does not specify sslmode in production. "
+                    "Add ?sslmode=require for encrypted connections. "
+                    "Example: postgresql+asyncpg://user:pass@host/db?sslmode=require\n"
+                    "If using Docker internal network, set ALLOW_DOCKER_INTERNAL_NETWORK=true"
                 )
+
+            redis_urls = [self.REDIS_URL, self.CELERY_BROKER_URL, self.CELERY_RESULT_BACKEND_URL]
+            for url in redis_urls:
+                if url.startswith("redis://") and not url.startswith("rediss://"):
+                    raise RuntimeError(
+                        f"CRITICAL: Redis URL uses unencrypted redis:// protocol in production: {url[:30]}... "
+                        "Use rediss:// for TLS-encrypted connections.\n"
+                        "If using Docker internal network, set ALLOW_DOCKER_INTERNAL_NETWORK=true"
+                    )
 
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
