@@ -25,7 +25,8 @@ import {
   isCSRFError,
   CSRF_HEADER_NAME,
 } from "./csrf";
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+import { env } from "@/lib/config/env";
+export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
 // ============================================
 // 🚫 LOGOUT GUARD (window-level flag)
