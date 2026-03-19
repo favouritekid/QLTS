@@ -42,7 +42,9 @@ class SocketService {
     // Authentication now uses httpOnly cookies (sent automatically by browser)
     // Backend reads access_token from Cookie header
 
-    console.log("[SocketService] Connecting to", env.NEXT_PUBLIC_API_URL);
+    if (process.env.NODE_ENV === "development") {
+      console.log("[SocketService] Connecting to", env.NEXT_PUBLIC_API_URL);
+    }
     this.reconnectAttempts = 0;
 
     this.socket = io(env.NEXT_PUBLIC_API_URL, {
@@ -64,7 +66,9 @@ class SocketService {
     if (!this.socket) return;
 
     this.socket.on("connect", () => {
-      console.log("[SocketService] ✅ Connected:", this.socket?.id);
+      if (process.env.NODE_ENV === "development") {
+        console.log("[SocketService] ✅ Connected:", this.socket?.id);
+      }
       this.reconnectAttempts = 0;
       this.reconnectDelay = 1000;
       if (this.shutdownReconnectTimer) {
@@ -77,7 +81,9 @@ class SocketService {
       // ✅ PRIORITY 3 FIX (Deep Dive Audit): Invalidate cache on reconnect
       // Solves: Stale data issue when socket disconnects and data changes on server
       if (this.onReconnectCallback) {
-        console.log("[SocketService] 🔄 Triggering cache invalidation after reconnect...");
+        if (process.env.NODE_ENV === "development") {
+          console.log("[SocketService] 🔄 Triggering cache invalidation after reconnect...");
+        }
         this.onReconnectCallback();
       }
     });
@@ -170,14 +176,12 @@ class SocketService {
 
     this.revalidateInterval = setInterval(() => {
       if (this.socket?.connected) {
-        console.log("[SocketService] 🔒 Revalidating auth...");
-
         this.socket.emit(
           "revalidate_auth",
           (response: { valid: boolean; reason?: string }) => {
             if (!response.valid) {
-              console.error(
-                "[SocketService] ❌ Revalidation failed:",
+              console.warn(
+                "[SocketService] Revalidation failed:",
                 response.reason
               );
               this.disconnect();
@@ -193,8 +197,6 @@ class SocketService {
               if (typeof window !== "undefined") {
                 window.location.href = "/login";
               }
-            } else {
-              console.log("[SocketService] ✅ Revalidation successful");
             }
           }
         );

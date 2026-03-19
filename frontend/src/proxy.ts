@@ -171,7 +171,7 @@ export function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
 
-    console.log(`[Proxy] ✅ Admin access granted for role '${userRole}': ${pathname}`);
+    // Admin access granted — no log needed in production
   }
 
   if (isFinanceRoute) {
@@ -185,7 +185,7 @@ export function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
 
-    console.log(`[Proxy] ✅ Finance access granted for role '${userRole}': ${pathname}`);
+    // Finance access granted — no log needed in production
   }
 
   // ========================================
@@ -199,7 +199,7 @@ export function proxy(request: NextRequest) {
 
   // Officers should use /dashboard/officer, not /dashboard
   if (pathname === "/dashboard" && payload.role === "officer") {
-    console.log(`[Proxy] 🔄 Redirecting officer to /dashboard/officer`);
+    // Redirect officer to their dashboard
     return NextResponse.redirect(new URL("/dashboard/officer", request.url));
   }
 
@@ -207,7 +207,7 @@ export function proxy(request: NextRequest) {
   // STEP 6: Allow access
   // ========================================
 
-  console.log(`[Proxy] ✅ Access granted: ${pathname} (user: ${payload.sub}, role: ${payload.role})`);
+  // Access granted — pass through
   return NextResponse.next();
 }
 

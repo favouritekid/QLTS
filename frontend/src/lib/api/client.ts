@@ -111,7 +111,9 @@ api.interceptors.request.use(
     // ✅ OPTIONAL ENHANCEMENT: Auto-detect FormData
     if (config.data instanceof FormData) {
       delete config.headers["Content-Type"];
-      console.log("[API Client] 📤 FormData detected - Auto-setting multipart headers");
+      if (process.env.NODE_ENV === "development") {
+        console.log("[API Client] 📤 FormData detected - Auto-setting multipart headers");
+      }
     }
 
     return config;
@@ -166,7 +168,9 @@ api.interceptors.response.use(
       // If refresh is already in progress, queue this request
       // ========================================
       if (isRefreshing) {
-        console.log("[API Client] 🔄 Request queued (refresh in progress)");
+        if (process.env.NODE_ENV === "development") {
+          console.log("[API Client] 🔄 Request queued (refresh in progress)");
+        }
 
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
@@ -187,7 +191,9 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        console.log("[API Client] 🔄 Access token expired, refreshing...");
+        if (process.env.NODE_ENV === "development") {
+          console.log("[API Client] 🔄 Access token expired, refreshing...");
+        }
 
         // Call /refresh endpoint (tokens sent/received via httpOnly cookies)
         await axios.post(
@@ -203,7 +209,9 @@ api.interceptors.response.use(
         // Some browsers (especially mobile) need 50-150ms to persist cookies
         await new Promise((resolve) => setTimeout(resolve, 100));
 
-        console.log("[API Client] ✅ Token refreshed successfully (via httpOnly cookie)");
+        if (process.env.NODE_ENV === "development") {
+          console.log("[API Client] ✅ Token refreshed successfully (via httpOnly cookie)");
+        }
 
         // ========================================
         // STEP 4: NOTIFY QUEUED REQUESTS

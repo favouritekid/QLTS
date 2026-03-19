@@ -76,7 +76,7 @@ interface RedisInfo {
 
 export function SystemMonitoringDashboard() {
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [refreshInterval] = useState(10000); // 10 seconds
+  const [refreshInterval] = useState(30000); // 30 seconds
 
   // System Overview Query
   const {
