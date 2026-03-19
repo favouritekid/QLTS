@@ -1,4 +1,6 @@
+import { Suspense } from "react"
 import type { Metadata } from "next"
+import { connection } from "next/server"
 
 import PublicAdmissionMethodsPage from "@/components/public/PublicAdmissionMethodsPage"
 import { serverApi } from "@/lib/api/server"
@@ -9,7 +11,9 @@ export const metadata: Metadata = {
     "So sánh phương thức xét tuyển, tổ hợp môn và checklist hồ sơ trên cổng tuyển sinh QLTS.",
 }
 
-export default async function AdmissionsMethodsPage() {
+async function MethodsContent() {
+  await connection()
+
   let catalog = null
 
   try {
@@ -19,4 +23,12 @@ export default async function AdmissionsMethodsPage() {
   }
 
   return <PublicAdmissionMethodsPage catalog={catalog} />
+}
+
+export default function AdmissionsMethodsPage() {
+  return (
+    <Suspense fallback={<div className="container mx-auto px-4 py-8 animate-pulse" />}>
+      <MethodsContent />
+    </Suspense>
+  )
 }

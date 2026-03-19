@@ -99,7 +99,7 @@ async def _create_lead_with_activity(
     unit_id: int,
     lead_name: str,
     activity_dt: datetime,
-    status_id: str = "STATUS_A1",
+    status_id: str = "status_a1",
     stage_id: str = "STAGE_A",
 ) -> int:
     """Create a Lead assigned to officer with next_activity_at set."""
