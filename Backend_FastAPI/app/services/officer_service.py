@@ -721,12 +721,19 @@ async def get_enhanced_dashboard_stats(
             "comparison": "Chưa có dữ liệu"
         }
 
-    # === 5. SLA COMPLIANCE RATE ===
-    # sla_hours resolved via all_targets below (catalog-driven, Step 0e)
-    sla_hours = await kpi_service.get_kpi_target(
-        db, "response_time_hours", officer_id, user.unit_id,
-        effective_date=filter_end,
+    # Catalog-driven: resolve ALL targets in one call (period_type derived from catalog)
+    from app.services.kpi_catalog import METRIC_CATALOG
+
+    all_targets = await kpi_service.get_all_kpi_targets(
+        db, officer_id, user.unit_id, effective_date=filter_end,
     )
+
+    def _target_or_none(code: str):
+        """Return target only for comparable metrics; None for non-comparable."""
+        return all_targets[code] if METRIC_CATALOG[code].comparison.comparable else None
+
+    # === 5. SLA COMPLIANCE RATE ===
+    sla_hours = all_targets["response_time_hours"]
     sla_stats = await repo.get_sla_compliance_stats(officer_id, filter_start, filter_end, sla_hours)
     prev_sla_stats = await repo.get_sla_compliance_stats(officer_id, prev_filter_start, prev_filter_end, sla_hours)
     sla_diff = sla_stats["rate"] - prev_sla_stats["rate"]
@@ -862,22 +869,11 @@ async def get_enhanced_dashboard_stats(
     d3_end = d3_start + timedelta(days=1)
     rollback_d3 = await repo.get_rollback_rate_d3(officer_id, d3_start, d3_end)
 
-    # Catalog-driven: resolve ALL targets in one call (period_type derived from catalog)
-    from app.services.kpi_catalog import METRIC_CATALOG
-
-    all_targets = await kpi_service.get_all_kpi_targets(
-        db, officer_id, user.unit_id, effective_date=filter_end,
-    )
-
     # P1: consultations_daily needs is_unit_target flag (special case)
     target_info = await kpi_service.get_kpi_target_source_info(
         db, "consultations_daily", officer_id, user.unit_id,
         effective_date=filter_end,
     )
-
-    def _target_or_none(code: str):
-        """Return target only for comparable metrics; None for non-comparable."""
-        return all_targets[code] if METRIC_CATALOG[code].comparison.comparable else None
 
     # Build enhanced response
     return {
