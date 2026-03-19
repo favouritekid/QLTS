@@ -67,7 +67,7 @@ EOF
 # Step 2: Start Nginx (HTTP only)
 # =============================================================================
 log "Step 2: Starting Nginx (HTTP only)..."
-docker compose --profile production --env-file .env.production up -d nginx
+docker compose -f docker-compose.yml --profile production --env-file .env.production up -d nginx
 sleep 3
 
 # =============================================================================
@@ -75,8 +75,9 @@ sleep 3
 # =============================================================================
 log "Step 3: Requesting SSL certificate from Let's Encrypt..."
 
-docker compose --profile production --env-file .env.production run --rm certbot \
+docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm certbot \
     certbot certonly \
+    --non-interactive \
     --webroot \
     --webroot-path=/var/www/certbot \
     --email "$EMAIL" \
@@ -96,7 +97,7 @@ envsubst '${DOMAIN}' < nginx/conf.d/default.conf.template > nginx/conf.d/default
 # Step 5: Reload Nginx with SSL
 # =============================================================================
 log "Step 5: Reloading Nginx with SSL..."
-docker compose --profile production exec nginx nginx -s reload
+docker compose -f docker-compose.yml --profile production exec nginx nginx -s reload
 
 log "========================================="
 log "SSL setup completed successfully!"

@@ -35,7 +35,7 @@ if [ ! -f .env.production ]; then
     error ".env.production not found. Copy from .env.production.example and fill in values."
 fi
 
-if grep -q "CHANGE_ME" .env.production; then
+if grep -v '^\s*#' .env.production | grep -q "CHANGE_ME"; then
     error ".env.production contains CHANGE_ME placeholders. Update all values before deploying."
 fi
 
@@ -67,7 +67,7 @@ log "Nginx config generated for domain: $DOMAIN"
 # Step 4: Build Docker images
 # =============================================================================
 log "Step 4/8: Building Docker images..."
-docker compose --profile production --env-file .env.production build --parallel
+docker compose -f docker-compose.yml --profile production --env-file .env.production build --parallel
 
 # =============================================================================
 # Step 5: Database backup (before migration)
@@ -75,8 +75,8 @@ docker compose --profile production --env-file .env.production build --parallel
 log "Step 5/8: Backing up database..."
 mkdir -p "$BACKUP_DIR"
 
-if docker compose ps postgres | grep -q "running"; then
-    docker compose exec -T postgres pg_dump \
+if docker compose -f docker-compose.yml ps postgres | grep -q "running"; then
+    docker compose -f docker-compose.yml exec -T postgres pg_dump \
         -U "${POSTGRES_USER:-qlts}" \
         "${POSTGRES_DB:-qlts_production}" \
         > "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" 2>/dev/null \
@@ -92,18 +92,18 @@ fi
 log "Step 6/8: Starting infrastructure & running migrations..."
 
 # Start infra services first
-docker compose --profile production --env-file .env.production up -d postgres redis
+docker compose -f docker-compose.yml --profile production --env-file .env.production up -d postgres redis
 log "Waiting for PostgreSQL to be healthy..."
 sleep 5
 
 # Run Alembic migrations
-docker compose --profile production --env-file .env.production run --rm backend \
+docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm backend \
     alembic upgrade head \
     && log "Migrations completed successfully" \
     || {
         warn "Migration failed! Rolling back..."
         if [ -f "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" ]; then
-            docker compose exec -T postgres psql \
+            docker compose -f docker-compose.yml exec -T postgres psql \
                 -U "${POSTGRES_USER:-qlts}" \
                 "${POSTGRES_DB:-qlts_production}" \
                 < "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
@@ -117,7 +117,7 @@ docker compose --profile production --env-file .env.production run --rm backend 
 # =============================================================================
 log "Step 7/8: Running pre-deploy checks..."
 
-docker compose --profile production --env-file .env.production run --rm backend \
+docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm backend \
     python scripts/pre_deploy_check.py \
     && log "Pre-deploy checks passed" \
     || warn "Pre-deploy checks had warnings (non-fatal)"
@@ -128,13 +128,13 @@ docker compose --profile production --env-file .env.production run --rm backend 
 log "Step 8/8: Rolling restart..."
 
 # Start backend + celery
-docker compose --profile production --env-file .env.production up -d \
+docker compose -f docker-compose.yml --profile production --env-file .env.production up -d \
     backend celery-worker celery-beat
 
 log "Waiting for backend to be healthy..."
 timeout=60
 while [ $timeout -gt 0 ]; do
-    if docker compose ps backend | grep -q "healthy"; then
+    if docker compose -f docker-compose.yml ps backend | grep -q "healthy"; then
         break
     fi
     sleep 2
@@ -146,13 +146,13 @@ if [ $timeout -le 0 ]; then
 fi
 
 # Start frontend + nginx + certbot
-docker compose --profile production --env-file .env.production up -d \
+docker compose -f docker-compose.yml --profile production --env-file .env.production up -d \
     frontend nginx certbot
 
 log "Waiting for frontend to be healthy..."
 timeout=60
 while [ $timeout -gt 0 ]; do
-    if docker compose ps frontend | grep -q "healthy"; then
+    if docker compose -f docker-compose.yml ps frontend | grep -q "healthy"; then
         break
     fi
     sleep 2
@@ -169,6 +169,6 @@ log "Domain: https://$DOMAIN"
 log "Health: https://$DOMAIN/health"
 log ""
 log "Useful commands:"
-log "  docker compose --profile production logs -f       # Follow all logs"
-log "  docker compose --profile production ps            # Service status"
-log "  docker compose --profile production logs backend   # Backend logs"
+log "  docker compose -f docker-compose.yml --profile production logs -f       # Follow all logs"
+log "  docker compose -f docker-compose.yml --profile production ps            # Service status"
+log "  docker compose -f docker-compose.yml --profile production logs backend   # Backend logs"
