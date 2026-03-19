@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { AlertTriangle, ArrowLeft, CalendarPlus, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarPlus, Plus, Trash2 } from "lucide-react";
 
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
@@ -31,7 +30,6 @@ import type { Holiday } from "@/types/kpi-planning.types";
 const currentYear = new Date().getFullYear();
 
 export default function HolidayManagementPage() {
-  const router = useRouter();
   const [yearFilter, setYearFilter] = useState(currentYear);
   const [showCreate, setShowCreate] = useState(false);
   const [editHoliday, setEditHoliday] = useState<Holiday | null>(null);
@@ -70,20 +68,10 @@ export default function HolidayManagementPage() {
 
   return (
     <PageContainer maxWidth="full">
-      <div className="mb-4 flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push("/admin/kpi-planning")}
-        >
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          Quay lại
-        </Button>
-      </div>
-
       <PageHeader
         title="Quản lý ngày lễ"
         description="Cấu hình lịch ngày lễ để tính working days chính xác cho KPI Planning"
+        backButton={{ href: "/admin/kpi-hub", label: "Tổng quan KPI" }}
       />
 
       {/* Status Banners */}

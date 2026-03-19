@@ -52,9 +52,16 @@ async def get_coverage_report(
         "reason_code": "missing_holiday" if not holiday_info["is_complete"] else None,
     }
 
-    # 2. Load active units
+    # 2. Load active units — only those with active distribution rules
+    distribution_unit_ids = (
+        select(models.OfferingDistributionConfig.unit_id)
+        .where(models.OfferingDistributionConfig.is_active == True)
+        .distinct()
+        .scalar_subquery()
+    )
     unit_query = select(models.OrganizationUnit).where(
         models.OrganizationUnit.is_active == True,
+        models.OrganizationUnit.id.in_(distribution_unit_ids),
     )
     if scope_unit_id is not None:
         unit_query = unit_query.where(models.OrganizationUnit.id == scope_unit_id)
@@ -106,6 +113,8 @@ async def get_coverage_report(
         officers = await user_repo.get_officers_by_unit(unit.id)
         officers_by_unit[unit.id] = officers
         all_officer_ids.extend(o.id for o in officers)
+
+    all_officer_id_set = set(all_officer_ids)
 
     # 6. Batch YTD counts for inherited officers (those without custom target)
     inherited_officer_ids = [oid for oid in all_officer_ids if oid not in officer_targets]
@@ -260,12 +269,14 @@ async def get_coverage_report(
             "entity_id": None,
         })
 
-    # Stale sync warning — check officer targets with stale or missing sync
+    # Stale sync warning — only check officers in distribution units
     stale_threshold = datetime.now(timezone.utc).timestamp() - 86400
     has_stale = False
     for t in targets:
         if t.officer_id is None:
             continue
+        if t.officer_id not in all_officer_id_set:
+            continue  # skip non-distribution-unit officers
         # P2 fix: NULL last_sync_at = never synced → also stale
         if t.last_sync_at is None or t.last_sync_at.timestamp() < stale_threshold:
             has_stale = True

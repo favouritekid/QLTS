@@ -30,6 +30,9 @@ export const kpiSetupKeys = {
   configs: () => [...kpiSetupKeys.all, "configs"] as const,
   configList: (filters: Record<string, unknown>) =>
     [...kpiSetupKeys.configs(), "list", filters] as const,
+  targets: () => [...kpiSetupKeys.all, "targets"] as const,
+  targetList: (filters: Record<string, unknown>) =>
+    [...kpiSetupKeys.targets(), "list", filters] as const,
 };
 
 export function useKpiCoverage(fiscalYear: number) {
@@ -39,6 +42,30 @@ export function useKpiCoverage(fiscalYear: number) {
       const res = await api.get<CoverageReport>("/api/admin/kpi-setup/coverage", {
         params: { fiscal_year: fiscalYear },
       });
+      return res.data;
+    },
+    staleTime: 2 * 60 * 1000,
+  });
+}
+
+export interface KpiTargetItem {
+  id: number;
+  kpi_code: string;
+  annual_target: number;
+  fiscal_year: number;
+  unit_id: number | null;
+  officer_id: number | null;
+  achieved_ytd: number;
+  is_active: boolean;
+  last_sync_at: string | null;
+  created_at: string;
+}
+
+export function useKpiTargets(params?: { fiscal_year?: number; is_active?: boolean }) {
+  return useQuery<KpiTargetItem[], AxiosError<ApiError>>({
+    queryKey: kpiSetupKeys.targetList(params || {}),
+    queryFn: async () => {
+      const res = await api.get<KpiTargetItem[]>("/api/admin/kpi-config/targets", { params });
       return res.data;
     },
     staleTime: 2 * 60 * 1000,

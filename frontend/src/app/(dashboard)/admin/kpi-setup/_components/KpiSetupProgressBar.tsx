@@ -6,9 +6,10 @@ import type { CoverageReport } from "@/types/kpi-setup.types";
 
 interface Props {
   report: CoverageReport;
+  onIndicatorClick?: (sectionId: string) => void;
 }
 
-export function KpiSetupProgressBar({ report }: Props) {
+export function KpiSetupProgressBar({ report, onIndicatorClick }: Props) {
   const { holiday_status, summary, warnings } = report;
 
   // Weighted completion score
@@ -31,20 +32,24 @@ export function KpiSetupProgressBar({ report }: Props) {
     {
       label: "Lịch nghỉ",
       ok: holiday_status.is_complete,
+      sectionId: "holiday-section",
     },
     {
       label: "Kế hoạch đơn vị",
       ok: summary.total_units > 0 && summary.units_with_plan === summary.total_units,
+      sectionId: "unit-coverage-section",
     },
     {
       label: "Chỉ tiêu officer",
       ok:
         summary.total_officers > 0 &&
         summary.officers_with_target === summary.total_officers,
+      sectionId: "unit-coverage-section",
     },
     {
       label: "Đồng bộ YTD",
       ok: warnings.every((w) => w.reason_code !== "stale_sync"),
+      sectionId: "unit-coverage-section",
     },
   ];
 
@@ -57,15 +62,31 @@ export function KpiSetupProgressBar({ report }: Props) {
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
-        {indicators.map((ind) => (
-          <Badge
-            key={ind.label}
-            variant={ind.ok ? "default" : "outline"}
-            className="text-xs"
-          >
-            {ind.ok ? "✓" : "○"} {ind.label}
-          </Badge>
-        ))}
+        {indicators.map((ind) => {
+          const badge = (
+            <Badge
+              key={ind.label}
+              variant={ind.ok ? "default" : "outline"}
+              className={`text-xs${onIndicatorClick ? " cursor-pointer hover:opacity-80" : ""}`}
+            >
+              {ind.ok ? "✓" : "○"} {ind.label}
+            </Badge>
+          );
+
+          if (onIndicatorClick) {
+            return (
+              <button
+                key={ind.label}
+                type="button"
+                onClick={() => onIndicatorClick(ind.sectionId)}
+              >
+                {badge}
+              </button>
+            );
+          }
+
+          return badge;
+        })}
       </div>
     </div>
   );
