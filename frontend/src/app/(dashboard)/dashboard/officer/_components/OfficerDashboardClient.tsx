@@ -177,6 +177,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   // so that historical range views show the correct plan
   const { endDate: dashEndDate, dateRange: dashDateRange } = useDashboardDate();
   const fiscalYear = dashEndDate ? parseInt(dashEndDate.slice(0, 4), 10) : new Date().getFullYear();
+  // Anchor month derived from dashboard end date (for KpiSummaryBanner + CurrentMonthSnapshot)
+  const anchorMonth = dashEndDate ? parseInt(dashEndDate.slice(5, 7), 10) : undefined;
   const shouldFetchKpiPlan = scope === "personal" || (!!scope && !!selectedOfficerId);
   const kpiPlanQuery = useOfficerKpiPlan({
     fiscalYear,
@@ -393,6 +395,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         kpis={stats.kpis}
         annualProgress={stats.annual_progress}
         plan={kpiPlanQuery.data}
+        anchorMonth={anchorMonth}
+        anchorYear={fiscalYear}
       />
 
       {/* KPI Cards Row */}
@@ -438,6 +442,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
             <CurrentMonthSnapshot
               plan={kpiPlanQuery.data}
               isLoading={kpiPlanQuery.isLoading}
+              anchorMonth={anchorMonth}
+              anchorYear={fiscalYear}
             />
           )}
         </div>

@@ -36,6 +36,9 @@ interface KpiSummaryBannerProps {
   kpis: KPIStats;
   annualProgress?: AnnualProgressInfo | null;
   plan?: OfficerKpiPlanResponse | null;
+  /** Anchor month/year from dashboard date range (defaults to client clock) */
+  anchorMonth?: number;
+  anchorYear?: number;
 }
 
 // =============================================================================
@@ -58,7 +61,7 @@ const TONE_COLOR = {
 // COMPONENT
 // =============================================================================
 
-export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBannerProps) {
+export function KpiSummaryBanner({ kpis, annualProgress, plan, anchorMonth, anchorYear }: KpiSummaryBannerProps) {
   const router = useRouter();
   const { dateRange, startDate, endDate } = useDashboardDate();
   const { canShowTarget } = useKpiCatalog();
@@ -76,7 +79,9 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
   const items = useMemo(() => {
     const attention: SummaryItem[] = [];
     const good: SummaryItem[] = [];
-    const currentMonth = new Date().getMonth() + 1;
+    const now = new Date();
+    const currentMonth = anchorMonth ?? (now.getMonth() + 1);
+    const currentYear = anchorYear ?? now.getFullYear();
 
     // Detect if today falls within the selected date range
     const today = new Date();
@@ -88,10 +93,10 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
 
     const todayStr = formatDateForAPI(today);
 
-    // Month start/end for enrollment deep-links
-    const monthStart = `${today.getFullYear()}-${String(currentMonth).padStart(2, "0")}-01`;
-    const lastDay = new Date(today.getFullYear(), currentMonth, 0).getDate();
-    const monthEnd = `${today.getFullYear()}-${String(currentMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+    // Month start/end for enrollment deep-links (anchored to dashboard range)
+    const monthStart = `${currentYear}-${String(currentMonth).padStart(2, "0")}-01`;
+    const lastDay = new Date(currentYear, currentMonth, 0).getDate();
+    const monthEnd = `${currentYear}-${String(currentMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
     // 1. Annual enrollment progress — only notable statuses
     if (annualProgress) {
@@ -184,7 +189,7 @@ export function KpiSummaryBanner({ kpis, annualProgress, plan }: KpiSummaryBanne
 
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kpis, annualProgress, plan, dateRange, canShowTarget, startDate, endDate]);
+  }, [kpis, annualProgress, plan, dateRange, canShowTarget, startDate, endDate, anchorMonth, anchorYear]);
 
   if (items.length === 0) return null;
 

@@ -14,6 +14,9 @@ import type { OfficerKpiPlanResponse } from "@/lib/api/officer";
 interface CurrentMonthSnapshotProps {
   plan: OfficerKpiPlanResponse | null | undefined;
   isLoading?: boolean;
+  /** Anchor month/year from dashboard date range (defaults to client clock) */
+  anchorMonth?: number;
+  anchorYear?: number;
 }
 
 function fmtNum(n: number | null | undefined): string {
@@ -48,12 +51,12 @@ const PROGRESS_INDICATOR_COLORS = {
   behind: "bg-destructive",
 } as const;
 
-export function CurrentMonthSnapshot({ plan, isLoading }: CurrentMonthSnapshotProps) {
+export function CurrentMonthSnapshot({ plan, isLoading, anchorMonth, anchorYear }: CurrentMonthSnapshotProps) {
   if (isLoading || !plan) return null;
 
   const now = new Date();
-  const currentMonth = now.getMonth() + 1; // 1-based
-  const currentYear = now.getFullYear();
+  const currentMonth = anchorMonth ?? (now.getMonth() + 1);
+  const currentYear = anchorYear ?? now.getFullYear();
 
   const monthData = plan.months.find((m) => m.month === currentMonth);
   if (!monthData) return null;
