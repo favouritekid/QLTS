@@ -56,6 +56,7 @@ vi.mock("lucide-react", () => ({
   TrendingDown: () => <span />,
   Minus: () => <span />,
   Clock: () => <span />,
+  GraduationCap: () => <span />,
   ShieldCheck: () => <span />,
   Target: () => <span />,
   Info: () => <span />,
@@ -85,6 +86,8 @@ function makeKpis(overrides: Record<string, any> = {}) {
     sla_compliance_rate_target: 80,
     new_lead_conversion_rate_target: null,
     consultation_effectiveness_target: null,
+    enrollments_monthly: 3,
+    enrollments_monthly_target: null,
     ...overrides,
   };
 }

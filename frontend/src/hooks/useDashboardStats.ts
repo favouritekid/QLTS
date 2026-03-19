@@ -46,6 +46,11 @@ export interface KPIStats {
   new_lead_conversion_rate_target?: number | null;
   sla_compliance_rate_target?: number | null;
   consultation_effectiveness_target?: number | null;
+  // Catalog-driven targets (full map from backend)
+  metric_targets?: Record<string, number> | null;
+  // Enrollments monthly
+  enrollments_monthly?: number;
+  enrollments_monthly_target?: number | null;
   // Phase D: Daily Quality KPIs
   verified_consultations_daily?: number;
   quality_rate_daily?: number | null;

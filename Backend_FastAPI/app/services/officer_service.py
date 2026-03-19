@@ -1047,6 +1047,13 @@ async def get_aggregated_dashboard_stats(
     # Aggregated Consultation Effectiveness
     agg_effectiveness_stats = await repo.get_aggregated_consultation_effectiveness_stats(officer_ids, filter_start, filter_end)
 
+    # Aggregated Enrollments Monthly (batch query, same semantics as personal)
+    from app.repositories.kpi_repository import KpiRepository
+    kpi_repo_agg = KpiRepository(db)
+    agg_enrollments_monthly = await kpi_repo_agg.count_enrollments_in_period_batch(
+        officer_ids, filter_start, filter_end,
+    )
+
     # ==========================================================================
     # Aggregated Funnel using Repository (was N+1 loop)
     # ==========================================================================
@@ -1235,7 +1242,7 @@ async def get_aggregated_dashboard_stats(
             "new_lead_conversion_rate_target": None,
             "consultation_effectiveness_target": None,
             "metric_targets": None,
-            "enrollments_monthly": 0,
+            "enrollments_monthly": agg_enrollments_monthly,
             "enrollments_monthly_target": None,
         },
         # Must match WorkloadStats schema

@@ -625,6 +625,34 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         )
         return result.scalar() or 0
 
+    async def count_enrollments_in_period_batch(
+        self,
+        officer_ids: List[int],
+        start_date,
+        end_date,
+    ) -> int:
+        """
+        Count enrollments for multiple officers within a date range.
+
+        Same semantics as count_enrollments_in_period() but for batch aggregation.
+        Uses updated_at (event-based: when enrollment happened) not created_at.
+        """
+        result = await self.db.execute(
+            select(func.count(models.Lead.id))
+            .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+            .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.PipelineStage.is_final_stage == True,
+                models.ConsultationStatus.counts_for_funnel == True,
+                models.ConsultationStatus.outcome_type == "positive",
+                models.Lead.deleted_at.is_(None),
+                models.Lead.updated_at >= start_date,
+                models.Lead.updated_at < end_date,
+            )
+        )
+        return result.scalar() or 0
+
     async def count_enrollments_ytd_batch(
         self,
         officer_ids: List[int],
