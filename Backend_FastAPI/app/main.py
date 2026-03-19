@@ -617,11 +617,10 @@ if settings.APP_ENV != "test":  # Disabled in tests by default
     fastapi_app.add_middleware(CSRFMiddleware)
     log.info("✅ CSRF protection middleware enabled")
 
-# --- Layer 2: HTTPS Redirect (production only) ---
-if settings.APP_ENV == "production":
-    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-    fastapi_app.add_middleware(HTTPSRedirectMiddleware)
-    log.info("✅ HTTPS redirect enabled for production")
+# --- Layer 2: HTTPS Redirect ---
+# Removed: Nginx handles HTTPS redirect (301) at the edge.
+# HTTPSRedirectMiddleware caused 307 loops for internal Docker traffic
+# (frontend SSR, healthchecks) which doesn't go through Nginx.
 
 # --- Layer 1 (outermost): CORS - MUST be last added ---
 # Ensures ALL responses (including middleware errors) have CORS headers
