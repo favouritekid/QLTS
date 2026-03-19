@@ -99,7 +99,6 @@ const DASHBOARD_RESPONSE = {
 
 const TEAM_STATS_RESPONSE = {
   team_avg_consultations: 8,
-  team_avg_conversions: 3,
   officer_rank_percentile: 70,
   total_officers: 5,
   period_days: 7,

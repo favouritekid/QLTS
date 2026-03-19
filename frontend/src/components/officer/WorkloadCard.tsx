@@ -84,17 +84,19 @@ export function WorkloadCard({ statusOverview, scope }: WorkloadCardProps) {
             <Briefcase aria-hidden="true" className="h-4 w-4" />
             Khối lượng công việc
           </CardTitle>
-          <Badge
-            variant={isAvailable ? "default" : "secondary"}
-            className={cn(
-              "text-xs",
-              isAvailable && "bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400",
-              isOffline && "bg-muted text-muted-foreground"
-            )}
-          >
-            <CircleDot aria-hidden="true" className="h-3 w-3 mr-1" />
-            {isAvailable ? "Sẵn sàng" : isOffline ? "Ngoại tuyến" : "Bận"}
-          </Badge>
+          {isPersonalScope && (
+            <Badge
+              variant={isAvailable ? "default" : "secondary"}
+              className={cn(
+                "text-xs",
+                isAvailable && "bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400",
+                isOffline && "bg-muted text-muted-foreground"
+              )}
+            >
+              <CircleDot aria-hidden="true" className="h-3 w-3 mr-1" />
+              {isAvailable ? "Sẵn sàng" : isOffline ? "Ngoại tuyến" : "Bận"}
+            </Badge>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">

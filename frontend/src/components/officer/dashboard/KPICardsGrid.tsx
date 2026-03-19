@@ -32,50 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useDashboardDate, DATE_PRESET_LABELS } from "@/contexts/DashboardDateContext";
 import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
-
-interface TrendInfo {
-  value: number;
-  direction: "up" | "down" | "neutral";
-  comparison: string;
-}
-
-interface KPIStats {
-  consultations_today: number;
-  consultations_target: number;
-  is_unit_target?: boolean;
-  consultations_trend: TrendInfo;
-  active_leads: number;
-  active_leads_trend: TrendInfo;
-  win_rate: number;
-  win_rate_trend?: TrendInfo | null;
-  new_lead_conversion_rate: number;
-  new_lead_conversion_rate_trend?: TrendInfo | null;
-  avg_response_time: number;
-  avg_response_time_trend: TrendInfo;
-  avg_response_time_target?: number | null;
-  sla_compliance_rate: number;
-  sla_compliance_rate_trend?: TrendInfo | null;
-  consultation_effectiveness: number;
-  consultation_effectiveness_trend?: TrendInfo | null;
-  consultations_avg_per_day?: number;
-  // Catalog-driven targets (null when not comparable)
-  win_rate_target?: number | null;
-  new_lead_conversion_rate_target?: number | null;
-  sla_compliance_rate_target?: number | null;
-  consultation_effectiveness_target?: number | null;
-  metric_targets?: Record<string, number> | null;
-  // Enrollments monthly
-  enrollments_monthly?: number;
-  enrollments_monthly_target?: number | null;
-  // Phase D: Daily Quality KPIs
-  verified_consultations_daily?: number;
-  quality_rate_daily?: number | null;
-  followup_commitment_rate?: number | null;
-  progress_rate_d7?: number | null;
-  progress_rate_d7_date?: string | null;
-  rollback_rate_d3?: number | null;
-  rollback_rate_d3_date?: string | null;
-}
+import type { KPIStats, TrendInfo } from "@/hooks/useDashboardStats";
 
 interface KPICardsGridProps {
   kpis: KPIStats;

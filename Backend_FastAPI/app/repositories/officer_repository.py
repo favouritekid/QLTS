@@ -1323,7 +1323,6 @@ class OfficerRepository(BaseRepository[models.User]):
         
         return {
             "team_avg_consultations": round(avg_consultations, 2),
-            "team_avg_conversions": 0.0,  # Placeholder
             "total_officers": officer_count,
         }
     

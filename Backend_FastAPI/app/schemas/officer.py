@@ -285,7 +285,6 @@ class WeeklyLeaderboard(BaseModel):
 class TeamStats(BaseModel):
     """Team average statistics for performance comparison."""
     team_avg_consultations: float  # Daily average across all officers
-    team_avg_conversions: float  # Daily average conversions
     officer_rank_percentile: int  # Current officer's percentile rank (0-100)
     total_officers: int
     period_days: int = 30

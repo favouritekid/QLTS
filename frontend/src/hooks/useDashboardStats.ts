@@ -211,7 +211,6 @@ export interface AnnualProgressInfo {
 
 export interface TeamStats {
   team_avg_consultations: number;
-  team_avg_conversions: number;
   officer_rank_percentile: number;
   total_officers: number;
   period_days: number;

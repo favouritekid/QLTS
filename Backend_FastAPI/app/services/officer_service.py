@@ -1091,12 +1091,6 @@ async def get_aggregated_dashboard_stats(
 
     # Phase 2: Generate funnel suggestions based on aggregated metrics
     funnel_suggestions = generate_funnel_suggestions(sales_funnel)
-    
-    # ==========================================================================
-    # Team Overview using Repository (was N+1 loop)
-    # ==========================================================================
-    team_overview = await repo.get_team_overview(officer_ids, filter_start, filter_end, limit=10)
-
     # Aggregated avg response time
     agg_avg_response_time = await repo.get_avg_response_time_hours_multi(officer_ids, filter_start, filter_end)
 
@@ -1265,7 +1259,6 @@ async def get_aggregated_dashboard_stats(
             "stale": [],
             "upcoming": [],
         },
-        "team_overview": team_overview,  # Added for manager/admin view
         "annual_progress": annual_progress,
         "funnel_net_conversion_trend": funnel_net_conversion_trend,
     }
@@ -1613,7 +1606,6 @@ async def get_team_stats(
     
     return {
         "team_avg_consultations": team_avg,
-        "team_avg_conversions": team_data["team_avg_conversions"],
         "officer_rank_percentile": rank_percentile,
         "total_officers": team_data["total_officers"],
         "period_days": calc_days,
