@@ -8,7 +8,7 @@
 
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useState } from "react";
 import {
   Phone,
   Mail, 
@@ -133,14 +133,13 @@ function InfoRow({
 export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: LeadSidebarProps) {
   const stageColor = lead.pipeline_stage?.color_code || STAGE_COLORS[lead.pipeline_stage?.id ?? ""];
 
-  // L2: Avoid hydration mismatch — computed client-side only via ref to skip cascading renders
-  const daysInPipelineRef = useRef<number | null>(null);
-  if (typeof window !== "undefined" && daysInPipelineRef.current === null) {
-    daysInPipelineRef.current = Math.floor(
+  // L2: Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
+  const [daysInPipeline, setDaysInPipeline] = useState<number | null>(null);
+  useEffect(() => {
+    setDaysInPipeline(Math.floor(
       (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-    );
-  }
-  const daysInPipeline = daysInPipelineRef.current;
+    ));
+  }, [lead.created_at]);
 
   return (
     <div className={cn(

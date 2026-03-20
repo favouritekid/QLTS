@@ -11,7 +11,7 @@
  */
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Edit,
@@ -144,14 +144,15 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const [showAllTimeline, setShowAllTimeline] = useState(false);
 
   // Calculate quick stats
-  // Client-side only via ref to avoid hydration mismatch and layout shift
-  const daysInPipelineRef = useRef<number>(0);
-  if (lead && typeof window !== "undefined") {
-    daysInPipelineRef.current = Math.floor(
-      (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-    );
-  }
-  const daysInPipeline = daysInPipelineRef.current;
+  // Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
+  const [daysInPipeline, setDaysInPipeline] = useState<number>(0);
+  useEffect(() => {
+    if (lead) {
+      setDaysInPipeline(Math.floor(
+        (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
+      ));
+    }
+  }, [lead]);
   // BUG 3: Count from timeline (already loaded) instead of lead.consultations (not loaded by shallow API)
   const successfulContacts = (timeline ?? []).filter(
     (e) => {

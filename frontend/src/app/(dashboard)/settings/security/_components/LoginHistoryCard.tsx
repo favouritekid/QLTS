@@ -1,6 +1,7 @@
 // src/app/(dashboard)/settings/security/_components/LoginHistoryCard.tsx
 "use client";
 
+import { useEffect, useState } from "react";
 import { format, formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
@@ -73,9 +74,13 @@ export function LoginHistoryCard({
   readOnly = false,
 }: LoginHistoryCardProps) {
   const loginDate = new Date(item.login_at);
-  const isRecent = Date.now() - loginDate.getTime() < 24 * 60 * 60 * 1000;
-  const isStale =
-    Date.now() - loginDate.getTime() > STALE_LOGIN_DAYS * 24 * 60 * 60 * 1000;
+
+  // Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => { setNow(Date.now()); }, []);
+  const elapsed = now ? now - loginDate.getTime() : 0;
+  const isRecent = now !== null && elapsed < 24 * 60 * 60 * 1000;
+  const isStale = now !== null && elapsed > STALE_LOGIN_DAYS * 24 * 60 * 60 * 1000;
 
   const showActions =
     !readOnly && item.is_suspicious && !item.user_response && onConfirm && onSecure;

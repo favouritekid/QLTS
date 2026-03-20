@@ -47,12 +47,14 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
     data: { type: "card", stageId: lead.pipeline_stage?.id },
   });
 
-  // Hydration-safe date calculation — useMemo avoids extra render cycle from useEffect+useState
-  const daysInPipeline = React.useMemo(() => {
-    if (!lead.created_at) return null;
-    return Math.floor(
-      (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-    );
+  // Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
+  const [daysInPipeline, setDaysInPipeline] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (lead.created_at) {
+      setDaysInPipeline(Math.floor(
+        (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
+      ));
+    }
   }, [lead.created_at]);
 
   const style = {
