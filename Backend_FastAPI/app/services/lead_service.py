@@ -1013,8 +1013,9 @@ async def create_lead(
             unit_id=create_data.get("unit_id"),
         )
 
-        # Set the calculated score
+        # Set the calculated score + derived cache fields
         create_data["lead_score"] = calculated_score
+        create_data["is_hot_lead"] = (calculated_score or 0) >= 70
         db_lead = models.Lead(**create_data)
 
         # Lấy trạng thái ban đầu từ DB (database-driven, không hardcode ID)
@@ -1435,6 +1436,7 @@ async def update_lead(
                 )
                 _old_lead_score = db_lead.lead_score
                 db_lead.lead_score = recalculated_score
+                db_lead.is_hot_lead = (recalculated_score or 0) >= 70
                 log.info(
                     "Lead score recalculated on update",
                     lead_id=lead_id,
@@ -3656,6 +3658,7 @@ async def import_leads_from_file_content(
             # Prepare dict for bulk insert
             lead_dict = lead_in.model_dump()
             lead_dict["lead_score"] = score
+            lead_dict["is_hot_lead"] = (score or 0) >= 70
             lead_dict["status"] = initial_legacy_status  # Use legacy_status from DB
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id
