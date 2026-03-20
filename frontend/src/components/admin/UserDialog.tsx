@@ -444,11 +444,11 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                     </FormControl>
                     <SelectContent>
                       {rolesLoading ? (
-                        <SelectItem value="" disabled>
+                        <SelectItem value="__radix_loading__" disabled>
                           Đang tải vai trò…
                         </SelectItem>
                       ) : availableRoles.length === 0 ? (
-                        <SelectItem value="" disabled>
+                        <SelectItem value="__radix_empty__" disabled>
                           Không có vai trò nào
                         </SelectItem>
                       ) : (

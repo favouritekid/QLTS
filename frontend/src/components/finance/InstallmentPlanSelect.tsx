@@ -15,6 +15,9 @@ import { Calendar, AlertTriangle, Loader2, CheckCircle } from "lucide-react"
 import { useInstallmentPlanOptions } from "@/hooks/finance/useInstallmentPlans"
 import { cn } from "@/lib/utils"
 
+// Radix Select forbids value="" on SelectItem — use sentinel internally
+const RADIX_NONE = "__radix_none__"
+
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -99,8 +102,14 @@ export function InstallmentPlanSelect({
   // Find selected option for display
   const selectedOption = options.find((opt) => opt.value === value)
 
+  // Normalize "" <-> sentinel only when one-time option is shown
+  const internalValue = showOneTimeOption && value === "" ? RADIX_NONE : value
+  const handleChange = (v: string) => {
+    onChange(v === RADIX_NONE ? "" : v)
+  }
+
   return (
-    <Select value={value} onValueChange={onChange} disabled={disabled}>
+    <Select value={internalValue} onValueChange={handleChange} disabled={disabled}>
       <SelectTrigger
         className={cn(
           error && "border-destructive focus-visible:ring-destructive",
@@ -108,14 +117,12 @@ export function InstallmentPlanSelect({
         )}
       >
         <SelectValue placeholder={placeholder}>
-          {value !== "" && (
+          {internalValue === RADIX_NONE ? (
+            <span>{oneTimeLabel}</span>
+          ) : (
             <div className="flex items-center gap-2">
               <Calendar className="h-4 w-4 shrink-0" />
-              <span>
-                {value === ""
-                  ? oneTimeLabel
-                  : selectedOption?.label ?? placeholder}
-              </span>
+              <span>{selectedOption?.label ?? placeholder}</span>
             </div>
           )}
         </SelectValue>
@@ -123,7 +130,7 @@ export function InstallmentPlanSelect({
       <SelectContent>
         {/* One-time payment option */}
         {showOneTimeOption && (
-          <SelectItem value="">
+          <SelectItem value={RADIX_NONE}>
             <div className="flex items-center gap-2">
               <CheckCircle className="h-4 w-4 shrink-0 text-success-600" />
               <span>{oneTimeLabel}</span>

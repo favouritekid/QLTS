@@ -38,6 +38,9 @@ import { useInstallmentPlans } from "@/hooks/finance/useInstallmentPlans"
 import { FEE_TYPE_LABELS, type FeeType } from "@/types/finance.types"
 import { toast } from "sonner"
 
+// Radix Select forbids value="" on SelectItem — use sentinel internally
+const RADIX_NONE = "__radix_none__"
+
 // =============================================================================
 // FORM SCHEMA
 // =============================================================================
@@ -98,7 +101,7 @@ export function FeeCalculateDialog({
     defaultValues: {
       admission_profile_id: defaultProfileId ?? undefined,
       fee_type: "tuition",
-      installment_plan_code: "",
+      installment_plan_code: RADIX_NONE,
     },
   })
 
@@ -114,7 +117,7 @@ export function FeeCalculateDialog({
       const result = await calculateMutation.mutateAsync({
         admission_profile_id: values.admission_profile_id,
         fee_type: values.fee_type,
-        installment_plan_code: values.installment_plan_code || undefined,
+        installment_plan_code: values.installment_plan_code === RADIX_NONE ? undefined : values.installment_plan_code || undefined,
       })
       toast.success("Đã tính phí thành công")
       form.reset()
@@ -132,7 +135,7 @@ export function FeeCalculateDialog({
       form.reset({
         admission_profile_id: defaultProfileId ?? undefined,
         fee_type: "tuition",
-        installment_plan_code: "",
+        installment_plan_code: RADIX_NONE,
       })
     }
   }, [open, form, defaultProfileId])
@@ -234,7 +237,7 @@ export function FeeCalculateDialog({
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="">Thanh toán 1 lần (mặc định)</SelectItem>
+                      <SelectItem value={RADIX_NONE}>Thanh toán 1 lần (mặc định)</SelectItem>
                       {activePlans.map((plan) => (
                         <SelectItem key={plan.id} value={plan.code}>
                           {plan.name} ({plan.installment_count} đợt)
