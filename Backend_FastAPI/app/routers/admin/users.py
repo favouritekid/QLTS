@@ -51,7 +51,8 @@ from app.config import settings
 from app.core import deps
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
-from app.services import activity_service, lead_service, user_service
+from app.services import activity_service, lead_service, notification_service, user_service
+from app.routers.notifications import send_realtime_notification
 from app.tasks import process_automatic_lead_assignment_task
 from app.core.constants import UserRole
 from app.utils.exceptions import (
@@ -293,9 +294,11 @@ async def admin_set_user_password(
     current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Admin đặt lại mật khẩu cho người dùng."""
-    await user_service.set_password_by_admin(
+    user, post_commit = await user_service.set_password_by_admin(
         db, user_id, password_data.new_password
     )
+    await db.commit()
+    await post_commit()
     return None
 
 
@@ -416,7 +419,7 @@ async def bulk_user_action(
     enforcer = request.app.state.enforcer
 
     # Perform bulk action
-    message = await user_service.perform_bulk_action(
+    message, bulk_callback = await user_service.perform_bulk_action(
         db,
         action=action_data.action,
         user_ids=action_data.user_ids,
@@ -458,6 +461,7 @@ async def bulk_user_action(
         changes={"user_ids": action_data.user_ids, "status": action_data.status} if action_data.status else {"user_ids": action_data.user_ids},
     )
     await db.commit()
+    await bulk_callback()
     await log_callback()
 
     return {"detail": message}
@@ -703,11 +707,13 @@ async def import_leads_from_file(
 
     # Call service layer with file content (DI pattern)
     try:
-        result = await lead_service.import_leads_from_file_content(
+        result, callback = await lead_service.import_leads_from_file_content(
             file_content=content,
             filename=file.filename or "unknown",
             db=db,
         )
+        await db.commit()
+        await callback()
         return result
 
     except ValueError as e:
@@ -1017,14 +1023,16 @@ async def update_existing_user(
         )
         change_description = ", ".join([f"{key}" for key in changes.keys()])
         try:
-            notification = await notification_service.create_notification(
+            notification, notify_callback = await notification_service.create_notification(
                 db=db,
                 user_id=updated_user.id,
                 title="Your profile has been updated",
                 message=f"An administrator has updated your profile. Changed: {change_description}",
                 notification_type="admin_update",
-                link=f"/profile",
+                link="/profile",
             )
+            await db.commit()
+            await notify_callback()
             log.info(
                 "Notification created successfully",
                 notification_id=notification.id,
