@@ -254,7 +254,7 @@ export const navigationConfig: NavigationConfig = {
           label: "Cộng tác viên",
           href: "/admin/collaborators",
           icon: Handshake,
-          roles: ["admin", "manager"],
+          roles: ["admin", "manager", "officer"],
         },
         {
           label: "Hoa hồng",
