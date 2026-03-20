@@ -320,7 +320,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         ),
         channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.SUCCESS,
-        link_template="/applications/${application_id}",
+        link_template="/admissions/${application_id}",
         priority=70,
     ),
 
@@ -336,7 +336,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         ),
         channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.INFO,
-        link_template="/applications/${application_id}",
+        link_template="/admissions/${application_id}",
         priority=80,
         dedup_key_template="app:${application_id}:status:${new_status}"
     ),
@@ -353,7 +353,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         ),
         channels=(CH.BROWSER,),
         notification_type=NT.INFO,
-        link_template="/applications/${application_id}",
+        link_template="/admissions/${application_id}",
         priority=120,
     ),
 
@@ -369,7 +369,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         ),
         channels=(CH.BROWSER,),
         notification_type=NT.WARNING,
-        link_template="/applications",
+        link_template="/admissions",
         priority=100,
     ),
 
@@ -575,7 +575,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         ),
         channels=(CH.BROWSER,),
         notification_type=NT.INFO,
-        link_template="/admin/officers",
+        link_template="/admin/users",
         priority=100,
     ),
 
