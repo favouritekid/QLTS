@@ -254,7 +254,13 @@ class EmailService:
         # Create HTML body
         html_body = self._render_notification_html(user_name, notification)
 
-        # Create plain text version
+        # Create plain text version with absolute URL
+        detail_link = ""
+        if notification.link:
+            base = settings.FRONTEND_URL.rstrip("/")
+            raw_link = notification.link if notification.link.startswith("/") else f"/{notification.link}"
+            detail_link = f"View details: {base}{raw_link}"
+
         text_body = f"""
 {notification.title}
 
@@ -262,7 +268,7 @@ class EmailService:
 
 Type: {notification.type}
 
-{f'View details: {notification.link}' if notification.link else ''}
+{detail_link}
 
 ---
 You received this email because you have notifications enabled in your QLTS account.
@@ -283,11 +289,17 @@ To manage your notification preferences, visit your Settings page.
         safe_type = html_escape(notification.type)
         safe_title = html_escape(notification.title)
         safe_message = html_escape(notification.message)
-        safe_link = html_escape(notification.link) if notification.link else ""
+
+        # Build absolute URL: notification.link is a relative path like "/leads/123"
+        full_link = ""
+        if notification.link:
+            base = settings.FRONTEND_URL.rstrip("/")
+            raw_link = notification.link if notification.link.startswith("/") else f"/{notification.link}"
+            full_link = html_escape(f"{base}{raw_link}")
 
         link_html = ""
-        if safe_link:
-            link_html = f'<a href="{safe_link}" class="button">View Details</a>'
+        if full_link:
+            link_html = f'<a href="{full_link}" class="button">View Details</a>'
 
         return f"""
 <!DOCTYPE html>
