@@ -32,9 +32,20 @@ export const leadHandlers = [
     const end = start + pageSize;
     const paginatedLeads = filteredLeads.slice(start, end);
 
+    const newCount = filteredLeads.filter((l) => l.status === "new").length;
+    const convertedCount = filteredLeads.filter((l) => l.status === "converted").length;
+    const highScoreCount = filteredLeads.filter((l) => (l.lead_score ?? 0) >= 70).length;
+    const total = filteredLeads.length;
+
     return HttpResponse.json({
-      total_count: filteredLeads.length,
+      total_count: total,
       leads: paginatedLeads,
+      summary: {
+        new_count: newCount,
+        high_score_count: highScoreCount,
+        converted_count: convertedCount,
+        conversion_rate: total > 0 ? Math.round((convertedCount / total) * 1000) / 10 : 0,
+      },
     });
   }),
 

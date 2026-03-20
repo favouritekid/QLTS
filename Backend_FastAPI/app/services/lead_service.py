@@ -688,7 +688,7 @@ async def get_leads(
     lead_ids: Optional[List[int]] = None,
     # === SUMMARY ===
     include_summary: bool = True,
-) -> Tuple[int, List[models.Lead], dict]:
+) -> Tuple[int, List[models.Lead], Optional[dict]]:
     """
     Lấy danh sách Leads (List View) + optional summary stats.
 

@@ -44,6 +44,12 @@ describe("Leads API Client", () => {
                 lead_score: 85,
               },
             ],
+            summary: {
+              new_count: 1,
+              high_score_count: 2,
+              converted_count: 0,
+              conversion_rate: 0,
+            },
           });
         })
       );
@@ -55,6 +61,8 @@ describe("Leads API Client", () => {
       expect(result.total_count).toBe(2)
       expect(result.leads).toHaveLength(2)
       expect(result.leads[0].full_name).toBe('Test Lead 1')
+      expect(result.summary).toBeDefined()
+      expect(result.summary?.new_count).toBe(1)
     })
 
 
@@ -90,6 +98,12 @@ describe("Leads API Client", () => {
                 lead_score: 75,
               },
             ],
+            summary: {
+              new_count: 1,
+              high_score_count: 1,
+              converted_count: 0,
+              conversion_rate: 0,
+            },
           });
         })
       );
