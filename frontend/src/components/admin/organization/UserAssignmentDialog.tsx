@@ -1,7 +1,7 @@
 // src/components/admin/organization/UserAssignmentDialog.tsx
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   ResponsiveDialog,
   ResponsiveDialogContent,
@@ -23,13 +23,15 @@ import {
   Loader2,
   AlertCircle,
   Users as UsersIcon,
-  CheckCircle2,
+  UserMinus,
+  Undo2,
 } from "lucide-react";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { masterDataApi } from "@/lib/api/master-data";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { adminUsersKeys } from "@/hooks/useAdminUsers";
+import { organizationKeys } from "@/hooks/useOrganization";
 import { getAvatarUrl } from "@/lib/utils";
 import type { User } from "@/types/api.types";
 
@@ -64,9 +66,11 @@ export function UserAssignmentDialog({
 }: UserAssignmentDialogProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  // Users selected to ADD to this unit (from available list)
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
+  // Users marked to REMOVE from this unit (from current list)
+  const [removedUserIds, setRemovedUserIds] = useState<Set<number>>(new Set());
   const [isAssigning, setIsAssigning] = useState(false);
-  const initialSyncDone = useRef(false);
 
   const queryClient = useQueryClient();
 
@@ -83,9 +87,9 @@ export function UserAssignmentDialog({
     error,
   } = useAdminUsersList({
     page: 1,
-    page_size: 100, // Max allowed by backend
+    page_size: 100,
     search: debouncedSearch || undefined,
-    status: "active", // Only active users
+    status: "active",
   });
 
   const users = useMemo(() => usersData?.users || [], [usersData?.users]);
@@ -106,33 +110,35 @@ export function UserAssignmentDialog({
     return { currentUsers: current, availableUsers: available };
   }, [users, unit.id]);
 
-  // Initialize selected users when opening dialog
+  // Reset state when dialog opens/closes
   const handleOpenChange = (newOpen: boolean) => {
     if (newOpen) {
-      // Pre-select users already in this unit
-      const currentIds = currentUsers.map((u) => u.id);
-      setSelectedUserIds(new Set(currentIds));
-      initialSyncDone.current = currentIds.length > 0;
-    } else {
-      // Clear selections when closing
       setSelectedUserIds(new Set());
+      setRemovedUserIds(new Set());
+    } else {
+      setSelectedUserIds(new Set());
+      setRemovedUserIds(new Set());
       setSearchQuery("");
-      initialSyncDone.current = false;
     }
     onOpenChange(newOpen);
   };
 
-  // Sync pre-selection when data loads after dialog opens
-  useEffect(() => {
-    if (open && !initialSyncDone.current && currentUsers.length > 0) {
-      setSelectedUserIds(new Set(currentUsers.map((u) => u.id)));
-      initialSyncDone.current = true;
-    }
-  }, [open, currentUsers]);
-
-  // Toggle user selection
-  const handleToggleUser = (userId: number) => {
+  // Toggle selection for available users (to add)
+  const handleToggleAvailable = (userId: number) => {
     setSelectedUserIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(userId)) {
+        newSet.delete(userId);
+      } else {
+        newSet.add(userId);
+      }
+      return newSet;
+    });
+  };
+
+  // Toggle removal for current users
+  const handleToggleRemove = (userId: number) => {
+    setRemovedUserIds((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(userId)) {
         newSet.delete(userId);
@@ -145,24 +151,9 @@ export function UserAssignmentDialog({
 
   // Handle save - assign/unassign users
   const handleSave = async () => {
-    // Determine which users to assign and which to unassign
-    const currentUserIds = new Set(currentUsers.map((u) => u.id));
-    const toAssign: number[] = [];
-    const toUnassign: number[] = [];
+    const toAssign = Array.from(selectedUserIds);
+    const toUnassign = Array.from(removedUserIds);
 
-    // Check all users
-    users.forEach((user) => {
-      const isCurrentlyInUnit = currentUserIds.has(user.id);
-      const isSelected = selectedUserIds.has(user.id);
-
-      if (isSelected && !isCurrentlyInUnit) {
-        toAssign.push(user.id);
-      } else if (!isSelected && isCurrentlyInUnit) {
-        toUnassign.push(user.id);
-      }
-    });
-
-    // No-op: close silently if no changes
     if (toAssign.length === 0 && toUnassign.length === 0) {
       handleOpenChange(false);
       return;
@@ -171,7 +162,6 @@ export function UserAssignmentDialog({
     setIsAssigning(true);
 
     try {
-      // Call API directly (not via mutation hooks) to avoid per-item toasts
       const updatePromises: Promise<unknown>[] = [];
 
       toAssign.forEach((userId) => {
@@ -184,12 +174,12 @@ export function UserAssignmentDialog({
 
       const results = await Promise.allSettled(updatePromises);
 
-      // Aggregate feedback
       const failures = results.filter((r) => r.status === "rejected").length;
       const successes = results.length - failures;
 
-      // Invalidate user queries to refresh data
+      // Invalidate relevant queries
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       if (failures === 0) {
         toast.success(`Đã cập nhật ${successes} người dùng`);
@@ -199,8 +189,7 @@ export function UserAssignmentDialog({
       } else {
         toast.error("Không thể cập nhật người dùng. Vui lòng thử lại.");
       }
-    } catch (error) {
-      console.error("Failed to update user assignments:", error);
+    } catch {
       toast.error("Không thể cập nhật người dùng. Vui lòng thử lại.");
     } finally {
       setIsAssigning(false);
@@ -217,19 +206,61 @@ export function UserAssignmentDialog({
     return fullName.substring(0, 2).toUpperCase();
   };
 
-  // Render user row
-  const renderUserRow = (user: User, isCurrentlyInUnit: boolean) => {
+  // Render current user row (read-only, with remove action)
+  const renderCurrentUserRow = (user: User) => {
+    const isMarkedForRemoval = removedUserIds.has(user.id);
+
+    return (
+      <div
+        key={user.id}
+        className={`flex items-center gap-3 p-3 rounded-lg ${isMarkedForRemoval ? "opacity-50 bg-destructive/5" : "hover:bg-accent/50"}`}
+      >
+        <Avatar className="h-8 w-8">
+          <AvatarImage src={getAvatarUrl(user.avatar_url) || undefined} />
+          <AvatarFallback className="text-xs">
+            {getUserInitials(user.full_name)}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex-1 min-w-0">
+          <div className={`font-medium text-sm truncate ${isMarkedForRemoval ? "line-through" : ""}`}>
+            {user.full_name || user.username}
+          </div>
+          <div className="text-xs text-muted-foreground truncate">
+            {user.email}
+          </div>
+        </div>
+        <Badge variant="secondary" className="text-xs shrink-0">
+          {user.role}
+        </Badge>
+        <Button
+          variant={isMarkedForRemoval ? "outline" : "ghost"}
+          size="sm"
+          className={`h-7 text-xs shrink-0 ${!isMarkedForRemoval ? "text-destructive hover:text-destructive hover:bg-destructive/10" : ""}`}
+          onClick={() => handleToggleRemove(user.id)}
+        >
+          {isMarkedForRemoval ? (
+            <><Undo2 className="h-3 w-3 mr-1" /> Hoàn tác</>
+          ) : (
+            <><UserMinus className="h-3 w-3 mr-1" /> Gỡ</>
+          )}
+        </Button>
+      </div>
+    );
+  };
+
+  // Render available user row (selectable checkbox)
+  const renderAvailableUserRow = (user: User) => {
     const isSelected = selectedUserIds.has(user.id);
 
     return (
       <div
         key={user.id}
         className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent/50 cursor-pointer"
-        onClick={() => handleToggleUser(user.id)}
+        onClick={() => handleToggleAvailable(user.id)}
       >
         <Checkbox
           checked={isSelected}
-          onCheckedChange={() => handleToggleUser(user.id)}
+          onCheckedChange={() => handleToggleAvailable(user.id)}
         />
         <Avatar className="h-8 w-8">
           <AvatarImage src={getAvatarUrl(user.avatar_url) || undefined} />
@@ -243,18 +274,14 @@ export function UserAssignmentDialog({
             {user.email}
           </div>
         </div>
-        {isCurrentlyInUnit && (
-          <Badge variant="default" className="text-xs">
-            <CheckCircle2 className="h-3 w-3 mr-1" />
-            Đã thuộc đơn vị
-          </Badge>
-        )}
-        <Badge variant="secondary" className="text-xs">
-          {user.role} {/* architecture-allow presentation */}
+        <Badge variant="secondary" className="text-xs shrink-0">
+          {user.role}
         </Badge>
       </div>
     );
   };
+
+  const hasChanges = selectedUserIds.size > 0 || removedUserIds.size > 0;
 
   return (
     <ResponsiveDialog open={open} onOpenChange={handleOpenChange}>
@@ -262,7 +289,7 @@ export function UserAssignmentDialog({
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle>Quản lý người dùng</ResponsiveDialogTitle>
           <ResponsiveDialogDescription>
-            Chọn người dùng để thêm vào đơn vị &quot;{unit.name}&quot;
+            Thêm hoặc gỡ người dùng khỏi đơn vị &quot;{unit.name}&quot;
           </ResponsiveDialogDescription>
         </ResponsiveDialogHeader>
 
@@ -294,7 +321,6 @@ export function UserAssignmentDialog({
             <div className="space-y-3">
               {[1, 2, 3, 4, 5].map((i) => (
                 <div key={i} className="flex items-center gap-3 p-3">
-                  <Skeleton className="h-4 w-4 rounded" />
                   <Skeleton className="h-8 w-8 rounded-full" />
                   <div className="flex-1 space-y-2">
                     <Skeleton className="h-4 w-32" />
@@ -325,26 +351,26 @@ export function UserAssignmentDialog({
           {/* User List */}
           {!isLoading && !error && users.length > 0 && (
             <div className="space-y-6">
-              {/* Current Users Section */}
+              {/* Current Users Section (read-only with remove action) */}
               {currentUsers.length > 0 && (
                 <div>
                   <h4 className="text-sm font-semibold mb-3 text-muted-foreground">
                     Đang thuộc đơn vị này ({currentUsers.length})
                   </h4>
                   <div className="space-y-1">
-                    {currentUsers.map((user) => renderUserRow(user, true))}
+                    {currentUsers.map((user) => renderCurrentUserRow(user))}
                   </div>
                 </div>
               )}
 
-              {/* Available Users Section */}
+              {/* Available Users Section (selectable) */}
               {availableUsers.length > 0 && (
                 <div>
                   <h4 className="text-sm font-semibold mb-3 text-muted-foreground">
                     Người dùng khác ({availableUsers.length})
                   </h4>
                   <div className="space-y-1">
-                    {availableUsers.map((user) => renderUserRow(user, false))}
+                    {availableUsers.map((user) => renderAvailableUserRow(user))}
                   </div>
                 </div>
               )}
@@ -355,7 +381,16 @@ export function UserAssignmentDialog({
         {/* Footer */}
         <ResponsiveDialogFooter className="flex items-center justify-between sm:justify-between">
           <div className="text-sm text-muted-foreground">
-            {selectedUserIds.size} người dùng đã chọn
+            {selectedUserIds.size > 0 && (
+              <span className="text-primary">{selectedUserIds.size} thêm</span>
+            )}
+            {selectedUserIds.size > 0 && removedUserIds.size > 0 && (
+              <span> · </span>
+            )}
+            {removedUserIds.size > 0 && (
+              <span className="text-destructive">{removedUserIds.size} gỡ</span>
+            )}
+            {!hasChanges && "Chưa có thay đổi"}
           </div>
           <div className="flex gap-2">
             <Button
@@ -366,7 +401,7 @@ export function UserAssignmentDialog({
             >
               Hủy
             </Button>
-            <Button onClick={handleSave} disabled={isAssigning}>
+            <Button onClick={handleSave} disabled={isAssigning || !hasChanges}>
               {isAssigning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Lưu thay đổi
             </Button>

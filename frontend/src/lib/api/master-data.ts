@@ -247,12 +247,17 @@ export async function upsertSharedDocumentGroup(offeringTypeId: number, data: Sh
 // ============================================
 
 export async function assignUserToUnit(userId: number, unitId: number) {
-  const response = await api.post(`/api/admin/organization-units/${unitId}/users`, { user_id: userId });
+  const formData = new FormData();
+  formData.append("unit_id", unitId.toString());
+  const response = await api.put(`/api/admin/users/${userId}`, formData);
   return response.data;
 }
 
-export async function unassignUserFromUnit(userId: number, unitId: number) {
-  await api.delete(`/api/admin/organization-units/${unitId}/users/${userId}`);
+export async function unassignUserFromUnit(userId: number, _unitId: number) {
+  const formData = new FormData();
+  formData.append("unit_id", "0");
+  const response = await api.put(`/api/admin/users/${userId}`, formData);
+  return response.data;
 }
 
 // ============================================

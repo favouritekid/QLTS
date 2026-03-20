@@ -141,8 +141,8 @@ export function useAdminUpdateUser(userId: number) {
       if (data.skills) formData.append("skills", JSON.stringify(data.skills));
       if (data.max_capacity !== undefined)
         formData.append("max_capacity", data.max_capacity.toString());
-      if (data.unit_id !== undefined && data.unit_id !== null)
-        formData.append("unit_id", data.unit_id.toString());
+      if (data.unit_id !== undefined)
+        formData.append("unit_id", (data.unit_id ?? 0).toString());
 
       // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
       // API client now auto-detects FormData and sets multipart/form-data headers
