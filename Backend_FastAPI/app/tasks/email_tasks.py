@@ -104,6 +104,7 @@ def send_login_alert_email_task(
                 "browser": browser,
                 "os": os,
                 "anomalies": anomalies or {},
+                "frontend_url": settings.FRONTEND_URL,
             },
             lang=lang,
         )

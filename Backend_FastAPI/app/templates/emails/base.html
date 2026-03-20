@@ -255,12 +255,16 @@
                             <p style="margin-top: 12px;">
                                 {% if lang == 'vi' %}
                                 Cần hỗ trợ? Liên hệ <a href="mailto:{{ support_email }}">{{ support_email }}</a>
+                                {% if hotline %}<br>Hotline: <a href="tel:{{ hotline | replace(' ', '') }}">{{ hotline }}</a>{% endif %}
                                 {% else %}
                                 Need help? Contact <a href="mailto:{{ support_email }}">{{ support_email }}</a>
+                                {% if hotline %}<br>Hotline: <a href="tel:{{ hotline | replace(' ', '') }}">{{ hotline }}</a>{% endif %}
                                 {% endif %}
                             </p>
-                            <p style="margin-top: 16px; color: #999; font-size: 12px;">
-                                © {{ current_year }} {{ company_name }}. All rights reserved.
+                            <p style="margin-top: 12px; color: #999; font-size: 12px;">
+                                {{ company_name }}<br>
+                                {% if address %}{{ address }}<br>{% endif %}
+                                © {{ current_year }}. All rights reserved.
                             </p>
                         </td>
                     </tr>

@@ -9,6 +9,7 @@ Uses Jinja2 for template rendering with support for:
 - Consistent branding
 """
 import smtplib
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape as html_escape
@@ -69,10 +70,12 @@ def render_email_template(
     # Add common variables to context
     context.update({
         "lang": lang,
-        "app_name": "QLTS Lead Management",
-        "company_name": "Your Company Name",
-        "support_email": "support@example.com",
-        "current_year": "2025",
+        "app_name": "Hệ thống Tuyển sinh",
+        "company_name": "Trường cao đẳng Bách khoa Tây Nguyên",
+        "support_email": settings.MAIL_FROM,
+        "hotline": "0906 513 555",
+        "address": "02 Lý Nhân Tông, Phường Tân An, Tỉnh Đắk Lắk",
+        "current_year": str(datetime.now().year),
     })
 
     # Render HTML version
@@ -95,10 +98,10 @@ def _generate_simple_text(context: Dict[str, Any]) -> str:
     Generate simple plain text version from context.
     Fallback when .txt template doesn't exist.
     """
-    lines = ["QLTS Lead Management System", "=" * 40, ""]
+    lines = ["Hệ thống Tuyển sinh", "=" * 40, ""]
 
     for key, value in context.items():
-        if key not in ["lang", "app_name", "company_name", "support_email", "current_year"]:
+        if key not in ["lang", "app_name", "company_name", "support_email", "current_year", "hotline", "address"]:
             lines.append(f"{key.replace('_', ' ').title()}: {value}")
 
     lines.extend(["", "=" * 40, "This is an automated email. Please do not reply."])
