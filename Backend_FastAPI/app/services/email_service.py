@@ -144,13 +144,11 @@ class EmailService:
     """Service for sending emails via SMTP."""
 
     def __init__(self):
-        self.smtp_host = getattr(settings, "SMTP_HOST", "smtp.gmail.com")
-        self.smtp_port = getattr(settings, "SMTP_PORT", 587)
-        self.smtp_user = getattr(settings, "SMTP_USER", None)
-        self.smtp_password = getattr(settings, "SMTP_PASSWORD", None)
-        self.from_email = getattr(
-            settings, "FROM_EMAIL", self.smtp_user or "noreply@example.com"
-        )
+        self.smtp_host = settings.MAIL_SERVER
+        self.smtp_port = settings.MAIL_PORT
+        self.smtp_user = settings.MAIL_USERNAME
+        self.smtp_password = settings.MAIL_PASSWORD
+        self.from_email = settings.MAIL_FROM
         self.from_name = getattr(settings, "FROM_NAME", "QLTS Notification")
 
     def _create_connection(self):
