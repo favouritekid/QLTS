@@ -369,24 +369,12 @@ export function FunnelChart({
     [mergedConfig]
   );
 
-  // =========== EMPTY STATE HANDLING ===========
-  if (!funnel || funnel.length === 0) {
-    return (
-      <Card className="border bg-card min-h-[300px] flex items-center justify-center">
-        <div className="text-center text-muted-foreground">
-          <Target className="h-12 w-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">Chưa có dữ liệu Pipeline</p>
-        </div>
-      </Card>
-    );
-  }
-
   // =========== MEMOIZED COMPUTATIONS ===========
-  // All heavy data transformations memoized with `funnel` dependency
+  // All hooks MUST be called before any conditional return (Rules of Hooks)
 
   // Sort by stage order
   const sortedFunnel = useMemo(
-    () => [...funnel].sort((a, b) => a.stage_order - b.stage_order),
+    () => funnel ? [...funnel].sort((a, b) => a.stage_order - b.stage_order) : [],
     [funnel]
   );
 
@@ -413,6 +401,15 @@ export function FunnelChart({
     netConversionRate, overallConversion, stageMetrics, bottleneckIndex,
     aggregatedLossBreakdown, totalLostRevenue
   } = useMemo(() => {
+    // Return empty defaults when funnel is empty (hooks still called)
+    if (sortedFunnel.length === 0) {
+      return {
+        totalEarlyExit: 0, enrolledCount: 0, failedCount: 0, totalLost: 0,
+        netConversionRate: 0, overallConversion: 0, stageMetrics: [] as { conversion: number | null; countDiff: number; countDiffPercent: number; percentFromTotal: number; prevCount: number; hasHistoricalData: boolean }[],
+        bottleneckIndex: -1, aggregatedLossBreakdown: [] as { reason_code: string; count: number; percentage: number }[],
+        totalLostRevenue: 0,
+      };
+    }
     // SPEC 2026-02-04: Calculate Early Exit total (FINAL leads at non-final stages)
     const _totalEarlyExit = coreStages.reduce((sum, s) =>
       sum + (s.early_exit_count || 0), 0
@@ -533,6 +530,18 @@ export function FunnelChart({
 
     router.push(`/leads?${params.toString()}`);
   };
+
+  // =========== EMPTY STATE HANDLING (after all hooks) ===========
+  if (!funnel || funnel.length === 0) {
+    return (
+      <Card className="border bg-card min-h-[300px] flex items-center justify-center">
+        <div className="text-center text-muted-foreground">
+          <Target className="h-12 w-12 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">Chưa có dữ liệu Pipeline</p>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <TooltipProvider delayDuration={150}>
