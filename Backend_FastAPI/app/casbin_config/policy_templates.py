@@ -116,6 +116,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/pipeline/all", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/board", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/allowed-next-statuses", "action": "GET"},
+        {"subject": "{role}", "object": "/api/pipeline/loss-reasons", "action": "GET"},
         # Officer Dashboard access (Phase 4: Unified Dashboard)
         {"subject": "{role}", "object": "/api/officer/stats", "action": "GET"},
         {"subject": "{role}", "object": "/api/officer/dashboard", "action": "GET"},
