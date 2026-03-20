@@ -98,9 +98,14 @@ async def list_collaborators(
 async def create_collaborator(
     data: CollaboratorCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(require_admin_or_manager),
+    current_user: models.User = Depends(check_permission),
 ):
-    """Create a new collaborator."""
+    """Create a new collaborator. Officers can propose (pending), admin/manager create directly."""
+    # Officer: auto-fill unit_id and managed_by_officer_id
+    if current_user.role == UserRole.OFFICER:
+        data.unit_id = current_user.unit_id
+        data.managed_by_officer_id = current_user.id
+
     collab, callback = await collaborator_service.create_collaborator(
         db, data, current_user
     )
