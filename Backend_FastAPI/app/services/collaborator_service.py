@@ -85,9 +85,19 @@ async def create_collaborator(
     - Checks phone uniqueness
     - If user_id provided: validates user exists and not already linked
     - If managed_by_officer_id provided: validates officer exists & active
+    - Officer: force unit_id + managed_by_officer_id (server-side invariant)
     - Auto-approve if created by admin
     """
     repo = CollaboratorRepository(db)
+
+    # Server-side invariant: officer always creates in own unit, managed by self
+    if created_by.role == UserRole.OFFICER:
+        data.unit_id = created_by.unit_id
+        data.managed_by_officer_id = created_by.id
+
+    # Validate unit_id is set (required for all roles after officer auto-fill)
+    if not data.unit_id:
+        raise BusinessRuleViolation("unit_id là bắt buộc khi tạo cộng tác viên")
 
     # Check phone uniqueness
     is_unique = await repo.check_phone_unique(data.phone)

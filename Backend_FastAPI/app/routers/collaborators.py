@@ -15,6 +15,7 @@ from app import database, models
 from app.core.constants import UserRole
 from app.core.deps import (
     check_permission,
+    get_current_active_user,
     get_collaborator_for_user,
     get_lead_claim_for_review,
     get_own_collaborator,
@@ -98,13 +99,18 @@ async def list_collaborators(
 async def create_collaborator(
     data: CollaboratorCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(check_permission),
+    current_user: models.User = Depends(get_current_active_user),
 ):
-    """Create a new collaborator. Officers can propose (pending), admin/manager create directly."""
-    # Officer: auto-fill unit_id and managed_by_officer_id
-    if current_user.role == UserRole.OFFICER:
-        data.unit_id = current_user.unit_id
-        data.managed_by_officer_id = current_user.id
+    """Create a new collaborator.
+
+    - Admin/Manager: create directly (admin auto-approves, manager pending)
+    - Officer: propose CTV (always pending, auto-fills unit + managed_by)
+    - Other roles (accountant, user): blocked
+    """
+    allowed_roles = {UserRole.ADMIN, UserRole.MANAGER, UserRole.OFFICER}
+    if current_user.role not in allowed_roles:
+        from app.utils.exceptions import PermissionDeniedError
+        raise PermissionDeniedError(detail="Bạn không có quyền tạo cộng tác viên")
 
     collab, callback = await collaborator_service.create_collaborator(
         db, data, current_user

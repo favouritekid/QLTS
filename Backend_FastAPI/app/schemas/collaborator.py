@@ -48,7 +48,7 @@ class CollaboratorCreate(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
     phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
     email: Optional[EmailStr] = None
-    unit_id: int
+    unit_id: Optional[int] = None  # Required for admin/manager; auto-filled for officer in service
     user_id: Optional[int] = None
     managed_by_officer_id: Optional[int] = None
     id_card_number: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
