@@ -50,6 +50,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+import { useClientNow } from "@/hooks/useClientNow";
 import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hooks/useLeads";
 import { useAuth } from "@/hooks/useAuth";
 import { isManagerOrAbove } from "@/lib/utils/permissions";
@@ -144,15 +145,11 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const [showAllTimeline, setShowAllTimeline] = useState(false);
 
   // Calculate quick stats
-  // Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
-  const [daysInPipeline, setDaysInPipeline] = useState<number>(0);
-  useEffect(() => {
-    if (lead) {
-      setDaysInPipeline(Math.floor(
-        (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-      ));
-    }
-  }, [lead]);
+  // Hydration-safe: useClientNow() returns null on server, Date.now() after hydration
+  const now = useClientNow();
+  const daysInPipeline = now && lead
+    ? Math.floor((now - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
   // BUG 3: Count from timeline (already loaded) instead of lead.consultations (not loaded by shallow API)
   const successfulContacts = (timeline ?? []).filter(
     (e) => {

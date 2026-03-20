@@ -8,7 +8,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useClientNow } from "@/hooks/useClientNow";
 import {
   Phone,
   Mail, 
@@ -133,13 +133,11 @@ function InfoRow({
 export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: LeadSidebarProps) {
   const stageColor = lead.pipeline_stage?.color_code || STAGE_COLORS[lead.pipeline_stage?.id ?? ""];
 
-  // L2: Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
-  const [daysInPipeline, setDaysInPipeline] = useState<number | null>(null);
-  useEffect(() => {
-    setDaysInPipeline(Math.floor(
-      (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-    ));
-  }, [lead.created_at]);
+  // L2: Hydration-safe: useClientNow() returns null on server, Date.now() after hydration
+  const now = useClientNow();
+  const daysInPipeline = now
+    ? Math.floor((now - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
 
   return (
     <div className={cn(

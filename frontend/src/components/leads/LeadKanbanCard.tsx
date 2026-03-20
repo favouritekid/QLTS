@@ -7,6 +7,7 @@ import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
 import { Mail, Phone, TrendingUp, User, Eye } from "lucide-react";
 
+import { useClientNow } from "@/hooks/useClientNow";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,15 +48,11 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
     data: { type: "card", stageId: lead.pipeline_stage?.id },
   });
 
-  // Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
-  const [daysInPipeline, setDaysInPipeline] = React.useState<number | null>(null);
-  React.useEffect(() => {
-    if (lead.created_at) {
-      setDaysInPipeline(Math.floor(
-        (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
-      ));
-    }
-  }, [lead.created_at]);
+  // Hydration-safe: useClientNow() returns null on server, Date.now() after hydration
+  const now = useClientNow();
+  const daysInPipeline = now && lead.created_at
+    ? Math.floor((now - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
 
   const style = {
     transform: CSS.Transform.toString(transform),

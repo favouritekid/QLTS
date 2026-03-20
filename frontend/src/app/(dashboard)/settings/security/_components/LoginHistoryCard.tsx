@@ -1,7 +1,6 @@
 // src/app/(dashboard)/settings/security/_components/LoginHistoryCard.tsx
 "use client";
 
-import { useEffect, useState } from "react";
 import { format, formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
@@ -16,6 +15,7 @@ import {
   Smartphone,
   Tablet,
 } from "lucide-react";
+import { useClientNow } from "@/hooks/useClientNow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -75,9 +75,8 @@ export function LoginHistoryCard({
 }: LoginHistoryCardProps) {
   const loginDate = new Date(item.login_at);
 
-  // Hydration-safe: compute client-side only to avoid server/client Date.now() mismatch
-  const [now, setNow] = useState<number | null>(null);
-  useEffect(() => { setNow(Date.now()); }, []);
+  // Hydration-safe: useClientNow() returns null on server, Date.now() after hydration
+  const now = useClientNow();
   const elapsed = now ? now - loginDate.getTime() : 0;
   const isRecent = now !== null && elapsed < 24 * 60 * 60 * 1000;
   const isStale = now !== null && elapsed > STALE_LOGIN_DAYS * 24 * 60 * 60 * 1000;
