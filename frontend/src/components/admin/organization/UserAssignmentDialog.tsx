@@ -181,6 +181,13 @@ export function UserAssignmentDialog({
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
+      // If current user was among those modified, refresh auth cache
+      const allModifiedIds = [...toAssign, ...toUnassign];
+      const currentUser = queryClient.getQueryData<{ id: number }>(["auth", "me"]);
+      if (currentUser && allModifiedIds.includes(currentUser.id)) {
+        queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+      }
+
       if (failures === 0) {
         toast.success(`Đã cập nhật ${successes} người dùng`);
         handleOpenChange(false);
@@ -261,6 +268,7 @@ export function UserAssignmentDialog({
         <Checkbox
           checked={isSelected}
           onCheckedChange={() => handleToggleAvailable(user.id)}
+          onClick={(e) => e.stopPropagation()}
         />
         <Avatar className="h-8 w-8">
           <AvatarImage src={getAvatarUrl(user.avatar_url) || undefined} />

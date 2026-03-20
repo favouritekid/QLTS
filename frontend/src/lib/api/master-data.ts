@@ -253,6 +253,7 @@ export async function assignUserToUnit(userId: number, unitId: number) {
   return response.data;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function unassignUserFromUnit(userId: number, _unitId: number) {
   const formData = new FormData();
   formData.append("unit_id", "0");
