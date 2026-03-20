@@ -4,29 +4,19 @@
 import React from "react";
 import { Users, UserPlus, Flame, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Lead } from "@/types/lead.types";
+import type { LeadsSummary } from "@/types/lead.types";
 
 interface LeadStatsProps {
-  leads: Lead[];
   totalCount: number;
+  summary?: LeadsSummary;
   isLoading?: boolean;
 }
 
 export const LeadStats = React.memo(function LeadStats({
-  leads,
   totalCount,
+  summary,
   isLoading,
 }: LeadStatsProps) {
-  // All stats are page-level (from current page data only)
-  const { newLeadsCount, highScoreCount, conversionRate } = React.useMemo(() => {
-    const pageTotal = leads.length;
-    const newCount = leads.filter((l) => l.status === "new").length;
-    const highScore = leads.filter((l) => l.lead_score >= 70).length;
-    const converted = leads.filter((l) => l.status === "converted").length;
-    const rate = pageTotal > 0 ? Math.round((converted / pageTotal) * 100) : 0;
-    return { newLeadsCount: newCount, highScoreCount: highScore, conversionRate: rate };
-  }, [leads]);
-
   const stats = [
     {
       title: "Tổng",
@@ -36,22 +26,22 @@ export const LeadStats = React.memo(function LeadStats({
       bgColor: "bg-blue-100 dark:bg-blue-900/40",
     },
     {
-      title: "Mới (trang này)",
-      value: newLeadsCount,
+      title: "Mới",
+      value: summary?.new_count ?? 0,
       icon: UserPlus,
       color: "text-emerald-600 dark:text-emerald-400",
       bgColor: "bg-emerald-100 dark:bg-emerald-900/40",
     },
     {
-      title: "Điểm cao (trang này)",
-      value: highScoreCount,
+      title: "Điểm cao",
+      value: summary?.high_score_count ?? 0,
       icon: Flame,
       color: "text-orange-600 dark:text-orange-400",
       bgColor: "bg-orange-100 dark:bg-orange-900/40",
     },
     {
-      title: "Chuyển đổi (trang này)",
-      value: `${conversionRate}%`,
+      title: "Chuyển đổi",
+      value: `${summary?.conversion_rate ?? 0}%`,
       icon: TrendingUp,
       color: "text-purple-600 dark:text-purple-400",
       bgColor: "bg-purple-100 dark:bg-purple-900/40",
@@ -87,11 +77,9 @@ export const LeadStats = React.memo(function LeadStats({
             "hover:shadow-sm transition-shadow"
           )}
         >
-          {/* Icon - Always visible with strong colors */}
           <div className={cn("flex-shrink-0 rounded-lg p-2", stat.bgColor)}>
             <stat.icon className={cn("h-4 w-4 sm:h-5 sm:w-5", stat.color)} />
           </div>
-          {/* Text */}
           <div className="min-w-0 flex-1">
             <p className="text-[10px] sm:text-xs font-medium text-muted-foreground truncate">
               {stat.title}

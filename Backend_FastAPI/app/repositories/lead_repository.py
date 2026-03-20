@@ -16,7 +16,7 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -166,65 +166,25 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def get_filtered(
+    def _build_filters(
         self,
-        skip: int = 0,
-        limit: int = 10,
         status: Optional[str] = None,
-        assigned_officer_id: Optional[str] = None,  # Comma-separated IDs for multi-select
+        assigned_officer_id: Optional[str] = None,
         unit_id: Optional[int] = None,
-        offering_id: Optional[str] = None,  # Comma-separated IDs for multi-select
+        offering_id: Optional[str] = None,
         source: Optional[str] = None,
         search: Optional[str] = None,
-        sort_by: str = "created_at",
-        order: str = "desc",
-        # === PIPELINE STAGE FILTER ===
-        pipeline_stage_id: Optional[str] = None,  # Comma-separated IDs for multi-select
-        # === DATE RANGE FILTER ===
+        pipeline_stage_id: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         date_field: str = "created_at",
-        # === COLLABORATOR FILTERS ===
         referrer_id: Optional[int] = None,
         validity_status: Optional[str] = None,
-        # === SCORE RANGE FILTER ===
         score_min: Optional[int] = None,
         score_max: Optional[int] = None,
-        # === SELECTIVE EXPORT ===
         lead_ids: Optional[List[int]] = None,
-    ) -> Tuple[int, List[models.Lead]]:
-        """
-        Get filtered list of leads with pagination and eager loading.
-
-        Implements Quick Disposition bubble-up logic:
-        - Overdue activities (next_activity_at <= now) appear first
-        - Today's activities appear second
-        - Future/no activities appear last
-
-        Multi-select filters:
-        - status, source, offering_id, pipeline_stage_id, assigned_officer_id accept comma-separated values
-
-        Args:
-            skip: Number of records to skip
-            limit: Maximum number of records to return
-            status: Comma-separated status filter
-            assigned_officer_id: Comma-separated officer IDs (e.g. "1,2,3")
-            unit_id: Filter by organization unit
-            offering_id: Comma-separated offering IDs (e.g. "1,2,3")
-            source: Comma-separated source filter
-            search: Search term for name/email/phone
-            sort_by: Column to sort by (default: created_at)
-            order: Sort order (asc/desc)
-            pipeline_stage_id: Comma-separated stage IDs (e.g. "stg01,stg02")
-
-        Returns:
-            Tuple of (total_count, lead_list)
-        """
-        # Build base queries
-        base_query = select(models.Lead)
-        count_query = select(func.count(models.Lead.id))
-
-        # Apply filters
+    ) -> list:
+        """Build reusable filter list for leads queries (shared by get_filtered + get_summary)."""
         filters = []
 
         # Always filter out soft-deleted leads
@@ -316,6 +276,71 @@ class LeadRepository(BaseRepository[models.Lead]):
         # === SELECTIVE EXPORT (lead_ids) ===
         if lead_ids:
             filters.append(models.Lead.id.in_(lead_ids))
+
+        return filters
+
+    async def get_summary(self, filters: list) -> dict:
+        """Compute aggregate summary over the full filtered set (no pagination)."""
+        summary_query = select(
+            func.count(models.Lead.id).label("total_count"),
+            func.count(models.Lead.id).filter(
+                models.Lead.status == "new"
+            ).label("new_count"),
+            func.count(models.Lead.id).filter(
+                models.Lead.is_hot_lead == True  # noqa: E712
+            ).label("high_score_count"),
+            func.count(models.Lead.id).filter(
+                models.Lead.status == "converted"
+            ).label("converted_count"),
+        )
+        if filters:
+            summary_query = summary_query.where(*filters)
+
+        result = await self.db.execute(summary_query)
+        row = result.one()
+        total = row.total_count or 0
+        converted = row.converted_count or 0
+        return {
+            "new_count": row.new_count or 0,
+            "high_score_count": row.high_score_count or 0,
+            "converted_count": converted,
+            "conversion_rate": round((converted / total) * 100, 1) if total > 0 else 0.0,
+        }
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 10,
+        status: Optional[str] = None,
+        assigned_officer_id: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        offering_id: Optional[str] = None,
+        source: Optional[str] = None,
+        search: Optional[str] = None,
+        sort_by: str = "created_at",
+        order: str = "desc",
+        pipeline_stage_id: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        date_field: str = "created_at",
+        referrer_id: Optional[int] = None,
+        validity_status: Optional[str] = None,
+        score_min: Optional[int] = None,
+        score_max: Optional[int] = None,
+        lead_ids: Optional[List[int]] = None,
+    ) -> Tuple[int, List[models.Lead]]:
+        """Get filtered list of leads with pagination and eager loading."""
+        filters = self._build_filters(
+            status=status, assigned_officer_id=assigned_officer_id,
+            unit_id=unit_id, offering_id=offering_id, source=source,
+            search=search, pipeline_stage_id=pipeline_stage_id,
+            date_from=date_from, date_to=date_to, date_field=date_field,
+            referrer_id=referrer_id, validity_status=validity_status,
+            score_min=score_min, score_max=score_max, lead_ids=lead_ids,
+        )
+
+        base_query = select(models.Lead)
+        count_query = select(func.count(models.Lead.id))
 
         # Apply filters to both queries
         if filters:

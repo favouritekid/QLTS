@@ -688,39 +688,43 @@ async def get_leads(
     lead_ids: Optional[List[int]] = None,
 ) -> Tuple[int, List[models.Lead]]:
     """
-    Lấy danh sách Leads (List View).
+    Lấy danh sách Leads (List View) + summary stats.
 
     ✅ PHASE 2 - WEEK 2: Refactored to use LeadRepository
     ✅ Multi-select filters: status, source, offering_id, pipeline_stage_id, assigned_officer_id now accept comma-separated values
+    ✅ Summary: aggregate stats computed on full filtered set (no pagination)
+
+    Returns:
+        Tuple of (total_count, lead_list, summary_dict)
     """
     from app.repositories import LeadRepository
 
     repo = LeadRepository(db)
-    return await repo.get_filtered(
+
+    # Build filters once, reuse for both list and summary
+    filter_kwargs = dict(
+        status=status, assigned_officer_id=assigned_officer_id,
+        unit_id=unit_id, offering_id=offering_id, source=source,
+        search=search, pipeline_stage_id=pipeline_stage_id,
+        date_from=date_from, date_to=date_to, date_field=date_field,
+        score_min=score_min, score_max=score_max,
+        validity_status=validity_status, lead_ids=lead_ids,
+    )
+    filters = repo._build_filters(**filter_kwargs)
+
+    # Get summary (full filtered set, no pagination)
+    summary = await repo.get_summary(filters)
+
+    # Get paginated leads
+    total_count, leads = await repo.get_filtered(
         skip=skip,
         limit=limit,
-        status=status,
-        assigned_officer_id=assigned_officer_id,
-        unit_id=unit_id,
-        offering_id=offering_id,
-        source=source,
-        search=search,
         sort_by=sort_by,
         order=order,
-        # === PIPELINE STAGE FILTER ===
-        pipeline_stage_id=pipeline_stage_id,
-        # === DATE RANGE FILTER ===
-        date_from=date_from,
-        date_to=date_to,
-        date_field=date_field,
-        # === SCORE RANGE FILTER ===
-        score_min=score_min,
-        score_max=score_max,
-        # === VALIDITY STATUS FILTER ===
-        validity_status=validity_status,
-        # === SELECTIVE EXPORT ===
-        lead_ids=lead_ids,
+        **filter_kwargs,
     )
+
+    return total_count, leads, summary
 
 
 

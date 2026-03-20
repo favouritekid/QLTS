@@ -414,9 +414,18 @@ class Lead(LeadBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LeadsSummary(BaseModel):
+    """Aggregate stats over the entire filtered set (not just current page)."""
+    new_count: int = 0
+    high_score_count: int = 0
+    converted_count: int = 0
+    conversion_rate: float = 0.0
+
+
 class LeadsPage(BaseModel):
     total_count: int
     leads: List[Lead]
+    summary: Optional[LeadsSummary] = None
 
 
 class BulkAssignLeadsSchema(BaseModel):

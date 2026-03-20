@@ -271,33 +271,27 @@ async def get_all_leads(
     effective_officer_id = lead_filter.assigned_officer_id
     effective_unit_id = lead_filter.unit_id
 
-    total, leads = await lead_service.get_leads(
+    total, leads, summary = await lead_service.get_leads(
         db,
         skip=skip,
         limit=page_size,
-        # === ⭐️ TRUYỀN THAM SỐ VÀO SERVICE ===
         status=status,
-        assigned_officer_id=effective_officer_id,  # Now role-enforced via dependency
-        unit_id=effective_unit_id,  # ✅ Phase 2: Also role-enforced
-        offering_id=offering_id,  # Now a string (comma-separated for multi)
+        assigned_officer_id=effective_officer_id,
+        unit_id=effective_unit_id,
+        offering_id=offering_id,
         source=source,
         search=search,
         sort_by=sort_by,
         order=order,
-        # === PIPELINE STAGE FILTER ===
-        pipeline_stage_id=pipeline_stage_id,  # Already string (comma-separated for multi)
-        # === DATE RANGE FILTER ===
+        pipeline_stage_id=pipeline_stage_id,
         date_from=date_from,
         date_to=date_to,
         date_field=date_field,
-        # === SCORE RANGE FILTER ===
         score_min=score_min,
         score_max=score_max,
-        # === VALIDITY STATUS FILTER ===
         validity_status=validity_status,
-        # === KẾT THÚC TRUYỀN THAM SỐ ===
     )
-    return {"total_count": total, "leads": leads}
+    return {"total_count": total, "leads": leads, "summary": summary}
 
 
 # ==============================================================================
@@ -378,7 +372,7 @@ async def export_leads(
             raise HTTPException(status_code=400, detail=f"Invalid lead_ids: {e}")
 
     # Get filtered leads (no pagination, but limit to 10,000)
-    total, leads = await lead_service.get_leads(
+    total, leads, _summary = await lead_service.get_leads(
         db,
         skip=0,
         limit=10000,  # Export limit

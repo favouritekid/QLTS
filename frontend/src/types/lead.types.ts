@@ -693,11 +693,22 @@ export interface LeadListParams extends PaginationParams {
 }
 
 /**
+ * Aggregate stats over the entire filtered set (not just current page).
+ */
+export interface LeadsSummary {
+  new_count: number;
+  high_score_count: number;
+  converted_count: number;
+  conversion_rate: number;
+}
+
+/**
  * Paginated leads response
  */
 export interface LeadsPage {
   total_count: number;
   leads: Lead[];
+  summary?: LeadsSummary;
 }
 
 // ============================================

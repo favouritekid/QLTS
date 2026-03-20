@@ -377,8 +377,8 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       {/* Stats Cards */}
       <div className="shrink-0 border-b px-4 py-2">
         <LeadStats
-          leads={leadsPage?.leads || []}
           totalCount={leadsPage?.total_count || 0}
+          summary={leadsPage?.summary}
           isLoading={isLoading}
         />
       </div>
