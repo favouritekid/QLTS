@@ -127,7 +127,7 @@ class TestGetLeads:
     ):
         """Test get_leads returns paginated results."""
         # Act
-        total_count, leads = await lead_service.get_leads(db, skip=0, limit=3)
+        total_count, leads, _summary = await lead_service.get_leads(db, skip=0, limit=3)
         
         # Assert
         assert total_count >= 5  # At least our 5 seeded leads
@@ -140,10 +140,10 @@ class TestGetLeads:
     ):
         """Test get_leads skip parameter works correctly."""
         # Get first page
-        _, first_page = await lead_service.get_leads(db, skip=0, limit=2)
+        _, first_page, _ = await lead_service.get_leads(db, skip=0, limit=2)
         
         # Get second page
-        _, second_page = await lead_service.get_leads(db, skip=2, limit=2)
+        _, second_page, _ = await lead_service.get_leads(db, skip=2, limit=2)
         
         # Assert - no overlap
         first_ids = {l.id for l in first_page}
@@ -158,7 +158,7 @@ class TestGetLeads:
     ):
         """Test get_leads filters by unit_id."""
         # Act
-        _, leads = await lead_service.get_leads(
+        _, leads, _ = await lead_service.get_leads(
             db, 
             unit_id=seeded_dependencies["unit_id"]
         )
@@ -175,7 +175,7 @@ class TestGetLeads:
     ):
         """Test get_leads filters by single status."""
         # Act
-        _, leads = await lead_service.get_leads(db, status=seeded_lead.status)
+        _, leads, _ = await lead_service.get_leads(db, status=seeded_lead.status)
         
         # Assert
         assert len(leads) >= 1
@@ -189,7 +189,7 @@ class TestGetLeads:
     ):
         """Test get_leads filters by comma-separated statuses."""
         # Act - filter by "new,contacted" (comma-separated)
-        _, leads = await lead_service.get_leads(db, status="new,contacted")
+        _, leads, _ = await lead_service.get_leads(db, status="new,contacted")
         
         # Assert - all leads should have status in the list
         for lead in leads:
@@ -203,7 +203,7 @@ class TestGetLeads:
     ):
         """Test get_leads filters by assigned_officer_id."""
         # Act
-        _, leads = await lead_service.get_leads(
+        _, leads, _ = await lead_service.get_leads(
             db, 
             assigned_officer_id=str(officer_user.id)
         )
@@ -219,7 +219,7 @@ class TestGetLeads:
     ):
         """Test get_leads search by name/email/phone."""
         # Act - search by phone
-        _, leads = await lead_service.get_leads(db, search=seeded_lead.phone[:5])
+        _, leads, _ = await lead_service.get_leads(db, search=seeded_lead.phone[:5])
         
         # Assert
         assert len(leads) >= 1
@@ -240,7 +240,7 @@ class TestGetLeads:
         date_to = now + timedelta(days=1)
         
         # Act
-        _, leads = await lead_service.get_leads(
+        _, leads, _ = await lead_service.get_leads(
             db, 
             date_from=date_from, 
             date_to=date_to,
@@ -253,7 +253,7 @@ class TestGetLeads:
     async def test_get_leads_empty_result(self, db: AsyncSession):
         """Test get_leads returns empty list when no matches."""
         # Act - search for non-existent value
-        _, leads = await lead_service.get_leads(db, search="zzznonexistent999")
+        _, leads, _ = await lead_service.get_leads(db, search="zzznonexistent999")
         
         # Assert
         assert len(leads) == 0

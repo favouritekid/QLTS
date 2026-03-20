@@ -686,22 +686,23 @@ async def get_leads(
     validity_status: Optional[str] = None,
     # === SELECTIVE EXPORT ===
     lead_ids: Optional[List[int]] = None,
-) -> Tuple[int, List[models.Lead]]:
+    # === SUMMARY ===
+    include_summary: bool = True,
+) -> Tuple[int, List[models.Lead], dict]:
     """
-    Lấy danh sách Leads (List View) + summary stats.
+    Lấy danh sách Leads (List View) + optional summary stats.
 
-    ✅ PHASE 2 - WEEK 2: Refactored to use LeadRepository
-    ✅ Multi-select filters: status, source, offering_id, pipeline_stage_id, assigned_officer_id now accept comma-separated values
-    ✅ Summary: aggregate stats computed on full filtered set (no pagination)
+    Args:
+        include_summary: If True, compute aggregate stats over full filtered set.
+            Set False for export to skip the extra query.
 
     Returns:
-        Tuple of (total_count, lead_list, summary_dict)
+        Tuple of (total_count, lead_list, summary_dict_or_none)
     """
     from app.repositories import LeadRepository
 
     repo = LeadRepository(db)
 
-    # Build filters once, reuse for both list and summary
     filter_kwargs = dict(
         status=status, assigned_officer_id=assigned_officer_id,
         unit_id=unit_id, offering_id=offering_id, source=source,
@@ -710,10 +711,12 @@ async def get_leads(
         score_min=score_min, score_max=score_max,
         validity_status=validity_status, lead_ids=lead_ids,
     )
-    filters = repo._build_filters(**filter_kwargs)
 
-    # Get summary (full filtered set, no pagination)
-    summary = await repo.get_summary(filters)
+    # Get summary only when needed (skip for export)
+    summary = None
+    if include_summary:
+        filters = repo._build_filters(**filter_kwargs)
+        summary = await repo.get_summary(filters)
 
     # Get paginated leads
     total_count, leads = await repo.get_filtered(

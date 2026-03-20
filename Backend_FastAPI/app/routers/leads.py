@@ -372,7 +372,8 @@ async def export_leads(
             raise HTTPException(status_code=400, detail=f"Invalid lead_ids: {e}")
 
     # Get filtered leads (no pagination, but limit to 10,000)
-    total, leads, _summary = await lead_service.get_leads(
+    # Skip summary computation for export (not needed, saves a query)
+    total, leads, _ = await lead_service.get_leads(
         db,
         skip=0,
         limit=10000,  # Export limit
@@ -392,6 +393,7 @@ async def export_leads(
         score_max=score_max,
         validity_status=validity_status,
         lead_ids=parsed_lead_ids,
+        include_summary=False,
     )
 
     # Helper: extract display names from relationships (already eager-loaded)
