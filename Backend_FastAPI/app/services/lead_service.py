@@ -1055,6 +1055,21 @@ async def create_lead(
             db_lead.assigned_at = datetime.now(timezone.utc)
             # Update assignment_status to "assigned" (workflow status)
             StatusHelper.set_assignment_status(db_lead, AssignmentStatus.ASSIGNED)
+
+            # ✅ FIX: Create AssignmentLog for direct assignment during lead creation
+            # Without this, timeline has no record of the initial assignment
+            assigner_name = (
+                f"{created_by.role} {created_by.username}" if created_by else "system"
+            )
+            assignment_log_entry = models.AssignmentLog(
+                lead_id=db_lead.id,
+                officer_id=direct_assignment_officer_id,
+                method="manual",
+                reason=f"Assigned during lead creation by {assigner_name}",
+                timestamp=datetime.now(timezone.utc),
+            )
+            db.add(assignment_log_entry)
+
             log.info(
                 "Lead directly assigned to officer",
                 lead_id=db_lead.id,
