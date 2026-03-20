@@ -15,7 +15,6 @@ from app import database, models
 from app.core.constants import UserRole
 from app.core.deps import (
     check_permission,
-    get_current_active_user,
     get_collaborator_for_user,
     get_lead_claim_for_review,
     get_own_collaborator,
@@ -99,13 +98,16 @@ async def list_collaborators(
 async def create_collaborator(
     data: CollaboratorCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    current_user: models.User = Depends(check_permission),  # Casbin enforced
 ):
     """Create a new collaborator.
 
     - Admin/Manager: create directly (admin auto-approves, manager pending)
     - Officer: propose CTV (always pending, auto-fills unit + managed_by)
-    - Other roles (accountant, user): blocked
+    - Other roles: blocked by Casbin (no POST /api/collaborators policy)
+
+    Defense-in-depth: role whitelist as secondary guard against Casbin
+    inheritance leaks (e.g. accountant inherits officer policies).
     """
     allowed_roles = {UserRole.ADMIN, UserRole.MANAGER, UserRole.OFFICER}
     if current_user.role not in allowed_roles:
