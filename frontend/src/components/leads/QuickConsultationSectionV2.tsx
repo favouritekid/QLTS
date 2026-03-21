@@ -154,12 +154,22 @@ export function QuickConsultationSectionV2({
   const { data: lead } = useLead(leadId);
   const currentStatusId = lead?.consultation_status_id;
   const {
-    data: statuses = [],
+    data: fsmStatuses = [],
     isLoading: statusesLoading,
     error,
     isError,
   } = useAllowedNextStatuses(currentStatusId, leadId);
   const addConsultation = useAddConsultation();
+
+  // Source of truth: lead.consultation_status is the current status.
+  // FSM engine only returns configured transitions and may omit it.
+  // Inject current status from lead data if FSM didn't include it.
+  const statuses = useMemo(() => {
+    if (!lead?.consultation_status || !currentStatusId) return fsmStatuses;
+    const hasCurrentInFsm = fsmStatuses.some((s) => s.id === currentStatusId);
+    if (hasCurrentInFsm) return fsmStatuses;
+    return [lead.consultation_status as ConsultationStatus, ...fsmStatuses];
+  }, [fsmStatuses, lead?.consultation_status, currentStatusId]);
 
   // --- Form state ---
   const [notes, setNotes] = useState("");
