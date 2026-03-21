@@ -35,6 +35,19 @@ from .notification_dispatcher import dispatch
 
 log = structlog.get_logger(__name__)
 
+# Phase labels for user-facing error messages
+_PHASE_LABELS = {
+    "consultation": "Tư vấn",
+    "admission": "Xét tuyển",
+    "fee": "Học phí",
+    "enrolled": "Nhập học",
+}
+
+
+def _phase_label(phase) -> str:
+    """Return Vietnamese label for a LeadPhase enum value."""
+    return _PHASE_LABELS.get(str(phase.value) if hasattr(phase, "value") else str(phase), str(phase))
+
 
 def _handle_lead_integrity_error(exc: IntegrityError) -> None:
     """Convert DB IntegrityError from lead unique indexes into DuplicateResourceError."""
@@ -1813,8 +1826,7 @@ async def add_consultation(
                     # Check if it's a universal status (always allowed)
                     if data.status_id not in UNIVERSAL_STATUSES:
                         raise BadRequest(
-                            detail=f"Status '{new_status.name}' không hợp lệ trong phase '{current_phase.value}'. "
-                                   f"Lead hiện đang ở giai đoạn {current_phase.value.upper()}."
+                            detail=f"Không thể chọn trạng thái '{new_status.name}' vì lead hiện đang ở giai đoạn {_phase_label(current_phase)}."
                         )
                 
                 is_valid = await pipeline_service.validate_status_transition(
@@ -2777,8 +2789,7 @@ async def update_consultation(
                     if not is_status_allowed_for_phase(current_phase, new_status_id, current_user.role):
                         if new_status_id not in UNIVERSAL_STATUSES:
                             raise BadRequest(
-                                detail=f"Status '{validated_status.name}' không hợp lệ trong phase '{current_phase.value}'. "
-                                       f"Lead hiện đang ở giai đoạn {current_phase.value.upper()}."
+                                detail=f"Không thể chọn trạng thái '{validated_status.name}' vì lead hiện đang ở giai đoạn {_phase_label(current_phase)}."
                             )
 
                     # Validate allowed transitions
