@@ -453,11 +453,11 @@ export function QuickConsultationSectionV2({
     const base =
       "relative flex items-center gap-2 rounded-lg px-3 text-sm font-medium min-h-[40px] transition-colors";
 
-    if (isCurrentStatus) {
-      return cn(base, "border-2 border-primary bg-primary/5 text-primary", "cursor-default");
-    }
     if (isPending) {
       return cn(base, "ring-2 ring-primary ring-offset-1 scale-[1.02]", getOutcomeBg(status.outcome_type));
+    }
+    if (isCurrentStatus) {
+      return cn(base, "border-2 border-primary bg-primary/5 text-primary hover:bg-primary/10");
     }
     if (group === "previous") {
       return cn(base, "opacity-60 hover:opacity-90", getOutcomeBg(status.outcome_type));
@@ -484,17 +484,20 @@ export function QuickConsultationSectionV2({
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
       {items.map((status) => {
         const isCurrentStatus = status.id === currentStatusId;
+        const isPending = pendingStatus?.id === status.id;
         return (
           <button
             key={status.id}
             type="button"
             className={getStatusButtonClasses(status, group)}
-            onClick={() => { if (!isCurrentStatus) handleStatusClick(status); }}
-            disabled={addConsultation.isPending || isCurrentStatus}
+            onClick={() => handleStatusClick(status)}
+            disabled={addConsultation.isPending}
             aria-label={`Chuyển sang trạng thái: ${status.name}`}
           >
             {savingStatusId === status.id ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" />
+            ) : isPending ? (
+              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
             ) : isCurrentStatus ? (
               <Check className="h-3.5 w-3.5 flex-shrink-0" />
             ) : (
