@@ -173,6 +173,13 @@ async def test_import_and_bulk_assign_success(
         for lead in leads_after_import:
             assert lead.status == initial_status_id
             assert lead.assigned_officer_id is None
+            # ✅ cached_urgency_score must NOT be default 50
+            # New lead with 0 consultations: base(30) + never_contacted(25) = 55
+            # (+ hot bonus 15 if lead_score >= 70)
+            assert lead.cached_urgency_score != 50, (
+                f"Lead {lead.id} has stale default cached_urgency_score=50"
+            )
+            assert lead.cached_urgency_score >= 55
     log.info("DB state after import verified.")
 
     # --- Bước 2: Gọi API Bulk Assign ---

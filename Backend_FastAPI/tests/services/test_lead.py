@@ -520,6 +520,86 @@ class TestCreateLead:
         
         assert "inactive" in str(exc.value.detail).lower() or "banned" in str(exc.value.detail).lower()
 
+    async def test_create_lead_cached_urgency_score_low_score(
+        self,
+        db: AsyncSession,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Test create_lead sets cached_urgency_score=55 for lead with score < 70."""
+        class MockLeadIn:
+            assigned_officer_id = None
+            source = "Website"
+            phone = "0909777001"
+            phone2 = None
+            email = "urgency_low@test.com"
+
+            def __init__(self, unit_id):
+                self.unit_id = unit_id
+
+            def model_dump(self, **kwargs):
+                return {
+                    "full_name": "Urgency Low Lead",
+                    "phone": self.phone,
+                    "email": self.email,
+                    "unit_id": self.unit_id,
+                    "source": "Website",
+                }
+
+        lead_in = MockLeadIn(seeded_dependencies["unit_id"])
+
+        with patch("app.services.lead_service.calculate_lead_score", new_callable=AsyncMock) as mock_score:
+            mock_score.return_value = 50  # Below hot threshold
+            lead, callback = await lead_service.create_lead(db, lead_in, created_by=admin_user)
+            await db.commit()
+            if callback:
+                await callback()
+
+        # New lead, score < 70 → base(30) + never_contacted(25) = 55
+        db_lead = await db.get(models.Lead, lead.id)
+        assert db_lead.cached_urgency_score == 55
+        assert db_lead.is_hot_lead is False
+
+    async def test_create_lead_cached_urgency_score_hot_lead(
+        self,
+        db: AsyncSession,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Test create_lead sets cached_urgency_score=70 for hot lead (score >= 70)."""
+        class MockLeadIn:
+            assigned_officer_id = None
+            source = "Website"
+            phone = "0909777002"
+            phone2 = None
+            email = "urgency_hot@test.com"
+
+            def __init__(self, unit_id):
+                self.unit_id = unit_id
+
+            def model_dump(self, **kwargs):
+                return {
+                    "full_name": "Urgency Hot Lead",
+                    "phone": self.phone,
+                    "email": self.email,
+                    "unit_id": self.unit_id,
+                    "source": "Website",
+                }
+
+        lead_in = MockLeadIn(seeded_dependencies["unit_id"])
+
+        with patch("app.services.lead_service.calculate_lead_score", new_callable=AsyncMock) as mock_score:
+            mock_score.return_value = 85  # Hot lead
+            lead, callback = await lead_service.create_lead(db, lead_in, created_by=admin_user)
+            await db.commit()
+            if callback:
+                await callback()
+
+        # New lead, score >= 70 → base(30) + hot(15) + never_contacted(25) = 70
+        db_lead = await db.get(models.Lead, lead.id)
+        assert db_lead.cached_urgency_score == 70
+        assert db_lead.is_hot_lead is True
+
 
 # =============================================================================
 # UPDATE LEAD TESTS

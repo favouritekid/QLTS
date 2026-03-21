@@ -1115,6 +1115,10 @@ async def create_lead(
             _handle_lead_integrity_error(exc)
         await db.refresh(db_lead)
 
+        # ✅ Sync cached_urgency_score (new lead: 0 consultations, not overdue)
+        from app.services import lead_cache_service
+        await lead_cache_service.update_lead_cache(db, db_lead.id, db_lead)
+
         # ✅ PR3: Register phone identities (DB-level uniqueness safety net)
         try:
             await repo.register_phone_identities(
@@ -3659,6 +3663,15 @@ async def import_leads_from_file_content(
             lead_dict = lead_in.model_dump()
             lead_dict["lead_score"] = score
             lead_dict["is_hot_lead"] = (score or 0) >= 70
+            # ✅ Inline cache init (new lead: 0 consultations, 0 days, not overdue/final)
+            from app.services.lead_cache_service import calculate_urgency_score
+            lead_dict["cached_urgency_score"] = calculate_urgency_score(
+                days_since_contact=0,
+                lead_score=score or 0,
+                consultation_count=0,
+                overdue_days=0,
+                is_final_stage=False,
+            )
             lead_dict["status"] = initial_legacy_status  # Use legacy_status from DB
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id
