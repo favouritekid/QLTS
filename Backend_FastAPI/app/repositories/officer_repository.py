@@ -228,50 +228,73 @@ class OfficerRepository(BaseRepository[models.User]):
         """
         Get loss reason breakdown aggregated by pipeline stage.
 
-        SPEC: LOSS_REASON_UX_SPEC.md / FUNNEL_FEASIBILITY_ANALYSIS.md Phase 2
+        Source: Consultation table (loss_reason now stored directly on consultation).
+        Deduped by (lead_id, stage_id) — latest consultation per lead/stage wins.
 
         Returns:
             Dict[stage_id, [
                 {"reason_code": "PRICE_HIGH", "count": 10, "percentage": 25.0},
-                {"reason_code": "NO_CONTACT", "count": 8, "percentage": 20.0},
                 ...
             ]]
         """
-        # Build conditions
+        from sqlalchemy.orm import aliased
+
+        # Subquery: latest consultation with loss_reason per (lead_id, stage_id)
+        # Using consultation_status -> stage_id for stage grouping
+        ConsultationStatus = aliased(models.ConsultationStatus)
+
         conditions = [
-            models.LeadStatusHistory.loss_reason_code.isnot(None),
+            models.Consultation.loss_reason_code.isnot(None),
+            models.Consultation.deleted_at.is_(None),
             models.Lead.deleted_at.is_(None),
         ]
 
-        # Filter by officer or units
         if officer_id:
             conditions.append(models.Lead.assigned_officer_id == officer_id)
         elif unit_ids:
             conditions.append(models.Lead.unit_id.in_(unit_ids))
 
-        # Optional date filter
         if start_date:
-            conditions.append(func.date(models.LeadStatusHistory.changed_at) >= start_date)
+            conditions.append(func.date(models.Consultation.consultation_date) >= start_date)
         if end_date:
-            conditions.append(func.date(models.LeadStatusHistory.changed_at) <= end_date)
+            conditions.append(func.date(models.Consultation.consultation_date) <= end_date)
 
-        # Query: aggregate loss_reason_code by pipeline_stage_id
+        # Dedupe: latest consultation per (lead_id, stage_id)
+        latest_subq = (
+            select(
+                models.Consultation.lead_id,
+                ConsultationStatus.stage_id,
+                func.max(models.Consultation.consultation_date).label("max_date"),
+            )
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
+            .join(ConsultationStatus, models.Consultation.consultation_status_id == ConsultationStatus.id)
+            .where(*conditions)
+            .group_by(models.Consultation.lead_id, ConsultationStatus.stage_id)
+            .subquery()
+        )
+
+        # Main query: join back to get loss_reason_code from latest consultation
+        ConsultationStatus2 = aliased(models.ConsultationStatus)
         query = (
             select(
-                models.LeadStatusHistory.new_pipeline_stage_id.label("stage_id"),
-                models.LeadStatusHistory.loss_reason_code,
+                ConsultationStatus2.stage_id.label("stage_id"),
+                models.Consultation.loss_reason_code,
                 func.count().label("count"),
             )
-            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
-            .where(*conditions)
-            .group_by(
-                models.LeadStatusHistory.new_pipeline_stage_id,
-                models.LeadStatusHistory.loss_reason_code,
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
+            .join(ConsultationStatus2, models.Consultation.consultation_status_id == ConsultationStatus2.id)
+            .join(
+                latest_subq,
+                (models.Consultation.lead_id == latest_subq.c.lead_id)
+                & (ConsultationStatus2.stage_id == latest_subq.c.stage_id)
+                & (models.Consultation.consultation_date == latest_subq.c.max_date),
             )
-            .order_by(
-                models.LeadStatusHistory.new_pipeline_stage_id,
-                func.count().desc(),
+            .where(
+                models.Consultation.loss_reason_code.isnot(None),
+                models.Consultation.deleted_at.is_(None),
             )
+            .group_by(ConsultationStatus2.stage_id, models.Consultation.loss_reason_code)
+            .order_by(ConsultationStatus2.stage_id, func.count().desc())
         )
 
         result = await self.db.execute(query)
@@ -281,13 +304,11 @@ class OfficerRepository(BaseRepository[models.User]):
         stage_breakdown: Dict[str, List[Dict[str, Any]]] = {}
         stage_totals: Dict[str, int] = {}
 
-        # First pass: calculate totals per stage
         for row in rows:
             stage_id = row.stage_id
             if stage_id:
                 stage_totals[stage_id] = stage_totals.get(stage_id, 0) + row.count
 
-        # Second pass: build breakdown with percentages
         for row in rows:
             stage_id = row.stage_id
             if stage_id:

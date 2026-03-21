@@ -11,15 +11,13 @@
 
 "use client";
 
-import React, { useState, useCallback, useTransition, useEffect, useRef } from "react";
+import React, { useState, useCallback, useTransition, useEffect, useRef, useMemo } from "react";
 import {
   Search,
   X,
   RotateCcw,
   Plus,
   ChevronDown,
-  Calendar,
-  Building2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -203,6 +201,20 @@ export function LeadFilterBar({
   const { data: pipelineStages = [] } = usePipelineStages();
   const { data: offeringsList = [] } = useAllProgramOfferings();
   const { data: organizationUnits = [] } = useOrganizationUnits();
+
+  // Flatten org tree for unit dropdown (tree → flat list with depth for indentation)
+  const flatUnits = useMemo(() => {
+    const result: { id: number; name: string; depth: number }[] = [];
+    function walk(units: typeof organizationUnits, depth: number) {
+      for (const unit of units) {
+        result.push({ id: unit.id, name: unit.name, depth });
+        if (unit.children?.length) walk(unit.children, depth + 1);
+      }
+    }
+    walk(organizationUnits, 0);
+    return result;
+  }, [organizationUnits]);
+
   const [officerSearch, setOfficerSearch] = useState("");
   const [debouncedOfficerSearch, setDebouncedOfficerSearch] = useState("");
   const officerSearchDebounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -362,7 +374,7 @@ export function LeadFilterBar({
   const getOfficerLabel = (id: string) =>
     officers.find((o) => o.id.toString() === id)?.full_name || id;
   const getUnitLabel = (id: string) =>
-    organizationUnits.find((u) => u.id.toString() === id)?.name || id;
+    flatUnits.find((u) => u.id.toString() === id)?.name || id;
   const getOfferingLabel = (id: string) => {
     const offering = offeringsList.find((o) => o.id.toString() === id);
     if (!offering) return id;
@@ -478,29 +490,32 @@ export function LeadFilterBar({
                     unitId && "border-primary bg-primary/5"
                   )}
                 >
-                  <Building2 className="h-3.5 w-3.5" />
                   {unitId ? getUnitLabel(unitId) : "Đơn vị"}
                   {unitId && (
-                    <button
+                    <span
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => { e.stopPropagation(); onUnitIdChange(""); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); onUnitIdChange(""); } }}
                       className="hover:bg-muted ml-0.5 rounded-full p-0.5"
                       aria-label="Xóa lọc đơn vị"
                     >
                       <X className="h-3 w-3" />
-                    </button>
+                    </span>
                   )}
                   <ChevronDown className="h-3.5 w-3.5 opacity-50" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-56 p-3" align="start">
                 <div className="max-h-48 space-y-2 overflow-y-auto">
-                  {organizationUnits.map((unit) => (
+                  {flatUnits.map((unit) => (
                     <div
                       key={unit.id}
                       className={cn(
                         "cursor-pointer rounded px-2 py-1.5 text-sm transition-colors hover:bg-accent",
                         unitId === unit.id.toString() && "bg-accent font-medium"
                       )}
+                      style={unit.depth > 0 ? { paddingLeft: `${8 + unit.depth * 12}px` } : undefined}
                       onClick={() => onUnitIdChange(
                         unitId === unit.id.toString() ? "" : unit.id.toString()
                       )}
@@ -661,7 +676,6 @@ export function LeadFilterBar({
                   (dateFrom || dateTo) && "border-primary bg-primary/5"
                 )}
               >
-                <Calendar className="h-3.5 w-3.5" />
                 {dateField === "created_at" ? "Ngày tạo" : "Ngày TĐ"}
                 {(dateFrom || dateTo) && (
                   <Badge variant="secondary" className="bg-primary text-primary-foreground ml-1 h-5 px-1.5 text-xs">
@@ -772,7 +786,6 @@ export function LeadFilterBar({
                       unitId && "border-primary bg-primary/5"
                     )}
                   >
-                    <Building2 className="h-3.5 w-3.5" />
                     {unitId ? getUnitLabel(unitId) : "Đơn vị"}
                     <ChevronDown className="h-3.5 w-3.5 opacity-50" />
                   </Button>

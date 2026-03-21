@@ -32,7 +32,7 @@ import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import type { ConsultationStatus, ConsultationCreate, ConsultationMethod } from "@/types/lead.types";
-import { LossReasonQuickSelect, requiresLossReason } from "@/components/leads/LossReasonQuickSelect";
+import { LossReasonQuickSelect, showsLossReason, requiresLossReason } from "@/components/leads/LossReasonQuickSelect";
 
 interface QuickConsultationSectionProps {
   leadId: number;
@@ -325,8 +325,8 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     setLossReasonCode(null);
     setLossReasonNote("");
 
-    if (requiresLossReason(status)) {
-      // Negative final: pause for loss reason selection (no countdown yet)
+    if (showsLossReason(status)) {
+      // Negative outcome: pause for loss reason selection (no countdown yet)
       if (countdownRef.current) clearInterval(countdownRef.current);
       setPendingStatus(status);
       setCountdown(COUNTDOWN_SECONDS);
@@ -928,14 +928,14 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               })()}
 
               {/* Loss Reason Selection (shown for negative final statuses) */}
-              {pendingStatus && requiresLossReason(pendingStatus) && (
+              {pendingStatus && showsLossReason(pendingStatus) && (
                 <div className="mt-3">
                   <LossReasonQuickSelect
                     value={lossReasonCode}
                     onChange={handleLossReasonSelect}
                     note={lossReasonNote}
                     onNoteChange={setLossReasonNote}
-                    required
+                    required={requiresLossReason(pendingStatus)}
                   />
                 </div>
               )}

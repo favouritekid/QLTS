@@ -24,6 +24,7 @@ import {
   Trash2,
   Edit,
   MoreVertical,
+  AlertTriangle,
 } from "lucide-react";
 import { useLeadTimeline, useDeleteConsultation } from "@/hooks/useLeads";
 import { format, isToday, isYesterday, parseISO } from "date-fns";
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ConsultationDialog } from "./ConsultationDialog";
 import type { Consultation, TimelineItem as TimelineItemBase } from "@/types/lead.types";
+import { getLossReasonLabelMap } from "@/lib/loss-reasons";
 
 // Extended timeline type for backward compatibility with old structure
 type TimelineItem = TimelineItemBase & {
@@ -262,6 +264,8 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
           const notes = consultData?.notes || "";
           const actorName = consultData?.officer?.full_name || assignData?.officer?.full_name || "";
           const scheduledAt = consultData?.scheduled_at;
+          const lossReasonCode = consultData?.loss_reason_code;
+          const lossReasonNote = consultData?.loss_reason_note;
 
           const compactDataId = isConsultation
             ? (eventData as { id?: number })?.id
@@ -270,22 +274,30 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
               : undefined;
           const compactKey = `${event.type}-${event.timestamp}-${compactDataId ?? index}`;
 
+          const lossReasonLabels = getLossReasonLabelMap();
+          const lossLabel = lossReasonCode
+            ? (lossReasonCode === "OTHER"
+              ? (lossReasonNote || "Lý do khác")
+              : lossReasonLabels[lossReasonCode] || lossReasonCode)
+            : null;
+
+          const hasNotes = notes && !notes.startsWith("Ghi nhận:") && !notes.startsWith("Ghi nhận nhanh:");
+
           return (
             <div
               key={compactKey}
               className="flex items-start gap-3 p-3 bg-muted hover:bg-muted/80 rounded-xl transition-colors"
             >
-              {/* Icon */}
-              <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0", config.bgColor)}>
+              {/* Icon — method indicator */}
+              <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0", config.bgColor)}>
                 <Icon className={cn("w-4 h-4", config.color)} />
               </div>
 
               {/* Content */}
               <div className="flex-1 min-w-0">
-                {/* Row 1: Status + Time */}
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {/* Status badge with color */}
+                {/* Header: Status badge + timestamp */}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     {isConsultation && statusColor ? (
                       <Badge
                         variant="outline"
@@ -305,41 +317,45 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                     ) : (
                       <span className="text-sm font-medium text-foreground truncate">{statusName}</span>
                     )}
-
-                    {/* Method label */}
-                    {isConsultation && config.label !== "Tư vấn" && (
-                      <span className="text-[10px] text-muted-foreground hidden sm:inline">
-                        {config.label}
-                      </span>
-                    )}
                   </div>
 
-                  {/* Timestamp */}
                   <span className="text-xs text-muted-foreground flex-shrink-0" suppressHydrationWarning>
                     {format(parseISO(event.timestamp || ""), "dd/MM HH:mm")}
                   </span>
                 </div>
 
-                {/* Row 2: Actor + Notes */}
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                {/* Notes */}
+                {hasNotes && (
+                  <p className="text-xs text-muted-foreground mt-1 italic line-clamp-2">
+                    &quot;{notes}&quot;
+                  </p>
+                )}
+
+                {/* Loss reason */}
+                {lossLabel && (
+                  <div className="flex items-center gap-1.5 mt-1 text-xs text-amber-600">
+                    <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                    <span>Lý do: {lossLabel}</span>
+                  </div>
+                )}
+
+                {/* Footer: Schedule (left) + Officer (right) */}
+                <div className="flex items-center justify-between gap-2 mt-1 text-xs text-muted-foreground">
+                  <div>
+                    {scheduledAt && (
+                      <span className="text-info-600 flex items-center gap-1" suppressHydrationWarning>
+                        <Calendar className="w-3 h-3" />
+                        Hẹn {format(parseISO(scheduledAt), "dd/MM HH:mm")}
+                      </span>
+                    )}
+                  </div>
                   {actorName && (
-                    <>
-                      <span className="font-medium">{actorName}</span>
-                      {(notes || scheduledAt) && <span>•</span>}
-                    </>
-                  )}
-                  {scheduledAt && (
-                    <span className="text-info-600 flex items-center gap-1" suppressHydrationWarning>
-                      <Calendar className="w-3 h-3" />
-                      Hẹn {format(parseISO(scheduledAt), "dd/MM HH:mm")}
+                    <span className="flex items-center gap-1">
+                      <User className="w-3 h-3" />
+                      {actorName}
                     </span>
                   )}
                 </div>
-
-                {/* Row 3: Notes (truncated) */}
-                {notes && !notes.startsWith("Ghi nhận:") && !notes.startsWith("Ghi nhận nhanh:") && (
-                  <p className="text-xs text-muted-foreground truncate mt-1 italic">&quot;{notes}&quot;</p>
-                )}
               </div>
             </div>
           );
@@ -634,6 +650,23 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                 <span suppressHydrationWarning>Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}</span>
                               </Badge>
                             )}
+
+                            {/* Consultation: Loss reason */}
+                            {isConsultation && consultData?.loss_reason_code && (() => {
+                              const labels = getLossReasonLabelMap();
+                              const label = consultData.loss_reason_code === "OTHER"
+                                ? (consultData.loss_reason_note || "Lý do khác")
+                                : labels[consultData.loss_reason_code] || consultData.loss_reason_code;
+                              return (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs font-normal gap-1 border-amber-200 bg-amber-50 text-amber-700"
+                                >
+                                  <AlertTriangle className="h-3 w-3" />
+                                  Lý do: {label}
+                                </Badge>
+                              );
+                            })()}
 
                             {/* Consultation: Duration */}
                             {isConsultation && consultData?.duration_minutes && consultData.duration_minutes > 0 && (

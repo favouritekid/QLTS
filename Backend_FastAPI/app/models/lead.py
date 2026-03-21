@@ -311,6 +311,9 @@ class Consultation(Base):
     consultation_status_id = Column(
         String(50), ForeignKey("consultation_status.id"), nullable=True, index=True
     )
+    # Loss reason — stored directly on consultation (source of truth)
+    loss_reason_code = Column(String(50), nullable=True, index=True)
+    loss_reason_note = Column(Text, nullable=True)
     # Record creation timestamp (for 24h edit window calculation)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     # Soft delete support - when parent lead is deleted, consultations are also soft-deleted

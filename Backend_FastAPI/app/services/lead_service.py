@@ -534,13 +534,13 @@ async def _log_lead_state_change(
 ):
     """
     Hàm helper tập trung để ghi lại bất kỳ thay đổi trạng thái nào của Lead.
+    Only writes when state actually changes (loss_reason now stored on Consultation).
     """
-    # Chỉ ghi log nếu thực sự có thay đổi
     if old_state == new_state:
         log.debug(
             "No state change detected, skipping history log.",
             lead_id=getattr(lead, "id", None),
-        )  # Thêm getattr phòng trường hợp lead chưa có ID
+        )
         return
 
     # Flush để lấy ID nếu chưa có (ví dụ khi tạo mới)
@@ -1929,36 +1929,32 @@ async def add_consultation(
                 )
 
             # Chuẩn bị dữ liệu để tạo Consultation
-            # Exclude fields that don't belong to Consultation model:
-            # - status_id: mapped to consultation_status_id
-            # - consultation_date: handled separately with fallback to NOW
-            # - loss_reason_code/loss_reason_note: belong to LeadStatusHistory, not Consultation
-            create_consult_data = data.model_dump(exclude={"status_id", "consultation_date", "loss_reason_code", "loss_reason_note"})
-            # (Đã xóa .strip() vì Pydantic xử lý)
+            # Exclude: status_id (mapped), consultation_date (handled separately)
+            # Include: loss_reason_code/loss_reason_note (now stored on Consultation)
+            create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
 
-            # Handle consultation_date: use provided value or default to NOW
             consultation_date = data.consultation_date or datetime.now(timezone.utc)
 
-            # Tạo đối tượng Consultation mới
+            # Clear loss_reason if not negative outcome
+            if new_status.outcome_type != "negative":
+                create_consult_data.pop("loss_reason_code", None)
+                create_consult_data.pop("loss_reason_note", None)
+
             new_consultation = models.Consultation(
                 lead_id=lead_id,
                 officer_id=officer_id,
-                consultation_status_id=new_status.id,  # Gán status ID cho consultation
+                consultation_status_id=new_status.id,
                 consultation_date=consultation_date,
                 **create_consult_data,
             )
 
-            # Thêm các đối tượng vào session
             db.add(new_consultation)
-            # ✅ P0 FIX: Always increment version when consultation is created
-            # (previously only bumped when updates_pipeline=True)
             lead.version = (lead.version or 1) + 1
             db.add(lead)
 
-            # Lấy trạng thái Lead mới
             new_state = _get_current_lead_state(lead)
 
-            # Ghi log lịch sử thay đổi trạng thái Lead (chỉ khi có thay đổi thực sự)
+            # Log history only when state actually changes (restored original semantic)
             if new_status.updates_pipeline and old_state != new_state:
                 await _log_lead_state_change(
                     db,
@@ -1966,8 +1962,8 @@ async def add_consultation(
                     old_state,
                     new_state,
                     changed_by=officer,
-                    reason=data.loss_reason_note or f"Consultation added: {data.method}",
-                    loss_reason_code=data.loss_reason_code if (new_status.is_final and new_status.outcome_type == "negative") else None,
+                    reason=f"Consultation added: {data.method}",
+                    loss_reason_code=data.loss_reason_code if new_status.outcome_type == "negative" else None,
                 )
 
             # Không cần commit ở đây, `async with` sẽ xử lý
@@ -2209,13 +2205,11 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
 
     timeline_items = []
 
-    # 3. Xử lý consultations (Dữ liệu đã có sẵn)
-    # ✅ FIX: Filter out soft-deleted consultations
+    # 3. Xử lý consultations — loss_reason now stored directly on Consultation
     if lead.consultations:
         for c in lead.consultations:
             if c.deleted_at is not None:
-                continue  # Skip soft-deleted consultations
-            # ❌ KHÔNG CẦN: await db.refresh(c, ["officer", "consultation_status"])
+                continue
             timeline_items.append(
                 schemas.TimelineItem(
                     type="consultation",
@@ -2826,19 +2820,13 @@ async def update_consultation(
                             detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
                         )
 
-            # Fields that belong to LeadStatusHistory, not Consultation model
-            NON_CONSULTATION_FIELDS = {"loss_reason_code", "loss_reason_note"}
-
+            # Update consultation fields (loss_reason now stored on Consultation)
             for field, value in update_data.items():
-                if field in NON_CONSULTATION_FIELDS:
-                    continue  # Skip fields not in Consultation model
-                elif field == "status_id":
+                if field == "status_id":
                     # Đặt consultation_status_id (already validated above)
                     consultation.consultation_status_id = value
                 else:
                     setattr(consultation, field, value)
-
-            db.add(consultation)
 
             # Nếu status_id thay đổi và đây là consultation mới nhất
             # Cập nhật trạng thái Lead (reuse is_latest_consultation from above)
@@ -2880,26 +2868,31 @@ async def update_consultation(
                             new_status=new_status.id,
                         )
 
+            # Clear loss_reason if status is no longer negative
+            effective_status = validated_status or (
+                await db.get(models.ConsultationStatus, consultation.consultation_status_id)
+            )
+            if effective_status and effective_status.outcome_type != "negative":
+                consultation.loss_reason_code = None
+                consultation.loss_reason_note = None
+
+            db.add(consultation)
+
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(lead)
 
-            # Ghi log lịch sử thay đổi trạng thái Lead (nếu có thay đổi)
+            # Log history only when state actually changes (restored original semantic)
             if status_changed:
-                # Get loss_reason for final negative status
-                loss_reason_for_log = None
-                loss_reason_note_for_log = None
-                if validated_status and validated_status.is_final and validated_status.outcome_type == "negative":
-                    loss_reason_for_log = update_data.get("loss_reason_code")
-                    loss_reason_note_for_log = update_data.get("loss_reason_note")
-
                 await _log_lead_state_change(
                     db,
                     lead,
                     old_state,
                     new_state,
                     changed_by=current_user,
-                    reason=loss_reason_note_for_log or f"Updated consultation ID {consultation_id}",
-                    loss_reason_code=loss_reason_for_log,
+                    reason=f"Updated consultation ID {consultation_id}",
+                    loss_reason_code=update_data.get("loss_reason_code") if (
+                        effective_status and effective_status.outcome_type == "negative"
+                    ) else None,
                 )
 
             # Flush to get changes ready (commit handled by begin_nested context)

@@ -65,6 +65,16 @@
     padding-right: env(safe-area-inset-right);
   }
 
+  /* Countdown progress bar — smooth CSS-only animation */
+  .countdown-bar {
+    animation: countdown-shrink 5s linear forwards;
+  }
+
+  @keyframes countdown-shrink {
+    from { width: 100%; }
+    to { width: 0%; }
+  }
+
   /* Mobile scroll indicators */
   .scroll-shadow-x {
     background:

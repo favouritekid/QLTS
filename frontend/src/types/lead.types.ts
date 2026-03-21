@@ -245,8 +245,7 @@ export interface Consultation {
   consultation_status_id?: string | null;
   created_at?: string | null; // ISO datetime
   updated_at?: string | null; // ISO datetime
-  // Note: loss_reason_code/loss_reason_note are stored in LeadStatusHistory,
-  // not on the Consultation record. Backend does not return these in the response.
+  // Loss reason: stored directly on Consultation (source of truth).
   loss_reason_code?: string | null;
   loss_reason_note?: string | null;
 
@@ -305,6 +304,8 @@ export interface ConsultationUpdate {
   duration_minutes?: number;
   status_id?: string; // consultation status ID
   scheduled_at?: string | null; // ISO datetime - for follow-up scheduling
+  loss_reason_code?: string | null;
+  loss_reason_note?: string;
 }
 
 // ============================================

@@ -984,6 +984,8 @@ async def update_a_consultation(
     await db.commit()
 
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
+    # Known limitation: same-status edits (e.g., adding loss_reason without status change)
+    # do not trigger realtime dispatch. Other tabs will be stale until manual refresh.
     if result.consultation_status_id != old_status_id:
         await safe_dispatch(
             db=db,

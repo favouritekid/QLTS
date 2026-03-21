@@ -41,7 +41,7 @@ import { useAddConsultation, useUpdateConsultation, useLead } from "@/hooks/useL
 import { useAllowedNextStatuses, useConsultationStatuses } from "@/hooks/usePipeline";
 import { useWorkflowContext, getAllowedStatusIds } from "@/hooks/useWorkflowContext";
 import { SmartConsultationStatusSelector } from "@/components/common/selectors";
-import { LossReasonQuickSelect, requiresLossReason } from "@/components/leads/LossReasonQuickSelect";
+import { LossReasonQuickSelect, showsLossReason, requiresLossReason } from "@/components/leads/LossReasonQuickSelect";
 import type { Consultation, ConsultationUpdate } from "@/types/lead.types";
 
 // Unified validation schema with optional fields for flexibility
@@ -171,7 +171,7 @@ export function ConsultationDialog({
   const selectedStatus = useMemo(() => {
     return allStatuses.find(s => s.id === watchedStatusId) || null;
   }, [allStatuses, watchedStatusId]);
-  const showLossReason = requiresLossReason(selectedStatus);
+  const showLossReason = showsLossReason(selectedStatus);
 
 
   // Reset/populate form when dialog opens
@@ -191,10 +191,9 @@ export function ConsultationDialog({
         notes: consultation.notes || "",
         method: consultation.method || "phone",
         duration_minutes: consultation.duration_minutes || undefined,
-        // Loss reason: backend stores these in LeadStatusHistory, not on Consultation record.
-        // They cannot be preloaded in edit mode; officer must re-enter if changing to a loss status.
-        loss_reason_code: null,
-        loss_reason_note: "",
+        // Loss reason: populated from LeadStatusHistory via timeline enrichment
+        loss_reason_code: consultation.loss_reason_code || null,
+        loss_reason_note: consultation.loss_reason_note || "",
       });
     } else if (isCreate) {
       // Reset to empty for create mode
@@ -278,12 +277,14 @@ export function ConsultationDialog({
       if (data.notes !== undefined) updateData.notes = data.notes;
       if (data.method) updateData.method = data.method;
       if (data.duration_minutes !== undefined) updateData.duration_minutes = data.duration_minutes;
-      // Include loss reason
-      if (needsLossReason) {
-        updateData.loss_reason_code = data.loss_reason_code;
-        if (data.loss_reason_note) updateData.loss_reason_note = data.loss_reason_note;
+      // Include loss reason for any negative outcome (optional for non-final, required for final)
+      if (showsLossReason(targetStatus)) {
+        if (data.loss_reason_code) {
+          updateData.loss_reason_code = data.loss_reason_code;
+          if (data.loss_reason_note) updateData.loss_reason_note = data.loss_reason_note;
+        }
       } else {
-        // Clear loss reason if status is not final negative
+        // Clear loss reason if status is not negative
         updateData.loss_reason_code = null;
       }
 
@@ -437,7 +438,7 @@ export function ConsultationDialog({
                         note={form.watch("loss_reason_note")}
                         onNoteChange={(note) => form.setValue("loss_reason_note", note)}
                         error={form.formState.errors.loss_reason_code?.message}
-                        required
+                        required={requiresLossReason(selectedStatus)}
                       />
                     </FormControl>
                   </FormItem>

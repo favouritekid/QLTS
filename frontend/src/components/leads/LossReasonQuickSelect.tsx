@@ -3,10 +3,10 @@
  * LossReasonQuickSelect - Quick-select buttons for loss reasons
  *
  * SPEC: LOSS_REASON_UX_SPEC.md
- * - Shows when officer selects a final negative status
+ * - Shows for all negative outcomes (showsLossReason)
+ * - Required only for final negative (requiresLossReason)
  * - 1-click selection for common reasons
  * - "Other" option expands input for custom reason
- * - Touch-friendly (min 44px touch targets)
  */
 
 "use client";
@@ -16,9 +16,8 @@ import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { AlertCircle } from "lucide-react";
-import { LOSS_REASONS as FALLBACK_LOSS_REASONS, getLossReasonLabel } from "@/lib/loss-reasons";
+import { LOSS_REASONS as FALLBACK_LOSS_REASONS } from "@/lib/loss-reasons";
 import { useLossReasons } from "@/hooks/usePipeline";
-import type { LossReason } from "@/lib/loss-reasons";
 
 // Re-export for backward compatibility (other components import from here)
 export type { LossReason } from "@/lib/loss-reasons";
@@ -96,8 +95,8 @@ export function LossReasonQuickSelect({
         {required && <span className="text-destructive">*</span>}
       </Label>
 
-      {/* Quick-select buttons grid */}
-      <div className="grid grid-cols-3 gap-2">
+      {/* Quick-select buttons */}
+      <div className="flex flex-wrap gap-1.5">
         {lossReasons.map((reason) => {
           const isSelected = value === reason.code;
 
@@ -108,34 +107,21 @@ export function LossReasonQuickSelect({
               onClick={() => handleSelect(reason.code)}
               disabled={disabled}
               className={cn(
-                // Base styles
-                "flex flex-col items-center justify-center gap-1",
-                "rounded-lg border-2 p-3",
-                "min-h-[64px] transition-colors duration-150",
-                // Touch target
-                "min-h-[48px] md:min-h-[64px]",
-                // Hover/Focus states
+                "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors",
                 "hover:border-primary/50 hover:bg-primary/5",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
-                // Selected state
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1",
                 isSelected
                   ? "border-primary bg-primary/10 text-primary"
-                  : "border-muted bg-background",
-                // Disabled state
+                  : "border-muted bg-background text-muted-foreground",
                 disabled && "cursor-not-allowed opacity-50"
               )}
               aria-pressed={isSelected}
               aria-label={`${reason.label}: ${isSelected ? "đã chọn" : "chưa chọn"}`}
             >
-              <span className="text-lg md:text-xl" role="img" aria-hidden="true">
+              <span className="text-sm" role="img" aria-hidden="true">
                 {reason.icon}
               </span>
-              <span className={cn(
-                "text-xs font-medium leading-tight text-center",
-                isSelected ? "text-primary" : "text-muted-foreground"
-              )}>
-                {reason.label}
-              </span>
+              {reason.label}
             </button>
           );
         })}
@@ -170,9 +156,24 @@ export function LossReasonQuickSelect({
 }
 
 // =============================================================================
-// HELPER: Check if status requires loss reason
+// HELPERS: Loss reason visibility & requirement
 // =============================================================================
 
+/**
+ * Show loss reason picker for all negative outcomes.
+ * Officer can optionally provide a reason even for non-final statuses.
+ */
+export function showsLossReason(status: {
+  outcome_type?: string;
+} | null | undefined): boolean {
+  if (!status) return false;
+  return status.outcome_type === "negative";
+}
+
+/**
+ * Block save until loss reason is selected.
+ * Only for final + negative statuses (matching backend validation).
+ */
 export function requiresLossReason(status: {
   is_final?: boolean;
   outcome_type?: string;

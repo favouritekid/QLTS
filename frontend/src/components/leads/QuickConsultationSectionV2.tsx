@@ -1,16 +1,14 @@
 // src/components/leads/QuickConsultationSectionV2.tsx
-// V2: Status-first layout with progressive disclosure
+// V2.2: Streamlined two-step layout — note fast, choose result
 "use client";
 
-import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { format, addMinutes, addHours, addDays, set } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
   Loader2,
-  Clock,
   CalendarClock,
-  HelpCircle,
   Phone,
   MessageSquare,
   Mail,
@@ -18,19 +16,13 @@ import {
   User,
   CheckCircle2,
   ChevronDown,
-  NotebookPen,
   Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+// Tooltip removed — Step 2 uses inline hint text instead
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DateTimePicker } from "@/components/common/form";
 import { cn, sanitizeColorCode } from "@/lib/utils";
@@ -44,6 +36,7 @@ import type {
 } from "@/types/lead.types";
 import {
   LossReasonQuickSelect,
+  showsLossReason,
   requiresLossReason,
 } from "@/components/leads/LossReasonQuickSelect";
 
@@ -58,15 +51,17 @@ interface QuickConsultationSectionV2Props {
 
 type ScheduleOption = "none" | "30m" | "1h" | "tomorrow" | "custom";
 
+const DEFAULT_METHOD: ConsultationMethod = "phone";
+
 const methodOptions: {
   value: ConsultationMethod;
   label: string;
   icon: React.ElementType;
 }[] = [
   { value: "phone", label: "Gọi điện", icon: Phone },
-  { value: "email", label: "Email", icon: Mail },
-  { value: "video_call", label: "Video", icon: Video },
   { value: "sms", label: "SMS", icon: MessageSquare },
+  { value: "video_call", label: "Video", icon: Video },
+  { value: "email", label: "Email", icon: Mail },
   { value: "in_person", label: "Gặp mặt", icon: User },
 ];
 
@@ -143,7 +138,7 @@ const getOutcomeSortOrder = (
 };
 
 // =============================================================================
-// V2 COMPONENT
+// V2.2 COMPONENT
 // =============================================================================
 
 export function QuickConsultationSectionV2({
@@ -176,41 +171,39 @@ export function QuickConsultationSectionV2({
   const [scheduleOption, setScheduleOption] = useState<ScheduleOption>("none");
   const [customDateTime, setCustomDateTime] = useState<Date | undefined>();
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
-  const [method, setMethod] = useState<ConsultationMethod>("phone");
+  const [method, setMethod] = useState<ConsultationMethod>(DEFAULT_METHOD);
   const [savingStatusId, setSavingStatusId] = useState<string | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   // --- Loss reason state ---
   const [lossReasonCode, setLossReasonCode] = useState<string | null>(null);
   const [lossReasonNote, setLossReasonNote] = useState("");
 
   // --- Delayed commit state ---
-  const COUNTDOWN_SECONDS = 3;
+  const COUNTDOWN_SECONDS = 5;
   const [pendingStatus, setPendingStatus] = useState<ConsultationStatus | null>(
     null
   );
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
+  const [countdownActive, setCountdownActive] = useState(false);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef(false);
   const pendingStatusRef = useRef<ConsultationStatus | null>(null);
   const commitSaveRef = useRef<((status: ConsultationStatus) => Promise<void>) | null>(null);
 
-  // --- Collapsible details ---
-  // Initialize as false to avoid hydration mismatch, sync from localStorage after mount
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // --- Previous stage expand ---
+  const [showPreviousStage, setShowPreviousStage] = useState(false);
 
-  useEffect(() => {
-    const stored = localStorage.getItem("qc-details-open");
-    if (stored === "true") setDetailsOpen(true);
-  }, []);
-
-  // Persist collapse state
-  const toggleDetails = useCallback(() => {
-    setDetailsOpen((prev) => {
-      const next = !prev;
-      localStorage.setItem("qc-details-open", String(next));
-      return next;
-    });
-  }, []);
+  // --- Form dirty detection (for beforeunload warning) ---
+  const isFormDirty = useMemo(() => {
+    return (
+      notes.trim().length > 0 ||
+      method !== DEFAULT_METHOD ||
+      scheduleOption !== "none" ||
+      pendingStatus !== null ||
+      lossReasonCode !== null
+    );
+  }, [notes, method, scheduleOption, pendingStatus, lossReasonCode]);
 
   // --- Keep ref in sync ---
   useEffect(() => {
@@ -245,7 +238,19 @@ export function QuickConsultationSectionV2({
       const statusToSave = pendingStatusRef.current;
       if (statusToSave) commitSave(statusToSave);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [countdown, pendingStatus]);
+
+  // --- Phase A: Warn on unsaved changes ---
+  useEffect(() => {
+    if (!isFormDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isFormDirty]);
 
   // ==========================================================================
   // ACTIONS
@@ -255,6 +260,7 @@ export function QuickConsultationSectionV2({
     if (countdownRef.current) clearInterval(countdownRef.current);
     setPendingStatus(status);
     setCountdown(COUNTDOWN_SECONDS);
+    setCountdownActive(true);
     countdownRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
@@ -270,6 +276,7 @@ export function QuickConsultationSectionV2({
     if (countdownRef.current) clearInterval(countdownRef.current);
     setPendingStatus(null);
     setCountdown(COUNTDOWN_SECONDS);
+    setCountdownActive(false);
     setLossReasonCode(null);
     setLossReasonNote("");
   };
@@ -278,6 +285,10 @@ export function QuickConsultationSectionV2({
     if (isSavingRef.current) return;
     if (requiresLossReason(status) && !lossReasonCode) {
       toast.error("Vui lòng chọn lý do mất lead trước khi lưu");
+      return;
+    }
+    if (lossReasonCode === "OTHER" && !lossReasonNote.trim()) {
+      toast.error("Vui lòng nhập lý do cụ thể");
       return;
     }
 
@@ -306,10 +317,13 @@ export function QuickConsultationSectionV2({
       setSavingStatusId(status.id);
       setPendingStatus(null);
       setCountdown(COUNTDOWN_SECONDS);
+      setCountdownActive(false);
       await addConsultation.mutateAsync({ leadId, data: payload });
       // Reset form
       setNotes("");
+      setMethod(DEFAULT_METHOD);
       setScheduleOption("none");
+      setScheduleOpen(false);
       setCustomDateTime(undefined);
       setLossReasonCode(null);
       setLossReasonNote("");
@@ -322,9 +336,6 @@ export function QuickConsultationSectionV2({
     }
   };
 
-  // Keep commitSaveRef pointing to the latest commitSave so the Ctrl+Enter
-  // handler (which has empty deps) always calls the current version.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { commitSaveRef.current = commitSave; });
 
   const handleStatusClick = (status: ConsultationStatus) => {
@@ -334,10 +345,12 @@ export function QuickConsultationSectionV2({
     setLossReasonCode(null);
     setLossReasonNote("");
 
-    if (requiresLossReason(status)) {
+    if (showsLossReason(status)) {
+      // Negative outcome: pause countdown so officer has time to pick loss reason
       if (countdownRef.current) clearInterval(countdownRef.current);
       setPendingStatus(status);
       setCountdown(COUNTDOWN_SECONDS);
+      setCountdownActive(false);
     } else {
       startCountdown(status);
     }
@@ -346,11 +359,20 @@ export function QuickConsultationSectionV2({
   const handleLossReasonSelect = (code: string | null, note?: string) => {
     setLossReasonCode(code);
     if (note !== undefined) setLossReasonNote(note);
-    if (code && pendingStatus) startCountdown(pendingStatus);
+
+    if (!code || code === "OTHER") {
+      // Cleared or OTHER: stop any running countdown
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      setCountdownActive(false);
+      setCountdown(COUNTDOWN_SECONDS);
+    } else if (pendingStatus) {
+      // Concrete reason selected: start countdown
+      startCountdown(pendingStatus);
+    }
   };
 
   // ==========================================================================
-  // STATUS GROUPING (Same logic as V1, reused)
+  // STATUS GROUPING
   // ==========================================================================
 
   const groupedStatuses = useMemo(() => {
@@ -388,7 +410,6 @@ export function QuickConsultationSectionV2({
       }
     });
 
-    // Sort: Positive → Neutral → Negative, then display_order
     const sortByOutcomeThenOrder = (
       a: ConsultationStatus,
       b: ConsultationStatus
@@ -404,55 +425,16 @@ export function QuickConsultationSectionV2({
       return (b.stage?.order ?? 0) - (a.stage?.order ?? 0);
     });
 
-    sameStage.sort((a, b) => {
-      const diff = getOutcomeSortOrder(a.outcome_type) - getOutcomeSortOrder(b.outcome_type);
-      if (diff !== 0) return diff;
-      if (a.id === currentStatusId) return -1;
-      if (b.id === currentStatusId) return 1;
-      return (a.display_order ?? 999) - (b.display_order ?? 999);
-    });
-
+    sameStage.sort(sortByOutcomeThenOrder);
     nextStage.sort(sortByOutcomeThenOrder);
 
     return { universal, previousStage, sameStage, nextStage };
-  }, [statuses, currentStatusId, lead?.pipeline_stage?.order, lead?.pipeline_stage_id]);
-
-  const hasResultStatuses =
-    groupedStatuses.previousStage.length > 0 ||
-    groupedStatuses.sameStage.length > 0 ||
-    groupedStatuses.nextStage.length > 0;
+  }, [statuses, lead?.pipeline_stage?.order, lead?.pipeline_stage_id]);
 
   // ==========================================================================
-  // RENDER
+  // RENDER HELPERS
   // ==========================================================================
 
-  if (statusesLoading) {
-    return (
-      <div className="flex items-center justify-center p-6">
-        <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
-      </div>
-    );
-  }
-
-  if (isError) {
-    return (
-      <div className="rounded-lg bg-error-50 p-4 text-sm text-error-600">
-        <p className="font-medium">Không thể tải trạng thái</p>
-        <p className="mt-1 text-xs">{error?.message || "Lỗi không xác định"}</p>
-      </div>
-    );
-  }
-
-  if (statuses.length === 0) {
-    return (
-      <div className="text-muted-foreground bg-muted/50 rounded-lg p-4 text-sm">
-        <p>Không có trạng thái nào được cấu hình.</p>
-        <p className="mt-1 text-xs">Vui lòng liên hệ Admin để thiết lập.</p>
-      </div>
-    );
-  }
-
-  // Helper: get style classes for a status button
   const getStatusButtonClasses = (
     status: ConsultationStatus,
     group: "previous" | "same" | "next"
@@ -461,7 +443,7 @@ export function QuickConsultationSectionV2({
     const isPending = pendingStatus?.id === status.id;
 
     const base =
-      "relative flex items-center gap-2 rounded-lg px-3 text-sm font-medium min-h-[40px] transition-colors";
+      "relative flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors";
 
     if (isPending) {
       return cn(base, "ring-2 ring-primary ring-offset-1 scale-[1.02]", getOutcomeBg(status.outcome_type));
@@ -486,7 +468,6 @@ export function QuickConsultationSectionV2({
     }
   };
 
-  // Render a group of status buttons in a grid
   const renderStatusGrid = (
     items: ConsultationStatus[],
     group: "previous" | "same" | "next"
@@ -523,10 +504,44 @@ export function QuickConsultationSectionV2({
     </div>
   );
 
+  // ==========================================================================
+  // LOADING / ERROR / EMPTY
+  // ==========================================================================
+
+  if (statusesLoading) {
+    return (
+      <div className="flex items-center justify-center p-6">
+        <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="rounded-lg bg-error-50 p-4 text-sm text-error-600">
+        <p className="font-medium">Không thể tải trạng thái</p>
+        <p className="mt-1 text-xs">{error?.message || "Lỗi không xác định"}</p>
+      </div>
+    );
+  }
+
+  if (statuses.length === 0) {
+    return (
+      <div className="text-muted-foreground bg-muted/50 rounded-lg p-4 text-sm">
+        <p>Không có trạng thái nào được cấu hình.</p>
+        <p className="mt-1 text-xs">Vui lòng liên hệ Admin để thiết lập.</p>
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // MAIN RENDER
+  // ==========================================================================
+
   return (
-    <div className="space-y-4">
+    <div id="quick-consultation-section" className="space-y-4">
       {/* ================================================================ */}
-      {/* SECTION 1: Current Status Indicator                              */}
+      {/* CURRENT STATUS INDICATOR                                        */}
       {/* ================================================================ */}
       {lead?.consultation_status && (
         <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2">
@@ -550,292 +565,76 @@ export function QuickConsultationSectionV2({
       )}
 
       {/* ================================================================ */}
-      {/* SECTION 2: Result Statuses — Grouped Grid (PRIMARY ACTION)       */}
+      {/* STEP 1: Content (always open, no labels for fields)             */}
       {/* ================================================================ */}
-      {hasResultStatuses && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            <Label className="text-muted-foreground text-xs font-medium">
-              Chọn kết quả
-            </Label>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <HelpCircle className="text-muted-foreground/50 h-3.5 w-3.5 cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-[220px] text-xs">
-                  <p>Click vào trạng thái để ghi nhận kết quả tư vấn. Bạn có 3 giây để hoàn tác.</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
+      <div className="space-y-3">
+        <Label className="text-muted-foreground text-xs font-medium uppercase tracking-wider">
+          Bước 1: Nội dung tư vấn
+        </Label>
 
-          {/* Grouped result statuses */}
-          <div className="space-y-3">
-            {/* Previous stage (revert) */}
-            {groupedStatuses.previousStage.length > 0 && (
-              <div>
-                <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
-                  ← Giai đoạn trước
-                </div>
-                {renderStatusGrid(groupedStatuses.previousStage, "previous")}
-              </div>
-            )}
-
-            {/* Same stage (current) */}
-            {groupedStatuses.sameStage.length > 0 && (
-              <div>
-                {groupedStatuses.previousStage.length > 0 && (
-                  <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
-                    Giai đoạn hiện tại
-                  </div>
-                )}
-                {renderStatusGrid(groupedStatuses.sameStage, "same")}
-              </div>
-            )}
-
-            {/* Next stage (progress) */}
-            {groupedStatuses.nextStage.length > 0 && (
-              <div>
-                <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
-                  Tiến tới →
-                </div>
-                {renderStatusGrid(groupedStatuses.nextStage, "next")}
-              </div>
-            )}
-          </div>
-
-          {/* Gradient progress bar */}
-          {(() => {
-            const prevColor = groupedStatuses.previousStage.length > 0
-              ? sanitizeColorCode(groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code, "#e2e8f0")
-              : "#e2e8f0";
-            const currColor = sanitizeColorCode(
-              groupedStatuses.sameStage.find((s) => s.id === currentStatusId)?.color_code
-                || groupedStatuses.sameStage[0]?.color_code,
-              "#3b82f6"
-            );
-            const nextColor = groupedStatuses.nextStage.length > 0
-              ? sanitizeColorCode(groupedStatuses.nextStage[0].color_code, "#a7f3d0")
-              : "#a7f3d0";
-            return (
-              <div
-                className="mt-1 h-1 rounded-full opacity-80"
-                style={{ background: `linear-gradient(to right, ${prevColor}, ${currColor}, ${nextColor})` }}
-              />
-            );
-          })()}
-        </div>
-      )}
-
-      {/* ================================================================ */}
-      {/* SECTION 2b: Universal Statuses — Smaller, Secondary              */}
-      {/* ================================================================ */}
-      {groupedStatuses.universal.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <Label className="text-muted-foreground text-[11px]">
-              Ghi nhận liên hệ
-            </Label>
-            <Badge
-              variant="secondary"
-              className="h-4 bg-amber-100 px-1.5 text-[10px] text-amber-700"
-            >
-              không đổi trạng thái
-            </Badge>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            {groupedStatuses.universal.map((status) => (
-              <button
-                key={status.id}
-                type="button"
-                className={cn(
-                  "flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100",
-                  pendingStatus?.id === status.id &&
-                    "ring-2 ring-primary ring-offset-1"
-                )}
-                onClick={() => handleStatusClick(status)}
-                disabled={addConsultation.isPending}
-                aria-label={`Ghi nhận: ${status.name}`}
-              >
-                {savingStatusId === status.id ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <ColorDot color={status.color_code} size="sm" />
-                )}
-                {status.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ================================================================ */}
-      {/* SECTION 3: Loss Reason (Conditional)                             */}
-      {/* ================================================================ */}
-      {pendingStatus && requiresLossReason(pendingStatus) && (
-        <div className="animate-in slide-in-from-top-2 duration-200">
-          <LossReasonQuickSelect
-            value={lossReasonCode}
-            onChange={handleLossReasonSelect}
-            note={lossReasonNote}
-            onNoteChange={setLossReasonNote}
-            required
-          />
-        </div>
-      )}
-
-      {/* ================================================================ */}
-      {/* SECTION 4: Delayed Commit Confirmation Bar                       */}
-      {/* ================================================================ */}
-      {pendingStatus &&
-        (lossReasonCode || !requiresLossReason(pendingStatus)) && (
-          <div className="animate-in slide-in-from-top-2 overflow-hidden rounded-lg border border-primary/20 bg-primary/5 duration-200">
-            {/* Progress bar */}
-            <div
-              className="h-1 bg-primary transition-[width] duration-1000 ease-linear"
-              style={{ width: `${(countdown / COUNTDOWN_SECONDS) * 100}%` }}
-            />
-
-            <div className="flex items-center justify-between gap-2 px-3 py-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-primary" />
-                <span className="truncate text-sm text-primary">
-                  Sẽ lưu: <strong>{pendingStatus.name}</strong>
-                </span>
-              </div>
-
-              <div className="flex flex-shrink-0 items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={cancelPending}
-                >
-                  Hoàn tác
-                </Button>
-                <Button
-                  type="button"
-                  variant="default"
-                  size="sm"
-                  className="h-7 px-3 text-xs"
-                  onClick={() => commitSave(pendingStatus)}
-                  disabled={addConsultation.isPending}
-                  title="Ctrl+Enter để lưu nhanh"
-                >
-                  {addConsultation.isPending ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <>
-                      Lưu ngay
-                      <kbd className="ml-1.5 hidden items-center rounded bg-primary-foreground/20 px-1 py-0.5 font-mono text-[9px] sm:inline-flex">
-                        ⌘↵
-                      </kbd>
-                    </>
-                  )}
-                </Button>
-                <span className="w-4 text-center text-xs font-medium text-primary">
-                  {countdown}s
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
-      {/* ================================================================ */}
-      {/* SECTION 5: Collapsible Details (Method + Notes + Schedule)       */}
-      {/* ================================================================ */}
-      <div className="border-t pt-3">
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-md px-1 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          onClick={toggleDetails}
-          aria-expanded={detailsOpen}
+        {/* Method Selector — no label, self-explanatory */}
+        <ToggleGroup
+          type="single"
+          value={method}
+          onValueChange={(value) =>
+            value && setMethod(value as ConsultationMethod)
+          }
+          className="flex justify-start gap-1"
         >
-          <span className="flex items-center gap-1.5 font-medium">
-            <NotebookPen className="h-3 w-3" />
-            Chi tiết tư vấn
-            {/* Show indicators when details have values but section is collapsed */}
-            {!detailsOpen && (notes || scheduleOption !== "none") && (
-              <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">
-                {[notes && "ghi chú", scheduleOption !== "none" && "lịch hẹn"]
-                  .filter(Boolean)
-                  .join(", ")}
+          {methodOptions.map((opt) => {
+            const Icon = opt.icon;
+            return (
+              <ToggleGroupItem
+                key={opt.value}
+                value={opt.value}
+                size="sm"
+                className={cn(
+                  "h-8 gap-1.5 px-2.5 text-xs",
+                  "data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {opt.label}
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+
+        {/* Notes */}
+        <Textarea
+          id="quick-notes-v2"
+          aria-label="Nội dung tư vấn"
+          placeholder="Nội dung tư vấn..."
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+          className="resize-none text-sm"
+        />
+
+        {/* Schedule — collapsed by default, click to expand */}
+        <div>
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setScheduleOpen((prev) => !prev)}
+          >
+            <CalendarClock className="h-3.5 w-3.5" />
+            <span>Đặt lịch hẹn</span>
+            <ChevronDown
+              className={cn(
+                "h-3.5 w-3.5 transition-transform duration-200",
+                scheduleOpen && "rotate-180"
+              )}
+            />
+            {scheduleOption !== "none" && !scheduleOpen && (
+              <Badge variant="secondary" className="ml-1 h-4 px-1.5 text-[10px]">
+                {getSchedulePreviewText(scheduleOption, customDateTime)}
               </Badge>
             )}
-          </span>
-          <ChevronDown
-            className={cn(
-              "h-4 w-4 transition-transform duration-200",
-              detailsOpen && "rotate-180"
-            )}
-          />
-        </button>
+          </button>
 
-        {detailsOpen && (
-          <div className="animate-in slide-in-from-top-1 mt-3 space-y-3 duration-200">
-            {/* Method Selector */}
-            <div className="space-y-1.5">
-              <Label className="text-muted-foreground flex items-center gap-1 text-xs">
-                <Phone className="h-3 w-3" />
-                Phương thức
-              </Label>
-              <ToggleGroup
-                type="single"
-                value={method}
-                onValueChange={(value) =>
-                  value && setMethod(value as ConsultationMethod)
-                }
-                className="flex justify-start gap-1"
-              >
-                {methodOptions.map((opt) => {
-                  const Icon = opt.icon;
-                  return (
-                    <ToggleGroupItem
-                      key={opt.value}
-                      value={opt.value}
-                      size="sm"
-                      className={cn(
-                        "h-8 gap-1.5 px-2.5 text-xs",
-                        "data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
-                      )}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">{opt.label}</span>
-                    </ToggleGroupItem>
-                  );
-                })}
-              </ToggleGroup>
-            </div>
-
-            {/* Notes Input */}
-            <div className="space-y-1.5">
-              <Label
-                htmlFor="quick-notes-v2"
-                className="text-muted-foreground flex items-center gap-1 text-xs"
-              >
-                <NotebookPen className="h-3 w-3" />
-                Nội dung tư vấn
-              </Label>
-              <Textarea
-                id="quick-notes-v2"
-                placeholder="VD: KH hẹn gọi lại lúc 3h chiều…"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={2}
-                className="resize-none text-sm"
-              />
-            </div>
-
-            {/* Schedule Section */}
-            <div className="space-y-2">
-              <Label className="text-muted-foreground flex items-center gap-1.5 text-xs">
-                <Clock className="h-3 w-3" />
-                Hẹn gọi lại
-              </Label>
-
+          {scheduleOpen && (
+            <div className="mt-2 space-y-2 animate-in slide-in-from-top-1 duration-200">
               <ToggleGroup
                 type="single"
                 value={scheduleOption}
@@ -909,9 +708,173 @@ export function QuickConsultationSectionV2({
                 </div>
               )}
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* STEP 2: Choose Result                                           */}
+      {/* ================================================================ */}
+      <div className="border-t pt-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Label className="text-muted-foreground text-xs font-medium uppercase tracking-wider">
+            Bước 2: Kết quả tư vấn
+          </Label>
+          {!pendingStatus && (
+            <span className="text-[11px] text-amber-600">
+              Chọn một kết quả bên dưới để lưu
+            </span>
+          )}
+        </div>
+
+        {/* ── Không liên hệ được ── */}
+        {groupedStatuses.universal.length > 0 && (
+          <div className="space-y-1.5">
+            <Label className="text-muted-foreground text-[11px]">
+              Không liên hệ được
+            </Label>
+            <div className="flex flex-wrap gap-1.5">
+              {groupedStatuses.universal.map((status) => (
+                <button
+                  key={status.id}
+                  type="button"
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100",
+                    pendingStatus?.id === status.id &&
+                      "ring-2 ring-primary ring-offset-1"
+                  )}
+                  onClick={() => handleStatusClick(status)}
+                  disabled={addConsultation.isPending}
+                  aria-label={`Ghi nhận: ${status.name}`}
+                >
+                  {savingStatusId === status.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ColorDot color={status.color_code} size="sm" />
+                  )}
+                  {status.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Liên hệ được ── */}
+        {groupedStatuses.sameStage.length > 0 && (
+          <div className="space-y-1.5">
+            <Label className="text-muted-foreground text-[11px]">
+              Liên hệ được
+            </Label>
+            {renderStatusGrid(groupedStatuses.sameStage, "same")}
+          </div>
+        )}
+
+        {/* Next stage */}
+        {groupedStatuses.nextStage.length > 0 && (
+          <div className="space-y-1.5">
+            <Label className="text-muted-foreground text-[11px]">
+              Tiến tới →
+            </Label>
+            {renderStatusGrid(groupedStatuses.nextStage, "next")}
+          </div>
+        )}
+
+        {/* Previous stage — collapsed */}
+        {groupedStatuses.previousStage.length > 0 && (
+          <div>
+            <button
+              type="button"
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setShowPreviousStage((prev) => !prev)}
+            >
+              <ChevronDown
+                className={cn(
+                  "h-3.5 w-3.5 transition-transform duration-200",
+                  showPreviousStage && "rotate-180"
+                )}
+              />
+              Xem thêm (giai đoạn trước)
+            </button>
+            {showPreviousStage && (
+              <div className="mt-2 animate-in slide-in-from-top-1 duration-200">
+                {renderStatusGrid(groupedStatuses.previousStage, "previous")}
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* ================================================================ */}
+      {/* LOSS REASON (Conditional)                                       */}
+      {/* ================================================================ */}
+      {pendingStatus && showsLossReason(pendingStatus) && (
+        <div className="animate-in slide-in-from-top-2 duration-200">
+          <LossReasonQuickSelect
+            value={lossReasonCode}
+            onChange={handleLossReasonSelect}
+            note={lossReasonNote}
+            onNoteChange={setLossReasonNote}
+            required={requiresLossReason(pendingStatus)}
+          />
+        </div>
+      )}
+
+      {/* ================================================================ */}
+      {/* DELAYED COMMIT BAR                                              */}
+      {/* ================================================================ */}
+      {pendingStatus &&
+        (lossReasonCode || !requiresLossReason(pendingStatus)) && (
+          <div className="animate-in slide-in-from-top-2 overflow-hidden rounded-lg border border-primary/20 bg-primary/5 duration-200">
+            <div
+              key={pendingStatus.id + (countdownActive ? "-active" : "")}
+              className={cn("h-1 bg-primary", countdownActive ? "countdown-bar" : "w-full")}
+            />
+
+            <div className="flex items-center justify-between gap-2 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-primary" />
+                <span className="truncate text-sm text-primary">
+                  Sẽ lưu: <strong>{pendingStatus.name}</strong>
+                </span>
+              </div>
+
+              <div className="flex flex-shrink-0 items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={cancelPending}
+                >
+                  Hoàn tác
+                </Button>
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="h-7 px-3 text-xs"
+                  onClick={() => commitSave(pendingStatus)}
+                  disabled={addConsultation.isPending}
+                  title="Ctrl+Enter để lưu nhanh"
+                >
+                  {addConsultation.isPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <>
+                      Lưu ngay
+                      <kbd className="ml-1.5 hidden items-center rounded bg-primary-foreground/20 px-1 py-0.5 font-mono text-[9px] sm:inline-flex">
+                        {typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent) ? "⌘↵" : "Ctrl+↵"}
+                      </kbd>
+                    </>
+                  )}
+                </Button>
+                <span className="w-4 text-center text-xs font-medium text-primary">
+                  {countdown}s
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 }

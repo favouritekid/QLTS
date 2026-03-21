@@ -29,6 +29,7 @@ vi.mock("@/components/common/form", () => ({
 
 vi.mock("@/components/leads/LossReasonQuickSelect", () => ({
   LossReasonQuickSelect: () => null,
+  showsLossReason: () => false,
   requiresLossReason: () => false,
 }));
 
@@ -37,6 +38,23 @@ vi.mock("@/components/ui/dynamic-color-badge", () => ({
 }));
 
 import { QuickConsultationSectionV2 } from "./QuickConsultationSectionV2";
+
+const CURRENT_STATUS = {
+  id: "sts03",
+  name: "Có nhu cầu tìm hiểu",
+  color_code: "#FACC15",
+  stage_id: "stg02",
+  outcome_type: "neutral" as const,
+  is_universal: false,
+  is_final: false,
+  status_type: "transition" as const,
+  selectable_mode: "user" as const,
+  updates_pipeline: true,
+  counts_for_funnel: true,
+  phase: "consultation",
+  display_order: 20,
+  stage: { id: "stg02", name: "Đang tư vấn", order: 2 },
+};
 
 describe("QuickConsultationSectionV2", () => {
   beforeEach(() => {
@@ -49,49 +67,29 @@ describe("QuickConsultationSectionV2", () => {
     mockUseLead.mockReturnValue({
       data: {
         id: 1,
-        consultation_status_id: "sts06",
+        consultation_status_id: "sts03",
         pipeline_stage_id: "stg02",
-        pipeline_stage: {
-          id: "stg02",
-          name: "Đang tư vấn",
-          order: 2,
-        },
-        consultation_status: {
-          id: "sts06",
-          name: "Có nhu cầu tìm hiểu",
-          color_code: "#2563eb",
-        },
+        pipeline_stage: { id: "stg02", name: "Đang tư vấn", order: 2 },
+        consultation_status: CURRENT_STATUS,
       },
     });
     mockUseAllowedNextStatuses.mockReturnValue({
       data: [
         {
           id: "sts06",
-          name: "Có nhu cầu tìm hiểu",
-          color_code: "#2563eb",
+          name: "Đồng ý tư vấn",
+          color_code: "#22C55E",
           stage_id: "stg02",
-          display_order: 1,
-          is_universal: false,
-          outcome_type: null,
-          stage: {
-            id: "stg02",
-            name: "Đang tư vấn",
-            order: 2,
-          },
-        },
-        {
-          id: "sts07",
-          name: "Đã tiếp nhận hồ sơ",
-          color_code: "#16a34a",
-          stage_id: "stg03",
-          display_order: 2,
+          display_order: 50,
           is_universal: false,
           outcome_type: "positive",
-          stage: {
-            id: "stg03",
-            name: "Đã nộp hồ sơ",
-            order: 3,
-          },
+          is_final: false,
+          status_type: "transition",
+          selectable_mode: "user",
+          updates_pipeline: true,
+          counts_for_funnel: true,
+          phase: "consultation",
+          stage: { id: "stg02", name: "Đang tư vấn", order: 2 },
         },
       ],
       isLoading: false,
@@ -100,16 +98,31 @@ describe("QuickConsultationSectionV2", () => {
     });
   });
 
-  it("allows recording a new consultation while keeping the current status", async () => {
+  it("renders step 1 (content) before step 2 (results)", () => {
     render(<QuickConsultationSectionV2 leadId={1} />);
 
-    const currentStatusButton = screen.getByRole("button", {
+    expect(screen.getByText(/Bước 1: Nội dung tư vấn/i)).toBeDefined();
+    expect(screen.getByText(/Bước 2: Kết quả tư vấn/i)).toBeDefined();
+    // Notes textarea always visible
+    expect(screen.getByPlaceholderText(/Nội dung tư vấn/i)).toBeDefined();
+  });
+
+  it("injects current status into grid when FSM omits it", () => {
+    render(<QuickConsultationSectionV2 leadId={1} />);
+
+    // Current status visible as highlighted button in grid
+    const buttons = screen.getAllByText("Có nhu cầu tìm hiểu");
+    expect(buttons.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("saves with current status via delayed commit", async () => {
+    render(<QuickConsultationSectionV2 leadId={1} />);
+
+    // Click current status in grid
+    const statusButton = screen.getByRole("button", {
       name: /Chuyển sang trạng thái: Có nhu cầu tìm hiểu/i,
     });
-
-    expect(currentStatusButton).not.toBeDisabled();
-
-    fireEvent.click(currentStatusButton);
+    fireEvent.click(statusButton);
 
     const saveButton = await screen.findByRole("button", { name: /Lưu ngay/i });
     fireEvent.click(saveButton);
@@ -117,13 +130,63 @@ describe("QuickConsultationSectionV2", () => {
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledWith({
         leadId: 1,
-        data: {
-          status_id: "sts06",
+        data: expect.objectContaining({
+          status_id: "sts03",
           method: "phone",
-          notes: "Ghi nhận: Có nhu cầu tìm hiểu",
-          scheduled_at: null,
-        },
+        }),
       });
     });
+  });
+
+  it("shows universal statuses as contact status", () => {
+    mockUseAllowedNextStatuses.mockReturnValue({
+      data: [
+        {
+          id: "sts01",
+          name: "Không nghe máy",
+          color_code: "#94A3B8",
+          stage_id: null,
+          display_order: 900,
+          is_universal: true,
+          outcome_type: "neutral",
+          is_final: false,
+          status_type: "activity",
+          selectable_mode: "user",
+          updates_pipeline: false,
+          counts_for_funnel: false,
+          phase: "universal",
+          stage: null,
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<QuickConsultationSectionV2 leadId={1} />);
+
+    expect(screen.getByText("Không liên hệ được")).toBeDefined();
+  });
+
+  it("schedule is collapsed by default", () => {
+    render(<QuickConsultationSectionV2 leadId={1} />);
+
+    expect(screen.getByText("Đặt lịch hẹn")).toBeDefined();
+    // Schedule options not visible until clicked
+    expect(screen.queryByText("Ngày mai")).toBeNull();
+
+    // Click to expand
+    fireEvent.click(screen.getByText("Đặt lịch hẹn"));
+    expect(screen.getByText("Ngày mai")).toBeDefined();
+  });
+
+  it("shows method labels on all screen sizes", () => {
+    render(<QuickConsultationSectionV2 leadId={1} />);
+
+    expect(screen.getByText("Gọi điện")).toBeDefined();
+    expect(screen.getByText("SMS")).toBeDefined();
+    expect(screen.getByText("Video")).toBeDefined();
+    expect(screen.getByText("Email")).toBeDefined();
+    expect(screen.getByText("Gặp mặt")).toBeDefined();
   });
 });

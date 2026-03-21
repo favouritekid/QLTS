@@ -70,6 +70,9 @@ class Consultation(ConsultationBase):
     consultation_status_id: Optional[str] = None
     officer: Optional[User] = None
     consultation_status: Optional[ConsultationStatus] = None
+    # Loss reason — populated from LeadStatusHistory in timeline, not stored on Consultation
+    loss_reason_code: Optional[str] = None
+    loss_reason_note: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
