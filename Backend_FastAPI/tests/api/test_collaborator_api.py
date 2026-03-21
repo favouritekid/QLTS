@@ -242,6 +242,24 @@ async def collab_in_unit2(second_unit_data):
             return {"id": collab.id, "unit_id": second_unit_data["unit_id"]}
 
 
+@pytest_asyncio.fixture(scope="function")
+async def collab_managed_by_officer(seed_collab_deps, officer_api):
+    """CTV managed by officer in unit 1."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            collab = models.Collaborator(
+                code="CTV-2026-0400",
+                full_name="Officer Managed CTV",
+                phone="0811000400",
+                status="active",
+                unit_id=seed_collab_deps["unit_id"],
+                managed_by_officer_id=officer_api["id"],
+            )
+            session.add(collab)
+            await session.flush()
+            return {"id": collab.id, "unit_id": seed_collab_deps["unit_id"]}
+
+
 # =============================================================================
 # TestCollaboratorIDOR
 # =============================================================================
@@ -281,17 +299,25 @@ class TestCollaboratorIDOR:
         )
         assert res.status_code == 404
 
-    async def test_officer_get_collaborator(
+    async def test_officer_get_unmanaged_collaborator(
         self, client: AsyncClient, officer_api, collab_in_unit1,
     ):
-        """Officer cannot access collaborator admin endpoints -> 403 or 404."""
+        """Officer cannot GET collaborator NOT managed by them -> 404 (IDOR)."""
         res = await client.get(
             f"{COLLABORATORS_URL}/{collab_in_unit1['id']}",
             headers=officer_api["headers"],
         )
-        # Officer doesn't have check_permission for collaborators -> 403 from Casbin
-        # OR 404 from deps — accept either
-        assert res.status_code in (403, 404)
+        assert res.status_code == 404
+
+    async def test_officer_get_managed_collaborator(
+        self, client: AsyncClient, officer_api, collab_managed_by_officer,
+    ):
+        """Officer can GET collaborator managed by them -> 200."""
+        res = await client.get(
+            f"{COLLABORATORS_URL}/{collab_managed_by_officer['id']}",
+            headers=officer_api["headers"],
+        )
+        assert res.status_code == 200
 
 
 # =============================================================================
@@ -342,6 +368,147 @@ class TestCollaboratorListFiltering:
         """Manager GET /claims -> only own unit (empty is OK for test)."""
         res = await client.get(CLAIMS_URL, headers=manager_api["headers"])
         assert res.status_code == 200
+
+
+# =============================================================================
+# TestOfficerCollaboratorList
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestOfficerCollaboratorList:
+    """Officer list: forced managed_by_officer_id=self, hard-block inactive."""
+
+    async def test_officer_list_default_excludes_inactive(
+        self, client: AsyncClient, officer_api, seed_collab_deps,
+    ):
+        """Officer list without status param never returns inactive CTVs."""
+        # Create an inactive CTV managed by officer
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                collab = models.Collaborator(
+                    code="CTV-2026-0500",
+                    full_name="Inactive CTV",
+                    phone="0811000500",
+                    status="inactive",
+                    unit_id=seed_collab_deps["unit_id"],
+                    managed_by_officer_id=officer_api["id"],
+                )
+                session.add(collab)
+
+        res = await client.get(COLLABORATORS_URL, headers=officer_api["headers"])
+        assert res.status_code == 200
+        data = res.json()
+        statuses = [c["status"] for c in data["collaborators"]]
+        assert "inactive" not in statuses
+
+    async def test_officer_list_sees_pending(
+        self, client: AsyncClient, officer_api, seed_collab_deps,
+    ):
+        """Officer can see pending CTV they proposed."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                collab = models.Collaborator(
+                    code="CTV-2026-0600",
+                    full_name="Pending CTV",
+                    phone="0811000600",
+                    status="pending",
+                    unit_id=seed_collab_deps["unit_id"],
+                    managed_by_officer_id=officer_api["id"],
+                )
+                session.add(collab)
+
+        res = await client.get(COLLABORATORS_URL, headers=officer_api["headers"])
+        assert res.status_code == 200
+        data = res.json()
+        names = [c["full_name"] for c in data["collaborators"]]
+        assert "Pending CTV" in names
+
+    async def test_officer_list_status_inactive_empty(
+        self, client: AsyncClient, officer_api, seed_collab_deps,
+    ):
+        """Officer querying status=inactive -> empty list."""
+        # Create an inactive CTV managed by officer
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                collab = models.Collaborator(
+                    code="CTV-2026-0700",
+                    full_name="Inactive CTV 2",
+                    phone="0811000700",
+                    status="inactive",
+                    unit_id=seed_collab_deps["unit_id"],
+                    managed_by_officer_id=officer_api["id"],
+                )
+                session.add(collab)
+
+        res = await client.get(
+            f"{COLLABORATORS_URL}?status=inactive",
+            headers=officer_api["headers"],
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total_count"] == 0
+        assert data["collaborators"] == []
+
+    async def test_officer_list_forced_managed_by(
+        self, client: AsyncClient, officer_api, collab_in_unit1,
+    ):
+        """Officer passes managed_by_officer_id=other -> overridden to self."""
+        # collab_in_unit1 has no managed_by_officer_id -> officer should NOT see it
+        res = await client.get(
+            f"{COLLABORATORS_URL}?managed_by_officer_id=99999",
+            headers=officer_api["headers"],
+        )
+        assert res.status_code == 200
+        data = res.json()
+        ids = [c["id"] for c in data["collaborators"]]
+        assert collab_in_unit1["id"] not in ids
+
+
+# =============================================================================
+# TestOfficerCollaboratorCreate
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestOfficerCollaboratorCreate:
+    """Officer POST /api/collaborators: auto-fill unit_id + managed_by_officer_id, always pending."""
+
+    async def test_officer_create_collaborator_pending(
+        self, client: AsyncClient, officer_api,
+    ):
+        """Officer creates CTV -> status=pending, unit/officer auto-filled."""
+        res = await client.post(
+            COLLABORATORS_URL,
+            json={
+                "full_name": "Officer Proposed CTV",
+                "phone": "0811009999",
+            },
+            headers=officer_api["headers"],
+        )
+        assert res.status_code == 201
+        data = res.json()
+        assert data["status"] == "pending"
+        assert data["managed_by_officer_id"] == officer_api["id"]
+        assert data["unit_id"] is not None  # auto-filled from officer's unit
+
+    async def test_officer_create_unit_id_overridden(
+        self, client: AsyncClient, officer_api,
+    ):
+        """Officer passes unit_id -> backend overrides to officer's own unit."""
+        res = await client.post(
+            COLLABORATORS_URL,
+            json={
+                "full_name": "Override Unit CTV",
+                "phone": "0811009998",
+                "unit_id": 99999,  # should be overridden
+            },
+            headers=officer_api["headers"],
+        )
+        assert res.status_code == 201
+        data = res.json()
+        # unit_id should be officer's unit, not 99999
+        assert data["unit_id"] != 99999
 
 
 # =============================================================================

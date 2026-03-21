@@ -26,6 +26,12 @@ export const collaboratorCreateSchema = z.object({
 
 export type CollaboratorCreateFormData = z.infer<typeof collaboratorCreateSchema>
 
+// Collaborator Create (Officer mode — unit_id auto-filled by backend)
+export const collaboratorOfficerCreateSchema = collaboratorCreateSchema.extend({
+  unit_id: z.number().optional().nullable(),
+})
+export type CollaboratorOfficerCreateFormData = z.infer<typeof collaboratorOfficerCreateSchema>
+
 // Collaborator Update
 export const collaboratorUpdateSchema = collaboratorCreateSchema.partial()
 export type CollaboratorUpdateFormData = z.infer<typeof collaboratorUpdateSchema>

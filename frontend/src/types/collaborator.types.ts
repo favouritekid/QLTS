@@ -38,7 +38,7 @@ export interface CollaboratorCreate {
   full_name: string
   phone: string
   email?: string | null
-  unit_id: number
+  unit_id?: number | null
   user_id?: number | null
   managed_by_officer_id?: number | null
   id_card_number?: string | null

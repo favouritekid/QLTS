@@ -76,10 +76,18 @@ async def list_collaborators(
     if current_user.role == UserRole.MANAGER:
         unit_id = current_user.unit_id
 
-    # Officer: force own managed CTV only + active status
+    # Officer: force own managed CTV only, hard-block inactive
     if current_user.role == UserRole.OFFICER:
         managed_by_officer_id = current_user.id
-        status = "active"
+        _OFFICER_ALLOWED = ("pending", "active", "suspended")
+        if not status:
+            status = ",".join(_OFFICER_ALLOWED)
+        else:
+            requested = [s.strip() for s in status.split(",") if s.strip()]
+            allowed = [s for s in requested if s in _OFFICER_ALLOWED]
+            if not allowed:
+                return CollaboratorsPage(total_count=0, collaborators=[])
+            status = ",".join(allowed)
 
     total, collaborators = await repo.get_filtered(
         skip=skip,

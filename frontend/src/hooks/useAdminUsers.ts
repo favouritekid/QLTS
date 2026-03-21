@@ -47,7 +47,7 @@ interface UseAdminUsersListParams {
  */
 export function useAdminUsersList(
   params: UseAdminUsersListParams = {},
-  options?: { initialData?: UsersPage }
+  options?: { initialData?: UsersPage; enabled?: boolean }
 ) {
   const { page = 1, page_size = 10, ...filters } = params;
 
@@ -64,6 +64,7 @@ export function useAdminUsersList(
     staleTime: Infinity, // Never mark as stale - real-time sync via Socket.IO
     gcTime: 10 * 60 * 1000, // Garbage collect after 10 minutes of inactivity
     initialData: options?.initialData, // ✅ Use initialData from Server Component
+    enabled: options?.enabled,
   });
 }
 

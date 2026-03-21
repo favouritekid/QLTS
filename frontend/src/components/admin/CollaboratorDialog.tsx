@@ -51,6 +51,7 @@ import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { SmartUnitSelector } from "@/components/common/selectors";
 import {
   collaboratorCreateSchema,
+  collaboratorOfficerCreateSchema,
   collaboratorUpdateSchema,
   type CollaboratorCreateFormData,
   type CollaboratorUpdateFormData,
@@ -62,6 +63,7 @@ interface CollaboratorDialogProps {
   onOpenChange: (open: boolean) => void;
   collaborator?: Collaborator | null;
   mode: "create" | "edit";
+  isOfficerMode?: boolean;
 }
 
 // Unified form type covering both create and edit modes
@@ -69,7 +71,7 @@ type CollaboratorFormData = {
   full_name: string;
   phone: string;
   email: string | null | undefined;
-  unit_id: number;
+  unit_id: number | null | undefined;
   user_id?: number | null;
   managed_by_officer_id?: number | null;
   id_card_number: string | null | undefined;
@@ -98,6 +100,7 @@ export function CollaboratorDialog({
   onOpenChange,
   collaborator,
   mode,
+  isOfficerMode,
 }: CollaboratorDialogProps) {
   const [optionalOpen, setOptionalOpen] = useState(false);
   const [officerComboOpen, setOfficerComboOpen] = useState(false);
@@ -107,22 +110,32 @@ export function CollaboratorDialog({
 
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
+  const isOfficerCreate = isOfficerMode && isCreate;
 
   const form = useForm<CollaboratorFormData>({
-    resolver: zodResolver(isCreate ? collaboratorCreateSchema : collaboratorUpdateSchema) as Resolver<CollaboratorFormData>,
+    resolver: zodResolver(
+      isOfficerCreate
+        ? collaboratorOfficerCreateSchema
+        : isCreate
+          ? collaboratorCreateSchema
+          : collaboratorUpdateSchema
+    ) as Resolver<CollaboratorFormData>,
     defaultValues: createDefaults,
   });
 
-  // Watch unit_id to filter officers by selected unit
+  // Watch unit_id to filter officers by selected unit (skip for officer create)
   const watchedUnitId = form.watch("unit_id");
 
-  // Fetch officers filtered by selected unit (active only)
-  const { data: usersData, isLoading: usersLoading } = useAdminUsersList({
-    page_size: 100,
-    status: "active",
-    unit_id: watchedUnitId || undefined,
-    include_children: true,
-  });
+  // Fetch officers filtered by selected unit (skip entirely for officer create)
+  const { data: usersData, isLoading: usersLoading } = useAdminUsersList(
+    {
+      page_size: 100,
+      status: "active",
+      unit_id: watchedUnitId || undefined,
+      include_children: true,
+    },
+    { enabled: !isOfficerCreate }
+  );
 
   const officers = useMemo(() => {
     if (!usersData?.users) return [];
@@ -208,12 +221,18 @@ export function CollaboratorDialog({
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>
-            {isCreate ? "Tạo Cộng tác viên Mới" : "Chỉnh sửa Cộng tác viên"}
+            {isOfficerCreate
+              ? "Đề xuất CTV mới"
+              : isCreate
+                ? "Tạo Cộng tác viên Mới"
+                : "Chỉnh sửa Cộng tác viên"}
           </DialogTitle>
           <DialogDescription>
-            {isCreate
-              ? "Thêm cộng tác viên mới vào hệ thống. Các trường có dấu * là bắt buộc."
-              : "Cập nhật thông tin cộng tác viên."}
+            {isOfficerCreate
+              ? "CTV sẽ ở trạng thái chờ duyệt cho đến khi được quản lý phê duyệt."
+              : isCreate
+                ? "Thêm cộng tác viên mới vào hệ thống. Các trường có dấu * là bắt buộc."
+                : "Cập nhật thông tin cộng tác viên."}
           </DialogDescription>
         </DialogHeader>
 
@@ -284,25 +303,27 @@ export function CollaboratorDialog({
               )}
             />
 
-            {/* Unit */}
-            <FormField
-              control={form.control}
-              name="unit_id"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Đơn vị *</FormLabel>
-                  <FormControl>
-                    <SmartUnitSelector
-                      value={field.value ? String(field.value) : undefined}
-                      onChange={(val) => field.onChange(val ? Number(val) : undefined)}
-                      placeholder="Chọn đơn vị"
-                      disabled={isPending}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {/* Unit (hidden for officer create — backend auto-fills) */}
+            {!isOfficerCreate && (
+              <FormField
+                control={form.control}
+                name="unit_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Đơn vị *</FormLabel>
+                    <FormControl>
+                      <SmartUnitSelector
+                        value={field.value ? String(field.value) : undefined}
+                        onChange={(val) => field.onChange(val ? Number(val) : undefined)}
+                        placeholder="Chọn đơn vị"
+                        disabled={isPending}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* ===== Optional fields (collapsible) ===== */}
             <Collapsible open={optionalOpen} onOpenChange={setOptionalOpen}>
@@ -321,101 +342,103 @@ export function CollaboratorDialog({
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent className="space-y-4 pt-2">
-                {/* Managed by officer */}
-                <FormField
-                  control={form.control}
-                  name="managed_by_officer_id"
-                  render={({ field }) => {
-                    const selectedOfficer = officers.find(
-                      (o) => o.id === field.value
-                    );
-                    return (
-                      <FormItem>
-                        <FormLabel>Nhân viên quản lý</FormLabel>
-                        <Popover
-                          open={officerComboOpen}
-                          onOpenChange={setOfficerComboOpen}
-                        >
-                          <PopoverTrigger asChild>
-                            <FormControl>
-                              <Button
-                                variant="outline"
-                                role="combobox"
-                                aria-expanded={officerComboOpen}
-                                disabled={isPending || usersLoading}
-                                className={cn(
-                                  "w-full justify-between font-normal",
-                                  !field.value && "text-muted-foreground"
-                                )}
-                              >
-                                <span className="truncate">
-                                  {usersLoading
-                                    ? "Đang tải…"
-                                    : selectedOfficer
-                                      ? `${selectedOfficer.full_name || selectedOfficer.username} (${selectedOfficer.role})`
-                                      : "Chọn nhân viên quản lý"}
-                                </span>
-                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                              </Button>
-                            </FormControl>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-                            <Command>
-                              <CommandInput placeholder="Tìm theo tên…" />
-                              <CommandEmpty>Không tìm thấy nhân viên.</CommandEmpty>
-                              <CommandGroup className="max-h-[200px] overflow-auto">
-                                {/* Option to clear selection */}
-                                <CommandItem
-                                  value="__none__"
-                                  onSelect={() => {
-                                    field.onChange(null);
-                                    setOfficerComboOpen(false);
-                                  }}
+                {/* Managed by officer (hidden for officer create — backend auto-fills) */}
+                {!isOfficerCreate && (
+                  <FormField
+                    control={form.control}
+                    name="managed_by_officer_id"
+                    render={({ field }) => {
+                      const selectedOfficer = officers.find(
+                        (o) => o.id === field.value
+                      );
+                      return (
+                        <FormItem>
+                          <FormLabel>Nhân viên quản lý</FormLabel>
+                          <Popover
+                            open={officerComboOpen}
+                            onOpenChange={setOfficerComboOpen}
+                          >
+                            <PopoverTrigger asChild>
+                              <FormControl>
+                                <Button
+                                  variant="outline"
+                                  role="combobox"
+                                  aria-expanded={officerComboOpen}
+                                  disabled={isPending || usersLoading}
+                                  className={cn(
+                                    "w-full justify-between font-normal",
+                                    !field.value && "text-muted-foreground"
+                                  )}
                                 >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      !field.value ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  <span className="text-muted-foreground">Không có</span>
-                                </CommandItem>
-                                {officers.map((officer) => (
+                                  <span className="truncate">
+                                    {usersLoading
+                                      ? "Đang tải…"
+                                      : selectedOfficer
+                                        ? `${selectedOfficer.full_name || selectedOfficer.username} (${selectedOfficer.role})`
+                                        : "Chọn nhân viên quản lý"}
+                                  </span>
+                                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                </Button>
+                              </FormControl>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                              <Command>
+                                <CommandInput placeholder="Tìm theo tên…" />
+                                <CommandEmpty>Không tìm thấy nhân viên.</CommandEmpty>
+                                <CommandGroup className="max-h-[200px] overflow-auto">
+                                  {/* Option to clear selection */}
                                   <CommandItem
-                                    key={officer.id}
-                                    value={`${officer.full_name ?? ""} ${officer.username} ${officer.role}`}
+                                    value="__none__"
                                     onSelect={() => {
-                                      field.onChange(officer.id);
+                                      field.onChange(null);
                                       setOfficerComboOpen(false);
                                     }}
                                   >
                                     <Check
                                       className={cn(
                                         "mr-2 h-4 w-4",
-                                        field.value === officer.id
-                                          ? "opacity-100"
-                                          : "opacity-0"
+                                        !field.value ? "opacity-100" : "opacity-0"
                                       )}
                                     />
-                                    <div>
-                                      <span className="font-medium">
-                                        {officer.full_name || officer.username}
-                                      </span>
-                                      <span className="ml-2 text-xs text-muted-foreground">
-                                        ({officer.role})
-                                      </span>
-                                    </div>
+                                    <span className="text-muted-foreground">Không có</span>
                                   </CommandItem>
-                                ))}
-                              </CommandGroup>
-                            </Command>
-                          </PopoverContent>
-                        </Popover>
-                        <FormMessage />
-                      </FormItem>
-                    );
-                  }}
-                />
+                                  {officers.map((officer) => (
+                                    <CommandItem
+                                      key={officer.id}
+                                      value={`${officer.full_name ?? ""} ${officer.username} ${officer.role}`}
+                                      onSelect={() => {
+                                        field.onChange(officer.id);
+                                        setOfficerComboOpen(false);
+                                      }}
+                                    >
+                                      <Check
+                                        className={cn(
+                                          "mr-2 h-4 w-4",
+                                          field.value === officer.id
+                                            ? "opacity-100"
+                                            : "opacity-0"
+                                        )}
+                                      />
+                                      <div>
+                                        <span className="font-medium">
+                                          {officer.full_name || officer.username}
+                                        </span>
+                                        <span className="ml-2 text-xs text-muted-foreground">
+                                          ({officer.role})
+                                        </span>
+                                      </div>
+                                    </CommandItem>
+                                  ))}
+                                </CommandGroup>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+                          <FormMessage />
+                        </FormItem>
+                      );
+                    }}
+                  />
+                )}
 
                 {/* ID Card Number */}
                 <FormField
@@ -535,6 +558,8 @@ export function CollaboratorDialog({
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                     Đang lưu…
                   </>
+                ) : isOfficerCreate ? (
+                  "Đề xuất"
                 ) : isCreate ? (
                   "Tạo CTV"
                 ) : (

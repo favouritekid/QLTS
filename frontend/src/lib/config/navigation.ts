@@ -89,8 +89,14 @@ export const navigationConfig: NavigationConfig = {
           label: "Performance Dashboard",
           href: "/dashboard/officer",
           icon: TrendingUp,
-          roles: ["admin", "manager", "officer"], // Only roles supported by officer dashboard scopes
-          // Officer = personal, Manager = team, Admin = organization
+          roles: ["admin", "manager", "officer"],
+          excludePaths: ["/dashboard/officer/collaborators"],
+        },
+        {
+          label: "CTV của tôi",
+          href: "/dashboard/officer/collaborators",
+          icon: Handshake,
+          roles: ["officer"],
         },
         {
           label: "Admin Dashboard",
@@ -254,7 +260,7 @@ export const navigationConfig: NavigationConfig = {
           label: "Cộng tác viên",
           href: "/admin/collaborators",
           icon: Handshake,
-          roles: ["admin", "manager", "officer"],
+          roles: ["admin", "manager"],
         },
         {
           label: "Hoa hồng",
