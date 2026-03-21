@@ -5,8 +5,12 @@ Unit tests for lead_cache_service.calculate_urgency_score.
 Pins the expected urgency score values for new leads to prevent
 regressions where cached_urgency_score defaults to 50 (stale).
 """
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
+from app.services import lead_service
 from app.services.lead_cache_service import calculate_urgency_score
 
 
@@ -108,3 +112,82 @@ class TestCalculateUrgencyScore:
         )
         assert low_score != 50, "Model default 50 must not match real urgency for new leads"
         assert hot_score != 50
+
+
+class TestImportUrgencyInitialization:
+    """Import flow should populate cached_urgency_score before bulk insert."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("score", "expected_urgency", "expected_hot"),
+        [
+            (50, 55, False),
+            (85, 70, True),
+        ],
+    )
+    async def test_import_populates_cached_urgency_score_before_insert(
+        self,
+        score: int,
+        expected_urgency: int,
+        expected_hot: bool,
+    ):
+        repo = AsyncMock()
+        repo.check_batch_email_conflict = AsyncMock(return_value=set())
+        repo.check_batch_phone_conflict = AsyncMock(return_value=set())
+        repo.register_phone_identities = AsyncMock()
+
+        captured = {}
+
+        async def _bulk_insert_leads(batch):
+            captured["batch"] = batch
+            return [101]
+
+        repo.bulk_insert_leads.side_effect = _bulk_insert_leads
+
+        db = AsyncMock()
+        nested_tx = AsyncMock()
+        nested_tx.__aenter__.return_value = None
+        nested_tx.__aexit__.return_value = None
+        db.begin_nested = MagicMock(return_value=nested_tx)
+        db.flush = AsyncMock()
+
+        initial_status = SimpleNamespace(
+            id="sts01",
+            stage_id="stg01",
+            legacy_status="new",
+        )
+        phone = "0909.667.001" if not expected_hot else "0909.667.002"
+
+        csv_content = (
+            "full_name,email,phone,source,unit_id\n"
+            f"Import Urgency {score},import_urgency_{score}@example.com,"
+            f"{phone},website,1001\n"
+        )
+
+        with patch(
+            "app.services.lead_service.StatusHelper.get_initial_status",
+            new=AsyncMock(return_value=initial_status),
+        ), patch(
+            "app.services.lead_service.LeadRepository",
+            return_value=repo,
+        ), patch(
+            "app.services.lead_service.calculate_lead_score",
+            new=AsyncMock(return_value=score),
+        ):
+            result, callback = await lead_service.import_leads_from_file_content(
+                file_content=csv_content.encode("utf-8"),
+                filename="urgency_import.csv",
+                db=db,
+                default_unit_id=1001,
+            )
+
+        assert result.successful_imports == 1
+        assert result.failed_imports == 0
+        assert result.created_lead_ids == [101]
+        assert callback is not None
+
+        inserted = captured["batch"][0]
+        assert inserted["lead_score"] == score
+        assert inserted["is_hot_lead"] is expected_hot
+        assert inserted["cached_urgency_score"] == expected_urgency
+        assert inserted["cached_urgency_score"] != 50

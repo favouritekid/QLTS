@@ -10,11 +10,12 @@ from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.constants import UserRole
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, engine
 from app.security import get_password_hash
 from app.config import settings
 
@@ -47,8 +48,27 @@ async def db(setup_test_database) -> AsyncSession:
     3. Yields the session for test use
     4. Closes the session after test completes
     """
+    async def _has_core_tables(session: AsyncSession) -> bool:
+        await session.execute(text("SET search_path TO public"))
+        result = await session.execute(
+            text(
+                "SELECT COUNT(*) FROM pg_tables "
+                "WHERE schemaname = 'public' AND tablename IN ('user', 'organization_unit')"
+            )
+        )
+        return result.scalar_one() == 2
+
     async with AsyncSessionLocal() as session:
-        yield session
+        if await _has_core_tables(session):
+            yield session
+            return
+
+    # Schema was recreated on a separate engine; if the first pooled connection
+    # still doesn't see core tables, dispose and retry with a fresh connection.
+    await engine.dispose()
+    async with AsyncSessionLocal() as retry_session:
+        assert await _has_core_tables(retry_session), "Core tables not visible after schema setup retry"
+        yield retry_session
 
 
 # =============================================================================
