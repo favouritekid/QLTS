@@ -1089,8 +1089,22 @@ async def get_aggregated_dashboard_stats(
         stage["velocity"] = velocity_by_stage.get(stage_id, None)
         stage["estimated_lost_revenue"] = lost_revenue_by_stage.get(stage_id, None)
 
+    # Aggregate loss breakdown across stages for suggestion generator
+    loss_totals: Dict[str, int] = {}
+    for stage in sales_funnel:
+        for item in (stage.get("loss_breakdown") or []):
+            loss_totals[item["reason_code"]] = loss_totals.get(item["reason_code"], 0) + item["count"]
+    total_loss_reasons = sum(loss_totals.values()) or 1
+    aggregated_loss = [
+        {"reason_code": k, "count": v, "percentage": round((v / total_loss_reasons) * 100, 1)}
+        for k, v in sorted(loss_totals.items(), key=lambda x: -x[1])
+    ]
+
     # Phase 2: Generate funnel suggestions based on aggregated metrics
-    funnel_suggestions = generate_funnel_suggestions(sales_funnel)
+    funnel_suggestions = generate_funnel_suggestions(
+        funnel_stages=sales_funnel,
+        aggregated_loss_breakdown=aggregated_loss,
+    )
     # Aggregated avg response time
     agg_avg_response_time = await repo.get_avg_response_time_hours_multi(officer_ids, filter_start, filter_end)
 
