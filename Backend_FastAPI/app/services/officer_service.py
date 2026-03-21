@@ -515,7 +515,7 @@ def generate_funnel_suggestions(
                 "metric_value": total_loss,
                 "metric_label": f"Lost: {loss_display} VND",
                 "action_label": "Xem leads lost",
-                "action_url": f"/leads?stage={stage['stage_id']}&outcome=negative",
+                "action_url": f"/leads?stage={stage['stage_id']}&status=rejected,unqualified",
                 "_severity": severity * 50,  # High weight for revenue
             })
 
@@ -547,7 +547,7 @@ def generate_funnel_suggestions(
                     "metric_value": pct,
                     "metric_label": f"{count} leads ({pct:.0f}%)",
                     "action_label": "Xem chi tiết",
-                    "action_url": f"/leads?outcome=negative&loss_reason={reason_code}",
+                    "action_url": "/leads?status=rejected,unqualified",
                     "_severity": pct,  # For sorting
                 })
 
