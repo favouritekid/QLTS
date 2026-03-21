@@ -83,6 +83,19 @@ async def get_next_statuses_for_lead(
     universal = await _get_universal_activities(db, user_role)
     combined = ds_ui_safe + universal
 
+    # STEP 5b: Ensure current status is always included (allow "stay in place" consultation)
+    if current_status_id:
+        existing_ids = {s.id for s in combined}
+        if current_status_id not in existing_ids:
+            result = await db.execute(
+                select(models.ConsultationStatus)
+                .where(models.ConsultationStatus.id == current_status_id)
+                .options(selectinload(models.ConsultationStatus.stage))
+            )
+            current_status = result.scalar_one_or_none()
+            if current_status:
+                combined.append(current_status)
+
     # STEP 6: Sort by display_order
     combined.sort(key=lambda s: getattr(s, 'display_order', 999))
 
