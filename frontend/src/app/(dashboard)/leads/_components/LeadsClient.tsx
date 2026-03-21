@@ -399,6 +399,8 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onStageChange={filterHandlers.handleStageChange}
         officerFilters={filterState.officerFilters}
         onOfficerChange={filterHandlers.handleOfficerChange}
+        unitId={filterState.unitId}
+        onUnitIdChange={filterHandlers.handleUnitIdChange}
         scoreRange={filterState.scoreRange}
         onScoreRangeChange={filterHandlers.handleScoreRangeChange}
         dateFrom={filterState.dateFrom}

@@ -19,6 +19,7 @@ import {
   Plus,
   ChevronDown,
   Calendar,
+  Building2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +43,7 @@ import { STAGE_COLORS } from "@/types/pipeline.types";
 import { useAuth } from "@/hooks/useAuth";
 import { isAdmin as checkIsAdmin, canFilterByOfficer as checkCanFilterByOfficer } from "@/lib/utils/permissions";
 import { MultiOfferingSelector } from "@/components/common/selectors";
+import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { Slider } from "@/components/ui/slider";
 import {
   Select,
@@ -73,6 +75,9 @@ interface LeadFilterBarProps {
   onStageChange: (stages: string[]) => void;
   officerFilters: string[];
   onOfficerChange: (officers: string[]) => void;
+  // Unit filter (admin only)
+  unitId: string;
+  onUnitIdChange: (unitId: string) => void;
   // Score range
   scoreRange: [number, number];
   onScoreRangeChange: (range: [number, number]) => void;
@@ -179,6 +184,8 @@ export function LeadFilterBar({
   onStageChange,
   officerFilters,
   onOfficerChange,
+  unitId,
+  onUnitIdChange,
   scoreRange,
   onScoreRangeChange,
   dateFrom,
@@ -195,6 +202,7 @@ export function LeadFilterBar({
   const { user } = useAuth();
   const { data: pipelineStages = [] } = usePipelineStages();
   const { data: offeringsList = [] } = useAllProgramOfferings();
+  const { data: organizationUnits = [] } = useOrganizationUnits();
   const [officerSearch, setOfficerSearch] = useState("");
   const [debouncedOfficerSearch, setDebouncedOfficerSearch] = useState("");
   const officerSearchDebounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -337,6 +345,7 @@ export function LeadFilterBar({
     offeringFilters.length > 0 ||
     stageFilters.length > 0 ||
     officerFilters.length > 0 ||
+    !!unitId ||
     hasScoreFilter ||
     dateFrom ||
     dateTo;
@@ -352,6 +361,8 @@ export function LeadFilterBar({
     pipelineStages.find((s) => s.id === id)?.name || id;
   const getOfficerLabel = (id: string) =>
     officers.find((o) => o.id.toString() === id)?.full_name || id;
+  const getUnitLabel = (id: string) =>
+    organizationUnits.find((u) => u.id.toString() === id)?.name || id;
   const getOfferingLabel = (id: string) => {
     const offering = offeringsList.find((o) => o.id.toString() === id);
     if (!offering) return id;
@@ -371,6 +382,7 @@ export function LeadFilterBar({
     stageFilters.length +
     offeringFilters.length +
     officerFilters.length +
+    (unitId ? 1 : 0) +
     (hasScoreFilter ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
     (search ? 1 : 0);
@@ -452,6 +464,53 @@ export function LeadFilterBar({
                 ))}
               </div>
             </FilterDropdown>
+          )}
+
+          {/* Unit Filter - Admin only */}
+          {isAdminFlag && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn(
+                    "h-8 gap-1",
+                    unitId && "border-primary bg-primary/5"
+                  )}
+                >
+                  <Building2 className="h-3.5 w-3.5" />
+                  {unitId ? getUnitLabel(unitId) : "Đơn vị"}
+                  {unitId && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onUnitIdChange(""); }}
+                      className="hover:bg-muted ml-0.5 rounded-full p-0.5"
+                      aria-label="Xóa lọc đơn vị"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-56 p-3" align="start">
+                <div className="max-h-48 space-y-2 overflow-y-auto">
+                  {organizationUnits.map((unit) => (
+                    <div
+                      key={unit.id}
+                      className={cn(
+                        "cursor-pointer rounded px-2 py-1.5 text-sm transition-colors hover:bg-accent",
+                        unitId === unit.id.toString() && "bg-accent font-medium"
+                      )}
+                      onClick={() => onUnitIdChange(
+                        unitId === unit.id.toString() ? "" : unit.id.toString()
+                      )}
+                    >
+                      {unit.name}
+                    </div>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
           )}
 
           {/* Source Filter */}
@@ -701,6 +760,44 @@ export function LeadFilterBar({
               </FilterDropdown>
             )}
 
+            {/* Unit Filter - Admin only (mobile) */}
+            {isAdminFlag && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      "h-9 gap-1",
+                      unitId && "border-primary bg-primary/5"
+                    )}
+                  >
+                    <Building2 className="h-3.5 w-3.5" />
+                    {unitId ? getUnitLabel(unitId) : "Đơn vị"}
+                    <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-56 p-3" align="start">
+                  <div className="max-h-48 space-y-2 overflow-y-auto">
+                    {organizationUnits.map((unit) => (
+                      <div
+                        key={unit.id}
+                        className={cn(
+                          "cursor-pointer rounded px-2 py-1.5 text-sm transition-colors hover:bg-accent",
+                          unitId === unit.id.toString() && "bg-accent font-medium"
+                        )}
+                        onClick={() => onUnitIdChange(
+                          unitId === unit.id.toString() ? "" : unit.id.toString()
+                        )}
+                      >
+                        {unit.name}
+                      </div>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+
             {/* Source Filter */}
             <FilterDropdown label="Nguồn" count={sourceFilters.length}>
               <div className="space-y-2">
@@ -854,6 +951,9 @@ export function LeadFilterBar({
         offeringFilters.forEach((id) => {
           allPills.push({ key: `offering-${id}`, label: getOfferingLabel(id), onRemove: () => handleOfferingToggle(id) });
         });
+        if (unitId) {
+          allPills.push({ key: "unit", label: `Đơn vị: ${getUnitLabel(unitId)}`, onRemove: () => onUnitIdChange("") });
+        }
         if (hasScoreFilter) {
           allPills.push({ key: "score", label: `Điểm: ${scoreRange[0]}-${scoreRange[1]}`, onRemove: () => onScoreRangeChange([0, 100]) });
         }
