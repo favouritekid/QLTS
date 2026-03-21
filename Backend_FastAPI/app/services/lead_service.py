@@ -1939,6 +1939,11 @@ async def add_consultation(
             if new_status.outcome_type != "negative":
                 create_consult_data.pop("loss_reason_code", None)
                 create_consult_data.pop("loss_reason_note", None)
+            else:
+                loss_reason_note = create_consult_data.get("loss_reason_note")
+                if isinstance(loss_reason_note, str):
+                    normalized_loss_reason_note = loss_reason_note.strip()
+                    create_consult_data["loss_reason_note"] = normalized_loss_reason_note or None
 
             new_consultation = models.Consultation(
                 lead_id=lead_id,
@@ -2812,20 +2817,12 @@ async def update_consultation(
                                 to_status=new_status_id,
                             )
 
-                # ✅ LOSS REASON VALIDATION: Require loss_reason_code for final negative status
-                if validated_status.is_final and validated_status.outcome_type == "negative":
-                    loss_reason_code = update_data.get("loss_reason_code")
-                    if not loss_reason_code:
-                        raise BadRequest(
-                            detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
-                        )
-
-            # Update consultation fields (loss_reason now stored on Consultation)
+            # Update consultation fields except loss_reason (handled separately below)
             for field, value in update_data.items():
                 if field == "status_id":
                     # Đặt consultation_status_id (already validated above)
                     consultation.consultation_status_id = value
-                else:
+                elif field not in {"loss_reason_code", "loss_reason_note"}:
                     setattr(consultation, field, value)
 
             # Nếu status_id thay đổi và đây là consultation mới nhất
@@ -2875,6 +2872,34 @@ async def update_consultation(
             if effective_status and effective_status.outcome_type != "negative":
                 consultation.loss_reason_code = None
                 consultation.loss_reason_note = None
+            else:
+                current_loss_reason_code = consultation.loss_reason_code
+
+                if "loss_reason_code" in update_data:
+                    requested_loss_reason_code = update_data.get("loss_reason_code") or None
+                    if requested_loss_reason_code:
+                        consultation.loss_reason_code = requested_loss_reason_code
+
+                        if "loss_reason_note" in update_data:
+                            note_value = update_data.get("loss_reason_note")
+                            consultation.loss_reason_note = note_value.strip() if isinstance(note_value, str) and note_value.strip() else None
+                        elif requested_loss_reason_code != current_loss_reason_code:
+                            consultation.loss_reason_note = None
+                    else:
+                        consultation.loss_reason_code = None
+                        consultation.loss_reason_note = None
+                elif "loss_reason_note" in update_data:
+                    if current_loss_reason_code:
+                        note_value = update_data.get("loss_reason_note")
+                        consultation.loss_reason_note = note_value.strip() if isinstance(note_value, str) and note_value.strip() else None
+                    else:
+                        consultation.loss_reason_note = None
+
+                if effective_status and effective_status.is_final and effective_status.outcome_type == "negative":
+                    if not consultation.loss_reason_code:
+                        raise BadRequest(
+                            detail="Vui lòng chọn lý do không tiếp tục (loss_reason_code) khi chuyển sang trạng thái cuối cùng."
+                        )
 
             db.add(consultation)
 
@@ -2889,8 +2914,8 @@ async def update_consultation(
                     old_state,
                     new_state,
                     changed_by=current_user,
-                    reason=f"Updated consultation ID {consultation_id}",
-                    loss_reason_code=update_data.get("loss_reason_code") if (
+                    reason="Consultation status updated",
+                    loss_reason_code=consultation.loss_reason_code if (
                         effective_status and effective_status.outcome_type == "negative"
                     ) else None,
                 )

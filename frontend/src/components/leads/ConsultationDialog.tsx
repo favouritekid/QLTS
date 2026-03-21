@@ -191,7 +191,7 @@ export function ConsultationDialog({
         notes: consultation.notes || "",
         method: consultation.method || "phone",
         duration_minutes: consultation.duration_minutes || undefined,
-        // Loss reason: populated from LeadStatusHistory via timeline enrichment
+        // Loss reason: stored directly on Consultation (source of truth)
         loss_reason_code: consultation.loss_reason_code || null,
         loss_reason_note: consultation.loss_reason_note || "",
       });
@@ -279,13 +279,14 @@ export function ConsultationDialog({
       if (data.duration_minutes !== undefined) updateData.duration_minutes = data.duration_minutes;
       // Include loss reason for any negative outcome (optional for non-final, required for final)
       if (showsLossReason(targetStatus)) {
-        if (data.loss_reason_code) {
-          updateData.loss_reason_code = data.loss_reason_code;
-          if (data.loss_reason_note) updateData.loss_reason_note = data.loss_reason_note;
-        }
+        updateData.loss_reason_code = data.loss_reason_code ?? null;
+        updateData.loss_reason_note = data.loss_reason_code
+          ? data.loss_reason_note?.trim() || ""
+          : "";
       } else {
         // Clear loss reason if status is not negative
         updateData.loss_reason_code = null;
+        updateData.loss_reason_note = "";
       }
 
       updateMutation.mutate(
@@ -417,7 +418,7 @@ export function ConsultationDialog({
               )}
             />
 
-            {/* Loss Reason - Only shown when status is final negative */}
+            {/* Loss Reason - Shown for all negative outcomes, required only for final negative */}
             {showLossReason && (
               <FormField
                 control={form.control}

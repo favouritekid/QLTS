@@ -13,11 +13,13 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.repositories.officer_repository import OfficerRepository
 from app.services import lead_service
-from app.schemas import LeadCreate, LeadUpdate, ConsultationCreate
+from app.schemas import LeadCreate, LeadUpdate, ConsultationCreate, ConsultationUpdate
 from app.utils.exceptions import (
     ResourceNotFoundError, 
     DuplicateResourceError, 
@@ -1234,7 +1236,222 @@ class TestConsultation:
         
         # Assert
         assert updated.notes == "Updated notes"
-    
+
+    async def test_add_consultation_stores_loss_reason_on_consultation(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Final negative consultations store loss_reason directly on Consultation."""
+        contacted_status = await db.get(
+            models.ConsultationStatus, seeded_dependencies["contacted_status_id"]
+        )
+        contacted_status.outcome_type = "negative"
+        contacted_status.is_final = True
+        contacted_status.updates_pipeline = True
+        db.add(contacted_status)
+        await db.flush()
+
+        consult_in = ConsultationCreate(
+            status_id=contacted_status.id,
+            method="phone",
+            notes="Lead declined after pricing discussion",
+            loss_reason_code="PRICE_HIGH",
+            loss_reason_note="Need lower tuition",
+        )
+
+        with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
+             patch("app.services.lead_service.pipeline_service.validate_status_transition", new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = True
+            consultation, _, _ = await lead_service.add_consultation(
+                db,
+                seeded_lead.id,
+                officer_user.id,
+                consult_in,
+            )
+            await db.commit()
+
+        persisted = await db.get(models.Consultation, consultation.id)
+        assert consultation.loss_reason_code == "PRICE_HIGH"
+        assert consultation.loss_reason_note == "Need lower tuition"
+        assert persisted.loss_reason_code == "PRICE_HIGH"
+        assert persisted.loss_reason_note == "Need lower tuition"
+
+    async def test_update_consultation_can_clear_optional_negative_loss_reason_without_history_row(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Optional negative consultations can clear loss_reason without creating same-state history."""
+        optional_negative_status = models.ConsultationStatus(
+            id="sts_optional_negative_test",
+            name="Optional Negative Test",
+            color_code="#FF8800",
+            stage_id=seeded_dependencies["stage_id"],
+            outcome_type="negative",
+            is_final=False,
+            updates_pipeline=True,
+        )
+        db.add(optional_negative_status)
+        await db.flush()
+
+        seeded_lead.consultation_status_id = optional_negative_status.id
+        seeded_lead.pipeline_stage_id = optional_negative_status.stage_id
+        seeded_lead.status = optional_negative_status.id
+        db.add(seeded_lead)
+
+        consultation = models.Consultation(
+            lead_id=seeded_lead.id,
+            officer_id=officer_user.id,
+            consultation_status_id=optional_negative_status.id,
+            consultation_date=datetime.now(timezone.utc),
+            method="phone",
+            notes="Optional negative consultation",
+            loss_reason_code="PRICE_HIGH",
+            loss_reason_note="Too expensive",
+        )
+        db.add(consultation)
+        await db.commit()
+
+        history_count_before = await db.scalar(
+            select(func.count())
+            .select_from(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == seeded_lead.id)
+        )
+
+        updated = await lead_service.update_consultation(
+            db,
+            seeded_lead.id,
+            consultation.id,
+            ConsultationUpdate(
+                status_id=optional_negative_status.id,
+                loss_reason_code=None,
+                loss_reason_note=None,
+                notes="Optional negative without reason",
+            ),
+            admin_user,
+        )
+        await db.commit()
+
+        history_count_after = await db.scalar(
+            select(func.count())
+            .select_from(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == seeded_lead.id)
+        )
+
+        assert updated.loss_reason_code is None
+        assert updated.loss_reason_note is None
+        assert updated.notes == "Optional negative without reason"
+        assert history_count_after == history_count_before == 0
+
+    async def test_get_lead_timeline_returns_loss_reason_from_consultation(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Timeline should read loss_reason directly from Consultation without history enrichment."""
+        consultation = models.Consultation(
+            lead_id=seeded_lead.id,
+            officer_id=officer_user.id,
+            consultation_status_id=seeded_dependencies["contacted_status_id"],
+            consultation_date=datetime.now(timezone.utc),
+            method="phone",
+            notes="Could not reach lead",
+            loss_reason_code="NO_CONTACT",
+            loss_reason_note="Three unanswered calls",
+        )
+        db.add(consultation)
+        await db.commit()
+
+        timeline = await lead_service.get_lead_timeline(db, seeded_lead.id)
+        consultation_item = next(
+            item for item in timeline
+            if item["type"] == "consultation" and item["data"]["id"] == consultation.id
+        )
+
+        assert consultation_item["data"]["loss_reason_code"] == "NO_CONTACT"
+        assert consultation_item["data"]["loss_reason_note"] == "Three unanswered calls"
+
+    async def test_revert_status_after_same_status_negative_edit_uses_last_real_transition(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Same-status loss_reason edits must not block admin revert."""
+        contacted_status = await db.get(
+            models.ConsultationStatus, seeded_dependencies["contacted_status_id"]
+        )
+        contacted_status.outcome_type = "negative"
+        contacted_status.is_final = True
+        contacted_status.updates_pipeline = True
+        db.add(contacted_status)
+        await db.flush()
+
+        with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
+             patch("app.services.lead_service.pipeline_service.validate_status_transition", new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = True
+            consultation, _, _ = await lead_service.add_consultation(
+                db,
+                seeded_lead.id,
+                officer_user.id,
+                ConsultationCreate(
+                    status_id=contacted_status.id,
+                    method="phone",
+                    notes="Lead declined",
+                    loss_reason_code="PRICE_HIGH",
+                    loss_reason_note="Too expensive",
+                ),
+            )
+            await db.commit()
+
+        history_count_before = await db.scalar(
+            select(func.count())
+            .select_from(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == seeded_lead.id)
+        )
+
+        updated = await lead_service.update_consultation(
+            db,
+            seeded_lead.id,
+            consultation.id,
+            ConsultationUpdate(
+                status_id=contacted_status.id,
+                loss_reason_code="OTHER",
+                loss_reason_note="Needs scholarship support",
+            ),
+            admin_user,
+        )
+        await db.commit()
+
+        history_count_after_edit = await db.scalar(
+            select(func.count())
+            .select_from(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == seeded_lead.id)
+        )
+
+        reverted_lead = await lead_service.revert_last_status(
+            db,
+            seeded_lead.id,
+            admin_user,
+            reason="Regression test revert",
+        )
+        await db.commit()
+
+        assert updated.loss_reason_code == "OTHER"
+        assert updated.loss_reason_note == "Needs scholarship support"
+        assert history_count_after_edit == history_count_before == 1
+        assert reverted_lead.consultation_status_id == seeded_dependencies["initial_status_id"]
+
     async def test_update_consultation_not_found(
         self, 
         db: AsyncSession, 
@@ -1770,6 +1987,99 @@ class TestRevertStatus:
         
         # Error should mention admin
         assert "admin" in str(exc.value.detail).lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestOfficerLossReasonBreakdown:
+    """Regression tests for consultation-based loss reason analytics."""
+
+    async def test_uses_latest_consultation_per_lead_stage(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        repo = OfficerRepository(db)
+
+        negative_status = models.ConsultationStatus(
+            id="sts_repo_negative_loss_reason",
+            name="Repo Negative Loss Reason",
+            color_code="#FF0000",
+            stage_id=seeded_dependencies["stage_id"],
+            outcome_type="negative",
+            is_final=False,
+        )
+        db.add(negative_status)
+        await db.flush()
+
+        second_lead = models.Lead(
+            full_name="Service Test Lead 2",
+            phone="0909444333",
+            email="service_lead_2@test.com",
+            source="Referral",
+            unit_id=seeded_dependencies["unit_id"],
+            status=seeded_dependencies["initial_status_id"],
+            consultation_status_id=seeded_dependencies["initial_status_id"],
+            pipeline_stage_id=seeded_dependencies["stage_id"],
+            assigned_officer_id=officer_user.id,
+            assigned_at=datetime.now(timezone.utc),
+        )
+        db.add(second_lead)
+        await db.flush()
+
+        shared_timestamp = datetime.now(timezone.utc)
+
+        db.add(
+            models.Consultation(
+                lead_id=seeded_lead.id,
+                officer_id=officer_user.id,
+                consultation_status_id=negative_status.id,
+                consultation_date=shared_timestamp,
+                method="phone",
+                notes="Older reason",
+                loss_reason_code="PRICE_HIGH",
+            )
+        )
+        await db.flush()
+
+        db.add(
+            models.Consultation(
+                lead_id=seeded_lead.id,
+                officer_id=officer_user.id,
+                consultation_status_id=negative_status.id,
+                consultation_date=shared_timestamp,
+                method="phone",
+                notes="Latest reason wins on tie",
+                loss_reason_code="NO_CONTACT",
+            )
+        )
+        db.add(
+            models.Consultation(
+                lead_id=second_lead.id,
+                officer_id=officer_user.id,
+                consultation_status_id=negative_status.id,
+                consultation_date=shared_timestamp,
+                method="phone",
+                notes="Second lead still price-sensitive",
+                loss_reason_code="PRICE_HIGH",
+            )
+        )
+        await db.commit()
+
+        breakdown = await repo.get_loss_reason_breakdown_by_stage(
+            officer_id=officer_user.id
+        )
+        stage_breakdown = {
+            row["reason_code"]: row
+            for row in breakdown[seeded_dependencies["stage_id"]]
+        }
+
+        assert stage_breakdown["NO_CONTACT"]["count"] == 1
+        assert stage_breakdown["PRICE_HIGH"]["count"] == 1
+        assert stage_breakdown["NO_CONTACT"]["percentage"] == 50.0
+        assert stage_breakdown["PRICE_HIGH"]["percentage"] == 50.0
 
 
 # =============================================================================

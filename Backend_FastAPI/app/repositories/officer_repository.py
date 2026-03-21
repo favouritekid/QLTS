@@ -240,7 +240,8 @@ class OfficerRepository(BaseRepository[models.User]):
         from sqlalchemy.orm import aliased
 
         # Subquery: latest consultation with loss_reason per (lead_id, stage_id)
-        # Using consultation_status -> stage_id for stage grouping
+        # Using consultation_status -> stage_id for stage grouping.
+        # row_number() avoids duplicate matches when multiple consultations share the same timestamp.
         ConsultationStatus = aliased(models.ConsultationStatus)
 
         conditions = [
@@ -259,42 +260,35 @@ class OfficerRepository(BaseRepository[models.User]):
         if end_date:
             conditions.append(func.date(models.Consultation.consultation_date) <= end_date)
 
-        # Dedupe: latest consultation per (lead_id, stage_id)
-        latest_subq = (
+        ranked_subq = (
             select(
+                models.Consultation.id.label("consultation_id"),
                 models.Consultation.lead_id,
                 ConsultationStatus.stage_id,
-                func.max(models.Consultation.consultation_date).label("max_date"),
+                models.Consultation.loss_reason_code.label("loss_reason_code"),
+                func.row_number().over(
+                    partition_by=(models.Consultation.lead_id, ConsultationStatus.stage_id),
+                    order_by=(
+                        models.Consultation.consultation_date.desc(),
+                        models.Consultation.id.desc(),
+                    ),
+                ).label("row_num"),
             )
             .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .join(ConsultationStatus, models.Consultation.consultation_status_id == ConsultationStatus.id)
             .where(*conditions)
-            .group_by(models.Consultation.lead_id, ConsultationStatus.stage_id)
             .subquery()
         )
 
-        # Main query: join back to get loss_reason_code from latest consultation
-        ConsultationStatus2 = aliased(models.ConsultationStatus)
         query = (
             select(
-                ConsultationStatus2.stage_id.label("stage_id"),
-                models.Consultation.loss_reason_code,
+                ranked_subq.c.stage_id,
+                ranked_subq.c.loss_reason_code,
                 func.count().label("count"),
             )
-            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
-            .join(ConsultationStatus2, models.Consultation.consultation_status_id == ConsultationStatus2.id)
-            .join(
-                latest_subq,
-                (models.Consultation.lead_id == latest_subq.c.lead_id)
-                & (ConsultationStatus2.stage_id == latest_subq.c.stage_id)
-                & (models.Consultation.consultation_date == latest_subq.c.max_date),
-            )
-            .where(
-                models.Consultation.loss_reason_code.isnot(None),
-                models.Consultation.deleted_at.is_(None),
-            )
-            .group_by(ConsultationStatus2.stage_id, models.Consultation.loss_reason_code)
-            .order_by(ConsultationStatus2.stage_id, func.count().desc())
+            .where(ranked_subq.c.row_num == 1)
+            .group_by(ranked_subq.c.stage_id, ranked_subq.c.loss_reason_code)
+            .order_by(ranked_subq.c.stage_id, func.count().desc())
         )
 
         result = await self.db.execute(query)
