@@ -219,6 +219,25 @@ describe("useDashboardStats", () => {
     // teamStats should be undefined because query was disabled
     expect(result.current.teamStats).toBeUndefined();
   });
+
+  it("fetches teamStats for officer drill-down in unit scope with full context", async () => {
+    const { result } = renderHook(
+      () => useDashboardStats({ scope: "unit", unitId: 7, officerId: 42 }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.teamStats).toBeDefined());
+
+    const teamStatsCalls = mockGet.mock.calls.filter(
+      (c: any[]) => typeof c[0] === "string" && c[0].includes("/team-stats"),
+    );
+    expect(teamStatsCalls.length).toBe(1);
+
+    const url = teamStatsCalls[0][0] as string;
+    expect(url).toContain("scope=unit");
+    expect(url).toContain("unit_id=7");
+    expect(url).toContain("officer_id=42");
+  });
 });
 
 

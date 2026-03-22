@@ -10,6 +10,7 @@ import { useDashboardDate } from "@/contexts/DashboardDateContext";
 import { todayVN, subDaysVN } from "@/lib/utils/vn-date";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
+import type { DrillDownDescriptor } from "@/lib/dashboard/buildDashboardDestination";
 
 // =============================================================================
 // TYPES
@@ -128,12 +129,7 @@ export interface FunnelSuggestion {
   action_label?: string | null;
   action_url?: string | null;
   /** V12: Typed drill-down descriptor */
-  drill_down?: {
-    target: "leads_snapshot" | "consultations" | "transitions" | "cohorts";
-    exactness: "exact";
-    metric_key: string;
-    filters?: Record<string, string | string[] | boolean | undefined>;
-  } | null;
+  drill_down?: DrillDownDescriptor | null;
 }
 
 export interface FunnelStage {
@@ -283,10 +279,18 @@ async function fetchDashboard(filters: DashboardFilters): Promise<EnhancedOffice
   }
 }
 
-async function fetchTeamStats(startDate?: string, endDate?: string, officerId?: number): Promise<TeamStats> {
+async function fetchTeamStats(
+  startDate?: string,
+  endDate?: string,
+  scope?: DashboardScope,
+  unitId?: number,
+  officerId?: number,
+): Promise<TeamStats> {
   const params = new URLSearchParams();
   if (startDate) params.append("start_date", startDate);
   if (endDate) params.append("end_date", endDate);
+  if (scope) params.append("scope", scope);
+  if (unitId) params.append("unit_id", unitId.toString());
   if (officerId) params.append("officer_id", officerId.toString());
 
   const url = `/api/officer/team-stats${params.toString() ? `?${params.toString()}` : ""}`;
@@ -355,8 +359,8 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
   // - drill-down into specific officer from team/org scope
   const isEffectivePersonalView = scope === "personal" || !!officerId;
   const teamStatsQuery = useQuery({
-    queryKey: ["officer", "team-stats", startDate, endDate, officerId],
-    queryFn: () => fetchTeamStats(startDate, endDate, officerId),
+    queryKey: ["officer", "team-stats", startDate, endDate, scope, unitId, officerId],
+    queryFn: () => fetchTeamStats(startDate, endDate, scope, unitId, officerId),
     staleTime: 300000,
     enabled: enabled && isEffectivePersonalView,
   });

@@ -255,60 +255,17 @@ async def get_all_leads(
     validity_status: Optional[str] = Query(
         None, description="Filter by validity status (comma-separated, e.g. 'valid,invalid,pending')"
     ),
-    # === DASHBOARD CONTEXT PARAMS (V12) ===
-    nav_source: Optional[str] = Query(None, description="Navigation source (e.g. 'dashboard')"),
-    scope: Optional[str] = Query(None, description="Dashboard scope: personal|unit|organization"),
-    scope_officer_id: Optional[int] = Query(None, description="Dashboard scope officer ID"),
-    scope_unit_id: Optional[int] = Query(None, description="Dashboard scope unit ID"),
-    include_descendants: Optional[bool] = Query(None, description="Include descendant units"),
-    loss_reason: Optional[str] = Query(None, description="Filter by loss reason code (EXISTS on consultation)"),
 ):
     """
     Lấy danh sách Leads (có phân trang, filter, search, sort).
 
-    V12: Added dashboard context params (nav_source, scope_*, loss_reason).
-    Returns effective_scope when dashboard context is provided.
+    V12: Dashboard context is resolved centrally by LeadListFilter.
+    Returns effective_scope when the resolved context is meaningful to the UI.
     """
     skip = (page - 1) * page_size
 
     effective_officer_id = lead_filter.assigned_officer_id
     effective_unit_id = lead_filter.unit_id
-
-    # V12: Resolve unit_ids from dashboard scope
-    unit_ids = None
-    effective_scope = None
-    if scope_unit_id and include_descendants:
-        from app.repositories.organization_repository import OrganizationRepository
-        org_repo = OrganizationRepository(db)
-        unit_ids = await org_repo.get_descendant_unit_ids(scope_unit_id)
-        effective_scope = {
-            "scope_kind": scope or "unit",
-            "label": f"Đơn vị (bao gồm đơn vị con)" if include_descendants else "Đơn vị",
-            "forced_by_role": lead_filter.is_forced_officer_filter,
-            "includes_descendants": True,
-        }
-    elif scope_unit_id:
-        unit_ids = [scope_unit_id]
-        effective_scope = {
-            "scope_kind": scope or "unit",
-            "label": "Đơn vị",
-            "forced_by_role": lead_filter.is_forced_officer_filter,
-            "includes_descendants": False,
-        }
-    elif scope_officer_id:
-        effective_scope = {
-            "scope_kind": scope or "personal",
-            "label": "Cá nhân",
-            "forced_by_role": lead_filter.is_forced_officer_filter,
-            "includes_descendants": False,
-        }
-    elif lead_filter.is_forced_officer_filter:
-        effective_scope = {
-            "scope_kind": "personal",
-            "label": "Cá nhân (bắt buộc theo quyền)",
-            "forced_by_role": True,
-            "includes_descendants": False,
-        }
 
     total, leads, summary = await lead_service.get_leads(
         db,
@@ -317,7 +274,7 @@ async def get_all_leads(
         status=status,
         assigned_officer_id=effective_officer_id,
         unit_id=effective_unit_id,
-        unit_ids=unit_ids,
+        unit_ids=lead_filter.unit_ids,
         offering_id=offering_id,
         source=source,
         search=search,
@@ -330,13 +287,13 @@ async def get_all_leads(
         score_min=score_min,
         score_max=score_max,
         validity_status=validity_status,
-        loss_reason=loss_reason,
+        loss_reason=lead_filter.loss_reason,
     )
     return {
         "total_count": total,
         "leads": leads,
         "summary": summary,
-        "effective_scope": effective_scope,
+        "effective_scope": lead_filter.effective_scope,
     }
 
 
@@ -426,6 +383,7 @@ async def export_leads(
         status=status,
         assigned_officer_id=effective_officer_id,
         unit_id=effective_unit_id,
+        unit_ids=lead_filter.unit_ids,
         offering_id=offering_id,
         source=source,
         search=search,
@@ -439,6 +397,7 @@ async def export_leads(
         score_max=score_max,
         validity_status=validity_status,
         lead_ids=parsed_lead_ids,
+        loss_reason=lead_filter.loss_reason,
         include_summary=False,
     )
 

@@ -129,4 +129,52 @@ describe("useLeadsFilter", () => {
     expect(result.current.state.scoreMin).toBe(30);
     expect(result.current.state.scoreMax).toBe(70);
   });
+
+  it("should preserve dashboard context params during URL sync", async () => {
+    useSearchParamsMock.mockReturnValue(
+      new URLSearchParams("nav_source=dashboard&scope=unit&scope_unit_id=7&include_descendants=1"),
+    );
+
+    const { result } = renderHook(() => useLeadsFilter());
+
+    act(() => {
+      result.current.handlers.handleStageChange(["stg01"]);
+    });
+
+    await vi.waitFor(() => {
+      expect(replaceStateSpy).toHaveBeenCalled();
+      const latestUrl = replaceStateSpy.mock.calls.at(-1)?.[2] as string;
+      expect(latestUrl).toContain("nav_source=dashboard");
+      expect(latestUrl).toContain("scope=unit");
+      expect(latestUrl).toContain("scope_unit_id=7");
+      expect(latestUrl).toContain("include_descendants=1");
+      expect(latestUrl).toContain("stage=stg01");
+    });
+  });
+
+  it("should normalize legacy scope=team to unit in dashboard context", () => {
+    useSearchParamsMock.mockReturnValue(
+      new URLSearchParams("nav_source=dashboard&scope=team&scope_unit_id=11"),
+    );
+
+    const { result } = renderHook(() => useLeadsFilter());
+
+    expect(result.current.dashboardContext?.scope).toBe("unit");
+    expect(result.current.apiFilters.scope).toBe("unit");
+  });
+
+  it("should clear dashboard context when exitDashboardContext is called", () => {
+    useSearchParamsMock.mockReturnValue(
+      new URLSearchParams("nav_source=dashboard&scope=unit&scope_unit_id=7"),
+    );
+
+    const { result } = renderHook(() => useLeadsFilter());
+
+    act(() => {
+      result.current.handlers.exitDashboardContext();
+    });
+
+    expect(replaceStateSpy).toHaveBeenCalledWith(window.history.state, "", "/leads");
+    expect(result.current.dashboardContext).toBeNull();
+  });
 });

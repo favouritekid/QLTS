@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { getLossReasonLabelMap } from "@/lib/loss-reasons";
 import { useLossReasons } from "@/hooks/usePipeline";
 import type { FunnelSuggestion } from "@/hooks/useDashboardStats";
+import { buildDashboardDestination } from "@/lib/dashboard/buildDashboardDestination";
 import {
   ChevronDown,
   ChevronRight,
@@ -99,6 +100,7 @@ interface FunnelTableProps {
   scope?: "personal" | "unit" | "organization";
   unitId?: number | null;
   officerId?: number | null;
+  includeDescendants?: boolean;
 }
 
 // ============================================================================
@@ -170,12 +172,22 @@ export function FunnelTable({
   scope,
   unitId,
   officerId,
+  includeDescendants = false,
 }: FunnelTableProps) {
   const router = useRouter();
   const { startDate, endDate } = useDashboardDate();
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const { data: lossReasons } = useLossReasons();
   const LOSS_REASON_LABELS = getLossReasonLabelMap(lossReasons);
+  const navContext = {
+    scope,
+    officerId,
+    unitId,
+    includeDescendants,
+    startDate,
+    endDate,
+    dateField: "created_at",
+  };
 
   // Sort stages by order
   const sortedFunnel = [...funnel].sort((a, b) => a.stage_order - b.stage_order);
@@ -203,13 +215,15 @@ export function FunnelTable({
 
   // Navigate to leads filtered by stage
   const handleStageClick = (stageId: string) => {
-    const params = new URLSearchParams();
-    params.set("stage", stageId);
-    if (startDate) params.set("from", startDate);
-    if (endDate) params.set("to", endDate);
-    if (officerId) params.set("officer", officerId.toString());
-    else if (unitId) params.set("unit_id", unitId.toString());
-    router.push(`/leads?${params.toString()}`);
+    const destination = buildDashboardDestination(navContext, {
+      target: "leads_snapshot",
+      exactness: "exact",
+      metric_key: "funnel_stage",
+      filters: { stage: stageId },
+    });
+    if (destination) {
+      router.push(destination);
+    }
   };
 
   // Empty state
@@ -551,12 +565,17 @@ export function FunnelTable({
                         </p>
                       )}
                     </div>
-                    {suggestion.action_url && (
+                    {buildDashboardDestination(navContext, suggestion.drill_down ?? null) && (
                       <Button
                         variant="outline"
                         size="sm"
                         className="shrink-0"
-                        onClick={() => router.push(suggestion.action_url!)}
+                        onClick={() => {
+                          const destination = buildDashboardDestination(navContext, suggestion.drill_down ?? null);
+                          if (destination) {
+                            router.push(destination);
+                          }
+                        }}
                       >
                         {suggestion.action_label || "Xem"}
                         <ExternalLink className="h-3 w-3 ml-1" />

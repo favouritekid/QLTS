@@ -97,11 +97,12 @@ const typeIconMap: Record<string, typeof Lightbulb> = {
 interface ActionInsightsPanelProps {
   actions: PriorityAction[];
   scope?: "personal" | "unit" | "organization" | null;
+  unitId?: number | null;
   officerId?: number | null;
   isPersonalView?: boolean;
 }
 
-export function ActionInsightsPanel({ actions, scope, officerId, isPersonalView }: ActionInsightsPanelProps) {
+export function ActionInsightsPanel({ actions, scope, unitId, officerId, isPersonalView }: ActionInsightsPanelProps) {
   // When drilling into a specific officer, treat as personal scope for recommendations
   const isPersonal = isPersonalView ?? ((!scope || scope === "personal") || officerId != null);
 
@@ -146,6 +147,8 @@ export function ActionInsightsPanel({ actions, scope, officerId, isPersonalView 
     startDate,
     endDate,
     enabled: isPersonal,
+    scope,
+    unitId,
     officerId,
   });
   const recommendations = recsData?.recommendations ?? [];

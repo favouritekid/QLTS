@@ -247,11 +247,11 @@ describe("OfficerDashboardClient", () => {
   // Quick actions
   // =========================================================================
 
-  it("navigates to /leads?action=create on 'new_lead' quick action", async () => {
+  it("navigates to dashboard create context on 'new_lead' quick action", async () => {
     renderWithProviders();
     await waitFor(() => expect(screen.getByTestId("smart-header")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("qa-new-lead"));
-    expect(mockPush).toHaveBeenCalledWith("/leads?action=create");
+    expect(mockPush).toHaveBeenCalledWith("/leads?nav_source=dashboard&action=create");
   });
 
   it("onQuickAction callback reference is stable across re-renders", async () => {

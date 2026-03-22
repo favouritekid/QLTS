@@ -194,6 +194,46 @@ class TestGetLeadListFilter:
         assert result.unit_id == 50  # Preserved
         assert result.is_forced_officer_filter is False
 
+    @pytest.mark.asyncio
+    async def test_dashboard_context_is_preserved_in_filter_contract(self):
+        """Dashboard context should be resolved once and exposed via LeadListFilter."""
+        user = create_mock_user(role=UserRole.MANAGER, unit_id=10)
+        db = MagicMock()
+        ctx = MagicMock()
+        ctx.effective_officer_ids = []
+        ctx.effective_unit_ids = [10, 11]
+        ctx.effective_unit_root_id = 10
+        ctx.includes_descendants = True
+        ctx.scope_kind = "unit"
+        ctx.label = "Đơn vị"
+        ctx.forced_by_role = True
+        ctx.requested_officer_id = None
+        ctx.requested_unit_id = 10
+
+        with patch("app.core.deps.get_officer_dashboard_scope", new=AsyncMock(return_value=ctx)):
+            result = await get_lead_list_filter(
+                nav_source="dashboard",
+                scope="unit",
+                scope_unit_id=10,
+                include_descendants=True,
+                loss_reason="PRICE_HIGH",
+                db=db,
+                current_user=user,
+            )
+
+        assert result.unit_id is None
+        assert result.unit_ids == [10, 11]
+        assert result.scope == "unit"
+        assert result.scope_unit_id == 10
+        assert result.include_descendants is True
+        assert result.loss_reason == "PRICE_HIGH"
+        assert result.effective_scope == {
+            "scope_kind": "unit",
+            "label": "Đơn vị",
+            "forced_by_role": True,
+            "includes_descendants": True,
+        }
+
 
 # =============================================================================
 # TEST: check_permission (Inactive User Blocking)

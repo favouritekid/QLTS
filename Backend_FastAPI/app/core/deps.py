@@ -1904,11 +1904,27 @@ class LeadListFilter:
         self,
         assigned_officer_id: str | None,
         unit_id: int | None,
+        unit_ids: list[int] | None,
+        nav_source: str | None,
+        scope: str | None,
+        scope_officer_id: int | None,
+        scope_unit_id: int | None,
+        include_descendants: bool,
+        loss_reason: str | None,
+        effective_scope: dict | None,
         requesting_user: models.User,
         is_forced_officer_filter: bool = False
     ):
         self.assigned_officer_id = assigned_officer_id
         self.unit_id = unit_id
+        self.unit_ids = unit_ids
+        self.nav_source = nav_source
+        self.scope = scope
+        self.scope_officer_id = scope_officer_id
+        self.scope_unit_id = scope_unit_id
+        self.include_descendants = include_descendants
+        self.loss_reason = loss_reason
+        self.effective_scope = effective_scope
         self.requesting_user = requesting_user
         self.is_forced_officer_filter = is_forced_officer_filter
 
@@ -1916,6 +1932,13 @@ class LeadListFilter:
 async def get_lead_list_filter(
     assigned_officer_id: str | None = None,
     unit_id: int | None = None,
+    nav_source: str | None = None,
+    scope: str | None = None,
+    scope_officer_id: int | None = None,
+    scope_unit_id: int | None = None,
+    include_descendants: bool | None = None,
+    loss_reason: str | None = None,
+    db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(get_current_active_user),
 ) -> LeadListFilter:
     """
@@ -1937,29 +1960,137 @@ async def get_lead_list_filter(
         LeadListFilter with validated/sanitized parameters
     """
     user_role = current_user.role
+    normalized_scope = "unit" if scope == "team" else scope
+    dashboard_ctx = None
+    effective_scope = None
+    unit_ids: list[int] | None = None
+    includes_descendants = bool(include_descendants)
+
+    should_resolve_dashboard_ctx = any(
+        value is not None
+        for value in (
+            nav_source,
+            normalized_scope,
+            scope_officer_id,
+            scope_unit_id,
+            include_descendants,
+        )
+    )
+
+    if should_resolve_dashboard_ctx:
+        resolved_scope = normalized_scope
+        if resolved_scope is None:
+            if user_role == UserRole.OFFICER:
+                resolved_scope = "personal"
+            elif user_role == UserRole.MANAGER:
+                resolved_scope = "unit"
+            else:
+                resolved_scope = "organization"
+
+        dashboard_ctx = await get_officer_dashboard_scope(
+            scope=resolved_scope,
+            officer_id=scope_officer_id,
+            unit_id=scope_unit_id,
+            db=db,
+            current_user=current_user,
+        )
+        includes_descendants = dashboard_ctx.includes_descendants
+        if dashboard_ctx.effective_unit_ids:
+            unit_ids = dashboard_ctx.effective_unit_ids
+        effective_scope = {
+            "scope_kind": dashboard_ctx.scope_kind,
+            "label": dashboard_ctx.label,
+            "forced_by_role": dashboard_ctx.forced_by_role,
+            "includes_descendants": dashboard_ctx.includes_descendants,
+        }
     
     # === OFFICER: Force their own ID, ignore any passed filter ===
     if user_role == UserRole.OFFICER:
+        effective_officer_id = (
+            str(dashboard_ctx.effective_officer_ids[0])
+            if dashboard_ctx and dashboard_ctx.effective_officer_ids
+            else str(current_user.id)
+        )
+        if effective_scope is None:
+            effective_scope = {
+                "scope_kind": "personal",
+                "label": "Cá nhân (bắt buộc theo quyền)",
+                "forced_by_role": True,
+                "includes_descendants": False,
+            }
         return LeadListFilter(
-            assigned_officer_id=str(current_user.id),  # Force own ID
+            assigned_officer_id=effective_officer_id,  # Force own ID
             unit_id=None,  # Officers cannot filter by unit
+            unit_ids=unit_ids,
+            nav_source=nav_source,
+            scope=dashboard_ctx.scope_kind if dashboard_ctx else normalized_scope,
+            scope_officer_id=dashboard_ctx.requested_officer_id if dashboard_ctx else scope_officer_id,
+            scope_unit_id=dashboard_ctx.requested_unit_id if dashboard_ctx else scope_unit_id,
+            include_descendants=includes_descendants,
+            loss_reason=loss_reason,
+            effective_scope=effective_scope,
             requesting_user=current_user,
             is_forced_officer_filter=True
         )
     
     # === MANAGER: Can filter by officers, force own unit ===
     if user_role == UserRole.MANAGER:
+        effective_officer_id = assigned_officer_id
+        effective_unit_id = current_user.unit_id
+
+        if dashboard_ctx is not None:
+            if len(dashboard_ctx.effective_officer_ids) == 1:
+                effective_officer_id = str(dashboard_ctx.effective_officer_ids[0])
+            if dashboard_ctx.effective_unit_ids:
+                effective_unit_id = None
+            elif dashboard_ctx.effective_unit_root_id is not None:
+                effective_unit_id = dashboard_ctx.effective_unit_root_id
+        elif effective_scope is None:
+            effective_scope = {
+                "scope_kind": "unit",
+                "label": "Đơn vị",
+                "forced_by_role": True,
+                "includes_descendants": False,
+            }
+
         return LeadListFilter(
-            assigned_officer_id=assigned_officer_id,
-            unit_id=current_user.unit_id,  # Force manager's unit
+            assigned_officer_id=effective_officer_id,
+            unit_id=effective_unit_id,
+            unit_ids=unit_ids,
+            nav_source=nav_source,
+            scope=dashboard_ctx.scope_kind if dashboard_ctx else normalized_scope,
+            scope_officer_id=dashboard_ctx.requested_officer_id if dashboard_ctx else scope_officer_id,
+            scope_unit_id=dashboard_ctx.requested_unit_id if dashboard_ctx else scope_unit_id,
+            include_descendants=includes_descendants,
+            loss_reason=loss_reason,
+            effective_scope=effective_scope,
             requesting_user=current_user,
             is_forced_officer_filter=False
         )
     
     # === ADMIN: Full access ===
+    effective_officer_id = assigned_officer_id
+    effective_unit_id = unit_id
+
+    if dashboard_ctx is not None:
+        if len(dashboard_ctx.effective_officer_ids) == 1:
+            effective_officer_id = str(dashboard_ctx.effective_officer_ids[0])
+        if dashboard_ctx.effective_unit_ids:
+            effective_unit_id = None
+        elif dashboard_ctx.effective_unit_root_id is not None:
+            effective_unit_id = dashboard_ctx.effective_unit_root_id
+
     return LeadListFilter(
-        assigned_officer_id=assigned_officer_id,
-        unit_id=unit_id,
+        assigned_officer_id=effective_officer_id,
+        unit_id=effective_unit_id,
+        unit_ids=unit_ids,
+        nav_source=nav_source,
+        scope=dashboard_ctx.scope_kind if dashboard_ctx else normalized_scope,
+        scope_officer_id=dashboard_ctx.requested_officer_id if dashboard_ctx else scope_officer_id,
+        scope_unit_id=dashboard_ctx.requested_unit_id if dashboard_ctx else scope_unit_id,
+        include_descendants=includes_descendants,
+        loss_reason=loss_reason,
+        effective_scope=effective_scope,
         requesting_user=current_user,
         is_forced_officer_filter=False
     )

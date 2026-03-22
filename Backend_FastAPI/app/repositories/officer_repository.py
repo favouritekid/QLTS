@@ -1278,6 +1278,7 @@ class OfficerRepository(BaseRepository[models.User]):
         unit_id: Optional[int],
         start_date: date,
         end_date: date,
+        officer_ids: Optional[List[int]] = None,
     ) -> Dict[str, float]:
         """
         Get team average consultations and conversions.
@@ -1286,6 +1287,7 @@ class OfficerRepository(BaseRepository[models.User]):
             unit_id: Filter by unit (None = all officers)
             start_date: Start date for calculation
             end_date: End date for calculation
+            officer_ids: Pre-resolved officer IDs for subtree/aggregated scope
         """
         # Calculate number of days for averaging
         days = (end_date - start_date).days + 1
@@ -1296,7 +1298,14 @@ class OfficerRepository(BaseRepository[models.User]):
             models.User.role == UserRole.OFFICER,
             models.User.status == "active",
         ]
-        if unit_id:
+        if officer_ids is not None:
+            if not officer_ids:
+                return {
+                    "team_avg_consultations": 0.0,
+                    "total_officers": 0,
+                }
+            conditions.append(models.User.id.in_(officer_ids))
+        elif unit_id:
             conditions.append(models.User.unit_id == unit_id)
         
         # Count officers
@@ -1312,20 +1321,12 @@ class OfficerRepository(BaseRepository[models.User]):
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
         ]
         
-        if unit_id:
-            consult_conditions.append(
-                models.Consultation.officer_id.in_(
-                    select(models.User.id).where(*conditions)
-                )
+        # Ensure numerator and denominator use the exact same officer set.
+        consult_conditions.append(
+            models.Consultation.officer_id.in_(
+                select(models.User.id).where(*conditions)
             )
-        else:
-             # FIX: Ensure we only count consults from officers matching the "conditions" (Active Officers)
-             # This aligns the numerator (consults by active officers) with the denominator (count of active officers)
-             consult_conditions.append(
-                models.Consultation.officer_id.in_(
-                    select(models.User.id).where(*conditions)
-                )
-            )
+        )
         
         consult_query = (
             select(func.count(models.Consultation.id))
@@ -1383,7 +1384,7 @@ class OfficerRepository(BaseRepository[models.User]):
         Get list of active officer IDs based on scope.
 
         Args:
-            scope: "unit" or "organization" (legacy "team" also accepted)
+            scope: "unit" or "organization"
             unit_id: Filter by unit ID (required for unit scope)
 
         Returns:

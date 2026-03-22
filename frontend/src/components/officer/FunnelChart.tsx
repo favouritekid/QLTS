@@ -55,6 +55,7 @@ import type { LucideIcon } from "lucide-react";
 import type { TrendInfo, FunnelSuggestion } from "@/hooks/useDashboardStats";
 import { getLossReasonMap } from "@/lib/loss-reasons";
 import { useLossReasons } from "@/hooks/usePipeline";
+import { buildDashboardDestination } from "@/lib/dashboard/buildDashboardDestination";
 
 // ============================================================================
 // INTERFACES
@@ -224,6 +225,8 @@ interface FunnelChartProps {
   unitId?: number | null;
   /** Selected officer ID (for drill-down) */
   officerId?: number | null;
+  /** Whether scope expands into descendant units */
+  includeDescendants?: boolean;
   /** Phase 2: AI-powered funnel suggestions */
   suggestions?: FunnelSuggestion[];
 }
@@ -334,6 +337,7 @@ export function FunnelChart({
   scope,
   unitId,
   officerId,
+  includeDescendants = false,
   suggestions = [],
 }: FunnelChartProps) {
   const router = useRouter();
@@ -341,6 +345,15 @@ export function FunnelChart({
   const [showStageDetails, setShowStageDetails] = useState(false);
   const { data: lossReasons } = useLossReasons();
   const LOSS_REASON_LABELS = useMemo(() => getLossReasonMap(lossReasons), [lossReasons]);
+  const navContext = useMemo(() => ({
+    scope,
+    officerId,
+    unitId,
+    includeDescendants,
+    startDate,
+    endDate,
+    dateField: "created_at",
+  }), [scope, officerId, unitId, includeDescendants, startDate, endDate]);
 
   // Merge user config with defaults — memoize to stabilize references
   const mergedConfig: FunnelConfig = useMemo(() => ({
@@ -383,14 +396,14 @@ export function FunnelChart({
   // Memoize all derived metrics together to avoid redundant computation
   const {
     totalEarlyExit, enrolledCount, failedCount, totalLost,
-    netConversionRate, overallConversion, stageMetrics, bottleneckIndex,
+    netConversionRate, stageMetrics, bottleneckIndex,
     aggregatedLossBreakdown, totalLostRevenue
   } = useMemo(() => {
     // Return empty defaults when funnel is empty (hooks still called)
     if (sortedFunnel.length === 0) {
       return {
         totalEarlyExit: 0, enrolledCount: 0, failedCount: 0, totalLost: 0,
-        netConversionRate: 0, overallConversion: 0, stageMetrics: [] as { conversion: number | null; countDiff: number; countDiffPercent: number; percentFromTotal: number; prevCount: number; hasHistoricalData: boolean }[],
+        netConversionRate: 0, stageMetrics: [] as { conversion: number | null; countDiff: number; countDiffPercent: number; percentFromTotal: number; prevCount: number; hasHistoricalData: boolean }[],
         bottleneckIndex: -1, aggregatedLossBreakdown: [] as { reason_code: string; count: number; percentage: number }[],
         totalLostRevenue: 0,
       };
@@ -413,10 +426,6 @@ export function FunnelChart({
     const _netConversionRate = (_enrolledCount + _totalLost) > 0
       ? (_enrolledCount / (_enrolledCount + _totalLost)) * 100
       : 0;
-
-    // Gross conversion (for display/comparison)
-    const completedCount = _enrolledCount + _failedCount;
-    const _overallConversion = totalLeads > 0 ? (completedCount / totalLeads) * 100 : 0;
 
     // Calculate metrics for each stage
     const _stageMetrics = coreStages.map((stage, index) => {
@@ -487,7 +496,6 @@ export function FunnelChart({
       failedCount: _failedCount,
       totalLost: _totalLost,
       netConversionRate: _netConversionRate,
-      overallConversion: _overallConversion,
       stageMetrics: _stageMetrics,
       bottleneckIndex: _bottleneckIndex,
       aggregatedLossBreakdown: _aggregatedLossBreakdown,
@@ -497,23 +505,15 @@ export function FunnelChart({
 
   // Navigate to leads filtered by stage, preserving date and scope context
   const handleStageClick = (stageId: string) => {
-    const params = new URLSearchParams();
-    params.set("stage", stageId);
-
-    // Include date range from global filter
-    if (startDate) params.set("from", startDate);
-    if (endDate) params.set("to", endDate);
-
-    // Include scope filters for drill-down context
-    if (officerId) {
-      params.set("officer", officerId.toString());
-    } else if (scope === "unit" && unitId) {
-      params.set("unit_id", unitId.toString());
-    } else if (scope === "organization" && unitId) {
-      params.set("unit_id", unitId.toString());
+    const destination = buildDashboardDestination(navContext, {
+      target: "leads_snapshot",
+      exactness: "exact",
+      metric_key: "funnel_stage",
+      filters: { stage: stageId },
+    });
+    if (destination) {
+      router.push(destination);
     }
-
-    router.push(`/leads?${params.toString()}`);
   };
 
   // =========== EMPTY STATE HANDLING (after all hooks) ===========
@@ -1089,9 +1089,14 @@ export function FunnelChart({
                               {suggestion.metric_label}
                             </p>
                           )}
-                          {suggestion.action_url && (
+                          {buildDashboardDestination(navContext, suggestion.drill_down ?? null) && (
                             <button
-                              onClick={() => router.push(suggestion.action_url!)}
+                              onClick={() => {
+                                const destination = buildDashboardDestination(navContext, suggestion.drill_down ?? null);
+                                if (destination) {
+                                  router.push(destination);
+                                }
+                              }}
                               className={cn(
                                 "mt-2 text-xs font-medium flex items-center gap-1",
                                 "hover:underline",

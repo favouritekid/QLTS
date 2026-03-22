@@ -1,7 +1,7 @@
 // src/app/(dashboard)/dashboard/officer/_components/OfficerDashboardClient.tsx
 "use client";
 
-import { useState, useRef, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -58,6 +58,8 @@ function getUrlParam(key: string): string | null {
   return new URLSearchParams(window.location.search).get(key);
 }
 
+const VALID_SCOPES: DashboardScope[] = ["personal", "unit", "organization"];
+
 function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStats }) {
   const navRouter = useRouter();
 
@@ -94,29 +96,21 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     : null;
 
   // Read initial filter state from URL (lazy init, only runs on mount)
-  const validScopes: DashboardScope[] = ["personal", "unit", "organization"];
-
-  const [scope, setScope] = useState<DashboardScope | null>(() => {
+  const initialUrlScope = useMemo<DashboardScope | null>(() => {
     let urlScope = getUrlParam("scope");
-    // Normalize legacy "team" → "unit"
     if (urlScope === "team") urlScope = "unit";
-    return urlScope && validScopes.includes(urlScope as DashboardScope)
+    return urlScope && VALID_SCOPES.includes(urlScope as DashboardScope)
       ? (urlScope as DashboardScope)
-      : resolvedScope;
-  });
+      : null;
+  }, []);
+
+  const [scope, setScope] = useState<DashboardScope | null>(() => initialUrlScope ?? resolvedScope);
+    // Normalize legacy "team" → "unit"
 
   // Track whether scope was initialized from URL (stable across renders)
-  const scopeFromUrlRef = useRef(scope !== null);
-  const prevResolvedRef = useRef<DashboardScope | null>(null);
 
   // Sync scope from role during render — only if URL didn't provide a scope
   // and only when resolvedScope changes (i.e., user hydrates)
-  if (resolvedScope !== prevResolvedRef.current) {
-    prevResolvedRef.current = resolvedScope;
-    if (!scopeFromUrlRef.current && scope === null) {
-      setScope(resolvedScope);
-    }
-  }
 
   // Secondary filter states — initialized from URL
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(() => {
@@ -149,7 +143,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       let urlScope = getUrlParam("scope");
       // Normalize legacy "team" → "unit"
       if (urlScope === "team") urlScope = "unit";
-      if (urlScope && validScopes.includes(urlScope as DashboardScope)) {
+      if (urlScope && VALID_SCOPES.includes(urlScope as DashboardScope)) {
         setScope(urlScope as DashboardScope);
       } else {
         // No scope in URL → reset to role-derived default
@@ -166,11 +160,39 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     return () => window.removeEventListener("popstate", handlePopState);
   }, [resolvedScope]); // re-bind when role changes
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("scope") !== "team") return;
+
+    params.set("scope", "unit");
+    const qs = params.toString();
+    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState({ ...window.history.state, _dashboardFilters: true }, "", newUrl);
+  }, []);
+
+  useEffect(() => {
+    if (initialUrlScope !== null) return;
+    if (scope !== null) return;
+    if (resolvedScope === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      setScope(resolvedScope);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialUrlScope, resolvedScope, scope]);
+
+  const effectiveUnitId = scope === "unit"
+    ? (user?.unit_id ?? null)
+    : scope === "organization"
+      ? selectedUnitId
+      : null;
+  const includeDescendants = scope === "unit" || (scope === "organization" && effectiveUnitId != null);
+
   // Pass scope and filter options to useDashboardStats hook
   const { stats, teamStats, isLoading, error, refetch } = useDashboardStats({
     scope: scope ?? "personal",
     officerId: selectedOfficerId ?? undefined,
-    unitId: selectedUnitId ?? undefined,
+    unitId: effectiveUnitId ?? undefined,
     initialData: scope === "personal" ? initialStats : undefined,
     enabled: !!scope,
   });
@@ -194,7 +216,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   const handleQuickAction = useCallback((action: "new_lead") => {
     switch (action) {
       case "new_lead":
-        navRouter.push("/leads?action=create");
+        navRouter.push("/leads?nav_source=dashboard&action=create");
         break;
     }
   }, [navRouter]);
@@ -403,11 +425,19 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         anchorYear={fiscalYear}
         scope={scope}
         officerId={selectedOfficerId}
-        unitId={selectedUnitId}
+        unitId={effectiveUnitId}
+        includeDescendants={includeDescendants}
       />
 
       {/* KPI Cards Row */}
-      <KPICardsGrid kpis={stats.kpis} isPersonalView={effectivePersonalView} scope={scope} officerId={selectedOfficerId} unitId={selectedUnitId} />
+      <KPICardsGrid
+        kpis={stats.kpis}
+        isPersonalView={effectivePersonalView}
+        scope={scope}
+        officerId={selectedOfficerId}
+        unitId={effectiveUnitId}
+        includeDescendants={includeDescendants}
+      />
 
       {/* Empty Data Message */}
       {isEmptyData && (
@@ -426,10 +456,16 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
 
       {/* Row 1: Actions + Operational (action-first, CRM pattern) */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
-        <ActionInsightsPanel actions={stats.priority_actions} scope={scope ?? undefined} officerId={selectedOfficerId} isPersonalView={effectivePersonalView} />
+        <ActionInsightsPanel
+          actions={stats.priority_actions}
+          scope={scope ?? undefined}
+          unitId={effectiveUnitId}
+          officerId={selectedOfficerId}
+          isPersonalView={effectivePersonalView}
+        />
         <div className="space-y-4">
           <WorkloadCard statusOverview={stats.status_overview} scope={scope} isPersonalView={effectivePersonalView} />
-          <TodaySchedule scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
+          <TodaySchedule scope={scope} unitId={effectiveUnitId} officerId={selectedOfficerId} />
         </div>
       </div>
 
@@ -495,16 +531,18 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
             funnel={salesFunnel}
             netConversionTrend={funnelNetConversionTrend}
             scope={scope}
-            unitId={selectedUnitId}
+            unitId={effectiveUnitId}
             officerId={selectedOfficerId}
+            includeDescendants={includeDescendants}
             suggestions={funnelSuggestions}
           />
         ) : (
           <FunnelTable
             funnel={salesFunnel}
             scope={scope}
-            unitId={selectedUnitId}
+            unitId={effectiveUnitId}
             officerId={selectedOfficerId}
+            includeDescendants={includeDescendants}
             suggestions={funnelSuggestions}
           />
         )}
@@ -537,7 +575,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       )}
 
       {/* Row 5: Leaderboard (supplementary) */}
-      <WeeklyLeaderboard scope={scope} unitId={selectedUnitId} officerId={selectedOfficerId} />
+      <WeeklyLeaderboard scope={scope} unitId={effectiveUnitId} officerId={selectedOfficerId} />
     </div>
   );
 }

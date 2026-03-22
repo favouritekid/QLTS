@@ -91,10 +91,19 @@ export const officerApi = {
     return response.data;
   },
 
-  getRecommendations: async (limit: number = 5, startDate?: string, endDate?: string, officerId?: number) => {
+  getRecommendations: async (
+    limit: number = 5,
+    startDate?: string,
+    endDate?: string,
+    scope?: "personal" | "unit" | "organization",
+    unitId?: number,
+    officerId?: number,
+  ) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (startDate) params.append("start_date", startDate);
     if (endDate) params.append("end_date", endDate);
+    if (scope) params.append("scope", scope);
+    if (unitId) params.append("unit_id", String(unitId));
     if (officerId) params.append("officer_id", String(officerId));
     const response = await api.get<RecommendationsResponse>(
       `/api/officer/recommendations?${params}`

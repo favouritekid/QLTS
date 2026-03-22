@@ -84,7 +84,7 @@ function parseSearchParamsToApiParams(
 
   // V12: Dashboard scope context
   if (get("nav_source")) params.nav_source = get("nav_source");
-  if (get("scope")) params.scope = get("scope");
+  if (get("scope")) params.scope = get("scope") === "team" ? "unit" : get("scope");
   if (get("scope_officer_id")) params.scope_officer_id = parseInt(get("scope_officer_id")!, 10);
   if (get("scope_unit_id")) params.scope_unit_id = parseInt(get("scope_unit_id")!, 10);
   if (get("include_descendants") === "1" || get("include_descendants") === "true") {

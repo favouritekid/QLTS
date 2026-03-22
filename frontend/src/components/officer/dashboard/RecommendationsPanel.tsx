@@ -91,13 +91,30 @@ interface RecommendationsPanelProps {
   className?: string;
   /** Dashboard scope — recommendations are personal only */
   scope?: "personal" | "unit" | "organization" | null;
+  /** Unit root for scoped drill-down */
+  unitId?: number | null;
+  /** Selected officer target */
+  officerId?: number | null;
 }
 
-export function RecommendationsPanel({ limit = 5, className, scope = "personal" }: RecommendationsPanelProps) {
+export function RecommendationsPanel({
+  limit = 5,
+  className,
+  scope = "personal",
+  unitId,
+  officerId,
+}: RecommendationsPanelProps) {
   // Hooks must be called unconditionally (Rules of Hooks)
   const { startDate, endDate } = useDashboardDate();
   const isPersonal = !scope || scope === "personal";
-  const { data, isLoading, error } = useOfficerRecommendations(limit, { startDate, endDate, enabled: isPersonal });
+  const { data, isLoading, error } = useOfficerRecommendations(limit, {
+    startDate,
+    endDate,
+    enabled: isPersonal,
+    scope,
+    unitId,
+    officerId,
+  });
 
   // Recommendations are always personal — hide in team/org view to avoid confusion
   if (!isPersonal) {

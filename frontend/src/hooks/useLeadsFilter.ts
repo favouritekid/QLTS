@@ -192,15 +192,21 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
 
 /** V12: Parse dashboard context from URL (read-only state) */
 function parseDashboardContext(searchParams: URLSearchParams) {
+  const rawScope = searchParams.get("scope");
+  const normalizedScope = rawScope === "team" ? "unit" : rawScope;
   return {
     navSource: searchParams.get("nav_source") || undefined,
     action: searchParams.get("action") || undefined,
-    scope: searchParams.get("scope") || undefined,
+    scope: normalizedScope || undefined,
     scopeOfficerId: searchParams.get("scope_officer_id") ? Number(searchParams.get("scope_officer_id")) : undefined,
     scopeUnitId: searchParams.get("scope_unit_id") ? Number(searchParams.get("scope_unit_id")) : undefined,
     includeDescendants: searchParams.get("include_descendants") === "1" || searchParams.get("include_descendants") === "true",
     lossReason: searchParams.get("loss_reason") || undefined,
   };
+}
+
+function dashboardContextsEqual(a: DashboardContext | null, b: DashboardContext | null): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
@@ -238,12 +244,12 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   // Track previous searchParams content to avoid false triggers from reference changes
   const prevSearchParamsStr = useRef(searchParams.toString());
 
-  // V12: Parse dashboard context from URL (immutable for this session)
-  const dashboardContext = useMemo<DashboardContext | null>(() => {
+  const initialDashboardContext = useMemo<DashboardContext | null>(() => {
     if (!hasRecognizedContextParams(searchParams)) return null;
     return parseDashboardContext(searchParams);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const [dashboardContext, setDashboardContext] = useState<DashboardContext | null>(initialDashboardContext);
 
   // V12: URL (context or filter or action) > localStorage > defaults
   // If URL has ANY recognized param, skip localStorage entirely
@@ -316,6 +322,13 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     }
 
     const urlFilters = parseSearchParams(searchParams);
+    const urlContext = hasRecognizedContextParams(searchParams)
+      ? parseDashboardContext(searchParams)
+      : null;
+
+    if (!dashboardContextsEqual(urlContext, dashboardContext)) {
+      setDashboardContext(urlContext);
+    }
     
     // Only update state if it differs from current URL params
     // This avoids infinite loops
@@ -367,8 +380,25 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (urlFilters.sortOrder && urlFilters.sortOrder !== sortOrder) {
       setSortOrder(urlFilters.sortOrder);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]); // Only trigger on searchParams change
+  }, [
+    searchParams,
+    dashboardContext,
+    stageFilters,
+    statusFilters,
+    sourceFilters,
+    validityFilters,
+    offeringFilters,
+    officerFilters,
+    unitId,
+    search,
+    page,
+    dateFrom,
+    dateTo,
+    dateField,
+    scoreRange,
+    sortBy,
+    sortOrder,
+  ]);
 
   // ==========================================================================
   // URL SYNC (Using native History API for better performance)
@@ -406,6 +436,14 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       if (sortBy !== "created_at") params.set("sort_by", sortBy);
       if (sortOrder !== "desc") params.set("order", sortOrder);
 
+      if (dashboardContext?.navSource) params.set("nav_source", dashboardContext.navSource);
+      if (dashboardContext?.action) params.set("action", dashboardContext.action);
+      if (dashboardContext?.scope) params.set("scope", dashboardContext.scope);
+      if (dashboardContext?.scopeOfficerId) params.set("scope_officer_id", String(dashboardContext.scopeOfficerId));
+      if (dashboardContext?.scopeUnitId) params.set("scope_unit_id", String(dashboardContext.scopeUnitId));
+      if (dashboardContext?.includeDescendants) params.set("include_descendants", "1");
+      if (dashboardContext?.lossReason) params.set("loss_reason", dashboardContext.lossReason);
+
       const queryString = params.toString();
       const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
 
@@ -425,7 +463,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   }, [
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField, scoreRange,
-    sortBy, sortOrder, pathname,
+    sortBy, sortOrder, pathname, dashboardContext,
   ]);
 
   // ==========================================================================
@@ -579,7 +617,9 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   /** V12: Exit dashboard context entirely — navigate to plain /leads */
   const exitDashboardContext = useCallback(() => {
     resetFilters();
+    setDashboardContext(null);
     // Clear URL completely — removes both context and filter params
+    isInternalUrlChange.current = true;
     window.history.replaceState(window.history.state, "", pathname);
   }, [resetFilters, pathname]);
 

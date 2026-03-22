@@ -456,6 +456,12 @@ def generate_funnel_suggestions(
                 "metric_label": f"Conversion: {conversion_rate:.0f}%",
                 "action_label": "Xem leads",
                 "action_url": f"/leads?stage={stage['stage_id']}",
+                "drill_down": {
+                    "target": "transitions",
+                    "exactness": "exact",
+                    "metric_key": "bottleneck",
+                    "filters": {"stage_id": str(stage["stage_id"])},
+                },
                 "_severity": severity,  # For sorting
             })
 
@@ -482,6 +488,12 @@ def generate_funnel_suggestions(
                 "metric_label": f"TB: {avg_days:.1f} ngày",
                 "action_label": "Xem leads",
                 "action_url": f"/leads?stage={stage['stage_id']}",
+                "drill_down": {
+                    "target": "transitions",
+                    "exactness": "exact",
+                    "metric_key": "slow_stage",
+                    "filters": {"stage_id": str(stage["stage_id"])},
+                },
                 "_severity": severity * 10,  # For sorting (multiply to compare with conversion)
             })
 
@@ -516,6 +528,16 @@ def generate_funnel_suggestions(
                 "metric_label": f"Lost: {loss_display} VND",
                 "action_label": "Xem leads lost",
                 "action_url": f"/leads?stage={stage['stage_id']}&status=rejected,unqualified",
+                "drill_down": {
+                    "target": "transitions",
+                    "exactness": "exact",
+                    "metric_key": "high_loss",
+                    "filters": {
+                        "stage_id": str(stage["stage_id"]),
+                        "outcome": "negative",
+                        "final_only": True,
+                    },
+                },
                 "_severity": severity * 50,  # High weight for revenue
             })
 
@@ -548,6 +570,15 @@ def generate_funnel_suggestions(
                     "metric_label": f"{count} leads ({pct:.0f}%)",
                     "action_label": "Xem chi tiết",
                     "action_url": "/leads?status=rejected,unqualified",
+                    "drill_down": {
+                        "target": "consultations",
+                        "exactness": "exact",
+                        "metric_key": "loss_reason",
+                        "filters": {
+                            "loss_reason_code": reason_code,
+                            "consultation_kind": "human",
+                        },
+                    },
                     "_severity": pct,  # For sorting
                 })
 
@@ -1516,10 +1547,7 @@ async def get_team_stats(
 
     unit_id = ctx.effective_unit_root_id
     officer_id = ctx.requested_officer_id or ctx.requesting_user.id
-
-    active_officers = await repo.get_active_officer_ids(
-        scope="unit" if unit_id else "organization", unit_id=unit_id
-    )
+    active_officers = ctx.effective_officer_ids
 
     if len(active_officers) == 0:
         return {
@@ -1529,7 +1557,12 @@ async def get_team_stats(
             "total_officers": 0,
         }
 
-    team_data = await repo.get_team_averages(unit_id=unit_id, start_date=calc_start, end_date=calc_end)
+    team_data = await repo.get_team_averages(
+        unit_id=unit_id,
+        start_date=calc_start,
+        end_date=calc_end,
+        officer_ids=active_officers,
+    )
 
     officer_kpi = await repo.get_kpi_stats(officer_id, calc_start, calc_end)
     current_officer_count = officer_kpi["consultations_in_range"]

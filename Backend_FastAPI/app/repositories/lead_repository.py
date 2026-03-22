@@ -331,6 +331,7 @@ class LeadRepository(BaseRepository[models.Lead]):
         status: Optional[str] = None,
         assigned_officer_id: Optional[str] = None,
         unit_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
         offering_id: Optional[str] = None,
         source: Optional[str] = None,
         search: Optional[str] = None,
@@ -345,15 +346,18 @@ class LeadRepository(BaseRepository[models.Lead]):
         score_min: Optional[int] = None,
         score_max: Optional[int] = None,
         lead_ids: Optional[List[int]] = None,
+        loss_reason: Optional[str] = None,
     ) -> Tuple[int, List[models.Lead]]:
         """Get filtered list of leads with pagination and eager loading."""
         filters = self._build_filters(
             status=status, assigned_officer_id=assigned_officer_id,
-            unit_id=unit_id, offering_id=offering_id, source=source,
+            unit_id=unit_id, unit_ids=unit_ids,
+            offering_id=offering_id, source=source,
             search=search, pipeline_stage_id=pipeline_stage_id,
             date_from=date_from, date_to=date_to, date_field=date_field,
             referrer_id=referrer_id, validity_status=validity_status,
             score_min=score_min, score_max=score_max, lead_ids=lead_ids,
+            loss_reason=loss_reason,
         )
 
         base_query = select(models.Lead)

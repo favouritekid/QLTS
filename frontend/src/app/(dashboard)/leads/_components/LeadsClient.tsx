@@ -73,7 +73,7 @@ interface LeadsClientProps {
 
 export function LeadsClient({ initialData }: LeadsClientProps) {
   // ✅ Option D: Use extracted filter hook
-  const { state: filterState, handlers: filterHandlers, apiFilters } = useLeadsFilter();
+  const { state: filterState, handlers: filterHandlers, apiFilters, dashboardContext } = useLeadsFilter();
 
   // ✅ Phase 1: Query client for prefetching
   const queryClient = useQueryClient();
@@ -104,6 +104,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
   // Ref to auto-scroll detail panel when selecting a new lead
   const detailPanelRef = useRef<HTMLDivElement>(null);
+  const handledDashboardActionRef = useRef<string | null>(null);
 
   // ===========================================================================
   // API CALLS
@@ -183,7 +184,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         });
       }
     }
-  }, [filterState.page, filterState.pageSize, leadsPage?.total_count, apiFilters, queryClient]);
+  }, [filterState.page, filterState.pageSize, leadsPage, apiFilters, queryClient]);
 
   // ===========================================================================
   // HANDLERS
@@ -218,6 +219,24 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     setDialogMode("create");
     setLeadDialogOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (dashboardContext?.action !== "create") {
+      handledDashboardActionRef.current = null;
+      return;
+    }
+
+    if (handledDashboardActionRef.current === dashboardContext.action) {
+      return;
+    }
+
+    handledDashboardActionRef.current = dashboardContext.action;
+    const frame = window.requestAnimationFrame(() => {
+      handleAddLead();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [dashboardContext?.action, handleAddLead]);
 
   const confirmDelete = async () => {
     if (leadToDelete) {
@@ -311,6 +330,14 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   // RENDER
   // ===========================================================================
 
+  const totalLeadCount = leadsPage?.total_count ?? initialData?.total_count ?? 0;
+  const effectiveScopeLabel = leadsPage?.effective_scope?.label;
+  const effectiveScopeSuffix = leadsPage?.effective_scope?.forced_by_role ? " (theo quyền)" : "";
+  const headerDescription = effectiveScopeLabel
+    ? `${totalLeadCount.toLocaleString("vi-VN")} lead • Phạm vi: ${effectiveScopeLabel}${effectiveScopeSuffix}`
+    : `${totalLeadCount.toLocaleString("vi-VN")} lead`;
+  const hasDashboardContext = dashboardContext !== null;
+  
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header - Sticky */}
@@ -318,9 +345,19 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         variant="sticky"
         title="Trung Tâm Quản Lý Lead"
         icon={<Command className="text-primary h-5 w-5" />}
-        description={`${(leadsPage?.total_count ?? initialData?.total_count ?? 0).toLocaleString("vi-VN")} lead`}
+        description={headerDescription}
         actions={
           <>
+            {hasDashboardContext && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                onClick={filterHandlers.exitDashboardContext}
+              >
+                Thoát context
+              </Button>
+            )}
             {/* Hidden file input for import */}
             <input
               ref={fileInputRef}
