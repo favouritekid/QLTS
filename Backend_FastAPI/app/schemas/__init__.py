@@ -330,6 +330,12 @@ from .officer import (
     # Gap 2: Monthly KPI Plan Breakdown
     OfficerPlanMonthSummary,
     OfficerKpiPlanResponse,
+    # V12 Phase B: Drill-down schemas
+    DrillDownMetadata,
+    ConsultationDrillDownRow,
+    TransitionDrillDownRow,
+    CohortDrillDownRow,
+    DrillDownResponse,
 )
 
 # --- Từ tuition_discount_policy.py ---

@@ -25,10 +25,7 @@ export interface DashboardDestinationContext {
  * V12: Build a deep-link URL from dashboard to a target page.
  * All links always carry nav_source=dashboard plus scope context.
  *
- * Only leads_snapshot targets link to /leads.
- * Other targets (consultations, transitions, cohorts) will link to
- * /dashboard/drilldown/{target} in Phase B.
- * If the target page doesn't exist yet, returns null (widget should be non-clickable).
+ * Phase B: all targets now route to their respective drill-down pages.
  */
 export function buildDashboardDestination(
   context: DashboardDestinationContext,
@@ -36,13 +33,9 @@ export function buildDashboardDestination(
 ): string | null {
   if (!descriptor) return null;
 
-  // Phase A: only leads_snapshot has a target page
-  if (descriptor.target !== "leads_snapshot") {
-    return null; // Widget should be non-clickable
-  }
-
   const params = new URLSearchParams();
   params.set("nav_source", "dashboard");
+  params.set("metric_key", descriptor.metric_key);
 
   // Scope context
   if (context.scope) params.set("scope", context.scope);
@@ -69,5 +62,17 @@ export function buildDashboardDestination(
     }
   }
 
-  return `/leads?${params.toString()}`;
+  // Route based on target
+  switch (descriptor.target) {
+    case "leads_snapshot":
+      return `/leads?${params.toString()}`;
+    case "consultations":
+      return `/dashboard/drilldown/consultations?${params.toString()}`;
+    case "transitions":
+      return `/dashboard/drilldown/transitions?${params.toString()}`;
+    case "cohorts":
+      return `/dashboard/drilldown/cohorts?${params.toString()}`;
+    default:
+      return null;
+  }
 }

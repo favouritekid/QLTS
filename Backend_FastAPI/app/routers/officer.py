@@ -1,5 +1,5 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -321,3 +321,99 @@ async def get_recommendations(
         end_date=validated_end,
     )
     return {"recommendations": recommendations, "count": len(recommendations)}
+
+
+# =============================================================================
+# V12 PHASE B: Drill-down Endpoints
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/drilldowns/consultations",
+    summary="Drill-down into consultation records"
+)
+async def drilldown_consultations(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    ctx: Annotated[DashboardScopeContext, Depends(get_officer_dashboard_scope)],
+    metric_key: str = Query(..., description="Metric being drilled into"),
+    start_date: str = Query(None, alias="from"),
+    end_date: str = Query(None, alias="to"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    sort_by: str = Query("consultation_date"),
+    order: str = Query("desc"),
+    stage_id: str = Query(None),
+    loss_reason_code: str = Query(None),
+    consultation_kind: str = Query(None),
+    response_breach_only: bool = Query(False),
+):
+    """Consultations drill-down: consultation records with lead info, officer, loss reason."""
+    from app.services.drilldown_service import get_consultations_drilldown
+    return await get_consultations_drilldown(
+        db=db, ctx=ctx, metric_key=metric_key,
+        start_date=start_date, end_date=end_date,
+        page=page, page_size=page_size, sort_by=sort_by, order=order,
+        stage_id=stage_id, loss_reason_code=loss_reason_code,
+        consultation_kind=consultation_kind, response_breach_only=response_breach_only,
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/drilldowns/transitions",
+    summary="Drill-down into status transition records"
+)
+async def drilldown_transitions(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    ctx: Annotated[DashboardScopeContext, Depends(get_officer_dashboard_scope)],
+    metric_key: str = Query(..., description="Metric being drilled into"),
+    start_date: str = Query(None, alias="from"),
+    end_date: str = Query(None, alias="to"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    sort_by: str = Query("changed_at"),
+    order: str = Query("desc"),
+    stage_id: str = Query(None),
+    outcome: str = Query(None, description="positive|negative"),
+    final_only: bool = Query(False),
+    consulted_only: bool = Query(False),
+):
+    """Transitions drill-down: status changes with stage, outcome, loss reason."""
+    from app.services.drilldown_service import get_transitions_drilldown
+    return await get_transitions_drilldown(
+        db=db, ctx=ctx, metric_key=metric_key,
+        start_date=start_date, end_date=end_date,
+        page=page, page_size=page_size, sort_by=sort_by, order=order,
+        stage_id=stage_id, outcome=outcome,
+        final_only=final_only, consulted_only=consulted_only,
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/drilldowns/cohorts",
+    summary="Drill-down into lead cohort (created in date range)"
+)
+async def drilldown_cohorts(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    ctx: Annotated[DashboardScopeContext, Depends(get_officer_dashboard_scope)],
+    metric_key: str = Query(..., description="Metric being drilled into"),
+    start_date: str = Query(None, alias="from"),
+    end_date: str = Query(None, alias="to"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    sort_by: str = Query("created_at"),
+    order: str = Query("desc"),
+    cohort_result: str = Query(None, description="converted|lost|open"),
+):
+    """Cohorts drill-down: leads created in period with conversion result."""
+    from app.services.drilldown_service import get_cohorts_drilldown
+    return await get_cohorts_drilldown(
+        db=db, ctx=ctx, metric_key=metric_key,
+        start_date=start_date, end_date=end_date,
+        page=page, page_size=page_size, sort_by=sort_by, order=order,
+        cohort_result=cohort_result,
+    )

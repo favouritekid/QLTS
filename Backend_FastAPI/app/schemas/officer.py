@@ -48,20 +48,86 @@ class EstimatedLostRevenue(BaseModel):
     leads_with_tuition: int            # Leads that have offering with tuition data
 
 
+class DrillDownDescriptor(BaseModel):
+    """V12: Typed drill-down descriptor for exact dashboard click-through."""
+    target: Literal["leads_snapshot", "consultations", "transitions", "cohorts"]
+    exactness: Literal["exact"] = "exact"
+    metric_key: str
+    filters: Optional[dict] = None
+
+
+class DrillDownMetadata(BaseModel):
+    """Common metadata for all drill-down responses."""
+    metric_key: str
+    exactness: Literal["exact"] = "exact"
+    effective_scope: Optional[dict] = None
+    effective_date_context: Optional[dict] = None
+    page: int
+    page_size: int
+    total_count: int
+
+
+class ConsultationDrillDownRow(BaseModel):
+    """Row for consultations drill-down."""
+    consultation_id: int
+    lead_id: int
+    lead_name: Optional[str] = None
+    officer_id: Optional[int] = None
+    officer_name: Optional[str] = None
+    consultation_date: Optional[str] = None
+    loss_reason_code: Optional[str] = None
+    loss_reason_note: Optional[str] = None
+    status: Optional[str] = None
+
+
+class TransitionDrillDownRow(BaseModel):
+    """Row for transitions drill-down."""
+    history_id: int
+    lead_id: int
+    lead_name: Optional[str] = None
+    changed_at: Optional[str] = None
+    changed_by: Optional[str] = None
+    old_status: Optional[str] = None
+    new_status: Optional[str] = None
+    old_stage_id: Optional[str] = None
+    new_stage_id: Optional[str] = None
+    old_stage_name: Optional[str] = None
+    new_stage_name: Optional[str] = None
+    loss_reason_code: Optional[str] = None
+    outcome: Optional[str] = None  # "positive" | "negative" | "neutral"
+
+
+class CohortDrillDownRow(BaseModel):
+    """Row for cohorts drill-down."""
+    lead_id: int
+    lead_name: Optional[str] = None
+    created_at: Optional[str] = None
+    current_status: Optional[str] = None
+    cohort_result: Optional[str] = None  # "converted" | "lost" | "open"
+    officer_id: Optional[int] = None
+    officer_name: Optional[str] = None
+
+
+class DrillDownResponse(BaseModel):
+    """Generic drill-down response with metadata + rows."""
+    metadata: DrillDownMetadata
+    rows: list  # Actual type varies by endpoint
+
+
 class FunnelSuggestion(BaseModel):
     """AI-powered suggestion for funnel optimization."""
-    id: str                            # Unique suggestion ID (e.g., "bottleneck_stg02")
+    id: str
     type: Literal["bottleneck", "slow_stage", "high_loss", "loss_reason"]
     priority: Literal["critical", "high", "medium", "low"]
-    stage_id: Optional[str] = None     # Related stage (if applicable)
-    stage_name: Optional[str] = None   # Stage name for display
-    title: str                         # Short title (e.g., "Điểm nghẽn tại Tư vấn")
-    description: str                   # Detailed description
-    metric_value: Optional[float] = None  # The metric that triggered this suggestion
-    metric_label: Optional[str] = None    # Label for the metric (e.g., "Conversion: 35%")
-    action_label: Optional[str] = None    # Suggested action button label
-    action_url: Optional[str] = None      # URL for the action (e.g., leads filtered by stage)
-    drill_down: Optional[dict] = Field(None, description="V12: Typed drill-down descriptor")
+    stage_id: Optional[str] = None
+    stage_name: Optional[str] = None
+    title: str
+    description: str
+    metric_value: Optional[float] = None
+    metric_label: Optional[str] = None
+    action_label: Optional[str] = None
+    action_url: Optional[str] = None       # Backward compat — frontend uses drill_down
+    drill_down: Optional[DrillDownDescriptor] = None
 
 
 class FunnelStage(BaseModel):
