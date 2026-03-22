@@ -32,11 +32,14 @@ import {
 import { cn } from "@/lib/utils";
 import { useDashboardDate, DATE_PRESET_LABELS } from "@/contexts/DashboardDateContext";
 import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
-import type { KPIStats, TrendInfo } from "@/hooks/useDashboardStats";
+import type { KPIStats, TrendInfo, DashboardScope } from "@/hooks/useDashboardStats";
 
 interface KPICardsGridProps {
   kpis: KPIStats;
   isPersonalView?: boolean;
+  scope?: DashboardScope;
+  officerId?: number | null;
+  unitId?: number | null;
 }
 
 // =============================================================================
@@ -188,7 +191,7 @@ const TOOLTIPS = {
 // MAIN COMPONENT
 // =============================================================================
 
-export function KPICardsGrid({ kpis, isPersonalView = true }: KPICardsGridProps) {
+export function KPICardsGrid({ kpis, isPersonalView = true, scope, officerId, unitId }: KPICardsGridProps) {
   const router = useRouter();
   const { preset, dateRange, startDate, endDate } = useDashboardDate();
   const { canShowTarget } = useKpiCatalog();

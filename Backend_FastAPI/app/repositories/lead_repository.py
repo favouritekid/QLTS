@@ -171,6 +171,7 @@ class LeadRepository(BaseRepository[models.Lead]):
         status: Optional[str] = None,
         assigned_officer_id: Optional[str] = None,
         unit_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
         offering_id: Optional[str] = None,
         source: Optional[str] = None,
         search: Optional[str] = None,
@@ -183,6 +184,7 @@ class LeadRepository(BaseRepository[models.Lead]):
         score_min: Optional[int] = None,
         score_max: Optional[int] = None,
         lead_ids: Optional[List[int]] = None,
+        loss_reason: Optional[str] = None,
     ) -> list:
         """Build reusable filter list for leads queries (shared by get_filtered + get_summary)."""
         filters = []
@@ -204,7 +206,10 @@ class LeadRepository(BaseRepository[models.Lead]):
                 else:
                     filters.append(models.Lead.assigned_officer_id.in_(officer_ids))
 
-        if unit_id is not None:
+        # unit_ids (dashboard scope) takes precedence over unit_id (manual filter)
+        if unit_ids:
+            filters.append(models.Lead.unit_id.in_(unit_ids))
+        elif unit_id is not None:
             filters.append(models.Lead.unit_id == unit_id)
 
         # Multi-select: offering_id
@@ -276,6 +281,18 @@ class LeadRepository(BaseRepository[models.Lead]):
         # === SELECTIVE EXPORT (lead_ids) ===
         if lead_ids:
             filters.append(models.Lead.id.in_(lead_ids))
+
+        # === LOSS REASON (EXISTS subquery on Consultation) ===
+        if loss_reason:
+            from sqlalchemy import exists as sa_exists
+            filters.append(
+                sa_exists(
+                    select(models.Consultation.id).where(
+                        models.Consultation.lead_id == models.Lead.id,
+                        models.Consultation.loss_reason_code == loss_reason,
+                    )
+                )
+            )
 
         return filters
 
@@ -589,13 +606,15 @@ class LeadRepository(BaseRepository[models.Lead]):
     async def count_by_status(
         self,
         unit_id: Optional[int] = None,
-        officer_id: Optional[int] = None
+        unit_ids: Optional[List[int]] = None,
+        officer_id: Optional[int] = None,
     ) -> dict:
         """
         Count leads grouped by status.
 
         Args:
-            unit_id: Filter by unit (optional)
+            unit_id: Filter by single unit (manual filter)
+            unit_ids: Filter by multiple units (dashboard scope, takes precedence)
             officer_id: Filter by officer (optional)
 
         Returns:
@@ -610,7 +629,9 @@ class LeadRepository(BaseRepository[models.Lead]):
             .group_by(models.Lead.status)
         )
 
-        if unit_id is not None:
+        if unit_ids:
+            query = query.where(models.Lead.unit_id.in_(unit_ids))
+        elif unit_id is not None:
             query = query.where(models.Lead.unit_id == unit_id)
 
         if officer_id is not None:

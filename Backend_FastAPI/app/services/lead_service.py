@@ -679,38 +679,29 @@ async def get_leads(
     skip: int = 0,
     limit: int = 10,
     status: Optional[str] = None,
-    assigned_officer_id: Optional[str] = None,  # Now comma-separated string for multi-select
+    assigned_officer_id: Optional[str] = None,
     unit_id: Optional[int] = None,
-    offering_id: Optional[str] = None,  # Now comma-separated string for multi-select
+    unit_ids: Optional[List[int]] = None,
+    offering_id: Optional[str] = None,
     source: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: str = "created_at",
     order: str = "desc",
-    # === PIPELINE STAGE FILTER ===
-    pipeline_stage_id: Optional[str] = None,  # Already string, now comma-separated for multi
-    # === DATE RANGE FILTER ===
+    pipeline_stage_id: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     date_field: str = "created_at",
-    # === SCORE RANGE FILTER ===
     score_min: Optional[int] = None,
     score_max: Optional[int] = None,
-    # === VALIDITY STATUS FILTER ===
     validity_status: Optional[str] = None,
-    # === SELECTIVE EXPORT ===
     lead_ids: Optional[List[int]] = None,
-    # === SUMMARY ===
+    loss_reason: Optional[str] = None,
     include_summary: bool = True,
 ) -> Tuple[int, List[models.Lead], Optional[dict]]:
     """
     Lấy danh sách Leads (List View) + optional summary stats.
 
-    Args:
-        include_summary: If True, compute aggregate stats over full filtered set.
-            Set False for export to skip the extra query.
-
-    Returns:
-        Tuple of (total_count, lead_list, summary_dict_or_none)
+    V12: Added unit_ids (dashboard scope) and loss_reason filter.
     """
     from app.repositories import LeadRepository
 
@@ -718,20 +709,20 @@ async def get_leads(
 
     filter_kwargs = dict(
         status=status, assigned_officer_id=assigned_officer_id,
-        unit_id=unit_id, offering_id=offering_id, source=source,
+        unit_id=unit_id, unit_ids=unit_ids,
+        offering_id=offering_id, source=source,
         search=search, pipeline_stage_id=pipeline_stage_id,
         date_from=date_from, date_to=date_to, date_field=date_field,
         score_min=score_min, score_max=score_max,
         validity_status=validity_status, lead_ids=lead_ids,
+        loss_reason=loss_reason,
     )
 
-    # Get summary only when needed (skip for export)
     summary = None
     if include_summary:
         filters = repo._build_filters(**filter_kwargs)
         summary = await repo.get_summary(filters)
 
-    # Get paginated leads
     total_count, leads = await repo.get_filtered(
         skip=skip,
         limit=limit,

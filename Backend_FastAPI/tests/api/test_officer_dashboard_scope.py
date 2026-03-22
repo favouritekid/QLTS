@@ -221,7 +221,7 @@ class TestDashboardIDOR:
         """Manager viewing officer in own unit → 200."""
         resp = await client.get(
             DASHBOARD_URL,
-            params={"officer_id": officer_user_in_db["id"], "scope": "personal"},
+            params={"officer_id": officer_user_in_db["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 200
@@ -233,7 +233,7 @@ class TestDashboardIDOR:
         """Manager viewing officer in child unit (descendant) → 200."""
         resp = await client.get(
             DASHBOARD_URL,
-            params={"officer_id": officer_in_child_unit["id"], "scope": "personal"},
+            params={"officer_id": officer_in_child_unit["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 200
@@ -245,7 +245,7 @@ class TestDashboardIDOR:
         """Manager viewing officer in unrelated unit → 404."""
         resp = await client.get(
             DASHBOARD_URL,
-            params={"officer_id": officer_in_unrelated_unit["id"], "scope": "personal"},
+            params={"officer_id": officer_in_unrelated_unit["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 404
@@ -257,7 +257,7 @@ class TestDashboardIDOR:
         """Manager viewing non-officer user → 404 (role check)."""
         resp = await client.get(
             DASHBOARD_URL,
-            params={"officer_id": regular_user_in_db["id"], "scope": "personal"},
+            params={"officer_id": regular_user_in_db["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 404
@@ -305,10 +305,71 @@ class TestDashboardIDOR:
         """Manager passing own ID as officer_id → 404 (manager is not an officer)."""
         resp = await client.get(
             DASHBOARD_URL,
-            params={"officer_id": manager_user_in_db["id"], "scope": "personal"},
+            params={"officer_id": manager_user_in_db["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 404
+
+    # --- V12 scope validation tests ---
+
+    @pytest.mark.asyncio
+    async def test_manager_personal_scope_rejected(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers
+    ):
+        """V12: Manager requesting scope=personal → 400."""
+        resp = await client.get(
+            DASHBOARD_URL,
+            params={"scope": "personal"},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_admin_unit_scope_rejected(
+        self, client: AsyncClient, admin_user_in_db, admin_token_headers
+    ):
+        """V12: Admin requesting scope=unit → 400."""
+        resp = await client.get(
+            DASHBOARD_URL,
+            params={"scope": "unit"},
+            headers=admin_token_headers,
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_admin_personal_no_officer_rejected(
+        self, client: AsyncClient, admin_user_in_db, admin_token_headers
+    ):
+        """V12: Admin requesting scope=personal without officer_id → 400."""
+        resp = await client.get(
+            DASHBOARD_URL,
+            params={"scope": "personal"},
+            headers=admin_token_headers,
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_scope_team_normalized_to_unit(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers
+    ):
+        """V12: Legacy scope=team is normalized to unit → 200."""
+        resp = await client.get(
+            DASHBOARD_URL,
+            params={"scope": "team"},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_manager_default_scope_rejected(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers
+    ):
+        """V12: Manager with no scope param (default 'personal') → 400."""
+        resp = await client.get(
+            DASHBOARD_URL,
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 400
 
 
 # ===========================================================================
@@ -353,7 +414,7 @@ class TestLeaderboardIDOR:
         """Manager drilling into officer in child unit → 200."""
         resp = await client.get(
             LEADERBOARD_URL,
-            params={"officer_id": officer_in_child_unit["id"]},
+            params={"officer_id": officer_in_child_unit["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 200
@@ -365,7 +426,7 @@ class TestLeaderboardIDOR:
         """Manager drilling into officer outside scope → 404."""
         resp = await client.get(
             LEADERBOARD_URL,
-            params={"officer_id": officer_in_unrelated_unit["id"]},
+            params={"officer_id": officer_in_unrelated_unit["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 404
@@ -377,7 +438,7 @@ class TestLeaderboardIDOR:
         """Manager drilling into non-officer → 404."""
         resp = await client.get(
             LEADERBOARD_URL,
-            params={"officer_id": regular_user_in_db["id"]},
+            params={"officer_id": regular_user_in_db["id"], "scope": "unit"},
             headers=manager_token_headers,
         )
         assert resp.status_code == 404
@@ -446,7 +507,7 @@ class TestUpcomingActivitiesIDOR:
         now = datetime.now(timezone.utc)
         resp = await client.get(
             UPCOMING_URL,
-            params={"officer_id": officer_in_child_unit["id"], "month": now.month, "year": now.year},
+            params={"officer_id": officer_in_child_unit["id"], "scope": "unit", "month": now.month, "year": now.year},
             headers=manager_token_headers,
         )
         assert resp.status_code == 200
@@ -459,7 +520,7 @@ class TestUpcomingActivitiesIDOR:
         now = datetime.now(timezone.utc)
         resp = await client.get(
             UPCOMING_URL,
-            params={"officer_id": officer_in_unrelated_unit["id"], "month": now.month, "year": now.year},
+            params={"officer_id": officer_in_unrelated_unit["id"], "scope": "unit", "month": now.month, "year": now.year},
             headers=manager_token_headers,
         )
         assert resp.status_code == 404
@@ -524,11 +585,12 @@ class TestUpcomingActivitiesDrillDown:
             activity_time + timedelta(hours=1),
         )
 
-        # Manager drills into officer1
+        # Manager drills into officer1 (V12: scope=unit required for manager)
         resp1 = await client.get(
             UPCOMING_URL,
             params={
                 "officer_id": officer_user_in_db["id"],
+                "scope": "unit",
                 "month": now.month,
                 "year": now.year,
             },
@@ -548,6 +610,7 @@ class TestUpcomingActivitiesDrillDown:
             UPCOMING_URL,
             params={
                 "officer_id": officer2_in_unit1["id"],
+                "scope": "unit",
                 "month": now.month,
                 "year": now.year,
             },
@@ -646,6 +709,7 @@ class TestLeaderboardHighlightSemantics:
             LEADERBOARD_URL,
             params={
                 "officer_id": officer_user_in_db["id"],
+                "scope": "unit",
                 "start_date": today,
                 "end_date": today,
             },
@@ -654,7 +718,7 @@ class TestLeaderboardHighlightSemantics:
         assert resp.status_code == 200
         data = resp.json()
 
-        # current_user_rank should be null — manager is not in officer population
+        # current_user_rank should reflect drill-down target's rank
         assert data["current_user_rank"] is not None, (
             "current_user_rank should reflect the drill-down target's rank"
         )

@@ -21,7 +21,7 @@ export const officerKeys = {
 export interface UseWeeklyLeaderboardOptions {
   startDate?: string;
   endDate?: string;
-  scope?: "personal" | "team" | "organization";
+  scope?: "personal" | "unit" | "organization";
   unitId?: number | null;
   officerId?: number | null;
 }

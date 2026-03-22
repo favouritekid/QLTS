@@ -96,7 +96,7 @@ const typeIconMap: Record<string, typeof Lightbulb> = {
 
 interface ActionInsightsPanelProps {
   actions: PriorityAction[];
-  scope?: "personal" | "team" | "organization" | null;
+  scope?: "personal" | "unit" | "organization" | null;
   officerId?: number | null;
   isPersonalView?: boolean;
 }

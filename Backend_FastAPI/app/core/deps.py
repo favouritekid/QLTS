@@ -75,7 +75,8 @@ __all__ = [
     "resolve_kpi_plan_officer_id",
 
     # Data Classes
-    "OfficerDashboardScope",
+    "DashboardScopeContext",
+    "OfficerDashboardScope",  # alias for migration, remove later
     "LeadListFilter",
 
     # Standard Aliases (Phase 2.2)
@@ -541,24 +542,56 @@ async def require_any_staff(
     return current_user
 
 
-class OfficerDashboardScope:
+class DashboardScopeContext:
     """
-    Data class containing validated scope parameters for officer dashboard.
-    
-    This is returned by get_officer_dashboard_scope dependency to provide
-    pre-validated, role-enforced filtering parameters.
+    Pre-resolved scope context for all dashboard-family endpoints.
+
+    Created once by the dependency resolver; routers and services read
+    from this object instead of resolving scope/descendants themselves.
+
+    Replaces the old OfficerDashboardScope (V12 plan).
     """
+    __slots__ = (
+        "scope_kind",
+        "requested_officer_id",
+        "requested_unit_id",
+        "effective_officer_ids",
+        "effective_unit_root_id",
+        "effective_unit_ids",
+        "includes_descendants",
+        "forced_by_role",
+        "label",
+        "requesting_user",
+    )
+
     def __init__(
         self,
-        scope: str,
-        officer_id: int | None,
-        unit_id: int | None,
-        requesting_user: models.User
+        *,
+        scope_kind: str,
+        requested_officer_id: int | None,
+        requested_unit_id: int | None,
+        effective_officer_ids: list[int],
+        effective_unit_root_id: int | None,
+        effective_unit_ids: list[int],
+        includes_descendants: bool,
+        forced_by_role: bool,
+        label: str,
+        requesting_user: models.User,
     ):
-        self.scope = scope
-        self.officer_id = officer_id
-        self.unit_id = unit_id
+        self.scope_kind = scope_kind
+        self.requested_officer_id = requested_officer_id
+        self.requested_unit_id = requested_unit_id
+        self.effective_officer_ids = effective_officer_ids
+        self.effective_unit_root_id = effective_unit_root_id
+        self.effective_unit_ids = effective_unit_ids
+        self.includes_descendants = includes_descendants
+        self.forced_by_role = forced_by_role
+        self.label = label
         self.requesting_user = requesting_user
+
+
+# Keep old name as alias during migration — remove after router migration done
+OfficerDashboardScope = DashboardScopeContext
 
 
 async def _validate_officer_target(
@@ -607,86 +640,238 @@ async def get_officer_dashboard_scope(
     unit_id: int | None = None,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(get_current_active_user),
-) -> OfficerDashboardScope:
+) -> DashboardScopeContext:
     """
-    Security Gateway for Officer Dashboard scoping.
+    Security Gateway + Scope Resolver for all dashboard-family endpoints.
 
-    Enforces role-based access to dashboard data:
-    - Officers: Can only view personal data
-    - Managers: Can view team data (their unit + descendant units)
-    - Admins: Full access to all scopes and filters
-    - All other roles: Denied (fail-closed)
+    Creates a fully-resolved DashboardScopeContext so that routers and
+    services never need to resolve descendants or derive unit from officer.
 
-    When officer_id is provided by manager/admin, target must:
-    - exist as a user
-    - have role "officer"
-    - be within the requester's scope (descendant units for manager)
-    Failures return 404 to avoid leaking resource existence.
+    Role-scope matrix (V12):
+    - officer  → personal only
+    - manager  → unit only
+    - admin    → organization, or personal when officer_id is provided
+    - manager personal  → 400
+    - admin unit        → 400
+    - admin personal without officer_id → 400
+
+    Compatibility: inbound scope=team is normalized to unit.
+    IDOR: unauthorized officer_id → 404 (never 403).
     """
-    # Validate scope value
-    if scope not in ("personal", "team", "organization"):
+    from ..repositories.organization_repository import OrganizationRepository
+    from ..repositories.officer_repository import OfficerRepository
+
+    # --- Compatibility alias: team → unit ---
+    if scope == "team":
+        scope = "unit"
+
+    # --- Validate scope value ---
+    if scope not in ("personal", "unit", "organization"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid scope: {scope}. Must be 'personal', 'team', or 'organization'"
+            detail=f"Scope không hợp lệ: {scope}. Phải là 'personal', 'unit', hoặc 'organization'"
         )
 
     user_role = current_user.role
 
-    # === OFFICER: Personal data only ===
+    # =====================================================================
+    # OFFICER: personal only, short-circuit (no CTE)
+    # =====================================================================
     if user_role == UserRole.OFFICER:
         if scope != "personal":
             raise PermissionDeniedError(
                 detail="Officers can only view personal dashboard"
             )
         if officer_id is not None and officer_id != current_user.id:
-            # 404, not 403 — don't leak existence
             raise ResourceNotFoundError(detail="Officer not found")
         if unit_id is not None:
             raise PermissionDeniedError(
                 detail="Officers cannot filter by unit"
             )
-        return OfficerDashboardScope(
-            scope="personal",
-            officer_id=current_user.id,
-            unit_id=None,
-            requesting_user=current_user
+        return DashboardScopeContext(
+            scope_kind="personal",
+            requested_officer_id=current_user.id,
+            requested_unit_id=None,
+            effective_officer_ids=[current_user.id],
+            effective_unit_root_id=current_user.unit_id,
+            effective_unit_ids=[current_user.unit_id] if current_user.unit_id else [],
+            includes_descendants=False,
+            forced_by_role=True,
+            label="Cá nhân",
+            requesting_user=current_user,
         )
 
-    # === MANAGER: Team or personal, own unit hierarchy ===
+    # =====================================================================
+    # MANAGER: unit only
+    # =====================================================================
     if user_role == UserRole.MANAGER:
-        if scope == "organization":
-            raise PermissionDeniedError(
-                detail="Managers cannot view organization-wide data"
+        if scope != "unit":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Manager chỉ được dùng scope 'unit'"
             )
         if unit_id is not None and unit_id != current_user.unit_id:
             raise PermissionDeniedError(
                 detail="Managers cannot view data from other units"
             )
 
-        # If filtering by officer, validate via shared helper (role + scope)
+        # Validate officer drill-down if requested
+        target_officer = None
         if officer_id is not None:
-            await _validate_officer_target(db, officer_id, current_user)
+            target_officer = await _validate_officer_target(db, officer_id, current_user)
 
-        return OfficerDashboardScope(
-            scope=scope,
-            officer_id=officer_id,
-            unit_id=current_user.unit_id,
-            requesting_user=current_user
+        # Resolve descendant units
+        root_unit_id = current_user.unit_id
+        if root_unit_id is None:
+            raise BusinessRuleViolation(
+                detail="Manager chưa được gán đơn vị"
+            )
+
+        org_repo = OrganizationRepository(db)
+        descendant_unit_ids = await org_repo.get_descendant_unit_ids(root_unit_id)
+
+        # If drill-down to specific officer, short-circuit to single officer
+        if target_officer is not None:
+            return DashboardScopeContext(
+                scope_kind="unit",
+                requested_officer_id=officer_id,
+                requested_unit_id=root_unit_id,
+                effective_officer_ids=[officer_id],
+                effective_unit_root_id=root_unit_id,
+                effective_unit_ids=descendant_unit_ids,
+                includes_descendants=True,
+                forced_by_role=True,
+                label=f"Cá nhân: {target_officer.full_name}",
+                requesting_user=current_user,
+            )
+
+        # Aggregated: all officers in descendant units
+        officer_repo = OfficerRepository(db)
+        effective_ids: list[int] = []
+        for uid in descendant_unit_ids:
+            ids = await officer_repo.get_active_officer_ids(scope="unit", unit_id=uid)
+            effective_ids.extend(ids)
+        effective_ids = list(set(effective_ids))
+
+        return DashboardScopeContext(
+            scope_kind="unit",
+            requested_officer_id=None,
+            requested_unit_id=root_unit_id,
+            effective_officer_ids=effective_ids,
+            effective_unit_root_id=root_unit_id,
+            effective_unit_ids=descendant_unit_ids,
+            includes_descendants=True,
+            forced_by_role=True,
+            label="Đơn vị",
+            requesting_user=current_user,
         )
 
-    # === ADMIN: Full access, but validate officer_id if provided ===
+    # =====================================================================
+    # ADMIN: organization or personal (with officer_id)
+    # =====================================================================
     if user_role == UserRole.ADMIN:
-        if officer_id is not None:
-            await _validate_officer_target(db, officer_id, current_user)
+        if scope == "unit":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Admin không dùng scope 'unit'. Dùng 'organization' với scope_unit_id để xem một đơn vị."
+            )
 
-        return OfficerDashboardScope(
-            scope=scope,
-            officer_id=officer_id,
-            unit_id=unit_id,
-            requesting_user=current_user
+        # --- personal: must have officer_id ---
+        if scope == "personal":
+            if officer_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Admin cần chỉ định officer_id khi dùng scope 'personal'"
+                )
+            target_officer = await _validate_officer_target(db, officer_id, current_user)
+            return DashboardScopeContext(
+                scope_kind="personal",
+                requested_officer_id=officer_id,
+                requested_unit_id=None,
+                effective_officer_ids=[officer_id],
+                effective_unit_root_id=target_officer.unit_id,
+                effective_unit_ids=[target_officer.unit_id] if target_officer.unit_id else [],
+                includes_descendants=False,
+                forced_by_role=False,
+                label=f"Cá nhân: {target_officer.full_name}",
+                requesting_user=current_user,
+            )
+
+        # --- organization ---
+        org_repo = OrganizationRepository(db)
+        officer_repo = OfficerRepository(db)
+
+        # If drill-down to specific officer
+        if officer_id is not None:
+            target_officer = await _validate_officer_target(db, officer_id, current_user)
+
+            # Still compute org-level units for context
+            if unit_id is not None:
+                eff_unit_ids = await org_repo.get_descendant_unit_ids(unit_id)
+                root = unit_id
+                includes_desc = True
+            elif target_officer.unit_id:
+                eff_unit_ids = [target_officer.unit_id]
+                root = target_officer.unit_id
+                includes_desc = False
+            else:
+                eff_unit_ids = []
+                root = None
+                includes_desc = False
+
+            return DashboardScopeContext(
+                scope_kind="organization",
+                requested_officer_id=officer_id,
+                requested_unit_id=unit_id,
+                effective_officer_ids=[officer_id],
+                effective_unit_root_id=root,
+                effective_unit_ids=eff_unit_ids,
+                includes_descendants=includes_desc,
+                forced_by_role=False,
+                label=f"Cá nhân: {target_officer.full_name}",
+                requesting_user=current_user,
+            )
+
+        # Aggregated organization view
+        if unit_id is not None:
+            # Scoped to a unit subtree
+            eff_unit_ids = await org_repo.get_descendant_unit_ids(unit_id)
+            effective_ids: list[int] = []
+            for uid in eff_unit_ids:
+                ids = await officer_repo.get_active_officer_ids(scope="organization", unit_id=uid)
+                effective_ids.extend(ids)
+            effective_ids = list(set(effective_ids))
+            return DashboardScopeContext(
+                scope_kind="organization",
+                requested_officer_id=None,
+                requested_unit_id=unit_id,
+                effective_officer_ids=effective_ids,
+                effective_unit_root_id=unit_id,
+                effective_unit_ids=eff_unit_ids,
+                includes_descendants=True,
+                forced_by_role=False,
+                label="Tổ chức (đơn vị)",
+                requesting_user=current_user,
+            )
+
+        # Full organization — all officers
+        all_ids = await officer_repo.get_active_officer_ids(scope="organization", unit_id=None)
+        return DashboardScopeContext(
+            scope_kind="organization",
+            requested_officer_id=None,
+            requested_unit_id=None,
+            effective_officer_ids=all_ids,
+            effective_unit_root_id=None,
+            effective_unit_ids=[],
+            includes_descendants=False,
+            forced_by_role=False,
+            label="Tổ chức",
+            requesting_user=current_user,
         )
 
-    # === ALL OTHER ROLES: Deny by default (fail-closed) ===
+    # =====================================================================
+    # ALL OTHER ROLES: Deny by default (fail-closed)
+    # =====================================================================
     raise PermissionDeniedError(
         detail="Your role is not allowed to access officer dashboard"
     )

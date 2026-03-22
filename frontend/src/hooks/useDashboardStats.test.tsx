@@ -5,7 +5,7 @@
  *
  * Validates:
  * - teamStatsQuery only enabled when scope === "personal"
- * - teamStatsQuery disabled for "team" and "organization" scopes
+ * - teamStatsQuery disabled for "unit" and "organization" scopes
  * - dashboardQuery passes all filter params correctly
  * - dashboardQuery disabled when enabled=false
  */
@@ -150,9 +150,9 @@ describe("useDashboardStats", () => {
     expect(teamStatsCalls.length).toBe(1);
   });
 
-  it("does NOT fetch teamStats when scope is 'team'", async () => {
+  it("does NOT fetch teamStats when scope is 'unit'", async () => {
     const { result } = renderHook(
-      () => useDashboardStats({ scope: "team" }),
+      () => useDashboardStats({ scope: "unit" }),
       { wrapper: createWrapper() },
     );
 
@@ -208,9 +208,9 @@ describe("useDashboardStats", () => {
     expect(mockGet).not.toHaveBeenCalled();
   });
 
-  it("returns teamStats=undefined when scope is 'team'", async () => {
+  it("returns teamStats=undefined when scope is 'unit'", async () => {
     const { result } = renderHook(
-      () => useDashboardStats({ scope: "team" }),
+      () => useDashboardStats({ scope: "unit" }),
       { wrapper: createWrapper() },
     );
 

@@ -67,7 +67,7 @@ function getGreeting(): string {
 
 const SCOPE_LABELS: Record<DashboardScope, { label: string; icon: typeof User }> = {
   personal: { label: "Cá nhân", icon: User },
-  team: { label: "Đội nhóm", icon: Users },
+  unit: { label: "Đơn vị", icon: Users },
   organization: { label: "Tổ chức", icon: Building2 },
 };
 
@@ -90,18 +90,18 @@ export function SmartHeader({
 
   const availableScopes: DashboardScope[] =
     isAdmin
-      ? ["personal", "team", "organization"]
+      ? ["personal", "organization"]
       : isManager
-        ? ["personal", "team"]
+        ? ["unit"]
         : ["personal"];
 
   // Fetch officers for officer selector based on scope:
-  // - "team" scope: ALWAYS filter by user's own unit (team = user's unit)
+  // - "unit" scope: ALWAYS filter by user's own unit (unit = user's unit)
   // - "organization" scope (admin): filter by selectedUnitId (any level in hierarchy)
   // - "personal" scope: no filter (admin can see all to drill down)
   const filterUnitId =
-    scope === "team"
-      ? (user?.unit_id ?? undefined) // Team = user's own unit
+    scope === "unit"
+      ? (user?.unit_id ?? undefined) // Unit = user's own unit
       : scope === "organization"
         ? (selectedUnitId ?? undefined) // Organization = selected unit or all
         : undefined; // Personal = no filter (admin can pick any officer)
@@ -126,10 +126,10 @@ export function SmartHeader({
 
   // Show officer selector when:
   // - Admin: always (can drill down to any officer)
-  // - Manager: when scope is "team" (can drill down to team members)
+  // - Manager: when scope is "unit" (can drill down to unit members)
   const showOfficerSelector =
-    (isAdmin && (scope === "personal" || scope === "team" || scope === "organization")) ||
-    (isManager && scope === "team");
+    (isAdmin && (scope === "personal" || scope === "unit" || scope === "organization")) ||
+    (isManager && scope === "unit");
 
   // Show unit selector when:
   // - Admin and scope is "organization"
@@ -222,7 +222,7 @@ export function SmartHeader({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">
-                {scope === "organization" ? "Tổng hợp" : scope === "team" ? "Cả đội" : "Tất cả"}
+                {scope === "organization" ? "Tổng hợp" : scope === "unit" ? "Cả đơn vị" : "Tất cả"}
               </SelectItem>
               {officers.map((officer) => (
                 <SelectItem key={officer.id} value={officer.id.toString()}>

@@ -32,6 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getLossReasonLabelMap } from "@/lib/loss-reasons";
 import { useLossReasons } from "@/hooks/usePipeline";
+import type { FunnelSuggestion } from "@/hooks/useDashboardStats";
 import {
   ChevronDown,
   ChevronRight,
@@ -77,20 +78,6 @@ interface EstimatedLostRevenue {
   leads_with_tuition: number;
 }
 
-interface FunnelSuggestion {
-  id: string;
-  type: "bottleneck" | "slow_stage" | "high_loss" | "loss_reason";
-  priority: "critical" | "high" | "medium" | "low";
-  stage_id?: string | null;
-  stage_name?: string | null;
-  title: string;
-  description: string;
-  metric_value?: number | null;
-  metric_label?: string | null;
-  action_label?: string | null;
-  action_url?: string | null;
-}
-
 interface FunnelStage {
   stage_id: string;
   stage_name: string;
@@ -109,7 +96,7 @@ interface FunnelStage {
 interface FunnelTableProps {
   funnel: FunnelStage[];
   suggestions?: FunnelSuggestion[];
-  scope?: "personal" | "team" | "organization";
+  scope?: "personal" | "unit" | "organization";
   unitId?: number | null;
   officerId?: number | null;
 }

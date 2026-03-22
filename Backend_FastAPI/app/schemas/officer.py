@@ -61,6 +61,7 @@ class FunnelSuggestion(BaseModel):
     metric_label: Optional[str] = None    # Label for the metric (e.g., "Conversion: 35%")
     action_label: Optional[str] = None    # Suggested action button label
     action_url: Optional[str] = None      # URL for the action (e.g., leads filtered by stage)
+    drill_down: Optional[dict] = Field(None, description="V12: Typed drill-down descriptor")
 
 
 class FunnelStage(BaseModel):

@@ -31,7 +31,7 @@ import { useOfficerSchedule, type ScheduleActivity } from "@/hooks/officer/useOf
 
 interface TodayScheduleProps {
   className?: string;
-  scope?: "personal" | "team" | "organization" | null;
+  scope?: "personal" | "unit" | "organization" | null;
   unitId?: number | null;
   officerId?: number | null;
 }

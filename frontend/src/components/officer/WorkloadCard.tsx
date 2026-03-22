@@ -26,7 +26,7 @@ interface StatusOverview {
 
 interface WorkloadCardProps {
   statusOverview: StatusOverview;
-  scope?: "personal" | "team" | "organization" | null;
+  scope?: "personal" | "unit" | "organization" | null;
   isPersonalView?: boolean;
 }
 

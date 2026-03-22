@@ -27,7 +27,7 @@ import { useWeeklyLeaderboard } from "@/hooks/officer/useWeeklyLeaderboard";
 
 interface WeeklyLeaderboardProps {
   /** Dashboard scope (affects unit filtering) */
-  scope?: "personal" | "team" | "organization";
+  scope?: "personal" | "unit" | "organization";
   /** Selected unit ID (for organization scope) */
   unitId?: number | null;
   /** Drill-down target officer (highlights this officer in leaderboard) */

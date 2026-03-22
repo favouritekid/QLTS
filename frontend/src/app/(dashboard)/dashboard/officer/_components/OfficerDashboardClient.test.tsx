@@ -275,12 +275,12 @@ describe("OfficerDashboardClient", () => {
   // =========================================================================
 
   it("initializes scope from URL and passes it as prop to SmartHeader", async () => {
-    setUrlSearch("?scope=team");
+    setUrlSearch("?scope=unit");
     renderWithProviders();
-    // SmartHeader receives scope prop = "team" (from URL), not "personal" (from role)
+    // SmartHeader receives scope prop = "unit" (from URL), not "personal" (from role)
     await waitFor(() => {
-      expect(screen.getByTestId("scope-value")).toHaveTextContent("team");
-      expect(headerProps.scope).toBe("team");
+      expect(screen.getByTestId("scope-value")).toHaveTextContent("unit");
+      expect(headerProps.scope).toBe("unit");
     });
   });
 
@@ -347,20 +347,20 @@ describe("OfficerDashboardClient", () => {
     renderWithProviders();
     await waitFor(() => expect(headerProps.scope).toBe("personal"));
 
-    setUrlSearch("?scope=team");
+    setUrlSearch("?scope=unit");
     act(() => { window.dispatchEvent(new PopStateEvent("popstate")); });
-    await waitFor(() => expect(headerProps.scope).toBe("team"));
+    await waitFor(() => expect(headerProps.scope).toBe("unit"));
   });
 
   it("resets scope to role-derived default on popstate when URL has no scope", async () => {
-    setUrlSearch("?scope=team");
+    setUrlSearch("?scope=unit");
     renderWithProviders();
-    await waitFor(() => expect(headerProps.scope).toBe("team"));
+    await waitFor(() => expect(headerProps.scope).toBe("unit"));
 
     // Navigate back to URL without scope
     setUrlSearch("");
     act(() => { window.dispatchEvent(new PopStateEvent("popstate")); });
-    // Must reset to "personal" (officer role default), not keep stale "team"
+    // Must reset to "personal" (officer role default), not keep stale "unit"
     await waitFor(() => expect(headerProps.scope).toBe("personal"));
   });
 

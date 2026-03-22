@@ -425,10 +425,19 @@ class LeadsSummary(BaseModel):
     conversion_rate: float = 0.0
 
 
+class EffectiveScope(BaseModel):
+    """Scope context returned with leads page so UI knows what data it's seeing."""
+    scope_kind: Optional[str] = None
+    label: Optional[str] = None
+    forced_by_role: bool = False
+    includes_descendants: bool = False
+
+
 class LeadsPage(BaseModel):
     total_count: int
     leads: List[Lead]
     summary: Optional[LeadsSummary] = None
+    effective_scope: Optional[EffectiveScope] = None
 
 
 class BulkAssignLeadsSchema(BaseModel):

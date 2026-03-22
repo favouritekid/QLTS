@@ -1383,8 +1383,8 @@ class OfficerRepository(BaseRepository[models.User]):
         Get list of active officer IDs based on scope.
 
         Args:
-            scope: "team" or "organization"
-            unit_id: Filter by unit ID (required for team scope)
+            scope: "unit" or "organization" (legacy "team" also accepted)
+            unit_id: Filter by unit ID (required for unit scope)
 
         Returns:
             List of officer user IDs

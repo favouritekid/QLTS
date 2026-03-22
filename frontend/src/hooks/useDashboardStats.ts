@@ -127,6 +127,13 @@ export interface FunnelSuggestion {
   metric_label?: string | null;
   action_label?: string | null;
   action_url?: string | null;
+  /** V12: Typed drill-down descriptor */
+  drill_down?: {
+    target: "leads_snapshot" | "consultations" | "transitions" | "cohorts";
+    exactness: "exact";
+    metric_key: string;
+    filters?: Record<string, string | string[] | boolean | undefined>;
+  } | null;
 }
 
 export interface FunnelStage {
@@ -223,7 +230,7 @@ export interface TeamStats {
 // API FUNCTIONS
 // =============================================================================
 
-export type DashboardScope = "personal" | "team" | "organization";
+export type DashboardScope = "personal" | "unit" | "organization";
 
 export interface DashboardFilters {
   scope?: DashboardScope;

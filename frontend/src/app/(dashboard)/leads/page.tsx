@@ -48,35 +48,82 @@ function LeadsLoading() {
 }
 
 /**
- * Server Component - Fetches initial data
- *
- * This runs on the server for every request.
- * Data is fetched and serialized into HTML.
+ * V12: Parse searchParams into LeadListParams for SSR fetch.
+ * This ensures deep-links from dashboard render correct initial data.
  */
-async function LeadsPageContent() {
-  // ✅ Fetch initial data on server (SSR)
-  // Default: First page, no filters
-  const initialData = await serverApi.leads.getLeads({
-    page: 1,
-    page_size: 50,
-    sort_by: "created_at",
-    order: "desc",
-  });
+function parseSearchParamsToApiParams(
+  searchParams: Record<string, string | string[] | undefined>
+) {
+  const get = (key: string): string | undefined => {
+    const v = searchParams[key];
+    return typeof v === "string" ? v : Array.isArray(v) ? v[0] : undefined;
+  };
 
-  // ✅ Pass data to Client Component
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const params: Record<string, any> = {
+    page: parseInt(get("page") || "1", 10),
+    page_size: 50,
+    sort_by: get("sort_by") || "created_at",
+    order: get("order") || "desc",
+  };
+
+  // Filter params
+  if (get("status")) params.status = get("status");
+  if (get("officer")) params.assigned_officer_id = get("officer");
+  if (get("unit_id")) params.unit_id = parseInt(get("unit_id")!, 10);
+  if (get("offering")) params.offering_id = get("offering");
+  if (get("source")) params.source = get("source");
+  if (get("q")) params.search = get("q");
+  if (get("stage")) params.pipeline_stage_id = get("stage");
+  if (get("from")) params.date_from = get("from");
+  if (get("to")) params.date_to = get("to");
+  if (get("date_field")) params.date_field = get("date_field");
+  if (get("score_min")) params.score_min = parseInt(get("score_min")!, 10);
+  if (get("score_max")) params.score_max = parseInt(get("score_max")!, 10);
+  if (get("validity")) params.validity_status = get("validity");
+
+  // V12: Dashboard scope context
+  if (get("nav_source")) params.nav_source = get("nav_source");
+  if (get("scope")) params.scope = get("scope");
+  if (get("scope_officer_id")) params.scope_officer_id = parseInt(get("scope_officer_id")!, 10);
+  if (get("scope_unit_id")) params.scope_unit_id = parseInt(get("scope_unit_id")!, 10);
+  if (get("include_descendants") === "1" || get("include_descendants") === "true") {
+    params.include_descendants = true;
+  }
+  if (get("loss_reason")) params.loss_reason = get("loss_reason");
+
+  return params;
+}
+
+/**
+ * Server Component - Fetches initial data
+ * V12: Reads searchParams so deep-links render correct SSR data.
+ */
+async function LeadsPageContent({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const resolvedParams = await searchParams;
+  const apiParams = parseSearchParamsToApiParams(resolvedParams);
+
+  const initialData = await serverApi.leads.getLeads(apiParams);
+
   return <LeadsClient initialData={initialData} />;
 }
 
 /**
  * Page Component (Server Component)
- *
- * Next.js 16 automatically treats this as Server Component
- * (no "use client" directive)
+ * V12: Receives searchParams from App Router for SSR context.
  */
-export default function LeadsPage() {
+export default function LeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   return (
     <Suspense fallback={<LeadsLoading />}>
-      <LeadsPageContent />
+      <LeadsPageContent searchParams={searchParams} />
     </Suspense>
   );
 }

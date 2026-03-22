@@ -90,7 +90,7 @@ interface RecommendationsPanelProps {
   /** Optional class name */
   className?: string;
   /** Dashboard scope — recommendations are personal only */
-  scope?: "personal" | "team" | "organization" | null;
+  scope?: "personal" | "unit" | "organization" | null;
 }
 
 export function RecommendationsPanel({ limit = 5, className, scope = "personal" }: RecommendationsPanelProps) {

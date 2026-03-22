@@ -17,7 +17,7 @@ import { CheckCircle2, AlertTriangle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDashboardDate, formatDateForAPI } from "@/contexts/DashboardDateContext";
 import { useKpiCatalog } from "@/lib/hooks/use-kpi-catalog";
-import type { KPIStats, AnnualProgressInfo } from "@/hooks/useDashboardStats";
+import type { KPIStats, AnnualProgressInfo, DashboardScope } from "@/hooks/useDashboardStats";
 import type { OfficerKpiPlanResponse } from "@/lib/api/officer";
 
 // =============================================================================
@@ -39,6 +39,9 @@ interface KpiSummaryBannerProps {
   /** Anchor month/year from dashboard date range (defaults to client clock) */
   anchorMonth?: number;
   anchorYear?: number;
+  scope?: DashboardScope;
+  officerId?: number | null;
+  unitId?: number | null;
 }
 
 // =============================================================================
@@ -61,7 +64,7 @@ const TONE_COLOR = {
 // COMPONENT
 // =============================================================================
 
-export function KpiSummaryBanner({ kpis, annualProgress, plan, anchorMonth, anchorYear }: KpiSummaryBannerProps) {
+export function KpiSummaryBanner({ kpis, annualProgress, plan, anchorMonth, anchorYear, scope, officerId, unitId }: KpiSummaryBannerProps) {
   const router = useRouter();
   const { dateRange, startDate, endDate } = useDashboardDate();
   const { canShowTarget } = useKpiCatalog();

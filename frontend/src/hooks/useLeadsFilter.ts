@@ -61,6 +61,19 @@ export interface LeadsFilterHandlers {
   handleUnitIdChange: (unitId: string) => void;
   handleSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void;
   resetFilters: () => void;
+  /** V12: Exit dashboard context, navigate to plain /leads */
+  exitDashboardContext: () => void;
+}
+
+/** V12: Dashboard navigation context (read-only, from URL) */
+export interface DashboardContext {
+  navSource?: string;
+  action?: string;
+  scope?: string;
+  scopeOfficerId?: number;
+  scopeUnitId?: number;
+  includeDescendants: boolean;
+  lossReason?: string;
 }
 
 export interface UseLeadsFilterReturn {
@@ -68,6 +81,8 @@ export interface UseLeadsFilterReturn {
   handlers: LeadsFilterHandlers;
   hasActiveFilters: boolean;
   apiFilters: Record<string, unknown>;
+  /** V12: Dashboard context from URL (read-only) */
+  dashboardContext: DashboardContext | null;
 }
 
 // =============================================================================
@@ -157,25 +172,35 @@ function clearFiltersFromStorage() {
 // URL HELPERS
 // =============================================================================
 
+// V12: Dashboard context params (read-only, not user-editable filters)
+const CONTEXT_PARAMS = ["nav_source", "action", "scope", "scope_officer_id", "scope_unit_id", "include_descendants"] as const;
+
+// V12: Recognized filter params (user-editable filters)
+const FILTER_PARAMS = ["page", "q", "status", "source", "validity", "offering", "stage", "officer", "unit_id", "from", "to", "date_field", "score_min", "score_max", "sort_by", "order", "loss_reason"] as const;
+
+function hasRecognizedContextParams(searchParams: URLSearchParams): boolean {
+  return CONTEXT_PARAMS.some(p => searchParams.has(p));
+}
+
+function hasRecognizedFilterParams(searchParams: URLSearchParams): boolean {
+  return FILTER_PARAMS.some(p => searchParams.has(p));
+}
+
 function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
-  return !!(
-    searchParams.get("page") ||
-    searchParams.get("q") ||
-    searchParams.get("status") ||
-    searchParams.get("source") ||
-    searchParams.get("validity") ||
-    searchParams.get("offering") ||
-    searchParams.get("stage") ||
-    searchParams.get("officer") ||
-    searchParams.get("unit_id") ||
-    searchParams.get("from") ||
-    searchParams.get("to") ||
-    searchParams.get("date_field") ||
-    searchParams.get("score_min") ||
-    searchParams.get("score_max") ||
-    searchParams.get("sort_by") ||
-    searchParams.get("order")
-  );
+  return hasRecognizedContextParams(searchParams) || hasRecognizedFilterParams(searchParams);
+}
+
+/** V12: Parse dashboard context from URL (read-only state) */
+function parseDashboardContext(searchParams: URLSearchParams) {
+  return {
+    navSource: searchParams.get("nav_source") || undefined,
+    action: searchParams.get("action") || undefined,
+    scope: searchParams.get("scope") || undefined,
+    scopeOfficerId: searchParams.get("scope_officer_id") ? Number(searchParams.get("scope_officer_id")) : undefined,
+    scopeUnitId: searchParams.get("scope_unit_id") ? Number(searchParams.get("scope_unit_id")) : undefined,
+    includeDescendants: searchParams.get("include_descendants") === "1" || searchParams.get("include_descendants") === "true",
+    lossReason: searchParams.get("loss_reason") || undefined,
+  };
 }
 
 function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
@@ -213,18 +238,26 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   // Track previous searchParams content to avoid false triggers from reference changes
   const prevSearchParamsStr = useRef(searchParams.toString());
 
-  // Determine initial values: URL params > localStorage > defaults
+  // V12: Parse dashboard context from URL (immutable for this session)
+  const dashboardContext = useMemo<DashboardContext | null>(() => {
+    if (!hasRecognizedContextParams(searchParams)) return null;
+    return parseDashboardContext(searchParams);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // V12: URL (context or filter or action) > localStorage > defaults
+  // If URL has ANY recognized param, skip localStorage entirely
   const initialValues = useMemo(() => {
     if (hasUrlFilterParams(searchParams)) {
       return parseSearchParams(searchParams);
     }
-    
+
     const storedFilters = loadFiltersFromStorage();
     if (storedFilters) {
-      return storedFilters; // storedFilters already includes page
+      return storedFilters;
     }
-    
-    return DEFAULT_FILTERS; // DEFAULT_FILTERS already includes page: 1
+
+    return DEFAULT_FILTERS;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -524,6 +557,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   }, []);
 
   const resetFilters = useCallback(() => {
+    // V12: resetFilters only resets user filters, NOT dashboard context
     setSearch("");
     setStatusFilters([]);
     setSourceFilters([]);
@@ -541,6 +575,13 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     setPage(1);
     clearFiltersFromStorage();
   }, []);
+
+  /** V12: Exit dashboard context entirely — navigate to plain /leads */
+  const exitDashboardContext = useCallback(() => {
+    resetFilters();
+    // Clear URL completely — removes both context and filter params
+    window.history.replaceState(window.history.state, "", pathname);
+  }, [resetFilters, pathname]);
 
   // ==========================================================================
   // COMPUTED VALUES
@@ -599,11 +640,21 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (scoreRange[0] > 0) params.score_min = scoreRange[0];
     if (scoreRange[1] < 100) params.score_max = scoreRange[1];
 
+    // V12: Pass dashboard scope context to API
+    if (dashboardContext) {
+      if (dashboardContext.navSource) params.nav_source = dashboardContext.navSource;
+      if (dashboardContext.scope) params.scope = dashboardContext.scope;
+      if (dashboardContext.scopeOfficerId) params.scope_officer_id = dashboardContext.scopeOfficerId;
+      if (dashboardContext.scopeUnitId) params.scope_unit_id = dashboardContext.scopeUnitId;
+      if (dashboardContext.includeDescendants) params.include_descendants = true;
+      if (dashboardContext.lossReason) params.loss_reason = dashboardContext.lossReason;
+    }
+
     return params;
   }, [
     page, pageSize, search, statusFilters, sourceFilters, validityFilters,
     offeringFilters, stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
-    sortBy, sortOrder, scoreRange,
+    sortBy, sortOrder, scoreRange, dashboardContext,
   ]);
 
   // ==========================================================================
@@ -647,9 +698,11 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       handleDateFieldChange,
       handleSortChange,
       resetFilters,
+      exitDashboardContext,
     },
     hasActiveFilters,
     apiFilters,
+    dashboardContext,
   };
 }
 

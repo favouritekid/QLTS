@@ -945,37 +945,20 @@ def _calc_trend(current: float, previous: float, label: str) -> Dict[str, Any]:
 
 async def get_aggregated_dashboard_stats(
     db: AsyncSession,
-    scope: str,  # "team" or "organization"
-    requesting_user: models.User,
-    officer_id: int = None,  # Optional: drill down to specific officer
-    unit_id: int = None,     # Optional: filter by unit (admin only)
+    ctx,  # DashboardScopeContext — pre-resolved by dependency
     start_date: str = None,
     end_date: str = None,
 ) -> Dict[str, Any]:
     """
     Get aggregated dashboard stats for multiple officers.
-    
-    REFACTORED: Uses OfficerRepository batch queries.
-    - Reduced from 14+ queries to 4 optimized batch queries.
-    
-    For team scope: Aggregates data from officers in same unit as requester
-    For organization scope: Aggregates data from all officers (or filtered by unit)
-    
-    If officer_id is provided, returns that officer's personal dashboard instead.
+
+    V12: Receives pre-resolved DashboardScopeContext from dependency.
+    No longer resolves descendants or officer IDs internally.
     """
     from datetime import date as date_type
-    
+
     repo = OfficerRepository(db)
-    
-    # If drilling down to specific officer, return their personal dashboard
-    if officer_id is not None:
-        return await get_enhanced_dashboard_stats(
-            db=db,
-            officer_id=officer_id,
-            start_date=start_date,
-            end_date=end_date,
-        )
-    
+
     # Parse date range
     today = datetime.now(timezone.utc).date()
     if start_date and end_date:
@@ -988,34 +971,24 @@ async def get_aggregated_dashboard_stats(
     else:
         filter_start = today - timedelta(days=6)
         filter_end = today
-    
+
     filter_days = (filter_end - filter_start).days + 1
-    
+
     # ==========================================================================
-    # Get officer IDs using Repository (was direct SQL)
+    # Read pre-resolved scope from DashboardScopeContext
     # ==========================================================================
-    target_unit_id = requesting_user.unit_id if scope == "team" else unit_id
-    if target_unit_id:
-        org_repo = OrganizationRepository(db)
-        descendant_unit_ids = await org_repo.get_descendant_unit_ids(target_unit_id)
-        # Flatten: get officers from ALL descendant units
-        officer_ids = []
-        for uid in descendant_unit_ids:
-            ids = await repo.get_active_officer_ids(scope=scope, unit_id=uid)
-            officer_ids.extend(ids)
-        officer_ids = list(set(officer_ids))  # dedupe
-    else:
-        officer_ids = await repo.get_active_officer_ids(scope=scope, unit_id=None)
+    officer_ids = ctx.effective_officer_ids
+    descendant_unit_ids = ctx.effective_unit_ids
     officer_count = len(officer_ids)
 
     if officer_count == 0:
-        return _empty_aggregated_stats(scope, filter_days)
+        return _empty_aggregated_stats(ctx.scope_kind, filter_days)
 
     log.info(
         "Aggregating dashboard for scope",
-        scope=scope,
+        scope=ctx.scope_kind,
         officer_count=officer_count,
-        unit_id=target_unit_id,
+        unit_root=ctx.effective_unit_root_id,
         date_range=f"{filter_start} to {filter_end}",
     )
     
@@ -1063,7 +1036,7 @@ async def get_aggregated_dashboard_stats(
     # Phase 2: Fetch metrics for aggregated funnel (loss_breakdown, velocity, lost_revenue)
     # Use unit_ids for filtering (more efficient than officer_ids for these queries)
     # ==========================================================================
-    unit_ids_for_metrics = descendant_unit_ids if target_unit_id else None
+    unit_ids_for_metrics = descendant_unit_ids if descendant_unit_ids else None
 
     # Fetch Phase 2 metrics (reusing existing repo methods with unit filter)
     loss_breakdown_by_stage = await repo.get_loss_reason_breakdown_by_stage(
@@ -1417,81 +1390,49 @@ async def _calculate_priority_actions(
 
 async def get_weekly_leaderboard(
     db: AsyncSession,
-    officer_id: int,
+    ctx,  # DashboardScopeContext
     limit: int = 5,
     start_date: date = None,
     end_date: date = None,
-    scope: str = None,
-    unit_id: int = None,
-    requesting_user: models.User = None,
 ) -> Dict[str, Any]:
     """
     Get weekly leaderboard for gamification.
 
-    REFACTORED: Uses OfficerRepository.get_all_weekly_rankings.
-    - Reduced from 2 queries to 1 batch query.
-
-    Shows top officers by consultations this week.
-    Includes current officer's rank even if not in top N.
-    PHASE 6: Now includes rank change vs previous week.
-
-    Args:
-        officer_id: Current user's ID (for marking "you" in leaderboard)
-        limit: Number of top entries to show
-        start_date: Optional custom start date (defaults to this week's Monday)
-        end_date: Optional custom end date (defaults to today)
-        scope: "personal" | "team" | "organization"
-        unit_id: Filter by specific unit (for organization scope)
-        requesting_user: The user making the request (for team scope)
+    V12: Reads unit_ids from ctx.effective_unit_ids instead of resolving descendants.
+    officer_id for highlight comes from ctx.requested_officer_id.
     """
     repo = OfficerRepository(db)
     today = datetime.now(timezone.utc).date()
 
-    # Use provided dates or default to current week
     if start_date and end_date:
         period_start = start_date
         period_end = end_date
     else:
-        period_start = today - timedelta(days=today.weekday())  # Monday
+        period_start = today - timedelta(days=today.weekday())
         period_end = today
 
-    # Calculate previous period for rank comparison
     period_length = (period_end - period_start).days + 1
     prev_period_end = period_start - timedelta(days=1)
     prev_period_start = prev_period_end - timedelta(days=period_length - 1)
 
-    # Determine unit filter based on scope
-    unit_ids = None
-    if scope == "team" and requesting_user and requesting_user.unit_id:
-        # Team scope: filter by requesting user's unit
-        org_repo = OrganizationRepository(db)
-        unit_ids = await org_repo.get_descendant_unit_ids(requesting_user.unit_id)
-    elif scope == "organization" and unit_id:
-        # Organization scope with specific unit: filter by that unit and descendants
-        org_repo = OrganizationRepository(db)
-        unit_ids = await org_repo.get_descendant_unit_ids(unit_id)
-    # For "personal" scope or no scope: show all officers (no filter)
+    # V12: Read unit filter from pre-resolved context
+    unit_ids = ctx.effective_unit_ids if ctx.effective_unit_ids else None
 
-    # Get all officers' stats for THIS period using Repository
     all_officers = await repo.get_all_weekly_rankings(period_start, period_end, unit_ids)
-
-    # Get PREVIOUS period ranks using Repository
     prev_officers = await repo.get_all_weekly_rankings(prev_period_start, prev_period_end, unit_ids)
-    
-    # Build previous week rank lookup
+
     prev_ranks = {officer.id: rank for rank, officer in enumerate(prev_officers, 1)}
-    
-    # Build leaderboard with ranks
-    # Separate concepts: is_current_user = actual logged-in user,
-    # is_focus_officer = drill-down target (may differ when manager/admin drills)
-    requesting_user_id = requesting_user.id if requesting_user else officer_id
+
+    # Highlight targets
+    officer_id = ctx.requested_officer_id or ctx.requesting_user.id
+    requesting_user_id = ctx.requesting_user.id
+
     leaderboard = []
     current_user_rank = None
     current_user_stats = None
 
     for rank, officer in enumerate(all_officers, 1):
         prev_rank = prev_ranks.get(officer.id)
-        # Calculate rank change: positive = improved, negative = dropped
         rank_change = (prev_rank - rank) if prev_rank else None
 
         entry = {
@@ -1502,7 +1443,7 @@ async def get_weekly_leaderboard(
             "consultations": officer.consultations or 0,
             "is_current_user": officer.id == requesting_user_id,
             "is_focus_officer": officer.id == officer_id,
-            "rank_change": rank_change,  # +2 = up 2 spots, -1 = down 1 spot, None = new
+            "rank_change": rank_change,
         }
 
         if officer.id == officer_id:
@@ -1511,13 +1452,12 @@ async def get_weekly_leaderboard(
 
         if rank <= limit:
             leaderboard.append(entry)
-    
-    # If current user not in top N, add them at the end
+
     if current_user_rank and current_user_rank > limit and current_user_stats:
         leaderboard.append(current_user_stats)
-    
-    # If drill-down target has no consultations this week, add with 0 (officers only)
-    if current_user_rank is None and requesting_user and requesting_user.role == "officer":
+
+    # If drill-down target has no consultations, add with 0 (officers only)
+    if current_user_rank is None and ctx.requesting_user.role == "officer":
         user = await repo.get_officer_with_capacity(officer_id)
         if user:
             prev_rank = prev_ranks.get(officer_id)
@@ -1532,10 +1472,7 @@ async def get_weekly_leaderboard(
                 "rank_change": (prev_rank - (len(all_officers) + 1)) if prev_rank else None,
             })
             current_user_rank = len(all_officers) + 1
-    
-    # total_officers = actual population count (don't inflate for non-participants)
-    # For officers with 0 consultations who were appended above, they're already
-    # counted via len(all_officers)+1 in their rank. Only inflate if we actually added them.
+
     added_zero_officer = (
         current_user_rank is not None
         and current_user_rank == len(all_officers) + 1
@@ -1546,50 +1483,44 @@ async def get_weekly_leaderboard(
         "week_start": period_start.isoformat(),
         "week_end": period_end.isoformat(),
         "total_officers": total,
-        "current_user_rank": current_user_rank,  # None for manager/admin not in population
+        "current_user_rank": current_user_rank,
         "leaderboard": leaderboard,
     }
 
 
 async def get_team_stats(
     db: AsyncSession,
-    officer_id: int,
+    ctx,  # DashboardScopeContext
     days: int = 30,
     start_date: date = None,
     end_date: date = None,
-    unit_id: int = None,
 ) -> Dict[str, Any]:
     """
     Get team average statistics for performance comparison.
-    
-    REFACTORED: Uses OfficerRepository methods.
-    - Reduced from 3 queries to 2 repository calls.
-    
-    Returns:
-        - team_avg_consultations: Average daily consultations across all officers
-        - team_avg_conversions: Average daily conversions across all officers
-        - officer_rank_percentile: Current officer's rank percentile
+
+    V12: Reads unit_id from ctx. officer_id for rank from ctx.requested_officer_id.
     """
     repo = OfficerRepository(db)
     today = datetime.now(timezone.utc).date()
-    
-    # Determine date range
+
     if start_date and end_date:
         calc_start = start_date
         calc_end = end_date
-        # Recalculate days for rank logic if needed or just trust the range
         calc_days = (end_date - start_date).days + 1
-        if calc_days < 1: calc_days = 1
+        if calc_days < 1:
+            calc_days = 1
     else:
         calc_start = today - timedelta(days=days - 1)
         calc_end = today
         calc_days = days
-    
-    # Get all active officers using Repository
+
+    unit_id = ctx.effective_unit_root_id
+    officer_id = ctx.requested_officer_id or ctx.requesting_user.id
+
     active_officers = await repo.get_active_officer_ids(
-        scope="team" if unit_id else "organization", unit_id=unit_id
+        scope="unit" if unit_id else "organization", unit_id=unit_id
     )
-    
+
     if len(active_officers) == 0:
         return {
             "team_avg_consultations": 0,
@@ -1597,19 +1528,14 @@ async def get_team_stats(
             "officer_rank_percentile": 0,
             "total_officers": 0,
         }
-    
-    # Get team averages using Repository
+
     team_data = await repo.get_team_averages(unit_id=unit_id, start_date=calc_start, end_date=calc_end)
-    
-    # Get current officer's KPI for rank calculation
+
     officer_kpi = await repo.get_kpi_stats(officer_id, calc_start, calc_end)
     current_officer_count = officer_kpi["consultations_in_range"]
-    
-    # Calculate approximate rank percentile
-    # Using team average as reference point
+
     team_avg = team_data["team_avg_consultations"]
     if team_avg > 0:
-        # Rough percentile: if above average, higher percentile
         daily_avg = current_officer_count / calc_days if calc_days > 0 else 0
         if daily_avg >= team_avg:
             rank_percentile = min(90, 50 + int((daily_avg / team_avg - 1) * 50))
@@ -1617,7 +1543,7 @@ async def get_team_stats(
             rank_percentile = max(10, int((daily_avg / team_avg) * 50))
     else:
         rank_percentile = 50
-    
+
     return {
         "team_avg_consultations": team_avg,
         "officer_rank_percentile": rank_percentile,
@@ -1628,50 +1554,27 @@ async def get_team_stats(
 
 async def get_upcoming_activities(
     db: AsyncSession,
-    officer_id: int,
+    ctx,  # DashboardScopeContext
     month: int,
     year: int,
-    scope: str = "personal",
-    unit_id: int = None,
-    requesting_user: models.User = None,
 ) -> Dict[str, Any]:
     """
     Lấy các hoạt động sắp tới (leads có next_activity_at).
 
-    Scope-aware:
-    - personal: chỉ leads giao cho officer
-    - team: tất cả leads trong unit của requesting_user
-    - organization: tất cả leads (hoặc filter theo unit_id)
+    V12: Reads scope from ctx. Single officer → personal path, multi → aggregated.
     """
     repo = OfficerRepository(db)
 
-    # Tính start/end của tháng
     start_of_month = datetime(year, month, 1, tzinfo=timezone.utc)
     if month == 12:
         end_of_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
     else:
         end_of_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
 
-    # Drill-down: when officer_id is explicitly set (different from requester),
-    # always use personal path — show only THAT officer's activities.
-    is_drill_down = requesting_user and officer_id != requesting_user.id
-    if scope == "personal" or not requesting_user or is_drill_down:
-        leads = await repo.get_upcoming_activities(officer_id, start_of_month, end_of_month)
+    if len(ctx.effective_officer_ids) == 1:
+        leads = await repo.get_upcoming_activities(ctx.effective_officer_ids[0], start_of_month, end_of_month)
     else:
-        # Resolve officer IDs for team/organization scope
-        target_unit_id = requesting_user.unit_id if scope == "team" else unit_id
-        if target_unit_id:
-            org_repo = OrganizationRepository(db)
-            descendant_unit_ids = await org_repo.get_descendant_unit_ids(target_unit_id)
-            officer_ids = []
-            for uid in descendant_unit_ids:
-                ids = await repo.get_active_officer_ids(scope=scope, unit_id=uid)
-                officer_ids.extend(ids)
-            officer_ids = list(set(officer_ids))
-        else:
-            officer_ids = await repo.get_active_officer_ids(scope=scope, unit_id=None)
-
-        leads = await repo.get_upcoming_activities_multi(officer_ids, start_of_month, end_of_month)
+        leads = await repo.get_upcoming_activities_multi(ctx.effective_officer_ids, start_of_month, end_of_month)
     
     # Build activities list and dates with activities
     activities = []

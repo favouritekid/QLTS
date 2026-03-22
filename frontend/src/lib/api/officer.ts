@@ -22,7 +22,7 @@ export interface WeeklyLeaderboardData {
 export interface LeaderboardFilters {
   startDate?: string;
   endDate?: string;
-  scope?: "personal" | "team" | "organization";
+  scope?: "personal" | "unit" | "organization";
   unitId?: number | null;
   officerId?: number | null;
 }

@@ -52,7 +52,7 @@ import {
   ChevronUp,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { TrendInfo } from "@/hooks/useDashboardStats";
+import type { TrendInfo, FunnelSuggestion } from "@/hooks/useDashboardStats";
 import { getLossReasonMap } from "@/lib/loss-reasons";
 import { useLossReasons } from "@/hooks/usePipeline";
 
@@ -125,21 +125,6 @@ interface FunnelStage {
   velocity?: VelocityStats | null;
   // Phase 2: Estimated lost revenue
   estimated_lost_revenue?: EstimatedLostRevenue | null;
-}
-
-/** Phase 2: AI-powered suggestion for funnel optimization */
-interface FunnelSuggestion {
-  id: string;                          // Unique suggestion ID
-  type: "bottleneck" | "slow_stage" | "high_loss" | "loss_reason";
-  priority: "critical" | "high" | "medium" | "low";
-  stage_id?: string | null;            // Related stage (if applicable)
-  stage_name?: string | null;          // Stage name for display
-  title: string;                       // Short title
-  description: string;                 // Detailed description
-  metric_value?: number | null;        // The metric that triggered this suggestion
-  metric_label?: string | null;        // Label for the metric
-  action_label?: string | null;        // Suggested action button label
-  action_url?: string | null;          // URL for the action
 }
 
 /** Map suggestion type to icon and color */
@@ -234,7 +219,7 @@ interface FunnelChartProps {
   /** Optional configuration to override defaults */
   config?: Partial<FunnelConfig>;
   /** Scope filter for navigation context */
-  scope?: "personal" | "team" | "organization";
+  scope?: "personal" | "unit" | "organization";
   /** Selected unit ID (for organization scope) */
   unitId?: number | null;
   /** Selected officer ID (for drill-down) */
@@ -522,7 +507,7 @@ export function FunnelChart({
     // Include scope filters for drill-down context
     if (officerId) {
       params.set("officer", officerId.toString());
-    } else if (scope === "team" && unitId) {
+    } else if (scope === "unit" && unitId) {
       params.set("unit_id", unitId.toString());
     } else if (scope === "organization" && unitId) {
       params.set("unit_id", unitId.toString());

@@ -86,7 +86,7 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       user.role === "admin"
         ? "organization"
         : user.role === "manager"
-          ? "team"
+          ? "unit"
           : user.role === "officer"
             ? "personal"
             : null
@@ -94,10 +94,12 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     : null;
 
   // Read initial filter state from URL (lazy init, only runs on mount)
-  const validScopes: DashboardScope[] = ["personal", "team", "organization"];
+  const validScopes: DashboardScope[] = ["personal", "unit", "organization"];
 
   const [scope, setScope] = useState<DashboardScope | null>(() => {
-    const urlScope = getUrlParam("scope");
+    let urlScope = getUrlParam("scope");
+    // Normalize legacy "team" → "unit"
+    if (urlScope === "team") urlScope = "unit";
     return urlScope && validScopes.includes(urlScope as DashboardScope)
       ? (urlScope as DashboardScope)
       : resolvedScope;
@@ -144,7 +146,9 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
   // URL is the source of truth: if a param is absent, reset to default.
   useEffect(() => {
     const handlePopState = () => {
-      const urlScope = getUrlParam("scope");
+      let urlScope = getUrlParam("scope");
+      // Normalize legacy "team" → "unit"
+      if (urlScope === "team") urlScope = "unit";
       if (urlScope && validScopes.includes(urlScope as DashboardScope)) {
         setScope(urlScope as DashboardScope);
       } else {
@@ -397,10 +401,13 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
         plan={kpiPlanQuery.data}
         anchorMonth={anchorMonth}
         anchorYear={fiscalYear}
+        scope={scope}
+        officerId={selectedOfficerId}
+        unitId={selectedUnitId}
       />
 
       {/* KPI Cards Row */}
-      <KPICardsGrid kpis={stats.kpis} isPersonalView={effectivePersonalView} />
+      <KPICardsGrid kpis={stats.kpis} isPersonalView={effectivePersonalView} scope={scope} officerId={selectedOfficerId} unitId={selectedUnitId} />
 
       {/* Empty Data Message */}
       {isEmptyData && (
@@ -410,8 +417,8 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
           <AlertDescription>
             {scope === "organization" && selectedUnitId
               ? "Đơn vị được chọn chưa có nhân viên hoặc chưa có lead nào được phân công."
-              : scope === "team"
-                ? "Đội nhóm của bạn chưa có nhân viên hoặc chưa có lead nào."
+              : scope === "unit"
+                ? "Đơn vị của bạn chưa có nhân viên hoặc chưa có lead nào."
                 : "Chưa có dữ liệu trong khoảng thời gian được chọn."}
           </AlertDescription>
         </Alert>

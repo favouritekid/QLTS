@@ -672,25 +672,28 @@ export interface PaginationParams {
  * Lead list filter parameters
  */
 export interface LeadListParams extends PaginationParams {
-  status?: string; // Comma-separated
-  assigned_officer_id?: number | string; // Single ID or comma-separated "1,2,3"
+  status?: string;
+  assigned_officer_id?: number | string;
   unit_id?: number;
-  offering_id?: number | string; // Single ID or comma-separated "1,2,3"
-  source?: string; // Comma-separated
+  offering_id?: number | string;
+  source?: string;
   search?: string;
   sort_by?: string;
   order?: "asc" | "desc";
-  // === DATE RANGE FILTER ===
-  date_from?: string; // ISO datetime
-  date_to?: string; // ISO datetime
+  date_from?: string;
+  date_to?: string;
   date_field?: "created_at" | "updated_at" | "last_consultation_at";
-  // === SCORE RANGE FILTER ===
   score_min?: number;
   score_max?: number;
-  // === VALIDITY STATUS FILTER ===
-  validity_status?: string; // Comma-separated
-  // === SELECTIVE EXPORT ===
-  lead_ids?: string; // Comma-separated lead IDs
+  validity_status?: string;
+  lead_ids?: string;
+  // V12: Dashboard scope context
+  nav_source?: string;
+  scope?: "personal" | "unit" | "organization";
+  scope_officer_id?: number;
+  scope_unit_id?: number;
+  include_descendants?: boolean;
+  loss_reason?: string;
 }
 
 /**
@@ -706,10 +709,19 @@ export interface LeadsSummary {
 /**
  * Paginated leads response
  */
+/** V12: Scope context returned with leads page */
+export interface EffectiveScope {
+  scope_kind?: string;
+  label?: string;
+  forced_by_role: boolean;
+  includes_descendants: boolean;
+}
+
 export interface LeadsPage {
   total_count: number;
   leads: Lead[];
   summary?: LeadsSummary;
+  effective_scope?: EffectiveScope;
 }
 
 // ============================================
