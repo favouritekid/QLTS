@@ -1,4 +1,5 @@
 import type { DashboardScope } from "@/hooks/useDashboardStats";
+import { todayVN } from "@/lib/utils/vn-date";
 
 export type DrillDownTarget = "leads_snapshot" | "consultations" | "transitions" | "cohorts";
 
@@ -144,13 +145,18 @@ export function buildDashboardDestination(
   params.set("nav_source", "dashboard");
   params.set("metric_key", descriptor.metric_key);
 
+  const shouldForceTodayContext =
+    descriptor.target === "consultations" && descriptor.metric_key === "consultations_today";
+  const effectiveStartDate = shouldForceTodayContext ? todayVN() : context.startDate;
+  const effectiveEndDate = shouldForceTodayContext ? todayVN() : context.endDate;
+
   if (context.scope) params.set("scope", context.scope);
   if (context.officerId) params.set("scope_officer_id", context.officerId.toString());
   if (context.unitId) params.set("scope_unit_id", context.unitId.toString());
   if (context.includeDescendants) params.set("include_descendants", "1");
 
-  if (context.startDate) params.set("from", context.startDate);
-  if (context.endDate) params.set("to", context.endDate);
+  if (effectiveStartDate) params.set("from", effectiveStartDate);
+  if (effectiveEndDate) params.set("to", effectiveEndDate);
   if (context.dateField) params.set("date_field", context.dateField);
 
   appendDescriptorFilters(params, descriptor);

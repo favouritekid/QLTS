@@ -241,8 +241,10 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const pathname = usePathname();
   const isInitialMount = useRef(true);
   const urlUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // Track previous searchParams content to avoid false triggers from reference changes
-  const prevSearchParamsStr = useRef(searchParams.toString());
+  // Track previous searchParams content to avoid false triggers from reference changes.
+  // Start at null so the first client render after navigation can still reconcile URL
+  // state into hook state, even if the initial lazy state was built from stale params.
+  const prevSearchParamsStr = useRef<string | null>(null);
 
   const initialDashboardContext = useMemo<DashboardContext | null>(() => {
     if (!hasRecognizedContextParams(searchParams)) return null;
@@ -305,7 +307,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   useEffect(() => {
     // Skip if searchParams content didn't actually change (just a new object reference)
     const currentStr = searchParams.toString();
-    if (currentStr === prevSearchParamsStr.current) {
+    if (prevSearchParamsStr.current !== null && currentStr === prevSearchParamsStr.current) {
       return;
     }
     prevSearchParamsStr.current = currentStr;

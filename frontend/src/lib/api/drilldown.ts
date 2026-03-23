@@ -40,15 +40,15 @@ export interface DrillDownResponse<T = Record<string, unknown>> {
 
 export const drilldownApi = {
   getConsultations: async (params: DrillDownParams) => {
-    const { data } = await api.get<DrillDownResponse>("/officer/drilldowns/consultations", { params });
+    const { data } = await api.get<DrillDownResponse>("/api/officer/drilldowns/consultations", { params });
     return data;
   },
   getTransitions: async (params: DrillDownParams) => {
-    const { data } = await api.get<DrillDownResponse>("/officer/drilldowns/transitions", { params });
+    const { data } = await api.get<DrillDownResponse>("/api/officer/drilldowns/transitions", { params });
     return data;
   },
   getCohorts: async (params: DrillDownParams) => {
-    const { data } = await api.get<DrillDownResponse>("/officer/drilldowns/cohorts", { params });
+    const { data } = await api.get<DrillDownResponse>("/api/officer/drilldowns/cohorts", { params });
     return data;
   },
 };

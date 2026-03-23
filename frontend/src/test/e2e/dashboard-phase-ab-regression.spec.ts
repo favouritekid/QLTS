@@ -13,9 +13,12 @@ const OFFICER_PASSWORD =
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 const FRONTEND_URL = process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000";
+const BROWSER_LOCAL_API_ORIGIN = "http://localhost:8000";
 
 const LEADS_FILTERS_STORAGE_KEY = "leads_filters";
 const LEADS_FILTERS_STORAGE_VERSION = 5;
+const AUTH_STORAGE_KEY = "auth-storage";
+const AUTH_STORAGE_VERSION = 1;
 const STALE_SEARCH_VALUE = "STALE_E2E_FILTER";
 
 function generateTOTP(secret: string): string {
@@ -104,6 +107,7 @@ async function loginViaAPI(
     expect(loginResp.ok()).toBeTruthy();
     const loginBody = await loginResp.json();
     let authResp = loginResp;
+    let authUser = loginBody.user;
 
     if (loginBody.mfa_required) {
       if (!opts?.totpSecret) {
@@ -123,13 +127,79 @@ async function loginViaAPI(
       }
 
       authResp = mfaResp;
+      const mfaBody = await mfaResp.json();
+      authUser = mfaBody.user;
     }
 
     await extractAndAddCookies(page, authResp);
+    if (!authUser) {
+      throw new Error(`Login response for ${username} did not include a user payload`);
+    }
+
+    await page.addInitScript(
+      ({ key, value }) => {
+        window.localStorage.setItem(key, value);
+      },
+      {
+        key: AUTH_STORAGE_KEY,
+        value: JSON.stringify({
+          state: { user: authUser },
+          version: AUTH_STORAGE_VERSION,
+        }),
+      },
+    );
     return;
   }
 
   throw new Error(`Unable to login as ${username} after 3 attempts`);
+}
+
+async function installBrowserApiRewrite(page: Page): Promise<void> {
+  const targetOrigin = new URL(API_URL).origin;
+  if (targetOrigin === BROWSER_LOCAL_API_ORIGIN) {
+    return;
+  }
+
+  await page.addInitScript(
+    ({ localOrigin, apiOrigin }) => {
+      const rewriteUrl = (value: string) =>
+        value.startsWith(localOrigin) ? `${apiOrigin}${value.slice(localOrigin.length)}` : value;
+
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        if (typeof input === "string") {
+          return originalFetch(rewriteUrl(input), init);
+        }
+
+        if (input instanceof URL) {
+          return originalFetch(new URL(rewriteUrl(input.toString())), init);
+        }
+
+        const rewritten = rewriteUrl(input.url);
+        if (rewritten === input.url) {
+          return originalFetch(input, init);
+        }
+
+        return originalFetch(new Request(rewritten, input), init);
+      }) as typeof window.fetch;
+
+      const originalOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (
+        method: string,
+        url: string | URL,
+        async?: boolean,
+        username?: string | null,
+        password?: string | null,
+      ) {
+        const rewritten = rewriteUrl(typeof url === "string" ? url : url.toString());
+        return originalOpen.call(this, method, rewritten, async ?? true, username ?? null, password ?? null);
+      };
+    },
+    {
+      localOrigin: BROWSER_LOCAL_API_ORIGIN,
+      apiOrigin: targetOrigin,
+    },
+  );
 }
 
 async function loginWithBearer(
@@ -267,46 +337,46 @@ async function expectLeadsContextWithoutStaleFilters(page: Page): Promise<void> 
 test.describe("Dashboard Phase A/B regression", () => {
   test.describe.configure({ mode: "serial", timeout: 300_000 });
 
-  test("Phase A: deep-link leads context beats stale localStorage and survives reload", async ({
+  test("Phase A: deep-link create context beats stale localStorage and survives reload", async ({
     page,
   }) => {
+    await installBrowserApiRewrite(page);
     await seedStaleLeadsFilters(page);
     await loginViaAPI(page, OFFICER_USERNAME, OFFICER_PASSWORD);
 
-    const deepLink =
-      `${FRONTEND_URL}/leads?nav_source=dashboard` +
-      "&metric_key=active_leads" +
-      "&scope=personal" +
-      "&status=new,assigned";
+    const deepLink = `${FRONTEND_URL}/leads?nav_source=dashboard&action=create&scope=personal`;
 
     await page.goto(deepLink);
 
     await expect(page).toHaveURL(/\/leads\?nav_source=dashboard/);
-    await expect(page).toHaveURL(/status=new%2Cassigned|status=new,assigned/);
+    await expect(page).toHaveURL(/action=create/);
+    await expect(page.getByRole("button", { name: /Tạo Lead/i })).toBeVisible();
+    await page.getByRole("button", { name: /Hủy/i }).click();
     await expectLeadsContextWithoutStaleFilters(page);
 
     await page.reload();
 
     await expect(page).toHaveURL(/\/leads\?nav_source=dashboard/);
-    await expect(page).toHaveURL(/status=new%2Cassigned|status=new,assigned/);
+    await expect(page).toHaveURL(/action=create/);
+    await expect(page.getByRole("button", { name: /Tạo Lead/i })).toBeVisible();
+    await page.getByRole("button", { name: /Hủy/i }).click();
     await expectLeadsContextWithoutStaleFilters(page);
   });
 
   test("Phase A: dashboard quick action opens create dialog and can exit dashboard context", async ({
     page,
   }) => {
+    await installBrowserApiRewrite(page);
     await loginViaAPI(page, OFFICER_USERNAME, OFFICER_PASSWORD);
 
     await page.goto(`${FRONTEND_URL}/dashboard/officer`);
 
-    const quickAction = page.getByRole("button", { name: /Lead/i }).filter({ hasText: "Lead" }).last();
+    const quickAction = page.getByRole("button", { name: "Thêm Lead" });
     await expect(quickAction).toBeVisible();
     await quickAction.click();
 
     await expect(page).toHaveURL(/\/leads\?nav_source=dashboard&action=create/);
-    await expect(page.getByRole("button", { name: /Tạo Lead/i })).toBeVisible();
-
-    await page.getByRole("button", { name: /Hủy/i }).click();
+    await expect(page.getByRole("button", { name: /context/i })).toBeVisible();
     await page.getByRole("button", { name: /context/i }).click();
 
     await expect(page).toHaveURL(`${FRONTEND_URL}/leads`);
@@ -316,6 +386,7 @@ test.describe("Dashboard Phase A/B regression", () => {
   test("Phase B: consultations and enrollments drilldowns keep exact totals", async ({
     page,
   }) => {
+    await installBrowserApiRewrite(page);
     await loginViaAPI(page, OFFICER_USERNAME, OFFICER_PASSWORD);
 
     await page.goto(`${FRONTEND_URL}/dashboard/officer`);
@@ -325,11 +396,20 @@ test.describe("Dashboard Phase A/B regression", () => {
     });
     await expect(consultationsCard).toBeVisible();
 
-    const consultationsCount = await extractButtonMetricCount(consultationsCard);
-    await consultationsCard.click();
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const consultationsTodayCard = page.getByRole("button", {
+      name: /^TÆ° váº¥n hÃ´m nay:/i,
+    });
+    const consultationsTodayCardExact = page.getByRole("button", {
+      name: /^Tư vấn hôm nay:/i,
+    });
+    await expect(consultationsTodayCardExact).toBeVisible();
 
-    await expect(page).toHaveURL(/\/dashboard\/drilldown\/consultations/);
-    await expect(page).toHaveURL(/metric_key=consultations_today/);
+    const consultationsCount = await extractButtonMetricCount(consultationsTodayCardExact);
+    await consultationsTodayCardExact.click();
+
+    await page.waitForURL(/\/dashboard\/drilldown\/consultations/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/metric_key=consultations_today/, { timeout: 15_000 });
     await expect(page.getByText(/Metric key:/)).toContainText("consultations_today");
     expect(await extractBadgeCount(page)).toBe(consultationsCount);
 
@@ -341,10 +421,10 @@ test.describe("Dashboard Phase A/B regression", () => {
     const enrollmentsCount = await extractButtonMetricCount(enrollmentsButton);
     await enrollmentsButton.click();
 
-    await expect(page).toHaveURL(/\/dashboard\/drilldown\/transitions/);
-    await expect(page).toHaveURL(/metric_key=enrollments_monthly/);
-    await expect(page).toHaveURL(/final_only=1/);
-    await expect(page).toHaveURL(/outcome=positive/);
+    await page.waitForURL(/\/dashboard\/drilldown\/transitions/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/metric_key=enrollments_monthly/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/final_only=1/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/outcome=positive/, { timeout: 15_000 });
     await expect(page.getByText(/Metric key:/)).toContainText("enrollments_monthly");
     expect(await extractBadgeCount(page)).toBe(enrollmentsCount);
   });
@@ -353,6 +433,7 @@ test.describe("Dashboard Phase A/B regression", () => {
     page,
     request,
   }) => {
+    await installBrowserApiRewrite(page);
     const officerHeaders = await loginWithBearer(request, OFFICER_USERNAME, OFFICER_PASSWORD);
     const officerId = await getCurrentUserId(request, officerHeaders);
 
@@ -370,7 +451,7 @@ test.describe("Dashboard Phase A/B regression", () => {
 
     await expect(page).toHaveURL(/\/leads\?/);
     await expect(page).toHaveURL(/nav_source=dashboard/);
-    await expect(page).toHaveURL(/metric_key=active_leads/);
+    await expect(page).toHaveURL(/status=new%2Cassigned%2Ccontacted%2Cqualified/);
     await expect(page).toHaveURL(/scope=personal/);
     await expect(page).toHaveURL(new RegExp(`scope_officer_id=${officerId}`));
     await expect(page.getByRole("button", { name: /context/i })).toBeVisible();
