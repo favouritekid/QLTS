@@ -185,6 +185,8 @@ class LeadRepository(BaseRepository[models.Lead]):
         score_max: Optional[int] = None,
         lead_ids: Optional[List[int]] = None,
         loss_reason: Optional[str] = None,
+        is_final: Optional[bool] = None,
+        counts_for_funnel: Optional[bool] = None,
     ) -> list:
         """Build reusable filter list for leads queries (shared by get_filtered + get_summary)."""
         filters = []
@@ -294,6 +296,28 @@ class LeadRepository(BaseRepository[models.Lead]):
                 )
             )
 
+        # === CONSULTATION STATUS FILTERS (correlated subquery) ===
+        # V12: Match dashboard KPI definition for active leads and funnel counts
+        if is_final is not None:
+            from sqlalchemy import exists as sa_exists
+            final_subq = select(models.ConsultationStatus.id).where(
+                models.ConsultationStatus.id == models.Lead.consultation_status_id,
+                models.ConsultationStatus.is_final == True,
+            )
+            if is_final:
+                filters.append(sa_exists(final_subq))
+            else:
+                # Non-final: is_final=False OR consultation_status_id IS NULL
+                filters.append(~sa_exists(final_subq))
+
+        if counts_for_funnel is not None:
+            from sqlalchemy import exists as sa_exists
+            funnel_subq = select(models.ConsultationStatus.id).where(
+                models.ConsultationStatus.id == models.Lead.consultation_status_id,
+                models.ConsultationStatus.counts_for_funnel == counts_for_funnel,
+            )
+            filters.append(sa_exists(funnel_subq))
+
         return filters
 
     async def get_summary(self, filters: list) -> dict:
@@ -347,6 +371,8 @@ class LeadRepository(BaseRepository[models.Lead]):
         score_max: Optional[int] = None,
         lead_ids: Optional[List[int]] = None,
         loss_reason: Optional[str] = None,
+        is_final: Optional[bool] = None,
+        counts_for_funnel: Optional[bool] = None,
     ) -> Tuple[int, List[models.Lead]]:
         """Get filtered list of leads with pagination and eager loading."""
         filters = self._build_filters(
@@ -358,6 +384,7 @@ class LeadRepository(BaseRepository[models.Lead]):
             referrer_id=referrer_id, validity_status=validity_status,
             score_min=score_min, score_max=score_max, lead_ids=lead_ids,
             loss_reason=loss_reason,
+            is_final=is_final, counts_for_funnel=counts_for_funnel,
         )
 
         base_query = select(models.Lead)

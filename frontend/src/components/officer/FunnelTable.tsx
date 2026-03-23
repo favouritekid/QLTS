@@ -219,7 +219,7 @@ export function FunnelTable({
       target: "leads_snapshot",
       exactness: "exact",
       metric_key: "funnel_stage",
-      filters: { stage_id: stageId },
+      filters: { stage_id: stageId, counts_for_funnel: true },
     });
     if (destination) {
       router.push(destination);

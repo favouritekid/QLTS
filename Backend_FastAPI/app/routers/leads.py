@@ -255,6 +255,13 @@ async def get_all_leads(
     validity_status: Optional[str] = Query(
         None, description="Filter by validity status (comma-separated, e.g. 'valid,invalid,pending')"
     ),
+    # === CONSULTATION STATUS FILTERS (V12: dashboard drill-down) ===
+    is_final: Optional[bool] = Query(
+        None, description="Filter by consultation status finality (true=final, false=non-final/active)"
+    ),
+    counts_for_funnel: Optional[bool] = Query(
+        None, description="Filter by funnel-relevant consultation statuses only"
+    ),
 ):
     """
     Lấy danh sách Leads (có phân trang, filter, search, sort).
@@ -288,6 +295,8 @@ async def get_all_leads(
         score_max=score_max,
         validity_status=validity_status,
         loss_reason=lead_filter.loss_reason,
+        is_final=is_final,
+        counts_for_funnel=counts_for_funnel,
     )
     return {
         "total_count": total,

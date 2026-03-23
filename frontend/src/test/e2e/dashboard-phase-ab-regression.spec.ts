@@ -1,4 +1,9 @@
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import * as OTPAuth from "otpauth";
 
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || "admin";
@@ -6,10 +11,24 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@12345";
 const ADMIN_TOTP_SECRET =
   process.env.E2E_ADMIN_TOTP_SECRET || "WUUT7KVVWRFVMVPZ7K6NGOKL2VYPPFH5";
 
-const OFFICER_USERNAME =
-  process.env.E2E_OFFICER_USERNAME || process.env.TEST_USERNAME || "vothuhien";
-const OFFICER_PASSWORD =
-  process.env.E2E_OFFICER_PASSWORD || process.env.TEST_PASSWORD || "@Matkhau123!";
+const OFFICER_18_USERNAME =
+  process.env.E2E_OFFICER18_USERNAME ||
+  process.env.E2E_OFFICER_USERNAME ||
+  "vothithuthuhien";
+const OFFICER_18_PASSWORD =
+  process.env.E2E_OFFICER18_PASSWORD ||
+  process.env.E2E_OFFICER_PASSWORD ||
+  "@Matkhau123!";
+
+const OFFICER_16_USERNAME =
+  process.env.E2E_OFFICER16_USERNAME || "nguyenhuuhieu";
+const OFFICER_16_PASSWORD =
+  process.env.E2E_OFFICER16_PASSWORD || "Officer@12345";
+
+const MANAGER_22_USERNAME =
+  process.env.E2E_MANAGER_USERNAME || "phanthithuyvan";
+const MANAGER_22_PASSWORD =
+  process.env.E2E_MANAGER_PASSWORD || "Manager@12345";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 const FRONTEND_URL = process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000";
@@ -21,6 +40,10 @@ const AUTH_STORAGE_KEY = "auth-storage";
 const AUTH_STORAGE_VERSION = 1;
 const STALE_SEARCH_VALUE = "STALE_E2E_FILTER";
 
+const OFFICER_18_ID = 18;
+const OFFICER_16_ID = 16;
+const DRILLDOWN_PAGE_SIZE = 20;
+
 function generateTOTP(secret: string): string {
   const totp = new OTPAuth.TOTP({
     secret: OTPAuth.Secret.fromBase32(secret),
@@ -31,16 +54,16 @@ function generateTOTP(secret: string): string {
   return totp.generate();
 }
 
-function extractAccessToken(
-  resp: { headersArray(): Array<{ name: string; value: string }> },
-): string | null {
-  for (const header of resp.headersArray()) {
-    if (header.name.toLowerCase() !== "set-cookie") continue;
-    const match = header.value.match(/^access_token=([^;]+)/);
-    if (match) return match[1];
-  }
-
-  return null;
+function normalizeText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase()
+    .replace(/[^a-z0-9%/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function getCSRFToken(page: Page): Promise<string | undefined> {
@@ -127,8 +150,7 @@ async function loginViaAPI(
       }
 
       authResp = mfaResp;
-      const mfaBody = await mfaResp.json();
-      authUser = mfaBody.user;
+      authUser = (await mfaResp.json()).user;
     }
 
     await extractAndAddCookies(page, authResp);
@@ -202,66 +224,6 @@ async function installBrowserApiRewrite(page: Page): Promise<void> {
   );
 }
 
-async function loginWithBearer(
-  request: APIRequestContext,
-  username: string,
-  password: string,
-  opts?: { totpSecret?: string },
-): Promise<Record<string, string>> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const loginResp = await request.post(`${API_URL}/api/auth/login`, {
-      form: { username, password },
-    });
-
-    if (loginResp.status() === 429) {
-      await new Promise((resolve) => setTimeout(resolve, 65_000));
-      continue;
-    }
-
-    expect(loginResp.ok()).toBeTruthy();
-    const loginBody = await loginResp.json();
-
-    if (loginBody.mfa_required) {
-      if (!opts?.totpSecret) {
-        throw new Error(`MFA required for ${username} but no TOTP secret was provided`);
-      }
-
-      const mfaResp = await request.post(`${API_URL}/api/auth/verify-mfa`, {
-        data: {
-          mfa_token: loginBody.mfa_token,
-          code: generateTOTP(opts.totpSecret),
-        },
-      });
-
-      if (!mfaResp.ok()) {
-        await new Promise((resolve) => setTimeout(resolve, 31_000));
-        continue;
-      }
-
-      const token = extractAccessToken(mfaResp);
-      expect(token).toBeTruthy();
-      return { Authorization: `Bearer ${token}` };
-    }
-
-    const token = extractAccessToken(loginResp);
-    expect(token).toBeTruthy();
-    return { Authorization: `Bearer ${token}` };
-  }
-
-  throw new Error(`Unable to login as ${username} after 3 attempts`);
-}
-
-async function getCurrentUserId(
-  request: APIRequestContext,
-  headers: Record<string, string>,
-): Promise<number> {
-  const response = await request.get(`${API_URL}/api/users/me`, { headers });
-  expect(response.ok()).toBeTruthy();
-  const body = await response.json();
-  expect(typeof body.id).toBe("number");
-  return body.id;
-}
-
 async function seedStaleLeadsFilters(page: Page): Promise<void> {
   const staleFilters = JSON.stringify({
     version: LEADS_FILTERS_STORAGE_VERSION,
@@ -296,35 +258,442 @@ async function seedStaleLeadsFilters(page: Page): Promise<void> {
   );
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+async function getAllAriaLabels(page: Page): Promise<string[]> {
+  return page
+    .locator("button[aria-label]")
+    .evaluateAll((elements) =>
+      elements
+        .map((element) => element.getAttribute("aria-label") || "")
+        .filter(Boolean),
+    );
 }
 
-function extractFirstNumber(value: string): number {
+async function findMetricAriaLabel(
+  page: Page,
+  metricPrefix: string,
+): Promise<string> {
+  const normalizedPrefix = normalizeText(metricPrefix);
+  const labels = await getAllAriaLabels(page);
+  const label = labels.find((candidate) => {
+    const normalized = normalizeText(candidate);
+    return normalized.startsWith(`${normalizedPrefix} `) || normalized.startsWith(`${normalizedPrefix}:`);
+  });
+
+  if (!label) {
+    throw new Error(
+      `Unable to find dashboard metric button for "${metricPrefix}". Labels seen: ${labels.join(" | ")}`,
+    );
+  }
+
+  return label;
+}
+
+async function tryFindMetricAriaLabel(
+  page: Page,
+  metricPrefix: string,
+): Promise<string | null> {
+  const normalizedPrefix = normalizeText(metricPrefix);
+  const labels = await getAllAriaLabels(page);
+  return labels.find((candidate) => {
+    const normalized = normalizeText(candidate);
+    return normalized.startsWith(`${normalizedPrefix} `) || normalized.startsWith(`${normalizedPrefix}:`);
+  }) ?? null;
+}
+
+async function getMetricButton(
+  page: Page,
+  metricPrefix: string,
+): Promise<Locator> {
+  const ariaLabel = await findMetricAriaLabel(page, metricPrefix);
+  return page.getByRole("button", { name: ariaLabel });
+}
+
+async function getMetricValue(
+  page: Page,
+  metricPrefix: string,
+): Promise<string> {
+  const ariaLabel = await findMetricAriaLabel(page, metricPrefix);
+  return ariaLabel.split(":").slice(1).join(":").trim();
+}
+
+function extractFirstInteger(value: string): number {
   const match = value.match(/(\d[\d.,]*)/);
   if (!match) {
-    throw new Error(`Unable to extract number from "${value}"`);
+    throw new Error(`Unable to extract integer from "${value}"`);
   }
 
   return Number(match[1].replace(/[.,]/g, ""));
 }
 
-async function extractButtonMetricCount(locator: ReturnType<Page["getByRole"]>): Promise<number> {
-  const ariaLabel = await locator.getAttribute("aria-label");
-  if (!ariaLabel) {
-    throw new Error("Button is missing aria-label");
+function extractFirstDecimal(value: string): number {
+  const match = value.match(/(\d[\d.,]*)/);
+  if (!match) {
+    throw new Error(`Unable to extract decimal from "${value}"`);
   }
 
-  const metricPart = ariaLabel.split(":").slice(1).join(":").trim();
-  const firstValue = metricPart.split("/")[0]?.trim() || metricPart;
-  return extractFirstNumber(firstValue);
+  return Number(match[1].replace(/\./g, "").replace(",", "."));
 }
 
-async function extractBadgeCount(page: Page): Promise<number> {
-  const badge = page.getByText(/\d+\s+bản ghi/).first();
-  await expect(badge).toBeVisible();
-  const text = (await badge.textContent()) || "";
-  return extractFirstNumber(text);
+async function expectMetricValue(
+  page: Page,
+  metricPrefix: string,
+  expected: string,
+): Promise<Locator> {
+  const button = await getMetricButton(page, metricPrefix);
+  await expect(button).toBeVisible();
+  await expect.poll(() => getMetricValue(page, metricPrefix)).toBe(expected);
+  return button;
+}
+
+async function expectMetricFirstNumber(
+  page: Page,
+  metricPrefix: string,
+  expected: number,
+): Promise<Locator> {
+  const button = await getMetricButton(page, metricPrefix);
+  await expect(button).toBeVisible();
+  await expect.poll(async () => extractFirstInteger(await getMetricValue(page, metricPrefix))).toBe(expected);
+  return button;
+}
+
+async function expectMetricNotClickable(
+  page: Page,
+  metricPrefix: string,
+): Promise<void> {
+  const labels = await getAllAriaLabels(page);
+  const normalizedPrefix = normalizeText(metricPrefix);
+  const found = labels.some((candidate) => {
+    const normalized = normalizeText(candidate);
+    return normalized.startsWith(`${normalizedPrefix} `) || normalized.startsWith(`${normalizedPrefix}:`);
+  });
+  expect(found).toBeFalsy();
+}
+
+async function getValueNearLabel(page: Page, label: string): Promise<string> {
+  const value = await page.evaluate((needle) => {
+    const normalize = (input: string) =>
+      input
+        .normalize("NFD")
+        .replace(/\p{Diacritic}/gu, "")
+        .replace(/đ/g, "d")
+        .replace(/Đ/g, "D")
+        .toLowerCase()
+        .replace(/[^a-z0-9%/]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const target = normalize(needle);
+    const elements = Array.from(document.querySelectorAll("body *"));
+
+    for (const element of elements) {
+      const text = (element.textContent || "").trim();
+      if (!text || normalize(text) !== target) continue;
+
+      let current: HTMLElement | null = element as HTMLElement;
+      for (let depth = 0; current && depth < 5; depth += 1) {
+        const lines = (current.innerText || "")
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+
+        const index = lines.findIndex((line) => normalize(line) === target);
+        if (index !== -1) {
+          for (let i = index + 1; i < lines.length; i += 1) {
+            if (normalize(lines[i]) !== target) {
+              return lines[i];
+            }
+          }
+        }
+
+        current = current.parentElement;
+      }
+    }
+
+    return null;
+  }, label);
+
+  if (!value) {
+    throw new Error(`Unable to find value near dashboard label "${label}"`);
+  }
+
+  return value;
+}
+
+async function expectLabeledValue(
+  page: Page,
+  label: string,
+  expected: string,
+): Promise<void> {
+  await expect.poll(() => getValueNearLabel(page, label)).toBe(expected);
+}
+
+async function readBadgeCount(page: Page): Promise<number> {
+  const badge = page.locator("main").getByText(/\d[\d.,]*\s+bản ghi/u).first();
+  const text = (await badge.textContent())?.trim() || "";
+  if (!text) {
+    throw new Error('Unable to find drilldown record count badge inside <main>');
+  }
+
+  return extractFirstInteger(text);
+}
+
+async function expectDrilldownCount(page: Page, expectedCount: number): Promise<void> {
+  await expect.poll(() => readBadgeCount(page)).toBe(expectedCount);
+
+  if (expectedCount === 0) {
+    await expect(page.getByText(/Không có dữ liệu/i)).toBeVisible();
+    return;
+  }
+
+  await expect
+    .poll(() => page.locator("tbody tr").count())
+    .toBe(Math.min(expectedCount, DRILLDOWN_PAGE_SIZE));
+}
+
+async function expectLeadsRowCount(page: Page, expectedCount: number): Promise<void> {
+  await expect.poll(async () => {
+    const rowCount = await page.locator("tbody tr[data-index]").count();
+    if (expectedCount === 0) {
+      return rowCount === 0;
+    }
+
+    return rowCount > 0 && rowCount <= expectedCount;
+  }).toBeTruthy();
+}
+
+async function readLeadsTotalCount(page: Page): Promise<number> {
+  const footer = page.locator("main").getByText(/Hiển thị\s+\d+-\d+\s*\/\s*\d+\s+lead/u).first();
+  const text = (await footer.textContent())?.trim() || "";
+  const match = text.match(/\/\s*(\d[\d.,]*)\s+lead/u);
+  if (!match) {
+    throw new Error(`Unable to parse leads total count from footer: "${text}"`);
+  }
+
+  return extractFirstInteger(match[1]);
+}
+
+async function getTableColumnTexts(
+  page: Page,
+  columnIndex: number,
+): Promise<string[]> {
+  return (await page.locator(`tbody tr td:nth-child(${columnIndex})`).allTextContents())
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+async function clickBackToDashboard(page: Page): Promise<void> {
+  await page.getByRole("button", { name: /Quay lại/i }).click();
+  await expect(page).toHaveURL(/\/dashboard\/officer/);
+  await waitForDashboardReady(page);
+}
+
+async function waitForDashboardReady(page: Page): Promise<void> {
+  await expect
+    .poll(() => tryFindMetricAriaLabel(page, "leads dang xu ly"), {
+      timeout: 30_000,
+      message: "Dashboard KPI cards did not finish hydrating",
+    })
+    .not.toBeNull();
+  const activeLeadsButton = await getMetricButton(page, "leads dang xu ly");
+  await expect(activeLeadsButton).toBeVisible();
+}
+
+async function openDashboard(
+  page: Page,
+  creds: {
+    username: string;
+    password: string;
+    totpSecret?: string;
+  },
+  path: string = "/dashboard/officer",
+): Promise<void> {
+  await installBrowserApiRewrite(page);
+  await loginViaAPI(page, creds.username, creds.password, {
+    totpSecret: creds.totpSecret,
+  });
+  await page.goto(`${FRONTEND_URL}${path}`);
+  await waitForDashboardReady(page);
+}
+
+async function expectOfficer18Snapshot(page: Page): Promise<void> {
+  await expectMetricFirstNumber(page, "tu van hom nay", 0);
+  await expectMetricValue(page, "leads dang xu ly", "13");
+  await expectMetricValue(page, "ti le chot don", "100,0%");
+  await expectMetricValue(page, "chuyen doi lead moi", "27,8%");
+  await expectMetricValue(page, "hieu qua tu van", "100,0%");
+  await expectMetricValue(page, "nhap hoc", "5");
+  await expectLabeledValue(page, "tuan thu sla", "94,1%");
+  await expectLabeledValue(page, "thoi gian phan hoi", "5,9h");
+  await expectMetricNotClickable(page, "tuan thu sla");
+  await expectMetricNotClickable(page, "thoi gian phan hoi");
+}
+
+async function expectOfficer16Snapshot(page: Page): Promise<void> {
+  await expectMetricFirstNumber(page, "tu van hom nay", 0);
+  await expectMetricValue(page, "leads dang xu ly", "14");
+  await expectMetricValue(page, "ti le chot don", "0,0%");
+  await expectMetricValue(page, "chuyen doi lead moi", "0,0%");
+  await expectMetricValue(page, "hieu qua tu van", "0,0%");
+  await expectMetricValue(page, "nhap hoc", "0");
+  await expectLabeledValue(page, "tuan thu sla", "100,0%");
+  await expectLabeledValue(page, "thoi gian phan hoi", "0,0h");
+  await expectMetricNotClickable(page, "tuan thu sla");
+  await expectMetricNotClickable(page, "thoi gian phan hoi");
+}
+
+async function expectManager22ZeroSnapshot(page: Page): Promise<void> {
+  await expectMetricFirstNumber(page, "tu van hom nay", 0);
+  await expectMetricValue(page, "leads dang xu ly", "0");
+  await expectMetricValue(page, "ti le chot don", "0,0%");
+  await expectMetricValue(page, "chuyen doi lead moi", "0,0%");
+  await expectMetricValue(page, "hieu qua tu van", "0,0%");
+  await expectMetricValue(page, "nhap hoc", "0");
+  await expectLabeledValue(page, "tuan thu sla", "0,0%");
+  await expectLabeledValue(page, "thoi gian phan hoi", "0,0h");
+  await expectMetricNotClickable(page, "tuan thu sla");
+  await expectMetricNotClickable(page, "thoi gian phan hoi");
+}
+
+async function expectAdminOrganizationSnapshot(page: Page): Promise<void> {
+  await expectMetricFirstNumber(page, "tu van hom nay", 0);
+  await expectMetricValue(page, "leads dang xu ly", "27");
+  await expectMetricValue(page, "ti le chot don", "100,0%");
+  await expectMetricValue(page, "chuyen doi lead moi", "15,6%");
+  await expectMetricValue(page, "hieu qua tu van", "100,0%");
+  await expectMetricValue(page, "nhap hoc", "5");
+  await expectLabeledValue(page, "tuan thu sla", "96,0%");
+  const responseTime = await getValueNearLabel(page, "thoi gian phan hoi");
+  const responseHours = extractFirstDecimal(responseTime);
+  expect(responseHours).toBeGreaterThanOrEqual(3);
+  expect(responseHours).toBeLessThanOrEqual(4);
+  await expectMetricNotClickable(page, "tuan thu sla");
+  await expectMetricNotClickable(page, "thoi gian phan hoi");
+}
+
+async function expectWinRateDrilldown(page: Page, expectedRows: number): Promise<void> {
+  const winRateButton = await getMetricButton(page, "ti le chot don");
+  await winRateButton.click();
+
+  await page.waitForURL(/\/dashboard\/drilldown\/transitions/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/metric_key=win_rate/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/final_only=1/, { timeout: 15_000 });
+  await expectDrilldownCount(page, expectedRows);
+
+  if (expectedRows > 0) {
+    const outcomes = await getTableColumnTexts(page, 5);
+    expect(outcomes).toHaveLength(expectedRows);
+    expect(outcomes.every((value) => normalizeText(value) === "positive")).toBeTruthy();
+  }
+}
+
+async function expectEnrollmentsDrilldown(page: Page, expectedRows: number): Promise<void> {
+  const enrollmentsButton = await getMetricButton(page, "nhap hoc");
+  await enrollmentsButton.click();
+
+  await page.waitForURL(/\/dashboard\/drilldown\/transitions/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/metric_key=enrollments_monthly/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/final_only=1/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/outcome=positive/, { timeout: 15_000 });
+  await expectDrilldownCount(page, expectedRows);
+
+  if (expectedRows > 0) {
+    const newStageNames = await getTableColumnTexts(page, 4);
+    expect(newStageNames).toHaveLength(expectedRows);
+    expect(
+      newStageNames.every((value) => normalizeText(value) === normalizeText("Đã nhập học")),
+    ).toBeTruthy();
+  }
+}
+
+async function expectCohortsDrilldown(
+  page: Page,
+  expectedRows: number,
+  expectedConverted: number,
+  expectedOpen: number,
+): Promise<void> {
+  const cohortsButton = await getMetricButton(page, "chuyen doi lead moi");
+  await cohortsButton.click();
+
+  await page.waitForURL(/\/dashboard\/drilldown\/cohorts/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/metric_key=new_lead_conversion/, { timeout: 15_000 });
+  await expectDrilldownCount(page, expectedRows);
+
+  if (expectedRows > 0) {
+    const cohortResults = await getTableColumnTexts(page, 4);
+    expect(cohortResults).toHaveLength(expectedRows);
+    const convertedCount = cohortResults.filter(
+      (value) => normalizeText(value) === "converted",
+    ).length;
+    const openCount = cohortResults.filter(
+      (value) => normalizeText(value) === "open",
+    ).length;
+    expect(convertedCount).toBe(expectedConverted);
+    expect(openCount).toBe(expectedOpen);
+  }
+}
+
+async function expectConsultationsTodayDrilldown(page: Page, expectedRows: number): Promise<void> {
+  const consultationsButton = await getMetricButton(page, "tu van hom nay");
+  await consultationsButton.click();
+
+  await page.waitForURL(/\/dashboard\/drilldown\/consultations/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/metric_key=consultations_today/, { timeout: 15_000 });
+  await expectDrilldownCount(page, expectedRows);
+}
+
+async function expectConsultationEffectivenessDrilldown(page: Page, expectedRows: number): Promise<void> {
+  const effectivenessButton = await getMetricButton(page, "hieu qua tu van");
+  await effectivenessButton.click();
+
+  await page.waitForURL(/\/dashboard\/drilldown\/transitions/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/metric_key=consultation_effectiveness/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/final_only=1/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/consulted_only=1/, { timeout: 15_000 });
+  await expectDrilldownCount(page, expectedRows);
+}
+
+async function expectActiveLeadsSnapshot(
+  page: Page,
+  expectedRows: number,
+  extraUrlChecks?: RegExp[],
+): Promise<void> {
+  const activeLeadsButton = await getMetricButton(page, "leads dang xu ly");
+  await activeLeadsButton.click();
+
+  await expect(page).toHaveURL(/\/leads\?/);
+  await expect(page).toHaveURL(/nav_source=dashboard/);
+  await expect(page).toHaveURL(/status=new%2Cassigned%2Ccontacted%2Cqualified/);
+
+  if (extraUrlChecks) {
+    for (const pattern of extraUrlChecks) {
+      await expect(page).toHaveURL(pattern);
+    }
+  }
+
+  await expect.poll(() => readLeadsTotalCount(page)).toBe(expectedRows);
+  await expectLeadsRowCount(page, expectedRows);
+  await expect(page.getByRole("button", { name: /context/i })).toBeVisible();
+}
+
+async function openFunnelTable(page: Page): Promise<void> {
+  await page.getByRole("button", { name: /^Bảng$/i }).click();
+  await expect(page.getByRole("button", { name: /^Chưa tư vấn$/i })).toBeVisible();
+}
+
+async function expectOfficerSelectorExcludesUnit14Officers(page: Page): Promise<void> {
+  const comboboxes = page.getByRole("combobox");
+  const officerSelector = comboboxes.first();
+  await officerSelector.click();
+  const options = (await page.getByRole("option").allTextContents()).map((value) => value.trim());
+
+  expect(options.some((value) => normalizeText(value) === normalizeText("Võ Thị Thu Thu Hiền"))).toBeFalsy();
+  expect(options.some((value) => normalizeText(value) === normalizeText("Nguyễn Hữu Hiệu"))).toBeFalsy();
+
+  await page.keyboard.press("Escape");
+}
+
+async function expectMetricPanelScopeLabel(page: Page, expectedLabel: string): Promise<void> {
+  await expect(page.getByText(expectedLabel, { exact: true })).toBeVisible();
 }
 
 async function expectLeadsContextWithoutStaleFilters(page: Page): Promise<void> {
@@ -335,14 +704,14 @@ async function expectLeadsContextWithoutStaleFilters(page: Page): Promise<void> 
 }
 
 test.describe("Dashboard Phase A/B regression", () => {
-  test.describe.configure({ mode: "serial", timeout: 300_000 });
+  test.describe.configure({ timeout: 300_000 });
 
   test("Phase A: deep-link create context beats stale localStorage and survives reload", async ({
     page,
   }) => {
     await installBrowserApiRewrite(page);
     await seedStaleLeadsFilters(page);
-    await loginViaAPI(page, OFFICER_USERNAME, OFFICER_PASSWORD);
+    await loginViaAPI(page, OFFICER_18_USERNAME, OFFICER_18_PASSWORD);
 
     const deepLink = `${FRONTEND_URL}/leads?nav_source=dashboard&action=create&scope=personal`;
 
@@ -366,14 +735,12 @@ test.describe("Dashboard Phase A/B regression", () => {
   test("Phase A: dashboard quick action opens create dialog and can exit dashboard context", async ({
     page,
   }) => {
-    await installBrowserApiRewrite(page);
-    await loginViaAPI(page, OFFICER_USERNAME, OFFICER_PASSWORD);
+    await openDashboard(page, {
+      username: OFFICER_18_USERNAME,
+      password: OFFICER_18_PASSWORD,
+    });
 
-    await page.goto(`${FRONTEND_URL}/dashboard/officer`);
-
-    const quickAction = page.getByRole("button", { name: "Thêm Lead" });
-    await expect(quickAction).toBeVisible();
-    await quickAction.click();
+    await page.getByRole("button", { name: /Thêm Lead/i }).click();
 
     await expect(page).toHaveURL(/\/leads\?nav_source=dashboard&action=create/);
     await expect(page.getByRole("button", { name: /context/i })).toBeVisible();
@@ -383,77 +750,136 @@ test.describe("Dashboard Phase A/B regression", () => {
     await expect(page.getByRole("button", { name: /context/i })).toHaveCount(0);
   });
 
-  test("Phase B: consultations and enrollments drilldowns keep exact totals", async ({
+  test("Officer 18 personal audit matches KPI cards, drilldowns, funnel stage, and back navigation", async ({
     page,
   }) => {
-    await installBrowserApiRewrite(page);
-    await loginViaAPI(page, OFFICER_USERNAME, OFFICER_PASSWORD);
-
-    await page.goto(`${FRONTEND_URL}/dashboard/officer`);
-
-    const consultationsCard = page.getByRole("button", {
-      name: /^(Tư vấn hôm nay|TB tư vấn\/ngày):/i,
+    await openDashboard(page, {
+      username: OFFICER_18_USERNAME,
+      password: OFFICER_18_PASSWORD,
     });
-    await expect(consultationsCard).toBeVisible();
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const consultationsTodayCard = page.getByRole("button", {
-      name: /^TÆ° váº¥n hÃ´m nay:/i,
-    });
-    const consultationsTodayCardExact = page.getByRole("button", {
-      name: /^Tư vấn hôm nay:/i,
-    });
-    await expect(consultationsTodayCardExact).toBeVisible();
+    await expectWinRateDrilldown(page, 5);
+    await expectMetricPanelScopeLabel(page, "Cá nhân");
+    await clickBackToDashboard(page);
 
-    const consultationsCount = await extractButtonMetricCount(consultationsTodayCardExact);
-    await consultationsTodayCardExact.click();
+    await expectEnrollmentsDrilldown(page, 5);
+    await clickBackToDashboard(page);
 
-    await page.waitForURL(/\/dashboard\/drilldown\/consultations/, { timeout: 15_000 });
-    await expect(page).toHaveURL(/metric_key=consultations_today/, { timeout: 15_000 });
-    await expect(page.getByText(/Metric key:/)).toContainText("consultations_today");
-    expect(await extractBadgeCount(page)).toBe(consultationsCount);
+    await expectCohortsDrilldown(page, 18, 5, 13);
+    await clickBackToDashboard(page);
 
-    await page.goto(`${FRONTEND_URL}/dashboard/officer`);
+    await expectConsultationEffectivenessDrilldown(page, 5);
+    await clickBackToDashboard(page);
 
-    const enrollmentsButton = page.getByRole("button", { name: /^Nhập học:/i });
-    await expect(enrollmentsButton).toBeVisible();
+    await expectConsultationsTodayDrilldown(page, 0);
+    await clickBackToDashboard(page);
 
-    const enrollmentsCount = await extractButtonMetricCount(enrollmentsButton);
-    await enrollmentsButton.click();
+    await expectOfficer18Snapshot(page);
 
-    await page.waitForURL(/\/dashboard\/drilldown\/transitions/, { timeout: 15_000 });
-    await expect(page).toHaveURL(/metric_key=enrollments_monthly/, { timeout: 15_000 });
-    await expect(page).toHaveURL(/final_only=1/, { timeout: 15_000 });
-    await expect(page).toHaveURL(/outcome=positive/, { timeout: 15_000 });
-    await expect(page.getByText(/Metric key:/)).toContainText("enrollments_monthly");
-    expect(await extractBadgeCount(page)).toBe(enrollmentsCount);
+    await openFunnelTable(page);
+    await page.getByRole("button", { name: /^Chưa tư vấn$/i }).click();
+    await expect(page).toHaveURL(/\/leads\?/);
+    await expect(page).toHaveURL(/stage=stg01/);
+    await expect.poll(() => page.locator("tbody tr[data-index]").count()).toBeGreaterThan(0);
   });
 
-  test("Phase A: admin personal officer drilldown keeps officer scope in leads snapshot", async ({
+  test("Officer 16 personal audit matches low-conversion expectations", async ({
     page,
-    request,
   }) => {
-    await installBrowserApiRewrite(page);
-    const officerHeaders = await loginWithBearer(request, OFFICER_USERNAME, OFFICER_PASSWORD);
-    const officerId = await getCurrentUserId(request, officerHeaders);
+    await openDashboard(page, {
+      username: OFFICER_16_USERNAME,
+      password: OFFICER_16_PASSWORD,
+    });
 
-    await loginViaAPI(page, ADMIN_USERNAME, ADMIN_PASSWORD, {
+    await expectActiveLeadsSnapshot(page, 14, [/scope=personal/]);
+
+    await page.goto(`${FRONTEND_URL}/dashboard/officer`);
+    await waitForDashboardReady(page);
+
+    await expectWinRateDrilldown(page, 0);
+    await clickBackToDashboard(page);
+
+    await expectOfficer16Snapshot(page);
+  });
+
+  test("Manager 22 stays unit-scoped to zero-data unit 19 and cannot escape to unit 14", async ({
+    page,
+  }) => {
+    await openDashboard(page, {
+      username: MANAGER_22_USERNAME,
+      password: MANAGER_22_PASSWORD,
+    });
+
+    await expectManager22ZeroSnapshot(page);
+    await expectOfficerSelectorExcludesUnit14Officers(page);
+
+    await expectActiveLeadsSnapshot(page, 0, [/scope=unit/]);
+
+    await page.goto(`${FRONTEND_URL}/dashboard/officer`);
+    await waitForDashboardReady(page);
+
+    await expectWinRateDrilldown(page, 0);
+    await clickBackToDashboard(page);
+
+    await page.goto(`${FRONTEND_URL}/dashboard/officer?scope=personal&officer=${OFFICER_18_ID}`);
+    await expect(page).toHaveURL(/scope=personal&officer=18/);
+    await expect(page.getByText(/Không thể tải thống kê dashboard/i)).toBeVisible();
+    await expect(page.getByText("Võ Thị Thu Thu Hiền")).toHaveCount(0);
+  });
+
+  test("Admin organization audit aggregates officer 16 and officer 18 data correctly", async ({
+    page,
+  }) => {
+    await openDashboard(page, {
+      username: ADMIN_USERNAME,
+      password: ADMIN_PASSWORD,
       totpSecret: ADMIN_TOTP_SECRET,
     });
 
-    await page.goto(`${FRONTEND_URL}/dashboard/officer?scope=personal&officer=${officerId}`);
+    await expectActiveLeadsSnapshot(page, 27, [/scope=organization/]);
 
-    const activeLeadsCard = page.getByRole("button", {
-      name: new RegExp(`^${escapeRegExp("Leads đang xử lý")}:`, "i"),
-    });
-    await expect(activeLeadsCard).toBeVisible();
-    await activeLeadsCard.click();
+    await page.goto(`${FRONTEND_URL}/dashboard/officer`);
+    await waitForDashboardReady(page);
 
-    await expect(page).toHaveURL(/\/leads\?/);
-    await expect(page).toHaveURL(/nav_source=dashboard/);
-    await expect(page).toHaveURL(/status=new%2Cassigned%2Ccontacted%2Cqualified/);
-    await expect(page).toHaveURL(/scope=personal/);
-    await expect(page).toHaveURL(new RegExp(`scope_officer_id=${officerId}`));
-    await expect(page.getByRole("button", { name: /context/i })).toBeVisible();
+    await expectWinRateDrilldown(page, 5);
+    await clickBackToDashboard(page);
+
+    await expectEnrollmentsDrilldown(page, 5);
+    await clickBackToDashboard(page);
+
+    await expectCohortsDrilldown(page, 32, 5, 27);
+    await clickBackToDashboard(page);
+
+    await expectAdminOrganizationSnapshot(page);
+  });
+
+  test("Admin personal drilldown mirrors officer-specific snapshots for officer 18 and officer 16", async ({
+    page,
+  }) => {
+    await openDashboard(page, {
+      username: ADMIN_USERNAME,
+      password: ADMIN_PASSWORD,
+      totpSecret: ADMIN_TOTP_SECRET,
+    }, `/dashboard/officer?scope=personal&officer=${OFFICER_18_ID}`);
+
+    await expectActiveLeadsSnapshot(page, 13, [
+      /scope=personal/,
+      new RegExp(`scope_officer_id=${OFFICER_18_ID}`),
+    ]);
+    await page.goto(
+      `${FRONTEND_URL}/dashboard/officer?scope=personal&officer=${OFFICER_18_ID}`,
+    );
+    await waitForDashboardReady(page);
+    await expectOfficer18Snapshot(page);
+
+    await page.goto(
+      `${FRONTEND_URL}/dashboard/officer?scope=personal&officer=${OFFICER_16_ID}`,
+    );
+    await waitForDashboardReady(page);
+
+    await expectWinRateDrilldown(page, 0);
+    await clickBackToDashboard(page);
+
+    await expectOfficer16Snapshot(page);
   });
 });

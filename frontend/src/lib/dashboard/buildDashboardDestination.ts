@@ -7,6 +7,8 @@ export interface LeadsSnapshotDrillDownFilters {
   stage_id?: string;
   status_codes?: string[];
   loss_reason_code?: string;
+  is_final?: boolean;
+  counts_for_funnel?: boolean;
 }
 
 export interface ConsultationsDrillDownFilters {
@@ -122,6 +124,12 @@ function appendDescriptorFilters(params: URLSearchParams, descriptor: DrillDownD
       }
       if (descriptor.filters.loss_reason_code) {
         params.set("loss_reason", descriptor.filters.loss_reason_code);
+      }
+      if (descriptor.filters.is_final !== undefined) {
+        params.set("is_final", descriptor.filters.is_final ? "true" : "false");
+      }
+      if (descriptor.filters.counts_for_funnel !== undefined) {
+        params.set("counts_for_funnel", descriptor.filters.counts_for_funnel ? "true" : "false");
       }
       return;
     case "consultations":

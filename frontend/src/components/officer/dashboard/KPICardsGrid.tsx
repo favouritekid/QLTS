@@ -240,7 +240,7 @@ export function KPICardsGrid({
       target: "leads_snapshot",
       exactness: "exact",
       metric_key: "active_leads",
-      filters: { status_codes: ["new", "assigned", "contacted", "qualified"] },
+      filters: { is_final: false },
     },
     false,
   );

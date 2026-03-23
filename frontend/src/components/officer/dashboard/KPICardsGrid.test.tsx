@@ -178,7 +178,7 @@ describe("KPICardsGrid", () => {
 
       const url = new URL(mockPush.mock.calls.at(-1)?.[0] ?? "", "http://test");
       expect(url.pathname).toBe("/leads");
-      expect(url.searchParams.get("status")).toBe("new,assigned,contacted,qualified");
+      expect(url.searchParams.get("is_final")).toBe("false");
       expect(url.searchParams.get("scope")).toBe("unit");
       expect(url.searchParams.get("scope_unit_id")).toBe("7");
       expect(url.searchParams.get("include_descendants")).toBe("1");

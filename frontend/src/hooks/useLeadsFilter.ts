@@ -176,7 +176,7 @@ function clearFiltersFromStorage() {
 const CONTEXT_PARAMS = ["nav_source", "action", "scope", "scope_officer_id", "scope_unit_id", "include_descendants"] as const;
 
 // V12: Recognized filter params (user-editable filters)
-const FILTER_PARAMS = ["page", "q", "status", "source", "validity", "offering", "stage", "officer", "unit_id", "from", "to", "date_field", "score_min", "score_max", "sort_by", "order", "loss_reason"] as const;
+const FILTER_PARAMS = ["page", "q", "status", "source", "validity", "offering", "stage", "officer", "unit_id", "from", "to", "date_field", "score_min", "score_max", "sort_by", "order", "loss_reason", "is_final", "counts_for_funnel"] as const;
 
 function hasRecognizedContextParams(searchParams: URLSearchParams): boolean {
   return CONTEXT_PARAMS.some(p => searchParams.has(p));
@@ -446,6 +446,12 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       if (dashboardContext?.includeDescendants) params.set("include_descendants", "1");
       if (dashboardContext?.lossReason) params.set("loss_reason", dashboardContext.lossReason);
 
+      // V12: Preserve consultation status pass-through params from dashboard deep-link
+      const curIsFinal = searchParams.get("is_final");
+      if (curIsFinal === "true" || curIsFinal === "false") params.set("is_final", curIsFinal);
+      const curFunnel = searchParams.get("counts_for_funnel");
+      if (curFunnel === "true" || curFunnel === "false") params.set("counts_for_funnel", curFunnel);
+
       const queryString = params.toString();
       const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
 
@@ -682,6 +688,14 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (scoreRange[0] > 0) params.score_min = scoreRange[0];
     if (scoreRange[1] < 100) params.score_max = scoreRange[1];
 
+    // V12: Consultation status pass-through (from dashboard deep-link only)
+    const isFinalParam = searchParams.get("is_final");
+    if (isFinalParam === "true") params.is_final = true;
+    else if (isFinalParam === "false") params.is_final = false;
+    const countsFunnelParam = searchParams.get("counts_for_funnel");
+    if (countsFunnelParam === "true") params.counts_for_funnel = true;
+    else if (countsFunnelParam === "false") params.counts_for_funnel = false;
+
     // V12: Pass dashboard scope context to API
     if (dashboardContext) {
       if (dashboardContext.navSource) params.nav_source = dashboardContext.navSource;
@@ -696,7 +710,7 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   }, [
     page, pageSize, search, statusFilters, sourceFilters, validityFilters,
     offeringFilters, stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
-    sortBy, sortOrder, scoreRange, dashboardContext,
+    sortBy, sortOrder, scoreRange, dashboardContext, searchParams,
   ]);
 
   // ==========================================================================

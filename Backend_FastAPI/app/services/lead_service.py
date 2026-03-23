@@ -696,6 +696,8 @@ async def get_leads(
     validity_status: Optional[str] = None,
     lead_ids: Optional[List[int]] = None,
     loss_reason: Optional[str] = None,
+    is_final: Optional[bool] = None,
+    counts_for_funnel: Optional[bool] = None,
     include_summary: bool = True,
 ) -> Tuple[int, List[models.Lead], Optional[dict]]:
     """
@@ -716,6 +718,7 @@ async def get_leads(
         score_min=score_min, score_max=score_max,
         validity_status=validity_status, lead_ids=lead_ids,
         loss_reason=loss_reason,
+        is_final=is_final, counts_for_funnel=counts_for_funnel,
     )
 
     summary = None
