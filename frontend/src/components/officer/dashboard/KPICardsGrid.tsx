@@ -240,7 +240,7 @@ export function KPICardsGrid({
       target: "leads_snapshot",
       exactness: "exact",
       metric_key: "active_leads",
-      filters: { status: "new,assigned,contacted,qualified" },
+      filters: { status_codes: ["new", "assigned", "contacted", "qualified"] },
     },
     false,
   );
@@ -259,6 +259,40 @@ export function KPICardsGrid({
     ? `${kpis.consultations_today}/${kpis.consultations_target}`
     : fmtPct(kpis.consultations_avg_per_day ?? 0);
   const consultationsSubtitle = todayInRange ? "Mục tiêu hàng ngày" : periodLabel;
+  const consultationsDescriptor: DrillDownDescriptor = todayInRange
+    ? {
+        target: "consultations",
+        exactness: "exact",
+        metric_key: "consultations_today",
+      }
+    : {
+        target: "consultations",
+        exactness: "exact",
+        metric_key: "consultations_avg_per_day",
+      };
+  const winRateDescriptor: DrillDownDescriptor = {
+    target: "transitions",
+    exactness: "exact",
+    metric_key: "win_rate",
+    filters: { final_only: true },
+  };
+  const cohortConversionDescriptor: DrillDownDescriptor = {
+    target: "cohorts",
+    exactness: "exact",
+    metric_key: "new_lead_conversion",
+  };
+  const consultationEffectivenessDescriptor: DrillDownDescriptor = {
+    target: "transitions",
+    exactness: "exact",
+    metric_key: "consultation_effectiveness",
+    filters: { final_only: true, consulted_only: true },
+  };
+  const enrollmentsDescriptor: DrillDownDescriptor = {
+    target: "transitions",
+    exactness: "exact",
+    metric_key: "enrollments_monthly",
+    filters: { final_only: true, outcome: "positive" },
+  };
 
   // Gap 1: Build dashboard range for catalog canShowTarget() comparison policy
   const dashboardRange = dateRange?.from && dateRange?.to
@@ -284,6 +318,7 @@ export function KPICardsGrid({
               tooltip={TOOLTIPS.consultations}
               trend={kpis.consultations_trend}
               icon={Phone}
+              onClick={() => navigateToDescriptor(consultationsDescriptor)}
             />
             {kpis.is_unit_target && todayInRange && (
               <span className="absolute bottom-1.5 left-3 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
@@ -311,6 +346,7 @@ export function KPICardsGrid({
             icon={TrendingUp}
             target={winRateTarget}
             actualValue={kpis.win_rate}
+            onClick={() => navigateToDescriptor(winRateDescriptor)}
           />
 
           <KPICard
@@ -321,6 +357,7 @@ export function KPICardsGrid({
             trend={kpis.new_lead_conversion_rate_trend ?? undefined}
             icon={TrendingUp}
             trendOnly={true}
+            onClick={() => navigateToDescriptor(cohortConversionDescriptor)}
           />
         </div>
 
@@ -343,6 +380,7 @@ export function KPICardsGrid({
               tooltip={TOOLTIPS.effectiveness}
               trend={kpis.consultation_effectiveness_trend}
               trendOnly={true}
+              onClick={() => navigateToDescriptor(consultationEffectivenessDescriptor)}
             />
             <StatItem
               icon={Clock}
@@ -363,6 +401,7 @@ export function KPICardsGrid({
               tooltip="Số hồ sơ nhập học trong kỳ (final stage + positive outcome)"
               target={enrollmentsMonthlyTarget}
               actualValue={kpis.enrollments_monthly ?? 0}
+              onClick={() => navigateToDescriptor(enrollmentsDescriptor)}
             />
           </div>
         </Card>

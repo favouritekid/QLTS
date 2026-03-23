@@ -1,5 +1,5 @@
 # app/schemas/officer.py
-from typing import Dict, List, Optional, Literal
+from typing import Annotated, Dict, List, Optional, Literal
 from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,17 +48,87 @@ class EstimatedLostRevenue(BaseModel):
     leads_with_tuition: int            # Leads that have offering with tuition data
 
 
-class DrillDownDescriptor(BaseModel):
-    """V12: Typed drill-down descriptor for exact dashboard click-through."""
-    target: Literal["leads_snapshot", "consultations", "transitions", "cohorts"]
+class LeadsSnapshotDrillDownFilters(BaseModel):
+    stage_id: Optional[str] = None
+    status_codes: Optional[List[str]] = None
+    loss_reason_code: Optional[str] = None
+
+
+class ConsultationsDrillDownFilters(BaseModel):
+    stage_id: Optional[str] = None
+    loss_reason_code: Optional[str] = None
+    consultation_kind: Optional[Literal["human", "system"]] = None
+    response_breach_only: Optional[bool] = None
+
+
+class TransitionsDrillDownFilters(BaseModel):
+    stage_id: Optional[str] = None
+    outcome: Optional[Literal["positive", "negative", "neutral"]] = None
+    final_only: Optional[bool] = None
+    consulted_only: Optional[bool] = None
+
+
+class CohortsDrillDownFilters(BaseModel):
+    cohort_result: Optional[Literal["converted", "lost", "open"]] = None
+
+
+DrillDownMetricKey = Literal[
+    "active_leads",
+    "funnel_stage",
+    "consultations_today",
+    "consultations_avg_per_day",
+    "loss_reason",
+    "avg_response_time",
+    "bottleneck",
+    "slow_stage",
+    "high_loss",
+    "win_rate",
+    "enrollments_monthly",
+    "consultation_effectiveness",
+    "new_lead_conversion",
+]
+
+
+class LeadsSnapshotDrillDownDescriptor(BaseModel):
+    target: Literal["leads_snapshot"]
     exactness: Literal["exact"] = "exact"
-    metric_key: str
-    filters: Optional[dict] = None
+    metric_key: Literal["active_leads", "funnel_stage"]
+    filters: Optional[LeadsSnapshotDrillDownFilters] = None
+
+
+class ConsultationsDrillDownDescriptor(BaseModel):
+    target: Literal["consultations"]
+    exactness: Literal["exact"] = "exact"
+    metric_key: Literal["consultations_today", "consultations_avg_per_day", "loss_reason", "avg_response_time"]
+    filters: Optional[ConsultationsDrillDownFilters] = None
+
+
+class TransitionsDrillDownDescriptor(BaseModel):
+    target: Literal["transitions"]
+    exactness: Literal["exact"] = "exact"
+    metric_key: Literal["bottleneck", "slow_stage", "high_loss", "win_rate", "enrollments_monthly", "consultation_effectiveness"]
+    filters: Optional[TransitionsDrillDownFilters] = None
+
+
+class CohortsDrillDownDescriptor(BaseModel):
+    target: Literal["cohorts"]
+    exactness: Literal["exact"] = "exact"
+    metric_key: Literal["new_lead_conversion"]
+    filters: Optional[CohortsDrillDownFilters] = None
+
+
+DrillDownDescriptor = Annotated[
+    LeadsSnapshotDrillDownDescriptor
+    | ConsultationsDrillDownDescriptor
+    | TransitionsDrillDownDescriptor
+    | CohortsDrillDownDescriptor,
+    Field(discriminator="target"),
+]
 
 
 class DrillDownMetadata(BaseModel):
     """Common metadata for all drill-down responses."""
-    metric_key: str
+    metric_key: DrillDownMetricKey
     exactness: Literal["exact"] = "exact"
     effective_scope: Optional[dict] = None
     effective_date_context: Optional[dict] = None

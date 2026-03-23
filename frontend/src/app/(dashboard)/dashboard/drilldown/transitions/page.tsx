@@ -16,6 +16,7 @@ const COLUMNS = [
 function TransitionsContent() {
   return (
     <DrillDownPageShell
+      target="transitions"
       title="Chi tiết chuyển đổi"
       fetchFn={drilldownApi.getTransitions}
       queryKeyPrefix="drilldown-transitions"

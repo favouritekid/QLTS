@@ -1,14 +1,17 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useMemo } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, CalendarRange, Filter, Layers3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Filter } from "lucide-react";
-import { useRouter } from "next/navigation";
 import type { DrillDownResponse, DrillDownParams } from "@/lib/api/drilldown";
 
+type DrillDownPageTarget = "consultations" | "transitions" | "cohorts";
+
 interface DrillDownPageShellProps {
+  target: DrillDownPageTarget;
   title: string;
   fetchFn: (params: DrillDownParams) => Promise<DrillDownResponse>;
   queryKeyPrefix: string;
@@ -16,7 +19,83 @@ interface DrillDownPageShellProps {
   columns: { key: string; label: string }[];
 }
 
+const KNOWN_PARAMS = new Set([
+  "metric_key",
+  "scope",
+  "scope_officer_id",
+  "scope_unit_id",
+  "include_descendants",
+  "from",
+  "to",
+  "page",
+  "page_size",
+  "sort_by",
+  "order",
+  "nav_source",
+  "date_field",
+]);
+
+const METRIC_TITLES: Record<DrillDownPageTarget, Record<string, string>> = {
+  consultations: {
+    consultations_today: "Tư vấn hôm nay",
+    consultations_avg_per_day: "Trung bình tư vấn / ngày",
+    loss_reason: "Lý do mất lead",
+    avg_response_time: "Thời gian phản hồi",
+  },
+  transitions: {
+    bottleneck: "Điểm nghẽn chuyển giai đoạn",
+    slow_stage: "Giai đoạn xử lý chậm",
+    high_loss: "Leads mất nhiều ở giai đoạn",
+    win_rate: "Tỷ lệ chốt đơn",
+    enrollments_monthly: "Nhập học trong kỳ",
+    consultation_effectiveness: "Hiệu quả tư vấn",
+  },
+  cohorts: {
+    new_lead_conversion: "Chuyển đổi lead mới",
+  },
+};
+
+const FILTER_LABELS: Record<string, string> = {
+  stage_id: "Giai đoạn",
+  loss_reason_code: "Lý do mất",
+  consultation_kind: "Loại tư vấn",
+  response_breach_only: "Vi phạm phản hồi",
+  outcome: "Kết quả",
+  final_only: "Chỉ final",
+  consulted_only: "Đã tư vấn",
+  cohort_result: "Kết quả cohort",
+};
+
+function formatFilterValue(key: string, value: string) {
+  if (key === "consultation_kind") {
+    return value === "human" ? "Tư vấn thủ công" : "System";
+  }
+  if (key === "response_breach_only" || key === "final_only" || key === "consulted_only") {
+    return value === "1" || value === "true" ? "Có" : "Không";
+  }
+  if (key === "outcome") {
+    return value === "positive"
+      ? "Tích cực"
+      : value === "negative"
+      ? "Tiêu cực"
+      : value === "neutral"
+      ? "Trung tính"
+      : value;
+  }
+  if (key === "cohort_result") {
+    return value === "converted"
+      ? "Đã chuyển đổi"
+      : value === "lost"
+      ? "Đã mất"
+      : value === "open"
+      ? "Đang mở"
+      : value;
+  }
+  return value;
+}
+
 export function DrillDownPageShell({
+  target,
   title,
   fetchFn,
   queryKeyPrefix,
@@ -26,7 +105,6 @@ export function DrillDownPageShell({
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Parse all params from URL
   const params: DrillDownParams = {
     metric_key: searchParams.get("metric_key") || "unknown",
     scope: searchParams.get("scope") || undefined,
@@ -36,12 +114,11 @@ export function DrillDownPageShell({
     from: searchParams.get("from") || undefined,
     to: searchParams.get("to") || undefined,
     page: Number(searchParams.get("page") || "1"),
-    page_size: 20,
+    page_size: Number(searchParams.get("page_size") || "20"),
     sort_by: searchParams.get("sort_by") || undefined,
     order: (searchParams.get("order") as "asc" | "desc") || "desc",
   };
 
-  // Pass through any extra filter params (stage_id, loss_reason_code, etc.)
   searchParams.forEach((value, key) => {
     if (!(key in params)) {
       params[key] = value;
@@ -55,61 +132,89 @@ export function DrillDownPageShell({
 
   const metadata = data?.metadata;
   const rows = data?.rows || [];
+  const metricTitle = METRIC_TITLES[target][params.metric_key] ?? title;
+  const appliedFilters = useMemo(
+    () =>
+      Array.from(searchParams.entries())
+        .filter(([key, value]) => !KNOWN_PARAMS.has(key) && value)
+        .map(([key, value]) => ({
+          key,
+          label: FILTER_LABELS[key] ?? key,
+          value: formatFilterValue(key, value),
+        })),
+    [searchParams],
+  );
 
   return (
-    <div className="h-full flex flex-col p-4 sm:p-6 space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-3">
+    <div className="flex h-full flex-col space-y-4 p-4 sm:p-6">
+      <div className="flex flex-wrap items-start gap-3">
         <Button variant="ghost" size="sm" onClick={() => router.back()}>
-          <ArrowLeft className="h-4 w-4 mr-1" />
+          <ArrowLeft className="mr-1 h-4 w-4" />
           Quay lại
         </Button>
-        <div>
-          <h1 className="text-lg font-semibold">{title}</h1>
-          {metadata?.effective_scope && (
-            <div className="flex items-center gap-2 mt-1">
-              <Badge variant="secondary" className="text-xs">
+        <div className="min-w-0 space-y-2">
+          <div>
+            <h1 className="text-lg font-semibold">{metricTitle}</h1>
+            <p className="text-sm text-muted-foreground">{title}</p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {metadata?.effective_scope && (
+              <Badge variant="secondary" className="gap-1">
+                <Layers3 className="h-3 w-3" />
                 {metadata.effective_scope.label}
               </Badge>
-              {metadata.effective_date_context?.start_date && (
-                <span className="text-xs text-muted-foreground">
-                  {metadata.effective_date_context.start_date} → {metadata.effective_date_context.end_date}
-                </span>
-              )}
-            </div>
-          )}
+            )}
+            {metadata?.effective_date_context?.start_date && (
+              <Badge variant="outline" className="gap-1">
+                <CalendarRange className="h-3 w-3" />
+                {metadata.effective_date_context.start_date} → {metadata.effective_date_context.end_date}
+              </Badge>
+            )}
+            {metadata && (
+              <Badge variant="outline">{metadata.total_count} bản ghi</Badge>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Filters applied */}
-      {params.metric_key && (
+      <div className="space-y-2">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Filter className="h-3.5 w-3.5" />
-          <span>Metric: <strong>{params.metric_key}</strong></span>
-          {metadata && <span>• {metadata.total_count} kết quả</span>}
+          <span>Metric key: <strong>{params.metric_key}</strong></span>
         </div>
-      )}
+        {appliedFilters.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {appliedFilters.map((filter) => (
+              <Badge key={filter.key} variant="outline">
+                {filter.label}: {filter.value}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Không có filter bổ sung.</p>
+        )}
+      </div>
 
-      {/* Table */}
       {isLoading ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Đang tải...
         </div>
       ) : error ? (
-        <div className="flex-1 flex items-center justify-center text-destructive">
+        <div className="flex flex-1 items-center justify-center text-destructive">
           Lỗi tải dữ liệu
         </div>
       ) : rows.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Không có dữ liệu
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto rounded-lg border">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-background border-b">
+            <thead className="sticky top-0 border-b bg-background">
               <tr>
                 {columns.map((col) => (
-                  <th key={col.key} className="text-left py-2 px-3 font-medium text-muted-foreground">
+                  <th key={col.key} className="px-3 py-2 text-left font-medium text-muted-foreground">
                     {col.label}
                   </th>
                 ))}
@@ -120,9 +225,8 @@ export function DrillDownPageShell({
             </tbody>
           </table>
 
-          {/* Pagination */}
           {metadata && metadata.total_count > metadata.page_size && (
-            <div className="flex items-center justify-between py-3 border-t mt-2">
+            <div className="mt-2 flex items-center justify-between border-t px-3 py-3">
               <span className="text-sm text-muted-foreground">
                 Trang {metadata.page} / {Math.ceil(metadata.total_count / metadata.page_size)}
               </span>

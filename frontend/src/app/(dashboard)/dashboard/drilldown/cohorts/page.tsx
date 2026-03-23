@@ -14,6 +14,7 @@ const COLUMNS = [
 function CohortsContent() {
   return (
     <DrillDownPageShell
+      target="cohorts"
       title="Chi tiết nhóm leads"
       fetchFn={drilldownApi.getCohorts}
       queryKeyPrefix="drilldown-cohorts"

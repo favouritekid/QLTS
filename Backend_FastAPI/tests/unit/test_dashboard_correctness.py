@@ -426,10 +426,29 @@ class TestSLAAggregateSemantics:
 
 class _FakeUser:
     """Minimal User stub for deps testing."""
-    def __init__(self, id, role, unit_id=None):
+    def __init__(self, id, role, unit_id=None, full_name=None):
         self.id = id
         self.role = role
         self.unit_id = unit_id
+        self.full_name = full_name or f"User {id}"
+
+
+class _FakeResult:
+    """Stub for SQLAlchemy result from execute()."""
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return [r[0] if isinstance(r, tuple) else r for r in self._rows]
+
+    def scalar(self):
+        return self._rows[0] if self._rows else None
 
 
 class _FakeDB:
@@ -439,6 +458,9 @@ class _FakeDB:
 
     async def get(self, model_class, pk):
         return self._users.get(pk)
+
+    async def execute(self, query):
+        return _FakeResult([])
 
 
 class _FakeOrgRepo:
@@ -745,7 +767,7 @@ class TestGetOfficerDashboardScopeIDOR:
                 scope="team", officer_id=42, unit_id=None,
                 db=db, current_user=manager,
             )
-        assert result.officer_id == 42
+        assert result.requested_officer_id == 42
 
     async def test_manager_out_of_scope_404(self):
         """Manager cannot drill into officer outside unit hierarchy."""
@@ -777,7 +799,7 @@ class TestGetOfficerDashboardScopeIDOR:
             scope="personal", officer_id=42, unit_id=None,
             db=db, current_user=admin,
         )
-        assert result.officer_id == 42
+        assert result.requested_officer_id == 42
 
     async def test_admin_target_non_officer_404(self):
         from app.core.deps import get_officer_dashboard_scope
@@ -803,8 +825,8 @@ class TestGetOfficerDashboardScopeIDOR:
             scope="organization", officer_id=None, unit_id=None,
             db=db, current_user=admin,
         )
-        assert result.officer_id is None
-        assert result.scope == "organization"
+        assert result.requested_officer_id is None
+        assert result.scope_kind == "organization"
 
     async def test_officer_other_id_404(self):
         """Officer trying to view another officer → 404."""

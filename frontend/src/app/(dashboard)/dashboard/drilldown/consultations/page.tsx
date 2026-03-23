@@ -14,6 +14,7 @@ const COLUMNS = [
 function ConsultationsContent() {
   return (
     <DrillDownPageShell
+      target="consultations"
       title="Chi tiết tư vấn"
       fetchFn={drilldownApi.getConsultations}
       queryKeyPrefix="drilldown-consultations"
