@@ -619,16 +619,22 @@ async function expectCohortsDrilldown(
   await expectDrilldownCount(page, expectedRows);
 
   if (expectedRows > 0) {
+    const visibleRows = Math.min(expectedRows, DRILLDOWN_PAGE_SIZE);
     const cohortResults = await getTableColumnTexts(page, 4);
-    expect(cohortResults).toHaveLength(expectedRows);
-    const convertedCount = cohortResults.filter(
-      (value) => normalizeText(value) === "converted",
-    ).length;
-    const openCount = cohortResults.filter(
-      (value) => normalizeText(value) === "open",
-    ).length;
-    expect(convertedCount).toBe(expectedConverted);
-    expect(openCount).toBe(expectedOpen);
+    expect(cohortResults).toHaveLength(visibleRows);
+
+    // Status distribution can only be verified when all rows fit on one page;
+    // paginated results have unpredictable first-page distribution.
+    if (expectedRows <= DRILLDOWN_PAGE_SIZE) {
+      const convertedCount = cohortResults.filter(
+        (value) => normalizeText(value) === "converted",
+      ).length;
+      const openCount = cohortResults.filter(
+        (value) => normalizeText(value) === "open",
+      ).length;
+      expect(convertedCount).toBe(expectedConverted);
+      expect(openCount).toBe(expectedOpen);
+    }
   }
 }
 
@@ -662,7 +668,7 @@ async function expectActiveLeadsSnapshot(
 
   await expect(page).toHaveURL(/\/leads\?/);
   await expect(page).toHaveURL(/nav_source=dashboard/);
-  await expect(page).toHaveURL(/status=new%2Cassigned%2Ccontacted%2Cqualified/);
+  await expect(page).toHaveURL(/is_final=false/);
 
   if (extraUrlChecks) {
     for (const pattern of extraUrlChecks) {

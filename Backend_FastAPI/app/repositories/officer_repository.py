@@ -1427,14 +1427,24 @@ class OfficerRepository(BaseRepository[models.User]):
             Dict with total_consultations, today_consultations, active_leads,
             converted_count, total_leads
         """
-        today = datetime.now(timezone.utc).date()
-        
-        # Query 1: Consultations (batch, exclude soft-deleted)
+        # Mirror personal-path semantics (get_kpi_stats L828-856):
+        # - VN timezone for today boundary
+        # - Exclude method='system' (NULL-safe)
+        from zoneinfo import ZoneInfo
+        VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+        now_vn = datetime.now(VN_TZ)
+        today_start = now_vn.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
+        # Query 1: Consultations (batch, exclude soft-deleted + system)
         consult_query = (
             select(
                 func.count(models.Consultation.id).label("range_count"),
                 func.count(
-                    case((func.date(models.Consultation.consultation_date) == today, 1))
+                    case((and_(
+                        models.Consultation.consultation_date >= today_start,
+                        models.Consultation.consultation_date < today_end,
+                    ), 1))
                 ).label("today_count"),
             )
             .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
@@ -1443,7 +1453,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
                 models.Lead.deleted_at.is_(None),
-                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+                models.Consultation.deleted_at.is_(None),
+                models.Consultation.method.is_distinct_from("system"),
             )
         )
         consult_result = await self.db.execute(consult_query)

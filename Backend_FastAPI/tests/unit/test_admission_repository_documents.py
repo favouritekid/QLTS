@@ -215,7 +215,7 @@ class TestUpdateDocumentStatus:
         assert result is not None
         assert result.status == "uploaded"
         assert result.file_path == "/uploads/hoc_ba.pdf"
-        assert result.uploaded_at == "2026-01-07T10:30:00Z"
+        assert result.uploaded_at == datetime(2026, 1, 7, 10, 30, tzinfo=timezone.utc)
 
     @pytest.mark.asyncio
     async def test_returns_none_for_nonexistent_document(self):

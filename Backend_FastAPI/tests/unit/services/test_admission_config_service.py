@@ -37,8 +37,9 @@ async def test_create_subject_duplicate():
 async def test_delete_subject_not_found():
     db = AsyncMock()
     service = AdmissionConfigService(db)
+    service.repo.check_subject_usage = AsyncMock(return_value=False)
     service.repo.delete_subject = AsyncMock(return_value=False)
-    
+
     user = Mock()
     
     with pytest.raises(ResourceNotFoundError):

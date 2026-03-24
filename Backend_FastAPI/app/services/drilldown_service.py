@@ -150,7 +150,10 @@ async def get_consultations_drilldown(
 ) -> Dict[str, Any]:
     _, _, start_dt, end_exclusive = _date_bounds(start_date, end_date)
     officer_alias = aliased(models.User)
-    effective_kind = consultation_kind or ("human" if metric_key == "loss_reason" else None)
+    # Default to human consultations for KPI-card metrics to match
+    # dashboard counting (get_kpi_stats / get_aggregated_kpis exclude system).
+    _human_default_metrics = {"loss_reason", "consultations_today", "consultations_avg_per_day"}
+    effective_kind = consultation_kind or ("human" if metric_key in _human_default_metrics else None)
 
     conditions = [
         models.Consultation.deleted_at.is_(None),

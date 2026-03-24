@@ -1997,6 +1997,10 @@ async def get_lead_list_filter(
         includes_descendants = dashboard_ctx.includes_descendants
         if dashboard_ctx.effective_unit_ids:
             unit_ids = dashboard_ctx.effective_unit_ids
+        # Personal scope: filter by assigned_officer_id only, not unit.
+        # Matches dashboard active_leads counting (officer_repository L900).
+        if dashboard_ctx.scope_kind == "personal":
+            unit_ids = None
         effective_scope = {
             "scope_kind": dashboard_ctx.scope_kind,
             "label": dashboard_ctx.label,
