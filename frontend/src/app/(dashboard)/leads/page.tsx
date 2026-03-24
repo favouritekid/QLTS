@@ -75,8 +75,11 @@ function parseSearchParamsToApiParams(
   if (get("source")) params.source = get("source");
   if (get("q")) params.search = get("q");
   if (get("stage")) params.pipeline_stage_id = get("stage");
-  if (get("from")) params.date_from = get("from");
-  if (get("to")) params.date_to = get("to");
+  // Convert date strings to VN timezone-aware ISO datetimes,
+  // matching client-side useLeadsFilter which uses local Date().
+  // SSR runs in UTC container; explicit +07:00 ensures parity.
+  if (get("from")) params.date_from = `${get("from")}T00:00:00+07:00`;
+  if (get("to")) params.date_to = `${get("to")}T23:59:59.999+07:00`;
   if (get("date_field")) params.date_field = get("date_field");
   if (get("score_min")) params.score_min = parseInt(get("score_min")!, 10);
   if (get("score_max")) params.score_max = parseInt(get("score_max")!, 10);
@@ -91,6 +94,12 @@ function parseSearchParamsToApiParams(
     params.include_descendants = true;
   }
   if (get("loss_reason")) params.loss_reason = get("loss_reason");
+
+  // V12: Dashboard drill-down consultation status filters
+  if (get("is_final") === "true") params.is_final = true;
+  else if (get("is_final") === "false") params.is_final = false;
+  if (get("counts_for_funnel") === "true") params.counts_for_funnel = true;
+  else if (get("counts_for_funnel") === "false") params.counts_for_funnel = false;
 
   return params;
 }

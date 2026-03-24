@@ -132,7 +132,11 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       filterState.scoreRange[0] === 0 &&
       filterState.scoreRange[1] === 100 &&
       filterState.sortBy === "created_at" &&
-      filterState.sortOrder === "desc"
+      filterState.sortOrder === "desc" &&
+      // V12: is_final/counts_for_funnel are not in filterState — guard
+      // against SSR/client param drift for these specific fields only.
+      // Use presence check (not falsy) because false is a valid filter value.
+      apiFilters.is_final === undefined && apiFilters.counts_for_funnel === undefined
         ? initialData
         : undefined,
   });
