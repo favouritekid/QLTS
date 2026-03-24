@@ -650,7 +650,7 @@ class OfficerRepository(BaseRepository[models.User]):
             if date_str in trends:
                 trends[date_str].assigned = row.count
         
-        # Query 2: Consultations per day (exclude soft-deleted)
+        # Query 2: Consultations per day (exclude soft-deleted + system)
         consult_query = (
             select(
                 func.date(models.Consultation.consultation_date).label("day"),
@@ -662,7 +662,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
                 models.Lead.deleted_at.is_(None),
-                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+                models.Consultation.deleted_at.is_(None),
+                models.Consultation.method.is_distinct_from("system"),
             )
             .group_by(func.date(models.Consultation.consultation_date))
         )
@@ -750,7 +751,7 @@ class OfficerRepository(BaseRepository[models.User]):
             if date_str in trends:
                 trends[date_str].assigned = row.count
 
-        # Query 2: Consultations per day
+        # Query 2: Consultations per day (exclude system — match KPI semantics)
         consult_query = (
             select(
                 func.date(models.Consultation.consultation_date).label("day"),
@@ -763,6 +764,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) <= end_date,
                 models.Lead.deleted_at.is_(None),
                 models.Consultation.deleted_at.is_(None),
+                models.Consultation.method.is_distinct_from("system"),
             )
             .group_by(func.date(models.Consultation.consultation_date))
         )
