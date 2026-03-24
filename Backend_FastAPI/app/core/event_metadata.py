@@ -54,7 +54,7 @@ class EventMetadata:
     description: str
     variables: List[EventVariable]
     filter_fields: List[str]
-    default_channels: List[str] = field(default_factory=lambda: ["socket"])
+    default_channels: List[str] = field(default_factory=lambda: ["browser"])
     category: str = "general"
 
 
@@ -81,7 +81,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("offering_name", "string", "Tên ngành/chương trình", required=False),
         ],
         filter_fields=["lead_id", "officer_id", "actor_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="lead"
     ),
 
@@ -97,7 +97,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người thực hiện"),
         ],
         filter_fields=["lead_id", "unit_id", "reason"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="lead"
     ),
 
@@ -115,7 +115,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("reason", "string", "Lý do chuyển giao", required=False),
         ],
         filter_fields=["lead_id", "old_officer_id", "new_officer_id", "old_unit_id", "new_unit_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="lead"
     ),
 
@@ -131,7 +131,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người thực hiện"),
         ],
         filter_fields=["lead_id", "officer_id", "old_status", "new_status"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="lead"
     ),
 
@@ -147,7 +147,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người tạo"),
         ],
         filter_fields=["lead_id", "unit_id", "source"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="lead"
     ),
 
@@ -163,7 +163,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
         ],
         filter_fields=["lead_id", "unit_id", "officer_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="lead"
     ),
 
@@ -183,7 +183,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người tạo"),
         ],
         filter_fields=["consultation_id", "lead_id", "officer_id", "status_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="consultation"
     ),
 
@@ -200,7 +200,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người cập nhật"),
         ],
         filter_fields=["consultation_id", "lead_id", "officer_id", "new_status_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="consultation"
     ),
 
@@ -215,7 +215,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người xóa"),
         ],
         filter_fields=["consultation_id", "lead_id", "officer_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="consultation"
     ),
 
@@ -233,7 +233,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("minutes_until", "integer", "Số phút còn lại"),
         ],
         filter_fields=["consultation_id", "lead_id", "officer_id", "minutes_until"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="consultation"
     ),
 
@@ -253,7 +253,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người tạo"),
         ],
         filter_fields=["application_id", "lead_id", "officer_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="application"
     ),
 
@@ -270,7 +270,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người thay đổi"),
         ],
         filter_fields=["application_id", "lead_id", "officer_id", "new_status"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="application"
     ),
 
@@ -286,7 +286,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin xóa"),
         ],
         filter_fields=["application_id", "lead_id", "officer_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="application"
     ),
 
@@ -306,7 +306,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người tạo"),
         ],
         filter_fields=["dorm_id", "fee_id", "amount"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="finance"
     ),
 
@@ -322,7 +322,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người ghi nhận"),
         ],
         filter_fields=["payment_id", "user_id", "payment_type", "amount"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="finance"
     ),
 
@@ -338,7 +338,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("fee_type", "string", "Loại phí"),
         ],
         filter_fields=["fee_id", "user_id", "days_overdue", "fee_type"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="finance"
     ),
 
@@ -358,7 +358,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("unit_id", "integer", "ID đơn vị"),
         ],
         filter_fields=["payment_id", "fee_id", "amount", "admission_profile_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="finance"
     ),
 
@@ -377,7 +377,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người phân"),
         ],
         filter_fields=["dorm_id", "room_id", "student_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="dorm"
     ),
 
@@ -394,7 +394,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("reporter_id", "integer", "ID người báo cáo"),
         ],
         filter_fields=["request_id", "dorm_id", "priority"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="dorm"
     ),
 
@@ -414,7 +414,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("unit_id", "integer", "ID đơn vị phụ trách", required=False),
         ],
         filter_fields=["asset_id", "maintenance_type", "unit_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="asset"
     ),
 
@@ -430,7 +430,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người cho mượn"),
         ],
         filter_fields=["asset_id", "borrower_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="asset"
     ),
 
@@ -449,7 +449,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("expires_at", "datetime", "Thời gian hết hạn", required=False),
         ],
         filter_fields=["severity"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="system"
     ),
 
@@ -464,7 +464,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin tạo"),
         ],
         filter_fields=["priority"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="system"
     ),
 
@@ -480,7 +480,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
         ],
         filter_fields=["user_id", "old_role", "new_role", "unit_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="system"
     ),
 
@@ -496,7 +496,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
         ],
         filter_fields=["user_id", "reason"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="system"
     ),
 
@@ -516,7 +516,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
         ],
         filter_fields=["config_type", "operation"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="pipeline"
     ),
 
@@ -537,7 +537,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người thay đổi"),
         ],
         filter_fields=["officer_id", "new_status", "unit_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="operational"
     ),
 }

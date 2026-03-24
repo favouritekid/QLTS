@@ -47,15 +47,16 @@ def upgrade() -> None:
           f"rules={rule_count}, actions={action_count}, templates={template_count}")
 
     # --- 1. notification_rule.channels: replace "socket" with "browser" in JSON array ---
+    # channels column is JSON (not JSONB), jsonb_array_elements_text returns plain text
     if rule_count > 0:
         conn.execute(text("""
             UPDATE notification_rule
             SET channels = (
-                SELECT jsonb_agg(
-                    CASE WHEN elem = '"socket"' THEN '"browser"' ELSE elem END
+                SELECT json_agg(
+                    CASE WHEN elem = 'socket' THEN 'browser' ELSE elem END
                 )
                 FROM jsonb_array_elements_text(channels::jsonb) AS elem
-            )::json
+            )
             WHERE channels::text LIKE '%socket%'
         """))
 
@@ -123,11 +124,11 @@ def downgrade() -> None:
     conn.execute(text("""
         UPDATE notification_rule
         SET channels = (
-            SELECT jsonb_agg(
-                CASE WHEN elem = '"browser"' THEN '"socket"' ELSE elem END
+            SELECT json_agg(
+                CASE WHEN elem = 'browser' THEN 'socket' ELSE elem END
             )
             FROM jsonb_array_elements_text(channels::jsonb) AS elem
-        )::json
+        )
         WHERE channels::text LIKE '%browser%'
     """))
 

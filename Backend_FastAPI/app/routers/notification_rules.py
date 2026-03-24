@@ -79,7 +79,7 @@ async def get_notification_metadata(
 
     return {
         "events": events_list,
-        "channels": ["socket", "email", "zalo", "sms"],
+        "channels": ["browser", "email", "zalo", "sms"],
         "resolver_types": [
             {
                 "value": "lead_owner",
