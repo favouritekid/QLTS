@@ -311,10 +311,41 @@ class PaymentService:
             fee_remaining=str(fee_remaining),
         )
 
-        # Post-commit: notify payment confirmed
+        # Resolve lead_id while session is still active
+        profile = await self._get_profile_for_fee(fee)
+        _lead_id = profile.lead_id if profile else None
+
+        # Capture data for post-commit closure
+        _notify_payload = {
+            "payment_id": payment.id,
+            "invoice_id": invoice.id,
+            "fee_id": fee.id,
+            "amount": str(payment.amount),
+            "verified_by_id": verifier_id,
+            "verified_at": (
+                payment.verified_at.isoformat()
+                if payment.verified_at
+                else datetime.now(timezone.utc).isoformat()
+            ),
+            "admission_profile_id": fee.admission_profile_id,
+            "lead_id": _lead_id,
+            "unit_id": unit_id,
+            # SpecificUsersResolver requires user_id or user_ids
+            "user_id": verifier_id,
+        }
+        _db = self.db
+
         async def post_commit():
-            # TODO: Emit PaymentVerified event for notifications
-            pass
+            # safe_dispatch handles commit + callback + error suppression
+            # Called AFTER router has committed business data
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.PAYMENT_VERIFIED,
+                payload=_notify_payload,
+            )
 
         return payment, post_commit
 

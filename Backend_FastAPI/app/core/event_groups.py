@@ -92,6 +92,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.DORM_FEE_CREATED: NotificationEventGroup.FINANCE,
     SystemEvents.PAYMENT_RECEIVED: NotificationEventGroup.FINANCE,
     SystemEvents.PAYMENT_OVERDUE: NotificationEventGroup.FINANCE,
+    SystemEvents.PAYMENT_VERIFIED: NotificationEventGroup.FINANCE,
 
     # Dorm events
     SystemEvents.DORM_ROOM_ASSIGNED: NotificationEventGroup.DORM,

@@ -403,6 +403,19 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         priority=20,  # Very high priority for overdue
     ),
 
+    SystemEvents.PAYMENT_VERIFIED: NotificationConfig(
+        group=NotificationEventGroup.FINANCE,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Thanh toán được xác nhận",
+            "Thanh toán ${amount} đã được xác nhận thành công."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.SUCCESS,
+        link_template="/finance/payments/${payment_id}",
+        priority=60,
+    ),
+
     # =========================================================================
     # 🏠 DORM EVENTS
     # =========================================================================

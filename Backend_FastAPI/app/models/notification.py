@@ -211,8 +211,8 @@ class NotificationTemplate(Base):
                      comment="Template category (e.g., 'lead', 'consultation')")
 
     # NEW: NOTIFICATION 2.0 - Channel and Event filtering (JSONB for efficient queries)
-    supported_channels = Column(JSONB, nullable=False, default=["socket"],
-                               comment='Channels this template supports (["socket", "email", "zalo", "sms"])')
+    supported_channels = Column(JSONB, nullable=False, default=["browser"],
+                               comment='Channels this template supports (["browser", "email", "zalo", "sms"])')
     allowed_events = Column(JSONB, nullable=True,
                            comment='Events this template is designed for (null = all events)')
 
@@ -251,7 +251,7 @@ class NotificationAction(Base):
     Fields:
         rule_id: Foreign key to NotificationRule (cascade delete)
         step: Step number in the workflow (1, 2, 3...)
-        channel: Delivery channel for this action ("socket", "email", "zalo", "sms")
+        channel: Delivery channel for this action ("browser", "email", "zalo", "sms")
         template_code: Optional reference to NotificationTemplate.template_code
         delay_minutes: Delay before executing this action (0 = immediate)
         config: Channel-specific configuration (JSON)
@@ -284,7 +284,7 @@ class NotificationAction(Base):
 
     # Delivery channel
     channel = Column(String(50), nullable=False,
-                    comment="Delivery channel: socket, email, zalo, sms")
+                    comment="Delivery channel: browser, email, zalo, sms")
 
     # Optional template reference (by code, not ID for flexibility)
     template_code = Column(String(100), nullable=True,

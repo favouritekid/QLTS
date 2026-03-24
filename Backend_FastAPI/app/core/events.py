@@ -319,6 +319,30 @@ class SystemEvents(str, Enum):
     Recipients: The user with overdue payment, finance staff
     """
 
+    PAYMENT_VERIFIED = "payment_verified"
+    """
+    Triggered when a payment is verified (funds confirmed by checker).
+
+    Bridged from finance domain event PaymentVerified.
+    This is the confirmed payment event used for external ZNS notifications.
+    PAYMENT_RECEIVED is for recording only; external Zalo must use this event.
+
+    Payload Schema:
+        {
+            "payment_id": int,            # Required: ID of the verified payment
+            "invoice_id": int,            # Required: ID of the invoice
+            "fee_id": int,                # Required: ID of the fee
+            "amount": str,                # Payment amount (Decimal as string)
+            "verified_by_id": int,        # Required: User who verified the payment
+            "verified_at": str,           # ISO timestamp of verification
+            "admission_profile_id": int,  # Required: Admission profile linked to fee
+            "lead_id": int,               # Required: Lead linked to admission profile
+            "unit_id": int                # Required: Unit for scoping
+        }
+
+    Recipients: Finance staff, the applicant (external via Zalo ZNS phase 1)
+    """
+
     # =========================================================================
     # DORM EVENTS (Future)
     # =========================================================================

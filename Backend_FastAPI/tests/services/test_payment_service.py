@@ -626,3 +626,169 @@ class TestRefundService:
 
         assert rejected.status == "rejected"
         assert rejected.rejection_reason == "Policy does not allow"
+
+
+# =============================================================================
+# PAYMENT_VERIFIED NOTIFICATION BRIDGE TESTS (Task 0.1)
+# =============================================================================
+
+class TestPaymentVerifiedNotificationBridge:
+    """
+    Tests for Task 0.1: verify_payment() dispatches PAYMENT_VERIFIED
+    notification with correct payload and transaction contract.
+    """
+
+    async def test_verify_dispatches_payment_verified_event(
+        self, db, payment_fixtures
+    ):
+        """
+        post_commit callback must dispatch PAYMENT_VERIFIED via safe_dispatch,
+        and the notification must be created for the verifier (user_id in payload).
+        """
+        from unittest.mock import AsyncMock, patch
+        from app.core.events import SystemEvents
+
+        service = PaymentService(db)
+        pf = payment_fixtures
+
+        # Record payment first
+        payment, _ = await service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("500000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # Verify payment — returns (payment, post_commit)
+        verified, post_commit = await service.verify_payment(
+            payment_id=payment.id,
+            verifier_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # Assert post_commit callback exists
+        assert post_commit is not None
+
+        # Patch safe_dispatch to capture the call
+        with patch(
+            "app.services.notification_dispatcher.safe_dispatch",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_safe_dispatch:
+            await post_commit()
+
+            # Verify safe_dispatch was called exactly once
+            mock_safe_dispatch.assert_awaited_once()
+            call_kwargs = mock_safe_dispatch.call_args
+            assert call_kwargs[1]["event"] == SystemEvents.PAYMENT_VERIFIED
+
+            # Verify payload contains all required fields
+            payload = call_kwargs[1]["payload"]
+            assert payload["payment_id"] == payment.id
+            assert payload["invoice_id"] == pf["invoice"].id
+            assert payload["fee_id"] == pf["fee"].id
+            assert Decimal(payload["amount"]) == Decimal("500000")
+            assert payload["verified_by_id"] == pf["checker"].id
+            assert payload["verified_at"] is not None
+            assert payload["admission_profile_id"] == pf["profile"].id
+            assert payload["unit_id"] == pf["unit_id"]
+
+            # Verify user_id is set for SpecificUsersResolver
+            assert payload["user_id"] == pf["checker"].id
+
+    async def test_verify_payload_has_lead_id(self, db, payment_fixtures):
+        """
+        Payload must include lead_id resolved from admission profile.
+        """
+        from unittest.mock import AsyncMock, patch
+        from app.core.events import SystemEvents
+
+        service = PaymentService(db)
+        pf = payment_fixtures
+
+        payment, _ = await service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("500000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        verified, post_commit = await service.verify_payment(
+            payment_id=payment.id,
+            verifier_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        with patch(
+            "app.services.notification_dispatcher.safe_dispatch",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_safe_dispatch:
+            await post_commit()
+
+            payload = mock_safe_dispatch.call_args[1]["payload"]
+            # lead_id must be resolved from fee -> profile -> lead
+            assert payload["lead_id"] is not None
+            assert isinstance(payload["lead_id"], int)
+
+    async def test_payment_received_not_used_for_external_zalo(self):
+        """
+        PAYMENT_RECEIVED must NOT be configured for external Zalo.
+        Only PAYMENT_VERIFIED should be used for external ZNS.
+        """
+        from app.core.events import SystemEvents
+        from app.services.notification_registry import NOTIFICATION_REGISTRY
+
+        # PAYMENT_RECEIVED exists in registry
+        assert SystemEvents.PAYMENT_RECEIVED in NOTIFICATION_REGISTRY
+
+        # PAYMENT_VERIFIED exists in registry
+        assert SystemEvents.PAYMENT_VERIFIED in NOTIFICATION_REGISTRY
+
+        # Both should exist as separate events
+        assert (
+            SystemEvents.PAYMENT_RECEIVED.value != SystemEvents.PAYMENT_VERIFIED.value
+        )
+
+    async def test_payment_verified_event_metadata_exists(self):
+        """
+        PAYMENT_VERIFIED must have metadata entry with correct payload variables.
+        """
+        from app.core.events import SystemEvents
+        from app.core.event_metadata import EVENT_METADATA_REGISTRY
+
+        metadata = EVENT_METADATA_REGISTRY.get(SystemEvents.PAYMENT_VERIFIED)
+        assert metadata is not None
+        assert metadata.category == "finance"
+
+        var_names = [v.name for v in metadata.variables]
+        assert "payment_id" in var_names
+        assert "invoice_id" in var_names
+        assert "fee_id" in var_names
+        assert "amount" in var_names
+        assert "verified_by_id" in var_names
+        assert "verified_at" in var_names
+        assert "admission_profile_id" in var_names
+        assert "lead_id" in var_names
+        assert "unit_id" in var_names
+
+    async def test_payment_verified_in_finance_event_group(self):
+        """
+        PAYMENT_VERIFIED must be mapped to FINANCE event group.
+        """
+        from app.core.events import SystemEvents
+        from app.core.event_groups import (
+            EVENT_GROUP_MAPPING,
+            NotificationEventGroup,
+        )
+
+        assert (
+            EVENT_GROUP_MAPPING[SystemEvents.PAYMENT_VERIFIED]
+            == NotificationEventGroup.FINANCE
+        )

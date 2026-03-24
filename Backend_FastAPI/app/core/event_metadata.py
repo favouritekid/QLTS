@@ -342,6 +342,26 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         category="finance"
     ),
 
+    SystemEvents.PAYMENT_VERIFIED: EventMetadata(
+        event=SystemEvents.PAYMENT_VERIFIED,
+        display_name="Thanh toán được xác nhận",
+        description="Khi thanh toán đã được xác minh (checker xác nhận)",
+        variables=[
+            EventVariable("payment_id", "integer", "ID thanh toán"),
+            EventVariable("invoice_id", "integer", "ID hóa đơn"),
+            EventVariable("fee_id", "integer", "ID phí"),
+            EventVariable("amount", "string", "Số tiền thanh toán"),
+            EventVariable("verified_by_id", "integer", "ID người xác nhận"),
+            EventVariable("verified_at", "datetime", "Thời điểm xác nhận"),
+            EventVariable("admission_profile_id", "integer", "ID hồ sơ tuyển sinh"),
+            EventVariable("lead_id", "integer", "ID lead"),
+            EventVariable("unit_id", "integer", "ID đơn vị"),
+        ],
+        filter_fields=["payment_id", "fee_id", "amount", "admission_profile_id"],
+        default_channels=["socket", "email"],
+        category="finance"
+    ),
+
     # =========================================================================
     # DORM EVENTS (2 events)
     # =========================================================================

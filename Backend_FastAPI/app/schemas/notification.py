@@ -2,7 +2,14 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.services.notification_channels import (
+    normalize_channel,
+    normalize_channels,
+    validate_channel_for_write,
+    validate_channels_for_write,
+)
 
 
 class NotificationBase(BaseModel):
@@ -55,7 +62,7 @@ class BulkDeleteRequest(BaseModel):
 class NotificationActionBase(BaseModel):
     """Base schema for notification action (workflow step)"""
     step: int = 1  # Step number in workflow
-    channel: str  # Delivery channel: socket, email, zalo, sms
+    channel: str  # Delivery channel: browser, email, zalo, sms
     template_code: Optional[str] = None  # Optional template code reference
     delay_minutes: int = 0  # Delay before execution (0 = immediate)
     config: Optional[Dict[str, Any]] = None  # Channel-specific config
@@ -63,7 +70,11 @@ class NotificationActionBase(BaseModel):
 
 class NotificationActionCreate(NotificationActionBase):
     """Schema for creating a notification action"""
-    pass
+
+    @field_validator("channel")
+    @classmethod
+    def reject_socket_channel(cls, v: str) -> str:
+        return validate_channel_for_write(v)
 
 
 class NotificationActionUpdate(BaseModel):
@@ -74,6 +85,13 @@ class NotificationActionUpdate(BaseModel):
     delay_minutes: Optional[int] = None
     config: Optional[Dict[str, Any]] = None
 
+    @field_validator("channel")
+    @classmethod
+    def reject_socket_channel(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return validate_channel_for_write(v)
+        return v
+
 
 class NotificationAction(NotificationActionBase):
     """Schema for reading notification action (response)"""
@@ -83,6 +101,11 @@ class NotificationAction(NotificationActionBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("channel")
+    @classmethod
+    def normalize_legacy_channel(cls, v: str) -> str:
+        return normalize_channel(v)
 
 
 # =============================================================================
@@ -111,7 +134,7 @@ class NotificationRuleBase(BaseModel):
     message_template: str  # Message template
     notification_type: str = "info"  # info, success, warning, error
     link_template: Optional[str] = None  # Optional link template
-    channels: List[str] = ["browser"]  # ["browser", "email", "sms"]
+    channels: List[str] = ["browser"]  # ["browser", "email", "zalo", "sms"]
 
     # ✅ Now typed with validation
     recipient_config: RecipientConfig  # Validated resolver config
@@ -124,6 +147,11 @@ class NotificationRuleBase(BaseModel):
 class NotificationRuleCreate(NotificationRuleBase):
     """Schema for creating a notification rule"""
     actions: List[NotificationActionCreate] = []  # ✅ NOTIFICATION 2.0: Workflow actions
+
+    @field_validator("channels")
+    @classmethod
+    def reject_socket_channels(cls, v: List[str]) -> List[str]:
+        return validate_channels_for_write(v)
 
 
 class NotificationRuleUpdate(BaseModel):
@@ -138,6 +166,13 @@ class NotificationRuleUpdate(BaseModel):
     enabled: Optional[bool] = None
     actions: Optional[List[NotificationActionCreate]] = None  # ✅ NOTIFICATION 2.0: Update actions
 
+    @field_validator("channels")
+    @classmethod
+    def reject_socket_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is not None:
+            return validate_channels_for_write(v)
+        return v
+
 
 class NotificationRule(NotificationRuleBase):
     """Schema for reading notification rule (response)"""
@@ -147,6 +182,11 @@ class NotificationRule(NotificationRuleBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("channels")
+    @classmethod
+    def normalize_legacy_channels(cls, v: List[str]) -> List[str]:
+        return normalize_channels(v)
 
 
 class NotificationRulesPage(BaseModel):
@@ -172,7 +212,7 @@ class NotificationTemplateBase(BaseModel):
     category: Optional[str] = None  # Template category (lead, consultation, etc.)
 
     # ✅ NOTIFICATION 2.0: New metadata fields
-    supported_channels: List[str] = ["socket"]  # Channels this template supports
+    supported_channels: List[str] = ["browser"]  # Channels this template supports
     allowed_events: Optional[List[str]] = None  # Events this template is for (null = all)
     template_type: str = "system"  # Template type: system, zalo_zns, email_html, sms
 
@@ -180,6 +220,11 @@ class NotificationTemplateBase(BaseModel):
 class NotificationTemplateCreate(NotificationTemplateBase):
     """Schema for creating a notification template"""
     is_system: bool = False  # System template flag
+
+    @field_validator("supported_channels")
+    @classmethod
+    def reject_socket_channels(cls, v: List[str]) -> List[str]:
+        return validate_channels_for_write(v)
 
 
 class NotificationTemplateUpdate(BaseModel):
@@ -198,6 +243,13 @@ class NotificationTemplateUpdate(BaseModel):
     allowed_events: Optional[List[str]] = None
     template_type: Optional[str] = None
 
+    @field_validator("supported_channels")
+    @classmethod
+    def reject_socket_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is not None:
+            return validate_channels_for_write(v)
+        return v
+
 
 class NotificationTemplate(NotificationTemplateBase):
     """Schema for reading notification template (response)"""
@@ -209,6 +261,11 @@ class NotificationTemplate(NotificationTemplateBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("supported_channels")
+    @classmethod
+    def normalize_legacy_channels(cls, v: List[str]) -> List[str]:
+        return normalize_channels(v)
 
 
 class NotificationTemplatesPage(BaseModel):
