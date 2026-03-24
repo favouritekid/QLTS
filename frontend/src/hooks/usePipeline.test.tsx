@@ -327,7 +327,7 @@ describe("usePipeline Hook", () => {
     describe("useRevertLeadStatus", () => {
       it("should revert a lead to a previous stage", async () => {
         server.use(
-          http.put(`${API_BASE_URL}/api/leads/:id`, async () => {
+          http.post(`${API_BASE_URL}/api/admin/leads/:id/revert-status`, async () => {
             return HttpResponse.json({
               id: 1,
               full_name: "Test Lead",

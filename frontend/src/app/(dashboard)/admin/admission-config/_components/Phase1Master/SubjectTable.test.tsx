@@ -75,23 +75,23 @@ describe("SubjectTable (via SubjectGroupPanel)", () => {
   it("should open create dialog and submit form correctly", async () => {
     render(<SubjectGroupPanel />);
 
-    // Click Add New
-    const addButton = screen.getByText("Add New");
+    // Click Thêm mới
+    const addButton = screen.getByText("Thêm mới");
     fireEvent.click(addButton);
 
     // Verify Dialog
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Create Subject")).toBeInTheDocument();
+    expect(screen.getByText("Create Môn học")).toBeInTheDocument();
 
     const withinDialog = within(dialog);
 
     // Fill Form
-    fireEvent.change(withinDialog.getByLabelText(/Subject Code/i), { target: { value: "HOA_HOC" } });
-    fireEvent.change(withinDialog.getByLabelText(/Subject Name \(Vietnamese\)/i), { target: { value: "Hóa học" } });
-    
+    fireEvent.change(withinDialog.getByLabelText(/Mã môn/i), { target: { value: "HOA_HOC" } });
+    fireEvent.change(withinDialog.getByLabelText(/Tên môn \(Tiếng Việt\)/i), { target: { value: "Hóa học" } });
+
     // Submit
-    const submitButton = withinDialog.getByText("Create");
+    const submitButton = withinDialog.getByText("Thêm mới");
     fireEvent.click(submitButton);
 
     // Check Mutation
@@ -119,13 +119,13 @@ describe("SubjectTable (via SubjectGroupPanel)", () => {
 
     // Verify Fields
     await waitFor(() => {
-      const codeInput = withinDialog.getByLabelText(/Subject Code/i) as HTMLInputElement;
+      const codeInput = withinDialog.getByLabelText(/Mã môn/i) as HTMLInputElement;
       expect(codeInput.value).toBe("TOAN");
     });
-    const codeInput = withinDialog.getByLabelText(/Subject Code/i) as HTMLInputElement;
+    const codeInput = withinDialog.getByLabelText(/Mã môn/i) as HTMLInputElement;
     expect(codeInput.disabled).toBe(true);
 
-    const nameInput = withinDialog.getByLabelText(/Subject Name \(Vietnamese\)/i) as HTMLInputElement;
+    const nameInput = withinDialog.getByLabelText(/Tên môn \(Tiếng Việt\)/i) as HTMLInputElement;
     expect(nameInput.value).toBe("Toán");
   });
 

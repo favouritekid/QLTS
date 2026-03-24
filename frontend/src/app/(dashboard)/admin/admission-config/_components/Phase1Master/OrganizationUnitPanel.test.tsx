@@ -11,6 +11,40 @@ vi.mock("@/hooks/admissions/useMasterData", () => ({
   useDeleteOrganizationUnit: vi.fn(),
 }));
 
+// Mock the SmartUnitSelector's internal hook (imports from a different path)
+// SmartUnitSelector uses useOrganizationUnits from @/hooks/useOrganization
+vi.mock("@/hooks/useOrganization", () => ({
+  useOrganizationUnits: vi.fn(() => ({
+    data: [
+      {
+        id: 1,
+        name: "Faculty of IT",
+        type: "Khoa",
+        parent_id: null,
+        is_active: true,
+        children: [
+          { id: 2, name: "Software Engineering", type: "Bộ môn", parent_id: 1, is_active: true, children: [] },
+          { id: 3, name: "Computer Science", type: "Bộ môn", parent_id: 1, is_active: true, children: [] },
+        ],
+      },
+      { id: 4, name: "Faculty of Medical", type: "Khoa", parent_id: null, is_active: true, children: [] },
+    ],
+    isLoading: false,
+  })),
+  flattenOrganizationTree: vi.fn((units: any[]) => {
+    const result: any[] = [];
+    const traverse = (items: any[], level: number) => {
+      for (const item of items) {
+        result.push({ unit: item, level, hasChildren: !!(item.children?.length) });
+        if (item.children) traverse(item.children, level + 1);
+      }
+    };
+    traverse(units, 0);
+    return result;
+  }),
+  getAllDescendantIds: vi.fn(() => new Set<number>()),
+}));
+
 describe("OrganizationUnitPanel", () => {
   const mockData = [
     {
@@ -120,7 +154,7 @@ describe("OrganizationUnitPanel", () => {
     const withinDialog = within(dialog);
 
     // 1. Name
-    const nameInput = withinDialog.getByLabelText(/Name/i) as HTMLInputElement;
+    const nameInput = withinDialog.getByLabelText(/Tên đơn vị/i) as HTMLInputElement;
     expect(nameInput.value).toBe("Software Engineering");
 
     // 2. Type

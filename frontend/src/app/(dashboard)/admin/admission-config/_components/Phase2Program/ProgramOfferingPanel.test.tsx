@@ -114,14 +114,14 @@ describe("ProgramOfferingPanel", () => {
   it("should open create dialog and submit form correctly", async () => {
     render(<ProgramOfferingPanel />);
 
-    // Click Add New
-    const addButton = screen.getByText("Add New");
+    // Click Thêm mới
+    const addButton = screen.getByText("Thêm mới");
     fireEvent.click(addButton);
 
     // Verify Dialog
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Create Program Offering")).toBeInTheDocument();
+    expect(screen.getByText("Create Chương trình Tuyển sinh")).toBeInTheDocument();
 
     const withinDialog = within(dialog);
 
@@ -142,11 +142,11 @@ describe("ProgramOfferingPanel", () => {
     fireEvent.click(typeOption);
 
     // Input text details
-    fireEvent.change(withinDialog.getByLabelText(/Duration/i), { target: { value: "7" } });
-    fireEvent.change(withinDialog.getByLabelText(/Total Credits/i), { target: { value: "140" } });
+    fireEvent.change(withinDialog.getByLabelText(/Thời gian/i), { target: { value: "7" } });
+    fireEvent.change(withinDialog.getByLabelText(/Tổng tín chỉ/i), { target: { value: "140" } });
     
     // Submit
-    const submitButton = withinDialog.getByText("Create");
+    const submitButton = withinDialog.getByText("Thêm mới");
     fireEvent.click(submitButton);
 
     // Check Mutation
@@ -175,11 +175,11 @@ describe("ProgramOfferingPanel", () => {
 
     // Verify Fields
     await waitFor(() => {
-        const durationInput = withinDialog.getByLabelText(/Duration/i) as HTMLInputElement;
+        const durationInput = withinDialog.getByLabelText(/Thời gian/i) as HTMLInputElement;
         expect(durationInput.value).toBe("6");
     });
 
-    const creditInput = withinDialog.getByLabelText(/Total Credits/i) as HTMLInputElement;
+    const creditInput = withinDialog.getByLabelText(/Tổng tín chỉ/i) as HTMLInputElement;
     expect(creditInput.value).toBe("120");
     
     // Warning: Selects for Program and Offering Type won't strictly "show" text "Công nghệ Thông tin" in input value via simple query

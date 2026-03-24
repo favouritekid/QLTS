@@ -298,7 +298,7 @@ describe("useLeads Hook", () => {
     describe("usePerformLeadAction", () => {
       it("should perform reject action on a lead", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/leads/:id/actions/:action`, async () => {
+          http.post(`${API_BASE_URL}/api/leads/:id/action`, async () => {
             return HttpResponse.json({
               id: 1,
               full_name: "Test Lead",
@@ -399,7 +399,7 @@ describe("useLeads Hook", () => {
     describe("useImportLeads", () => {
       it("should import leads from file", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/admin/leads/import`, async () => {
+          http.post(`${API_BASE_URL}/api/leads/import`, async () => {
             return HttpResponse.json({
               successful_imports: 10,
               failed_imports: 2,
@@ -430,11 +430,19 @@ describe("useLeads Hook", () => {
 
     describe("useExportLeads", () => {
       it("should export leads to CSV", async () => {
-        const mockBlob = new Blob(["test,data"], { type: "text/csv" });
+        // Mock URL.createObjectURL and URL.revokeObjectURL for JSDOM
+        const createObjectURLMock = vi.fn(() => "blob:http://localhost/mock");
+        const revokeObjectURLMock = vi.fn();
+        window.URL.createObjectURL = createObjectURLMock;
+        window.URL.revokeObjectURL = revokeObjectURLMock;
+
+        const csvContent = "test,data";
+        const encoder = new TextEncoder();
+        const csvBuffer = encoder.encode(csvContent).buffer;
 
         server.use(
-          http.get(`${API_BASE_URL}/api/leads/export`, async () => {
-            return HttpResponse.arrayBuffer(await mockBlob.arrayBuffer(), {
+          http.get(`${API_BASE_URL}/api/leads/export`, () => {
+            return HttpResponse.arrayBuffer(csvBuffer, {
               headers: {
                 "Content-Type": "text/csv",
               },

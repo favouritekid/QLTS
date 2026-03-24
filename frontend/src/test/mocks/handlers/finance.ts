@@ -111,7 +111,7 @@ export const financeHandlers = [
 
   // Get profile finance summary
   http.get(
-    `${API_BASE_URL}/api/fees/by-profile/:profileId/summary`,
+    `${API_BASE_URL}/api/fees/summary/:profileId`,
     async ({ params }) => {
       const { profileId } = params;
       const fees = mockFees.filter(

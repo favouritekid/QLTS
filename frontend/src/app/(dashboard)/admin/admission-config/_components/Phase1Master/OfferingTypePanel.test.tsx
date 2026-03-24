@@ -66,26 +66,26 @@ describe("OfferingTypePanel", () => {
   it("should open create dialog and submit form correctly", async () => {
     render(<OfferingTypePanel />);
 
-    // Click Add New
-    const addButton = screen.getByText("Add New");
+    // Click Thêm mới
+    const addButton = screen.getByText("Thêm mới");
     fireEvent.click(addButton);
 
     // Verify Dialog
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Create Offering Type")).toBeInTheDocument();
+    expect(screen.getByText("Create Loại hình")).toBeInTheDocument();
 
     const withinDialog = within(dialog);
 
     // Fill Form
-    const codeInput = withinDialog.getByLabelText(/Code/i);
-    const nameInput = withinDialog.getByLabelText(/Name/i);
-    
+    const codeInput = withinDialog.getByLabelText(/Mã loại hình/i);
+    const nameInput = withinDialog.getByLabelText(/Tên loại hình/i);
+
     fireEvent.change(codeInput, { target: { value: "distance" } });
     fireEvent.change(nameInput, { target: { value: "Distance Learning" } });
 
     // Submit
-    const submitButton = withinDialog.getByText("Create");
+    const submitButton = withinDialog.getByText("Thêm mới");
     fireEvent.click(submitButton);
 
     // Check Mutation
@@ -113,13 +113,13 @@ describe("OfferingTypePanel", () => {
     // Verify Dialog
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Edit Offering Type")).toBeInTheDocument();
+    expect(screen.getByText("Edit Loại hình")).toBeInTheDocument();
 
     const withinDialog = within(dialog);
 
     // Verify Fields
-    const codeInput = withinDialog.getByLabelText(/Code/i) as HTMLInputElement;
-    const nameInput = withinDialog.getByLabelText(/Name/i) as HTMLInputElement;
+    const codeInput = withinDialog.getByLabelText(/Mã loại hình/i) as HTMLInputElement;
+    const nameInput = withinDialog.getByLabelText(/Tên loại hình/i) as HTMLInputElement;
 
     expect(codeInput.value).toBe("regular");
     expect(codeInput.disabled).toBe(true); // Code is disabled in edit

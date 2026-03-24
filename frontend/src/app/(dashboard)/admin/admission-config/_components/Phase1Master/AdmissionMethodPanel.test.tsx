@@ -68,42 +68,42 @@ describe("AdmissionMethodPanel", () => {
     expect(screen.getByText("Xét điểm thi THPT QG")).toBeInTheDocument();
 
     // Check Custom Columns (Yes/No)
-    // "requires_gpa" is true for first item -> "✓ Yes"
-    // We expect at least one "✓ Yes"
-    const yesText = screen.getAllByText("✓ Yes");
+    // "requires_gpa" is true for first item -> "✓ Có"
+    // We expect at least one "✓ Có"
+    const yesText = screen.getAllByText("✓ Có");
     expect(yesText.length).toBeGreaterThan(0);
-    
-    // "requires_gpa" is false for second item -> "✗ No"
-    const noText = screen.getAllByText("✗ No");
+
+    // "requires_gpa" is false for second item -> "✗ Không"
+    const noText = screen.getAllByText("✗ Không");
     expect(noText.length).toBeGreaterThan(0);
   });
 
   it("should open create dialog and submit form correctly", async () => {
     render(<AdmissionMethodPanel />);
 
-    // Click Add New
-    const addButton = screen.getByText("Add New");
+    // Click Thêm mới
+    const addButton = screen.getByText("Thêm mới");
     fireEvent.click(addButton);
 
     // Verify Dialog
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Create Admission Method")).toBeInTheDocument();
+    expect(screen.getByText("Create Phương thức")).toBeInTheDocument();
 
     const withinDialog = within(dialog);
 
     // Fill Form
     // Text Inputs
-    fireEvent.change(withinDialog.getByLabelText(/Code/i), { target: { value: "dgnl" } });
-    fireEvent.change(withinDialog.getByLabelText(/Name/i), { target: { value: "Đánh giá năng lực" } });
-    
+    fireEvent.change(withinDialog.getByLabelText(/Mã phương thức/i), { target: { value: "dgnl" } });
+    fireEvent.change(withinDialog.getByLabelText(/Tên phương thức/i), { target: { value: "Đánh giá năng lực" } });
+
     // Checkboxes (using getByLabelText on the label text next to checkbox)
     // Radix/Shadcn Checkbox is button role usually, relying on label click is safest integration test
-    const gpaLabel = withinDialog.getByText("Requires GPA (Grade Point Average)");
+    const gpaLabel = withinDialog.getByText("Yêu cầu điểm trung bình (GPA)");
     fireEvent.click(gpaLabel); // Toggle to checked (default false)
 
     // Submit
-    const submitButton = withinDialog.getByText("Create");
+    const submitButton = withinDialog.getByText("Thêm mới");
     fireEvent.click(submitButton);
 
     // Check Mutation
@@ -131,11 +131,11 @@ describe("AdmissionMethodPanel", () => {
     const withinDialog = within(dialog);
 
     // Verify Fields
-    const codeInput = withinDialog.getByLabelText(/Code/i) as HTMLInputElement;
+    const codeInput = withinDialog.getByLabelText(/Mã phương thức/i) as HTMLInputElement;
     expect(codeInput.value).toBe("hoc_ba");
     expect(codeInput.disabled).toBe(true);
 
-    const nameInput = withinDialog.getByLabelText(/Name/i) as HTMLInputElement;
+    const nameInput = withinDialog.getByLabelText(/Tên phương thức/i) as HTMLInputElement;
     expect(nameInput.value).toBe("Xét học bạ THPT");
 
     // Verify Checkbox state

@@ -45,7 +45,7 @@ describe("getStatusConfig", () => {
       const config = getStatusConfig("approved")
 
       expect(config.label).toBe("Đã duyệt")
-      expect(config.badgeColor).toContain("green")
+      expect(config.badgeColor).toContain("success")
       expect(config.showBanner).toBe(true)
       expect(config.bannerType).toBe("success")
       expect(config.allowedActions).toContain("enroll")
@@ -66,7 +66,7 @@ describe("getStatusConfig", () => {
       const config = getStatusConfig("enrolled")
 
       expect(config.label).toBe("Đã nhập học")
-      expect(config.badgeColor).toContain("purple")
+      expect(config.badgeColor).toContain("blue")
       expect(config.showBanner).toBe(false)
       expect(config.allowedActions).toEqual([])
     })

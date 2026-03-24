@@ -168,7 +168,7 @@ describe('DialogContent', () => {
     );
 
     // Close button should exist
-    const closeButton = screen.getByRole('button', { name: /close/i });
+    const closeButton = screen.getByRole('button', { name: /đóng/i });
     expect(closeButton).toBeInTheDocument();
 
     // Check positioning classes
@@ -359,12 +359,12 @@ describe('Dialog accessibility', () => {
       </Dialog>
     );
 
-    const closeButton = screen.getByRole('button', { name: /close/i });
+    const closeButton = screen.getByRole('button', { name: /đóng/i });
     expect(closeButton).toBeInTheDocument();
 
     // Should have sr-only text
     const srText = closeButton.querySelector('.sr-only');
-    expect(srText).toHaveTextContent('Close');
+    expect(srText).toHaveTextContent('Đóng');
   });
 
   it('renders overlay for blocking background interaction', () => {

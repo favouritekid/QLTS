@@ -68,24 +68,24 @@ describe("DocumentTypePanel", () => {
   it("should open create dialog and submit form correctly", async () => {
     render(<DocumentTypePanel />);
 
-    // Click Add New
-    const addButton = screen.getByText("Add New");
+    // Click Thêm mới
+    const addButton = screen.getByText("Thêm mới");
     fireEvent.click(addButton);
 
     // Verify Dialog
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Create Document Type")).toBeInTheDocument();
+    expect(screen.getByText("Create Loại Giấy tờ")).toBeInTheDocument();
 
     const withinDialog = within(dialog);
 
     // Fill Form
-    fireEvent.change(withinDialog.getByLabelText(/Code/i), { target: { value: "bang_tn" } });
-    fireEvent.change(withinDialog.getByLabelText(/Name/i), { target: { value: "Bằng tốt nghiệp" } });
-    fireEvent.change(withinDialog.getByLabelText(/Description/i), { target: { value: "Graduation certificate" } });
-    
+    fireEvent.change(withinDialog.getByLabelText(/Mã loại giấy tờ/i), { target: { value: "bang_tn" } });
+    fireEvent.change(withinDialog.getByLabelText(/Tên loại giấy tờ/i), { target: { value: "Bằng tốt nghiệp" } });
+    fireEvent.change(withinDialog.getByLabelText(/Mô tả/i), { target: { value: "Graduation certificate" } });
+
     // Submit
-    const submitButton = withinDialog.getByText("Create");
+    const submitButton = withinDialog.getByText("Thêm mới");
     fireEvent.click(submitButton);
 
     // Check Mutation
@@ -113,14 +113,14 @@ describe("DocumentTypePanel", () => {
     const withinDialog = within(dialog);
 
     // Verify Fields
-    const codeInput = withinDialog.getByLabelText(/Code/i) as HTMLInputElement;
+    const codeInput = withinDialog.getByLabelText(/Mã loại giấy tờ/i) as HTMLInputElement;
     expect(codeInput.value).toBe("hoc_ba");
     expect(codeInput.disabled).toBe(true);
 
-    const nameInput = withinDialog.getByLabelText(/Name/i) as HTMLInputElement;
+    const nameInput = withinDialog.getByLabelText(/Tên loại giấy tờ/i) as HTMLInputElement;
     expect(nameInput.value).toBe("Học bạ THPT");
 
-    const descInput = withinDialog.getByLabelText(/Description/i) as HTMLTextAreaElement;
+    const descInput = withinDialog.getByLabelText(/Mô tả/i) as HTMLTextAreaElement;
     expect(descInput.value).toBe("High school transcript");
   });
 

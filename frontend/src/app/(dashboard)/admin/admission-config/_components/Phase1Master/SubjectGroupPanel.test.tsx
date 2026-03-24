@@ -83,29 +83,29 @@ describe("SubjectGroupPanel", () => {
     expect(screen.getByText("D01")).toBeInTheDocument();
     expect(screen.getByText("Toán-Văn-Anh")).toBeInTheDocument();
     // Check Empty State
-    expect(screen.getByText("No subjects assigned")).toBeInTheDocument();
+    expect(screen.getByText("Chưa có môn học")).toBeInTheDocument();
   });
 
   it("should open create dialog and submit form correctly", async () => {
     render(<SubjectGroupTable />);
 
-    // Click Add New
-    const addButton = screen.getByText("Add New");
+    // Click Thêm mới
+    const addButton = screen.getByText("Thêm mới");
     fireEvent.click(addButton);
 
     // Verify Dialog
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Create Subject Group")).toBeInTheDocument();
+    expect(screen.getByText("Create Tổ hợp môn")).toBeInTheDocument();
 
     const withinDialog = within(dialog);
 
     // Fill Form
-    fireEvent.change(withinDialog.getByLabelText(/Group Code/i), { target: { value: "A01" } });
-    fireEvent.change(withinDialog.getByLabelText(/Group Name/i), { target: { value: "Toán-Lý-Anh" } });
-    
+    fireEvent.change(withinDialog.getByLabelText(/Mã tổ hợp/i), { target: { value: "A01" } });
+    fireEvent.change(withinDialog.getByLabelText(/Tên tổ hợp/i), { target: { value: "Toán-Lý-Anh" } });
+
     // Submit
-    const submitButton = withinDialog.getByText("Create");
+    const submitButton = withinDialog.getByText("Thêm mới");
     fireEvent.click(submitButton);
 
     // Check Mutation
@@ -133,19 +133,19 @@ describe("SubjectGroupPanel", () => {
 
     // Verify Fields
     await waitFor(() => {
-      const codeInput = withinDialog.getByLabelText(/Group Code/i) as HTMLInputElement;
+      const codeInput = withinDialog.getByLabelText(/Mã tổ hợp/i) as HTMLInputElement;
       expect(codeInput.value).toBe("A00");
     });
-    
+
     // Check if disabled
-    const codeInput = withinDialog.getByLabelText(/Group Code/i) as HTMLInputElement;
+    const codeInput = withinDialog.getByLabelText(/Mã tổ hợp/i) as HTMLInputElement;
     expect(codeInput.disabled).toBe(true);
 
-    const nameInput = withinDialog.getByLabelText(/Group Name/i) as HTMLInputElement;
+    const nameInput = withinDialog.getByLabelText(/Tên tổ hợp/i) as HTMLInputElement;
     expect(nameInput.value).toBe("Toán-Lý-Hóa");
 
     // Verify Current Subjects Info Display
-    expect(withinDialog.getByText(/Current Subjects:/i)).toBeInTheDocument();
+    expect(withinDialog.getByText(/Các môn trong tổ hợp:/i)).toBeInTheDocument();
     expect(withinDialog.getByText("1. Toán")).toBeInTheDocument();
     expect(withinDialog.getByText("2. Lý")).toBeInTheDocument();
     expect(withinDialog.getByText("3. Hóa")).toBeInTheDocument();

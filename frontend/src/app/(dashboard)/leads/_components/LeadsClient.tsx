@@ -47,6 +47,7 @@ import { useLeads, useDeleteLead, useExportLeads, useImportLeads, useDownloadImp
 import { leadsApi } from "@/lib/api/leads";
 import { useLeadsFilter } from "@/hooks/useLeadsFilter";
 import { LeadDialog } from "@/components/leads/LeadDialog";
+import { shouldUseInitialLeadsData } from "./LeadsClient.helpers";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { 
   LeadStats, 
@@ -116,29 +117,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     isError,
     error,
   } = useLeads(apiFilters, {
-    initialData:
-      filterState.page === 1 &&
-      !filterState.search &&
-      filterState.statusFilters.length === 0 &&
-      filterState.offeringFilters.length === 0 &&
-      filterState.sourceFilters.length === 0 &&
-      filterState.validityFilters.length === 0 &&
-      filterState.stageFilters.length === 0 &&
-      filterState.officerFilters.length === 0 &&
-      !filterState.unitId &&
-      !filterState.dateFrom &&
-      !filterState.dateTo &&
-      // ✅ T6 FIX: Don't inject unfiltered initialData when score filter is active
-      filterState.scoreRange[0] === 0 &&
-      filterState.scoreRange[1] === 100 &&
-      filterState.sortBy === "created_at" &&
-      filterState.sortOrder === "desc" &&
-      // V12: is_final/counts_for_funnel are not in filterState — guard
-      // against SSR/client param drift for these specific fields only.
-      // Use presence check (not falsy) because false is a valid filter value.
-      apiFilters.is_final === undefined && apiFilters.counts_for_funnel === undefined
-        ? initialData
-        : undefined,
+    initialData: shouldUseInitialLeadsData(filterState, apiFilters)
+      ? initialData
+      : undefined,
   });
 
   const deleteMutation = useDeleteLead();

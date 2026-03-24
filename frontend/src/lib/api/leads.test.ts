@@ -203,6 +203,7 @@ describe("Leads API Client", () => {
           const body = (await request.json()) as Record<string, unknown>
           return HttpResponse.json({
             id: 1,
+            status: 'contacted',
             ...body,
             updated_at: new Date().toISOString(),
           })
