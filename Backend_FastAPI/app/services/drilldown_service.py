@@ -27,16 +27,25 @@ def _date_bounds(
     start_date: Optional[str],
     end_date: Optional[str],
 ) -> tuple[Optional[date_type], Optional[date_type], Optional[datetime], Optional[datetime]]:
+    """Convert ISO date strings to timezone-aware datetime boundaries.
+
+    Uses Asia/Ho_Chi_Minh to match KPI counting semantics
+    (get_kpi_stats / get_aggregated_kpis use VN day boundaries).
+    Frontend sends dates in VN context via todayVN().
+    """
+    from zoneinfo import ZoneInfo
+    VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
     parsed_start = _parse_iso_date(start_date)
     parsed_end = _parse_iso_date(end_date)
 
     start_dt = (
-        datetime(parsed_start.year, parsed_start.month, parsed_start.day, tzinfo=timezone.utc)
+        datetime(parsed_start.year, parsed_start.month, parsed_start.day, tzinfo=VN_TZ)
         if parsed_start
         else None
     )
     end_exclusive = (
-        datetime(parsed_end.year, parsed_end.month, parsed_end.day, tzinfo=timezone.utc) + timedelta(days=1)
+        datetime(parsed_end.year, parsed_end.month, parsed_end.day, tzinfo=VN_TZ) + timedelta(days=1)
         if parsed_end
         else None
     )

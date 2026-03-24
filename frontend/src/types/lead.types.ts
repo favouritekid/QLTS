@@ -687,13 +687,16 @@ export interface LeadListParams extends PaginationParams {
   score_max?: number;
   validity_status?: string;
   lead_ids?: string;
-  // V12: Dashboard scope context
+  // V12: Dashboard scope context & drill-down filters
   nav_source?: string;
   scope?: "personal" | "unit" | "organization";
   scope_officer_id?: number;
   scope_unit_id?: number;
   include_descendants?: boolean;
   loss_reason?: string;
+  pipeline_stage_id?: string;
+  is_final?: boolean;
+  counts_for_funnel?: boolean;
 }
 
 /**

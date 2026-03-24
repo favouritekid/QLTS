@@ -356,6 +356,13 @@ async def export_leads(
     validity_status: Optional[str] = Query(
         None, description="Filter by validity status (comma-separated)"
     ),
+    # === CONSULTATION STATUS FILTERS (V12: dashboard drill-down) ===
+    is_final: Optional[bool] = Query(
+        None, description="Filter by consultation status finality (true=final, false=non-final/active)"
+    ),
+    counts_for_funnel: Optional[bool] = Query(
+        None, description="Filter by funnel-relevant consultation statuses only"
+    ),
     # === SELECTIVE EXPORT ===
     lead_ids: Optional[str] = Query(None, description="Comma-separated lead IDs to export"),
 ):
@@ -407,6 +414,8 @@ async def export_leads(
         validity_status=validity_status,
         lead_ids=parsed_lead_ids,
         loss_reason=lead_filter.loss_reason,
+        is_final=is_final,
+        counts_for_funnel=counts_for_funnel,
         include_summary=False,
     )
 
