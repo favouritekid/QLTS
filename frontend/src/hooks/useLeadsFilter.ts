@@ -446,11 +446,15 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       if (dashboardContext?.includeDescendants) params.set("include_descendants", "1");
       if (dashboardContext?.lossReason) params.set("loss_reason", dashboardContext.lossReason);
 
-      // V12: Preserve consultation status pass-through params from dashboard deep-link
-      const curIsFinal = searchParams.get("is_final");
-      if (curIsFinal === "true" || curIsFinal === "false") params.set("is_final", curIsFinal);
-      const curFunnel = searchParams.get("counts_for_funnel");
-      if (curFunnel === "true" || curFunnel === "false") params.set("counts_for_funnel", curFunnel);
+      // V12: Preserve consultation status pass-through params only while
+      // dashboard context is active. Without this guard, exitDashboardContext
+      // clears context but stale searchParams re-adds these on next sync.
+      if (dashboardContext) {
+        const curIsFinal = searchParams.get("is_final");
+        if (curIsFinal === "true" || curIsFinal === "false") params.set("is_final", curIsFinal);
+        const curFunnel = searchParams.get("counts_for_funnel");
+        if (curFunnel === "true" || curFunnel === "false") params.set("counts_for_funnel", curFunnel);
+      }
 
       const queryString = params.toString();
       const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
