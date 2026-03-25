@@ -696,8 +696,58 @@ class TestPaymentVerifiedNotificationBridge:
             assert payload["admission_profile_id"] == pf["profile"].id
             assert payload["unit_id"] == pf["unit_id"]
 
-            # Verify user_id is set for SpecificUsersResolver
+            # user_id = officer_id (preferred) or verifier_id (fallback)
+            # In this fixture, lead has no assigned_officer_id → fallback to verifier
             assert payload["user_id"] == pf["checker"].id
+
+    async def test_verify_notifies_officer_when_assigned(self, db, payment_fixtures):
+        """
+        When lead has assigned_officer_id, notification should target the officer,
+        not the verifier.
+        """
+        from unittest.mock import AsyncMock, patch
+        from app.core.events import SystemEvents
+
+        service = PaymentService(db)
+        pf = payment_fixtures
+
+        # Assign an officer to the lead
+        from sqlalchemy import select
+        lead_result = await db.execute(
+            select(models.Lead).where(models.Lead.id == pf["profile"].lead_id)
+        )
+        lead = lead_result.scalar()
+        lead.assigned_officer_id = pf["maker"].id  # maker is the officer
+        await db.flush()
+
+        payment, _ = await service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("500000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        verified, post_commit = await service.verify_payment(
+            payment_id=payment.id,
+            verifier_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        with patch(
+            "app.services.notification_dispatcher.safe_dispatch",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_safe_dispatch:
+            await post_commit()
+
+            payload = mock_safe_dispatch.call_args[1]["payload"]
+            # Should notify the officer (maker), not the verifier (checker)
+            assert payload["user_id"] == pf["maker"].id, (
+                f"Expected officer {pf['maker'].id}, got {payload['user_id']}"
+            )
 
     async def test_verify_payload_has_lead_id(self, db, payment_fixtures):
         """

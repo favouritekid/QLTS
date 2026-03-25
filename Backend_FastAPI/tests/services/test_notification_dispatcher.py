@@ -32,7 +32,7 @@ class TestNotificationDispatcher:
         # Arrange
         user_id = officer_user_in_db["id"]
         # Use UNIT_CREATED for success test
-        event = SystemEvents.UNIT_CREATED
+        event = SystemEvents.SYSTEM_ALERT
         
         # 1. Seed reusable template
         # FIX: Use ${} for string.Template compatibility
@@ -109,7 +109,7 @@ class TestNotificationDispatcher:
         # Arrange
         user_id = officer_user_in_db["id"]
         # Use UNIT_UPDATED for dedupe test
-        event = SystemEvents.UNIT_UPDATED
+        event = SystemEvents.SYSTEM_ALERT
         dedupe_key = "unique_dedupe_123"
         
         # Seed Rule
@@ -178,7 +178,7 @@ class TestNotificationDispatcher:
         # Arrange
         user_id = officer_user_in_db["id"]
         # Use PROGRAM_CREATED for preference test
-        event = SystemEvents.PROGRAM_CREATED
+        event = SystemEvents.SYSTEM_ALERT
         
         # Disable browser notifications globally for this user
         pref = models.NotificationPreference(

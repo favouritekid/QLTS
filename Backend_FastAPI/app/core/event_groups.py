@@ -55,7 +55,7 @@ class NotificationEventGroup(str, Enum):
     """Pipeline configuration events: stage/status updates"""
 
     ORGANIZATION = "organization"
-    """Organization events: unit, program, offering changes (Admin only)"""
+    """Organization events: domain broadcast only, NOT user notifications. See addendum."""
 
     SECURITY = "security"
     """Security events: suspicious logins, password changes, device changes"""
@@ -153,7 +153,7 @@ def get_event_group(event: SystemEvents) -> NotificationEventGroup:
         log = structlog.get_logger(__name__)
         log.warning(
             "Event not in EVENT_GROUP_MAPPING, falling back to SYSTEM group",
-            event=event.value if hasattr(event, 'value') else str(event),
+            unmapped_event=event.value if hasattr(event, 'value') else str(event),
             action="Add event to EVENT_GROUP_MAPPING in event_groups.py",
         )
         return NotificationEventGroup.SYSTEM
@@ -227,10 +227,10 @@ EVENT_GROUP_LABELS: Dict[NotificationEventGroup, Dict[str, str]] = {
         "description_vi": "Thông báo về thay đổi cấu hình pipeline (Chỉ Admin)"
     },
     NotificationEventGroup.ORGANIZATION: {
-        "en": "Organization Management",
-        "vi": "Quản lý Tổ chức",
-        "description_en": "Notifications about unit, program, and offering changes (Admin only)",
-        "description_vi": "Thông báo về thay đổi đơn vị, chương trình, loại hình đào tạo (Chỉ Admin)"
+        "en": "Organization (broadcast only)",
+        "vi": "Tổ chức (chỉ broadcast)",
+        "description_en": "Domain broadcast only — not user-facing notifications",
+        "description_vi": "Chỉ broadcast real-time — không phải thông báo cho user"
     },
     NotificationEventGroup.SECURITY: {
         "en": "Security",
@@ -314,12 +314,7 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
         NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
-    NotificationEventGroup.ORGANIZATION: {
-        NotificationChannel.BROWSER: True,
-        NotificationChannel.EMAIL: False,
-        NotificationChannel.ZALO: False,
-        NotificationChannel.SMS: False,
-    },
+    # ORGANIZATION group excluded — domain broadcast only, not user notification channels
     NotificationEventGroup.SECURITY: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,

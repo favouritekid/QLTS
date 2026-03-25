@@ -153,23 +153,31 @@ class TestEventRegistryGroupParity:
 
 class TestEventMetadataParity:
     """
-    Events that are in the registry AND group mapping should ideally
-    have metadata for admin UI. This test warns about gaps.
+    Events in registry AND group mapping must have metadata for admin UI.
+    CTV events are temporarily exempted pending metadata backfill.
     """
 
+    # CTV events pending metadata backfill — remove from this list as they get metadata
+    CTV_EVENTS_PENDING_METADATA = {
+        "ctv_claim_submitted", "ctv_claim_approved", "ctv_claim_rejected",
+        "ctv_approved", "ctv_suspended", "ctv_lead_converted",
+        "ctv_attribution_expiring", "ctv_attribution_expired",
+        "ctv_commission_created", "ctv_weekly_summary",
+    }
+
     def test_registry_events_have_metadata(self):
-        """Events with runtime config should have metadata for admin forms."""
+        """Non-exempted events with runtime config MUST have metadata."""
         missing = []
         for event in NOTIFICATION_REGISTRY:
+            if event.value in self.CTV_EVENTS_PENDING_METADATA:
+                continue
             if event not in EVENT_METADATA_REGISTRY:
                 missing.append(event.value)
 
-        # This is a warning, not a hard failure — some events may be
-        # system-only and not need admin metadata
-        if missing:
-            pytest.skip(
-                f"Events in registry but missing metadata (not blocking): {missing}"
-            )
+        assert not missing, (
+            f"Events in NOTIFICATION_REGISTRY but missing from EVENT_METADATA_REGISTRY: {missing}. "
+            "Add metadata entry or add to CTV_EVENTS_PENDING_METADATA exemption list."
+        )
 
 
 # =============================================================================

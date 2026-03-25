@@ -152,6 +152,22 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         category="lead"
     ),
 
+    SystemEvents.LEAD_UPDATED: EventMetadata(
+        event=SystemEvents.LEAD_UPDATED,
+        display_name="Lead được cập nhật",
+        description="Khi lead được cập nhật thông tin",
+        variables=[
+            EventVariable("lead_id", "integer", "ID của lead"),
+            EventVariable("updated_fields", "string", "Danh sách trường đã thay đổi", required=False),
+            EventVariable("status_changed", "boolean", "Có thay đổi trạng thái không", required=False),
+            EventVariable("actor_id", "integer", "ID người cập nhật"),
+            EventVariable("actor_name", "string", "Tên người cập nhật", required=False),
+        ],
+        filter_fields=["lead_id", "status_changed"],
+        default_channels=["browser"],
+        category="lead"
+    ),
+
     SystemEvents.LEAD_DELETED: EventMetadata(
         event=SystemEvents.LEAD_DELETED,
         display_name="Lead bị xóa",
