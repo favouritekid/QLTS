@@ -57,6 +57,8 @@ from .admission_config import (
 # Notification models
 from .notification import Notification, NotificationAction, NotificationRule, NotificationTemplate
 from .notification_preference import NotificationPreference
+from .notification_delivery import NotificationDelivery
+from .notification_consent import NotificationConsent
 
 # Organization models (includes temporal models)
 # OLD: from .organization import Major  # REMOVED after 3-tier migration
