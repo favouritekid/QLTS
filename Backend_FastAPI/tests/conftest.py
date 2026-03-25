@@ -349,34 +349,39 @@ _schema_initialized = False
 async def _init_schema_once():
     """Create the full schema from scratch. Called once per pytest session."""
     from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
+    from sqlalchemy.pool import NullPool
 
-    # Use a SEPARATE short-lived engine for schema DDL.
-    # This avoids polluting the main engine's asyncpg connection cache
-    # with DDL operations that would become stale after DROP/CREATE.
+    # Use a SEPARATE short-lived engine (NullPool) for schema DDL.
+    # NullPool creates a fresh connection each time and closes it immediately,
+    # eliminating asyncpg prepared-statement cache pollution entirely.
     setup_engine = _create_engine(
         settings.DATABASE_URL,
-        pool_size=2,
-        max_overflow=0,
+        poolclass=NullPool,
         connect_args={"command_timeout": 60},
     )
 
     try:
         # Step 1: Nuke everything via DROP SCHEMA CASCADE (clean slate).
-        # Safe because this is a short-lived engine — no other code holds
-        # connections from it. The main engine gets fresh connections after.
+        # First terminate other connections to avoid deadlocks — the app
+        # engine or Casbin adapter may hold idle connections from import.
         async with setup_engine.begin() as conn:
+            await conn.execute(text(
+                "SELECT pg_terminate_backend(pid) "
+                "FROM pg_stat_activity "
+                "WHERE datname = current_database() "
+                "AND pid <> pg_backend_pid()"
+            ))
             await conn.execute(text("DROP SCHEMA public CASCADE"))
             await conn.execute(text("CREATE SCHEMA public"))
         log.info("[Schema Init] Step 1: DROP SCHEMA CASCADE complete")
 
-        # Must dispose to clear asyncpg cache of the old schema
+        # Must dispose to clear any residual state
         await setup_engine.dispose()
 
-        # Step 2: Recreate with a fresh engine (new connections, no stale cache)
+        # Step 2: Recreate with a fresh engine (NullPool = no stale cache)
         setup_engine = _create_engine(
             settings.DATABASE_URL,
-            pool_size=2,
-            max_overflow=0,
+            poolclass=NullPool,
             connect_args={"command_timeout": 60},
         )
         async with setup_engine.begin() as conn:
@@ -388,6 +393,12 @@ async def _init_schema_once():
             await conn.execute(text("DROP TYPE IF EXISTS selectablemode CASCADE"))
             await conn.execute(text("DROP TYPE IF EXISTS triggertype CASCADE"))
             await conn.execute(text("DROP TYPE IF EXISTS administrativenodelevel CASCADE"))
+
+            # Re-create enum types that have create_type=False in models
+            # (migration-managed enums that create_all() won't auto-create)
+            await conn.execute(text(
+                "CREATE TYPE discount_type_enum AS ENUM ('amount', 'percentage')"
+            ))
 
             await conn.run_sync(AppBase.metadata.create_all)
 
@@ -446,26 +457,42 @@ async def _init_schema_once():
 async def _truncate_all_tables():
     """Truncate all data from all tables in a single statement.
 
-    Uses a single TRUNCATE for all tables (much faster than one-by-one)
-    and temporarily disables statement_timeout to avoid 30s cutoff.
+    Uses a DEDICATED short-lived engine (NullPool) to avoid deadlocks
+    with the app's connection pool. The app engine may hold idle connections
+    that lock tables, causing deadlock when TRUNCATE CASCADE acquires
+    AccessExclusiveLock in a different order.
     """
-    async with engine.begin() as conn:
-        # Disable statement_timeout for bulk truncate (default 30s is too short)
-        await conn.execute(text("SET LOCAL statement_timeout = 0"))
-        result = await conn.execute(text(
-            "SELECT string_agg(quote_ident(tablename), ', ') "
-            "FROM pg_tables WHERE schemaname = 'public'"
-        ))
-        tables = result.scalar()
-        if tables:
-            await conn.execute(
-                text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
-            )
-            # Reset standalone sequences not owned by any table column
-            # (RESTART IDENTITY only resets column-owned sequences)
-            await conn.execute(text(
-                "SELECT setval('collaborator_code_seq', 1, false)"
+    from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
+    from sqlalchemy.pool import NullPool
+
+    truncate_engine = _create_engine(
+        settings.DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={"command_timeout": 60},
+    )
+    try:
+        # Dispose app engine first to release any held connections
+        await engine.dispose()
+
+        async with truncate_engine.begin() as conn:
+            # Disable statement_timeout for bulk truncate
+            await conn.execute(text("SET LOCAL statement_timeout = 0"))
+            result = await conn.execute(text(
+                "SELECT string_agg(quote_ident(tablename), ', ') "
+                "FROM pg_tables WHERE schemaname = 'public'"
             ))
+            tables = result.scalar()
+            if tables:
+                await conn.execute(
+                    text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
+                )
+                # Reset standalone sequences not owned by any table column
+                # (RESTART IDENTITY only resets column-owned sequences)
+                await conn.execute(text(
+                    "SELECT setval('collaborator_code_seq', 1, false)"
+                ))
+    finally:
+        await truncate_engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="function", autouse=False)

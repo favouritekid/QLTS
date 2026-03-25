@@ -25,21 +25,23 @@ DELIVERIES_URL = "/api/notification-deliveries"
 # ============================================
 
 @pytest_asyncio.fixture
-async def seeded_deliveries(client, admin_user_in_db):
+async def seeded_deliveries(admin_token_headers, client):
     """
     Seed delivery records for API tests.
 
-    Depends on `client` to ensure lifespan + casbin are initialized.
-    Depends on `admin_user_in_db` for a valid user_id FK reference.
-    Uses a separate session to insert data directly.
+    Depends on `admin_token_headers` which guarantees:
+      - setup_test_database ran (schema ready)
+      - client is up (lifespan + casbin initialized)
+      - admin user exists and is committed
+
+    Uses user_id=None (nullable FK) to avoid cross-session FK timing issues.
+    Delivery rows only need to exist so the API can filter/return them.
     """
-    user_id = admin_user_in_db["id"]
     async with AsyncSessionLocal() as db:
         d1 = models.NotificationDelivery(
             event="lead_assigned",
             channel="browser",
             recipient_kind="internal",
-            user_id=user_id,
             source_type="lead",
             source_id=1,
             status="sent",
@@ -48,7 +50,6 @@ async def seeded_deliveries(client, admin_user_in_db):
             event="lead_assigned",
             channel="email",
             recipient_kind="internal",
-            user_id=user_id,
             source_type="lead",
             source_id=1,
             status="failed",
@@ -58,7 +59,6 @@ async def seeded_deliveries(client, admin_user_in_db):
             event="profile_submitted",
             channel="browser",
             recipient_kind="internal",
-            user_id=user_id,
             status="queued",
         )
         db.add_all([d1, d2, d3])

@@ -168,44 +168,61 @@ async def _complete_login_flow(
             if session:
                 session.is_suspicious = True
                 db.add(session)
-            # Dispatch notification (fire-and-forget after commit)
+            # Dispatch notification (fire-and-forget after commit).
+            # Uses a SEPARATE session to avoid corrupting the login session
+            # if notification dispatch fails (e.g., FK errors in test env).
+            _notif_user_id = user.id
+            _notif_login_id = login_record.id
+            _notif_payload = {
+                "user_id": _notif_user_id,
+                "user_ids": [_notif_user_id],
+                "login_history_id": _notif_login_id,
+                "ip_address": ip_address or "unknown",
+                "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", "),
+                "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip(),
+                "risk_score": login_record.risk_score,
+                "anomalies": anomalies,
+                "actor_id": _notif_user_id,
+            }
+
             async def _dispatch_suspicious_login():
                 try:
-                    await safe_dispatch(
-                        db=db,
-                        event=SystemEvents.SUSPICIOUS_LOGIN,
-                        payload={
-                            "user_id": user.id,
-                            "user_ids": [user.id],
-                            "login_history_id": login_record.id,
-                            "ip_address": ip_address or "unknown",
-                            "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", "),
-                            "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip(),
-                            "risk_score": login_record.risk_score,
-                            "anomalies": anomalies,
-                            "actor_id": user.id,
-                        },
-                    )
+                    async with database.AsyncSessionLocal() as notif_db:
+                        await safe_dispatch(
+                            db=notif_db,
+                            event=SystemEvents.SUSPICIOUS_LOGIN,
+                            payload=_notif_payload,
+                        )
                 except Exception as notif_error:
-                    log.error("Failed to dispatch suspicious login notification", user_id=user.id, error=str(notif_error))
+                    log.error("Failed to dispatch suspicious login notification",
+                              user_id=_notif_user_id, error=str(notif_error))
             post_commit_callbacks.append(_dispatch_suspicious_login)
     except Exception as history_error:
         log.error("Failed to record login history", user_id=user.id, error=str(history_error), exc_info=True)
 
-    # 5. Commit and execute callbacks
+    # 5. Snapshot user data BEFORE callbacks (so response doesn't depend
+    #    on ORM state that callbacks might corrupt)
+    user_snapshot = {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "status": user.status,
+        "password_reset_required": user.password_reset_required,
+        "mfa_enabled": user.mfa_enabled,
+    }
+
+    # 6. Commit and execute callbacks
     try:
         await db.commit()
         for callback in post_commit_callbacks:
             try:
                 await callback()
             except Exception as cb_e:
+                # Callbacks use separate sessions, so errors here are
+                # truly non-critical and don't affect the login session.
                 log.error("Post-commit callback failed", error=str(cb_e))
-                # Rollback to clear session error state so subsequent
-                # callbacks or responses can still use the session.
-                try:
-                    await db.rollback()
-                except Exception:
-                    pass
     except Exception as e:
         await db.rollback()
         try:
@@ -215,20 +232,11 @@ async def _complete_login_flow(
         log.error("Failed to commit DB changes during login", user_id=user.id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Could not save session")
 
-    # 6. Build response with httpOnly cookies
+    # 7. Build response from snapshot (not ORM objects)
     response = JSONResponse(
         content={
             "token_type": "bearer",
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
-                "role": user.role,
-                "status": user.status,
-                "password_reset_required": user.password_reset_required,
-                "mfa_enabled": user.mfa_enabled,
-            },
+            "user": user_snapshot,
             "login_notification": login_notification_data,
         },
         status_code=200,

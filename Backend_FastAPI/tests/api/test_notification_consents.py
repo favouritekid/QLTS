@@ -27,13 +27,17 @@ CONSENTS_URL = "/api/notification-consents"
 # ============================================
 
 @pytest_asyncio.fixture
-async def seeded_consents(client, admin_user_in_db):
+async def seeded_consents(admin_token_headers, client):
     """
     Seed consent records for API tests.
 
-    Depends on `client` to ensure lifespan + casbin are initialized.
+    Depends on `admin_token_headers` which guarantees:
+      - setup_test_database ran (schema ready)
+      - client is up (lifespan + casbin initialized)
+      - admin user exists and is committed
+
+    Uses granted_by=None to avoid cross-session FK timing issues.
     """
-    user_id = admin_user_in_db["id"]
     async with AsyncSessionLocal() as db:
         c1 = models.NotificationConsent(
             channel="zalo",
@@ -42,7 +46,6 @@ async def seeded_consents(client, admin_user_in_db):
             consent_status="granted",
             consent_source="manual",
             normalized_phone="84901234567",
-            granted_by=user_id,
         )
         c2 = models.NotificationConsent(
             channel="email",
@@ -51,7 +54,6 @@ async def seeded_consents(client, admin_user_in_db):
             consent_status="revoked",
             consent_source="csv_import",
             normalized_email="test@example.com",
-            granted_by=user_id,
         )
         db.add_all([c1, c2])
         await db.commit()

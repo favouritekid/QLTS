@@ -67,7 +67,8 @@ class TuitionDiscountPolicy(Base):
         Enum(
             DiscountTypeEnum,
             name="discount_type_enum",
-            values_callable=lambda obj: [e.value for e in obj]
+            values_callable=lambda obj: [e.value for e in obj],
+            create_type=False,  # Enum created by migration, not by create_all()
         ),
         nullable=False,
         comment="Loại ưu đãi: 'amount' (VND) hoặc 'percentage' (%)"
