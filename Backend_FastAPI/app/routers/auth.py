@@ -200,6 +200,12 @@ async def _complete_login_flow(
                 await callback()
             except Exception as cb_e:
                 log.error("Post-commit callback failed", error=str(cb_e))
+                # Rollback to clear session error state so subsequent
+                # callbacks or responses can still use the session.
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
     except Exception as e:
         await db.rollback()
         try:

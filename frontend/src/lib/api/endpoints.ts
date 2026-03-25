@@ -182,6 +182,17 @@ export const API_ENDPOINTS = {
     UPDATE: (id: number) => `/api/notification-templates/${id}`,
     DELETE: (id: number) => `/api/notification-templates/${id}`,
   },
+  // ✅ PHASE B8: Notification Delivery Ops (Admin-only)
+  NOTIFICATION_DELIVERIES: {
+    LIST: "/api/notification-deliveries",
+    DETAIL: (id: number) => `/api/notification-deliveries/${id}`,
+  },
+  // ✅ PHASE B7: Notification Consents (Admin-only)
+  NOTIFICATION_CONSENTS: {
+    LIST: "/api/notification-consents",
+    UPSERT: "/api/notification-consents/upsert",
+    BULK_IMPORT: "/api/notification-consents/bulk-import",
+  },
   // ✅ LOGIN SECURITY: Phase 5 - User Response Flow
   SECURITY: {
     LOGIN_HISTORY: "/api/security/login-history",

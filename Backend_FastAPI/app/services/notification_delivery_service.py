@@ -16,6 +16,77 @@ from app.repositories.notification_delivery_repository import NotificationDelive
 log = structlog.get_logger(__name__)
 
 
+def build_payload_snapshot(
+    title: str,
+    message: str,
+    link: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    """
+    Build a frozen payload snapshot for delivery records.
+
+    This captures the rendered content at send time so delivery records
+    remain interpretable even if templates change later.
+    """
+    snapshot = {"title": title, "message": message}
+    if link:
+        snapshot["link"] = link
+    if extra:
+        snapshot["extra"] = extra
+    return snapshot
+
+
+async def prepare_external_deliveries(
+    db: AsyncSession,
+    event: str,
+    channel: str,
+    recipients: list,
+    dedupe_key: str | None = None,
+    payload_snapshot: dict | None = None,
+) -> List[int]:
+    """
+    Create NotificationDelivery rows for external (non-user) recipients.
+
+    Each recipient dict must have at least:
+      - source_type, source_id
+      - destination (email or phone)
+    Optional: normalized_phone, normalized_email
+
+    Returns list of delivery IDs created.
+    """
+    repo = NotificationDeliveryRepository(db)
+    deliveries_data = []
+
+    for r in recipients:
+        deliveries_data.append({
+            "event": event,
+            "channel": channel,
+            "recipient_kind": "external",
+            "user_id": None,
+            "notification_id": None,
+            "source_type": r.get("source_type"),
+            "source_id": r.get("source_id"),
+            "destination": r.get("destination"),
+            "status": "queued",
+            "dedupe_key": dedupe_key,
+            "payload_snapshot": payload_snapshot,
+        })
+
+    if not deliveries_data:
+        return []
+
+    delivery_ids = await repo.bulk_create_deliveries(deliveries_data)
+
+    log.info(
+        "External delivery records created",
+        notification_event=event,
+        channel=channel,
+        delivery_count=len(delivery_ids),
+    )
+
+    return delivery_ids
+
+
 async def create_deliveries_for_dispatch(
     db: AsyncSession,
     event: str,
@@ -23,7 +94,9 @@ async def create_deliveries_for_dispatch(
     notification_id_map: Dict[int, int],
     dedupe_key: str | None = None,
     payload_snapshot: dict | None = None,
-) -> List[int]:
+    source_type: str | None = None,
+    source_id: int | None = None,
+) -> Dict[str, List[int]]:
     """
     Create NotificationDelivery rows for a dispatch.
 
@@ -34,14 +107,21 @@ async def create_deliveries_for_dispatch(
         notification_id_map: {user_id: notification_id} for linking
         dedupe_key: Optional dedup key
         payload_snapshot: Rendered content snapshot
+        source_type: Business entity type (lead, admission_profile, etc.)
+        source_id: Business entity ID
 
     Returns:
-        List of delivery IDs created
+        Dict mapping channel -> list of delivery IDs created for that channel.
+        Example: {"browser": [1, 2], "email": [3]}
     """
     repo = NotificationDeliveryRepository(db)
-    deliveries_data = []
+
+    # Build all delivery rows, tracking which indices belong to which channel
+    deliveries_data: List[Dict[str, Any]] = []
+    channel_ranges: Dict[str, tuple] = {}  # channel -> (start_idx, count)
 
     for channel, user_ids in channel_recipient_map.items():
+        start = len(deliveries_data)
         for user_id in user_ids:
             notification_id = notification_id_map.get(user_id)
             deliveries_data.append({
@@ -50,25 +130,76 @@ async def create_deliveries_for_dispatch(
                 "channel": channel,
                 "recipient_kind": "internal",
                 "user_id": user_id,
+                "source_type": source_type,
+                "source_id": source_id,
                 "status": "queued",
                 "dedupe_key": dedupe_key,
                 "payload_snapshot": payload_snapshot,
             })
+        channel_ranges[channel] = (start, len(user_ids))
 
     if not deliveries_data:
-        return []
+        return {}
 
-    delivery_ids = await repo.bulk_create_deliveries(deliveries_data)
+    all_ids = await repo.bulk_create_deliveries(deliveries_data)
+
+    # Slice IDs back into per-channel buckets
+    channel_delivery_ids: Dict[str, List[int]] = {}
+    for channel, (start, count) in channel_ranges.items():
+        channel_delivery_ids[channel] = all_ids[start:start + count]
 
     log.info(
         "Delivery records created",
         notification_event=event,
-        delivery_count=len(delivery_ids),
-        channels={ch: len(ids) for ch, ids in channel_recipient_map.items()},
+        delivery_count=len(all_ids),
+        channels={ch: len(ids) for ch, ids in channel_delivery_ids.items()},
     )
 
-    return delivery_ids
+    return channel_delivery_ids
 
+
+async def mark_delivery_ids_sent(
+    db: AsyncSession,
+    delivery_ids: List[int],
+    sent_at: datetime | None = None,
+) -> int:
+    """Mark specific delivery IDs as sent. Scoped to exact IDs."""
+    repo = NotificationDeliveryRepository(db)
+    return await repo.bulk_update_status(
+        delivery_ids, "sent",
+        sent_at=sent_at or datetime.now(timezone.utc),
+    )
+
+
+async def mark_delivery_ids_failed(
+    db: AsyncSession,
+    delivery_ids: List[int],
+    error_reason: str = "",
+) -> int:
+    """Mark specific delivery IDs as failed. Scoped to exact IDs."""
+    repo = NotificationDeliveryRepository(db)
+    return await repo.bulk_update_status(
+        delivery_ids, "failed", error_reason=error_reason,
+    )
+
+
+async def mark_delivery_ids_skipped(
+    db: AsyncSession,
+    delivery_ids: List[int],
+    error_reason: str = "channel_not_live",
+) -> int:
+    """Mark specific delivery IDs as skipped. Scoped to exact IDs."""
+    repo = NotificationDeliveryRepository(db)
+    return await repo.bulk_update_status(
+        delivery_ids, "skipped", error_reason=error_reason,
+    )
+
+
+# ============================================================
+# Legacy API (kept for backward compatibility with existing tests)
+# These delegate to the ID-scoped functions above when possible,
+# but fall back to re-query if delivery_ids are not available.
+# ============================================================
 
 async def mark_channel_sent(
     db: AsyncSession,
@@ -77,25 +208,11 @@ async def mark_channel_sent(
     user_ids: List[int],
     sent_at: datetime | None = None,
 ) -> int:
-    """Mark deliveries as sent for a channel+user_ids batch."""
-    repo = NotificationDeliveryRepository(db)
-    updated = 0
-
-    # Find matching queued deliveries
-    records, _ = await repo.list_deliveries(
-        event=event, channel=channel, status="queued", limit=1000
-    )
-
-    user_set = set(user_ids)
-    for record in records:
-        if record.user_id in user_set:
-            await repo.update_status(
-                record.id, "sent",
-                sent_at=sent_at or datetime.now(timezone.utc),
-            )
-            updated += 1
-
-    return updated
+    """Mark deliveries as sent for a channel+user_ids batch (legacy)."""
+    delivery_ids = await _resolve_delivery_ids(db, event, channel, user_ids)
+    if not delivery_ids:
+        return 0
+    return await mark_delivery_ids_sent(db, delivery_ids, sent_at=sent_at)
 
 
 async def mark_channel_failed(
@@ -105,21 +222,11 @@ async def mark_channel_failed(
     user_ids: List[int],
     error_reason: str = "",
 ) -> int:
-    """Mark deliveries as failed for a channel+user_ids batch."""
-    repo = NotificationDeliveryRepository(db)
-    updated = 0
-
-    records, _ = await repo.list_deliveries(
-        event=event, channel=channel, status="queued", limit=1000
-    )
-
-    user_set = set(user_ids)
-    for record in records:
-        if record.user_id in user_set:
-            await repo.update_status(record.id, "failed", error_reason=error_reason)
-            updated += 1
-
-    return updated
+    """Mark deliveries as failed for a channel+user_ids batch (legacy)."""
+    delivery_ids = await _resolve_delivery_ids(db, event, channel, user_ids)
+    if not delivery_ids:
+        return 0
+    return await mark_delivery_ids_failed(db, delivery_ids, error_reason=error_reason)
 
 
 async def mark_channel_skipped(
@@ -129,18 +236,23 @@ async def mark_channel_skipped(
     user_ids: List[int],
     error_reason: str = "channel_not_live",
 ) -> int:
-    """Mark deliveries as skipped (channel not implemented, etc)."""
-    repo = NotificationDeliveryRepository(db)
-    updated = 0
+    """Mark deliveries as skipped (legacy)."""
+    delivery_ids = await _resolve_delivery_ids(db, event, channel, user_ids)
+    if not delivery_ids:
+        return 0
+    return await mark_delivery_ids_skipped(db, delivery_ids, error_reason=error_reason)
 
+
+async def _resolve_delivery_ids(
+    db: AsyncSession,
+    event: str,
+    channel: str,
+    user_ids: List[int],
+) -> List[int]:
+    """Resolve delivery IDs from event+channel+user_ids (legacy helper)."""
+    repo = NotificationDeliveryRepository(db)
     records, _ = await repo.list_deliveries(
         event=event, channel=channel, status="queued", limit=1000
     )
-
     user_set = set(user_ids)
-    for record in records:
-        if record.user_id in user_set:
-            await repo.update_status(record.id, "skipped", error_reason=error_reason)
-            updated += 1
-
-    return updated
+    return [r.id for r in records if r.user_id in user_set]

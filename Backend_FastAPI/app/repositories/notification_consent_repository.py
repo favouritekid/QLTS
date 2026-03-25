@@ -20,7 +20,7 @@ class NotificationConsentRepository(BaseRepository[NotificationConsent]):
 
     async def get_filtered(
         self, skip: int = 0, limit: int = 100, **filters
-    ) -> Tuple[List[NotificationConsent], int]:
+    ) -> Tuple[int, List[NotificationConsent]]:
         """Required by BaseRepository. Delegates to list_consents."""
         records, total = await self.list_consents(skip=skip, limit=limit, **filters)
         return total, records
@@ -63,10 +63,15 @@ class NotificationConsentRepository(BaseRepository[NotificationConsent]):
         await self.db.execute(stmt)
         await self.db.flush()
 
-        # Fetch the row back
-        return await self.get_latest(
+        # Expire any cached identity-map entry so the next SELECT sees
+        # the updated values written by ON CONFLICT DO UPDATE.
+        # Without this, SQLAlchemy may return the stale pre-upsert row.
+        existing = await self.get_latest(
             data["channel"], data["source_type"], data["source_id"]
         )
+        if existing:
+            await self.db.refresh(existing)
+        return existing
 
     async def bulk_upsert(
         self, rows: List[Dict[str, Any]]

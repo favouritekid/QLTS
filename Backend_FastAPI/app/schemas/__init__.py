@@ -291,6 +291,20 @@ from .notification import (
     Condition,
 )
 
+# --- Từ notification_delivery.py ---
+from .notification_delivery import (
+    NotificationDeliveryResponse,
+    NotificationDeliveriesPage,
+)
+
+# --- Từ notification_consent.py ---
+from .notification_consent import (
+    NotificationConsentUpsert,
+    NotificationConsentResponse,
+    NotificationConsentsPage,
+    NotificationConsentImportResult,
+)
+
 # --- Từ notification_preference.py ---
 from .notification_preference import (
     NotificationPreference,

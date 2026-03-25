@@ -163,9 +163,12 @@ __all__ = [
     "AdmissionPath",  # Phase 1: Admission Configuration Console
     # Notification
     "Notification",
+    "NotificationAction",
     "NotificationRule",
     "NotificationTemplate",
     "NotificationPreference",
+    "NotificationDelivery",
+    "NotificationConsent",
     # Organization (Legacy)
     # "Major",  # REMOVED after 3-tier migration k6l7m8n9o0p1
     # "MajorAcademicInfo",  # REMOVED after 3-tier migration k6l7m8n9o0p1

@@ -5,7 +5,7 @@ Repository for NotificationDelivery — per-channel delivery tracking.
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification_delivery import NotificationDelivery
@@ -19,7 +19,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
 
     async def get_filtered(
         self, skip: int = 0, limit: int = 100, **filters
-    ) -> Tuple[List[NotificationDelivery], int]:
+    ) -> Tuple[int, List[NotificationDelivery]]:
         """Required by BaseRepository. Delegates to list_deliveries."""
         records, total = await self.list_deliveries(skip=skip, limit=limit, **filters)
         return total, records
@@ -66,6 +66,38 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
 
         await self.db.flush()
         return delivery
+
+    async def bulk_update_status(
+        self,
+        delivery_ids: List[int],
+        status: str,
+        error_reason: str | None = None,
+        sent_at: datetime | None = None,
+    ) -> int:
+        """
+        Bulk update status for a list of delivery IDs.
+
+        Uses a single UPDATE statement for efficiency and correctness —
+        scoped to exact IDs, not re-queried by event/channel.
+        """
+        if not delivery_ids:
+            return 0
+
+        values: Dict[str, Any] = {"status": status}
+        if error_reason is not None:
+            values["error_reason"] = error_reason
+        if sent_at is not None:
+            values["sent_at"] = sent_at
+        elif status == "sent":
+            values["sent_at"] = datetime.now(timezone.utc)
+
+        stmt = (
+            update(NotificationDelivery)
+            .where(NotificationDelivery.id.in_(delivery_ids))
+            .values(**values)
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount
 
     async def get_by_notification_id(
         self, notification_id: int

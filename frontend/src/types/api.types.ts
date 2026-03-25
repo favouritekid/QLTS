@@ -423,6 +423,78 @@ export interface NotificationTemplatesPage {
 }
 
 // ============================================
+// ✅ PHASE B8: NOTIFICATION DELIVERY OPS
+// ============================================
+
+export interface NotificationDelivery {
+  id: number;
+  notification_id: number | null;
+  event: string;
+  channel: string;
+  recipient_kind: string; // "internal" | "external"
+  user_id: number | null;
+  source_type: string | null;
+  source_id: number | null;
+  destination: string | null;
+  status: string; // "queued" | "sent" | "failed" | "skipped"
+  error_reason: string | null;
+  dedupe_key: string | null;
+  created_at: string;
+  updated_at: string;
+  sent_at: string | null;
+}
+
+export interface NotificationDeliveriesPage {
+  total_count: number;
+  deliveries: NotificationDelivery[];
+}
+
+// ============================================
+// ✅ PHASE B7: NOTIFICATION CONSENT
+// ============================================
+
+export interface NotificationConsent {
+  id: number;
+  channel: string;
+  source_type: string;
+  source_id: number;
+  normalized_phone: string | null;
+  normalized_email: string | null;
+  consent_status: string; // "granted" | "revoked"
+  consent_source: string;
+  granted_by: number | null;
+  granted_at: string | null;
+  revoked_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationConsentsPage {
+  total_count: number;
+  consents: NotificationConsent[];
+}
+
+export interface NotificationConsentUpsert {
+  channel: string;
+  source_type: string;
+  source_id: number;
+  consent_status?: string;
+  normalized_phone?: string | null;
+  normalized_email?: string | null;
+  consent_source?: string;
+  notes?: string | null;
+}
+
+export interface NotificationConsentImportResult {
+  processed: number;
+  granted: number;
+  revoked: number;
+  skipped: number;
+  errors: Array<{ line: number; message: string }>;
+}
+
+// ============================================
 // ✅ NOTIFICATION 2.0: METADATA FOR DYNAMIC BUILDER
 // ============================================
 

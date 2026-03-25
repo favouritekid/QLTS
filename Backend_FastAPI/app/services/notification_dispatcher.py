@@ -69,6 +69,39 @@ BULK_INSERT_CHUNK_SIZE = 100
 
 
 # =============================================================================
+# SOURCE EXTRACTION — Derive source_type/source_id from event + payload
+# =============================================================================
+
+# Payload key -> source_type mapping.  Order matters: first match wins.
+_SOURCE_KEYS = [
+    ("lead_id", "lead"),
+    ("profile_id", "admission_profile"),
+    ("admission_profile_id", "admission_profile"),
+    ("collaborator_id", "collaborator"),
+    ("user_id", "user"),
+]
+
+
+def _extract_source_from_payload(
+    event: SystemEvents,
+    payload: dict,
+) -> tuple:
+    """
+    Best-effort extraction of (source_type, source_id) from event payload.
+
+    Returns (None, None) if no recognisable key is found.
+    """
+    for key, source_type in _SOURCE_KEYS:
+        val = payload.get(key)
+        if val is not None:
+            try:
+                return source_type, int(val)
+            except (ValueError, TypeError):
+                continue
+    return None, None
+
+
+# =============================================================================
 # DOMAIN EVENT EMITTER - Real-time UI Refresh
 # =============================================================================
 
@@ -422,14 +455,32 @@ async def dispatch(
     # Step 6.5: Create NotificationDelivery rows for tracking
     from app.services import notification_delivery_service
     notification_id_map = dict(zip(inbox_user_ids, notification_ids)) if notification_ids else {}
-    delivery_ids = await notification_delivery_service.create_deliveries_for_dispatch(
-        db=db,
-        event=event.value,
-        channel_recipient_map=channel_recipient_map,
-        notification_id_map=notification_id_map,
-        dedupe_key=dedupe_key,
-        payload_snapshot={"title": title, "message": message, "link": link},
-    )
+
+    # Extract source context from payload for delivery tracking
+    _source_type, _source_id = _extract_source_from_payload(event, payload)
+
+    try:
+        channel_delivery_ids = await notification_delivery_service.create_deliveries_for_dispatch(
+            db=db,
+            event=event.value,
+            channel_recipient_map=channel_recipient_map,
+            notification_id_map=notification_id_map,
+            dedupe_key=dedupe_key,
+            payload_snapshot={"title": title, "message": message, "link": link},
+            source_type=_source_type,
+            source_id=_source_id,
+        )
+    except Exception as e:
+        log.error(
+            "Failed to create delivery records (non-critical)",
+            event_type=event.value,
+            error=str(e),
+        )
+        channel_delivery_ids = {}
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -500,13 +551,16 @@ async def dispatch(
 
                 channel_name, channel_result, error_msg = result
 
+                # Get delivery IDs for this channel (scoped to this batch)
+                ch_del_ids = channel_delivery_ids.get(channel_name, [])
+
                 if channel_result is None and error_msg is None:
                     # Channel not implemented — mark skipped
-                    await notification_delivery_service.mark_channel_skipped(
-                        db, event.value, channel_name,
-                        channel_recipient_map.get(channel_name, []),
-                        error_reason="channel_not_implemented",
-                    )
+                    if ch_del_ids:
+                        await notification_delivery_service.mark_delivery_ids_skipped(
+                            db, ch_del_ids,
+                            error_reason="channel_not_implemented",
+                        )
                 elif error_msg:
                     log.error(
                         "Channel delivery failed",
@@ -514,27 +568,36 @@ async def dispatch(
                         channel=channel_name,
                         error=error_msg,
                     )
-                    await notification_delivery_service.mark_channel_failed(
-                        db, event.value, channel_name,
-                        channel_recipient_map.get(channel_name, []),
-                        error_reason=error_msg,
-                    )
+                    if ch_del_ids:
+                        await notification_delivery_service.mark_delivery_ids_failed(
+                            db, ch_del_ids,
+                            error_reason=error_msg,
+                        )
                 elif channel_result:
+                    # Build user_id -> delivery_id map for this channel
+                    ch_user_ids = channel_recipient_map.get(channel_name, [])
+                    uid_to_did = dict(zip(ch_user_ids, ch_del_ids))
+
                     # Mark successful sends
-                    sent_ids = [
-                        uid for uid in channel_recipient_map.get(channel_name, [])
-                        if uid not in channel_result.failed_ids
+                    sent_del_ids = [
+                        uid_to_did[uid]
+                        for uid in ch_user_ids
+                        if uid not in channel_result.failed_ids and uid in uid_to_did
                     ]
-                    if sent_ids:
-                        await notification_delivery_service.mark_channel_sent(
-                            db, event.value, channel_name, sent_ids,
+                    if sent_del_ids:
+                        await notification_delivery_service.mark_delivery_ids_sent(
+                            db, sent_del_ids,
                         )
 
                     # Mark failed sends
-                    if channel_result.failed_ids:
-                        await notification_delivery_service.mark_channel_failed(
-                            db, event.value, channel_name,
-                            channel_result.failed_ids,
+                    failed_del_ids = [
+                        uid_to_did[uid]
+                        for uid in channel_result.failed_ids
+                        if uid in uid_to_did
+                    ]
+                    if failed_del_ids:
+                        await notification_delivery_service.mark_delivery_ids_failed(
+                            db, failed_del_ids,
                             error_reason=channel_result.error_message or "delivery_failed",
                         )
 
@@ -683,6 +746,12 @@ async def _bulk_create_notifications(
                 error=str(e),
                 notification_type=notification_type
             )
+            # Rollback to clear session error state so subsequent
+            # operations (delivery tracking, other chunks) can proceed.
+            try:
+                await db.rollback()
+            except Exception:
+                pass
             # Continue with other chunks
 
     log.info(
@@ -1040,4 +1109,10 @@ async def safe_dispatch(
             dedupe_key=dedupe_key,
             error=str(e),
         )
+        # Rollback to clear session error state (PendingRollbackError)
+        # so the caller's session remains usable for subsequent operations.
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         return []

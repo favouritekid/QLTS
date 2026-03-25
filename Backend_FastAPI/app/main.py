@@ -55,6 +55,8 @@ from .routers import (
     leads,
     meta,  # ✅ Public metadata (KPI catalog)
     monitoring,
+    notification_consents,  # ✅ PHASE B7: Notification Consent management
+    notification_delivery_ops,  # ✅ PHASE B8: Delivery ops admin API
     notification_preferences,
     notification_rules,  # ✅ PHASE 2.2: Notification Rules CRUD
     notification_templates,  # ✅ PHASE 3.1: Notification Templates CRUD
@@ -705,6 +707,8 @@ fastapi_app.include_router(notifications.router, prefix="/api/notifications")
 fastapi_app.include_router(notification_preferences.router, prefix="/api/notifications")
 fastapi_app.include_router(notification_rules.router, prefix="/api")  # ✅ PHASE 2.2: Admin-only notification rule management
 fastapi_app.include_router(notification_templates.router, prefix="/api")  # ✅ PHASE 3.1: Admin-only template management
+fastapi_app.include_router(notification_consents.router, prefix="/api")  # ✅ PHASE B7: Consent management
+fastapi_app.include_router(notification_delivery_ops.router, prefix="/api")  # ✅ PHASE B8: Delivery ops
 fastapi_app.include_router(leads.router, prefix="/api/leads")
 fastapi_app.include_router(collaborators.admin_router, prefix="/api")  # ✅ CTV: Admin/Manager CTV management
 fastapi_app.include_router(collaborators.ctv_router, prefix="/api")  # ✅ CTV: Self-service endpoints
