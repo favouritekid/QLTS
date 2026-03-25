@@ -257,6 +257,9 @@ class NotificationChannel(str, Enum):
     EMAIL = "email"
     """Email notification"""
 
+    ZALO = "zalo"
+    """Zalo ZNS notification (Phase 1)"""
+
     SMS = "sms"
     """SMS notification (future feature)"""
 
@@ -266,56 +269,67 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
     NotificationEventGroup.LEAD: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.CONSULTATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.APPLICATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.FINANCE: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.DORM: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.ASSET: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.SYSTEM: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.PIPELINE: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.ORGANIZATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.SECURITY: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.CTV: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
 }

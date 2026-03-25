@@ -20,6 +20,8 @@ class NotificationPreference(Base):
     email_enabled = Column(Boolean, nullable=False, default=True)
     sound_enabled = Column(Boolean, nullable=False, default=True)
     browser_enabled = Column(Boolean, nullable=False, default=True)
+    zalo_enabled = Column(Boolean, nullable=False, default=False,
+                          comment="Zalo ZNS channel — disabled by default until user opts in")
 
     # Email digest preferences
     email_digest = Column(
