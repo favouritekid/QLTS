@@ -207,7 +207,7 @@ class TestDispatcherPerChannelIntegration:
     browser-eligible users, not for all recipients.
     """
 
-    async def test_dispatch_no_inbox_for_browser_disabled_user(
+    async def test_dispatch_creates_notification_for_email_only_user(
         self,
         db: AsyncSession,
         admin_user: models.User,
@@ -215,10 +215,10 @@ class TestDispatcherPerChannelIntegration:
         seeded_dependencies: dict,
     ):
         """
-        User with browser_enabled=False should NOT get inbox Notification row
-        but dispatch should still succeed (for other channels).
+        User with browser_enabled=False but email_enabled=True should still
+        get a Notification row (needed by EmailChannel for content matching).
+        Dispatch should succeed and email channel should have this user.
         """
-        # Disable browser for officer
         pref = models.NotificationPreference(
             user_id=officer_user.id,
             browser_enabled=False,
@@ -228,7 +228,7 @@ class TestDispatcherPerChannelIntegration:
         await db.commit()
 
         lead = models.Lead(
-            full_name="No Inbox Test",
+            full_name="Email Only Test",
             phone="0909777888",
             source="test",
             unit_id=seeded_dependencies["unit_id"],
@@ -252,7 +252,62 @@ class TestDispatcherPerChannelIntegration:
         )
         await db.commit()
 
-        # No inbox notification should be created for browser-disabled user
+        # Notification row SHOULD exist (needed by EmailChannel)
+        stmt = select(models.Notification).where(
+            models.Notification.user_id == officer_user.id
+        )
+        query_result = await db.execute(stmt)
+        notifications = query_result.scalars().all()
+
+        assert len(notifications) >= 1, (
+            "Email-only user should still get Notification row for EmailChannel"
+        )
+        assert result, "dispatch should return notification IDs"
+
+    async def test_dispatch_no_notification_when_all_channels_disabled(
+        self,
+        db: AsyncSession,
+        admin_user: models.User,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """
+        User with ALL channels disabled should NOT get any Notification row.
+        """
+        pref = models.NotificationPreference(
+            user_id=officer_user.id,
+            browser_enabled=False,
+            email_enabled=False,
+            zalo_enabled=False,
+        )
+        db.add(pref)
+        await db.commit()
+
+        lead = models.Lead(
+            full_name="All Off Test",
+            phone="0909777999",
+            source="test",
+            unit_id=seeded_dependencies["unit_id"],
+            consultation_status_id=seeded_dependencies["initial_status_id"],
+            pipeline_stage_id=seeded_dependencies["stage_id"],
+            assigned_officer_id=officer_user.id,
+        )
+        db.add(lead)
+        await db.commit()
+        await db.refresh(lead)
+
+        result, callback = await dispatch(
+            db=db,
+            event=SystemEvents.LEAD_ASSIGNED,
+            payload={
+                "lead_id": lead.id,
+                "lead_name": lead.full_name,
+                "officer_id": officer_user.id,
+                "actor_id": admin_user.id,
+            },
+        )
+        await db.commit()
+
         stmt = select(models.Notification).where(
             models.Notification.user_id == officer_user.id
         )
@@ -260,7 +315,7 @@ class TestDispatcherPerChannelIntegration:
         notifications = query_result.scalars().all()
 
         assert len(notifications) == 0, (
-            "Browser-disabled user should NOT get inbox Notification row"
+            "All-channels-disabled user should NOT get Notification row"
         )
 
 

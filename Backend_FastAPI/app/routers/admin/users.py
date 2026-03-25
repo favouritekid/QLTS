@@ -1016,37 +1016,25 @@ async def update_existing_user(
     # Send notification to user if admin updated their info
     if current_admin.id != updated_user.id and changes:
         log.info(
-            "Admin updated user info, creating notification",
+            "Admin updated user info, dispatching notification",
             admin_id=current_admin.id,
             target_user_id=updated_user.id,
             changes=list(changes.keys()),
         )
         change_description = ", ".join([f"{key}" for key in changes.keys()])
-        try:
-            notification, notify_callback = await notification_service.create_notification(
-                db=db,
-                user_id=updated_user.id,
-                title="Your profile has been updated",
-                message=f"An administrator has updated your profile. Changed: {change_description}",
-                notification_type="admin_update",
-                link="/profile",
-            )
-            await db.commit()
-            await notify_callback()
-            log.info(
-                "Notification created successfully",
-                notification_id=notification.id,
-                target_user_id=updated_user.id,
-            )
-            # Send real-time notification via WebSocket
-            await send_realtime_notification(notification)
-        except Exception as e:
-            log.error(
-                "Failed to create/send notification",
-                admin_id=current_admin.id,
-                target_user_id=updated_user.id,
-                error=str(e),
-            )
+        from app.services.notification_dispatcher import safe_dispatch
+        from app.core.events import SystemEvents
+
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.SYSTEM_NOTIFICATION,
+            payload={
+                "user_id": updated_user.id,
+                "title": "Your profile has been updated",
+                "message": f"An administrator has updated your profile. Changed: {change_description}",
+                "actor_id": current_admin.id,
+            },
+        )
     else:
         log.debug(
             "Skipping notification",

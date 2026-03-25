@@ -148,6 +148,16 @@ async def _send_via_channel(
         from app.services.notification_channels import get_channel
 
         channel = get_channel(channel_name)
+        if channel is None:
+            # Channel is known but not yet implemented (e.g. zalo, sms)
+            log.info(
+                "Channel not yet implemented, skipping delivery",
+                channel=channel_name,
+                event=event,
+                recipient_count=len(recipient_ids),
+            )
+            return (channel_name, None, None)  # Not an error — just not ready
+
         result = await channel.send(
             notifications=notifications,
             recipient_ids=recipient_ids,
@@ -312,8 +322,13 @@ async def dispatch(
             )
             channel_recipient_map[ch] = filtered
 
-    # Inbox (Notification rows) are for browser-eligible users
-    inbox_user_ids = channel_recipient_map.get("browser", [])
+    # Notification rows (inbox) are created for ALL internal users who have
+    # at least one channel enabled. This is needed because channel adapters
+    # (e.g. EmailChannel) depend on Notification rows for content/user_id matching.
+    all_channel_user_ids = set()
+    for ids in channel_recipient_map.values():
+        all_channel_user_ids.update(ids)
+    inbox_user_ids = sorted(all_channel_user_ids)
 
     # If no channel has any recipients, short-circuit
     all_recipients = set()
@@ -423,8 +438,10 @@ async def dispatch(
         await _emit_domain_event(event, payload)
 
         # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
-        if notification_ids and inbox_user_ids:
-            await _prepend_to_inbox_cache(inbox_user_ids, notification_ids)
+        # Only cache for browser-eligible users (bell icon / dropdown)
+        browser_user_ids = channel_recipient_map.get("browser", [])
+        if notification_ids and browser_user_ids:
+            await _prepend_to_inbox_cache(browser_user_ids, notification_ids)
 
         # ✅ NOTIFICATION 2.0 - PHASE 3.1: Per-Channel Delivery
         # Step 8: Send notifications through configured channels
