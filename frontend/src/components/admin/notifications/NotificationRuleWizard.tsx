@@ -702,7 +702,7 @@ export function NotificationRuleWizard({
     }));
   }, [metadata]);
 
-  // Dynamic channels from metadata (convert to full format with labels)
+  // Dynamic channels from metadata (convert to full format with labels + status)
   const dynamicChannels = useMemo(() => {
     const channelLabels: Record<string, { label: string; description: string }> = {
       browser: { label: "Browser (Real-time)", description: "Hiển thị popup trong trình duyệt ngay lập tức" },
@@ -711,11 +711,18 @@ export function NotificationRuleWizard({
       sms: { label: "SMS", description: "Gửi tin nhắn SMS" },
     };
 
-    const channels = metadata?.channels || ["browser", "email", "zalo", "sms"];
-    return channels.map((channel) => ({
-      value: channel,
-      label: channelLabels[channel]?.label || channel,
-      description: channelLabels[channel]?.description || "",
+    const fallback = [
+      { value: "browser", status: "live" as const },
+      { value: "email", status: "live" as const },
+      { value: "zalo", status: "planned" as const },
+      { value: "sms", status: "planned" as const },
+    ];
+    const channels = metadata?.channels || fallback;
+    return channels.map((ch) => ({
+      value: ch.value,
+      label: channelLabels[ch.value]?.label || ch.value,
+      description: channelLabels[ch.value]?.description || "",
+      status: ch.status,
     }));
   }, [metadata]);
 
@@ -1621,10 +1628,11 @@ export function NotificationRuleWizard({
                                 control={form.control}
                                 name="channels"
                                 render={({ field }) => (
-                                  <FormItem className="flex items-start space-x-3 space-y-0 rounded-lg border p-3">
+                                  <FormItem className={`flex items-start space-x-3 space-y-0 rounded-lg border p-3 ${channel.status === "planned" ? "opacity-60" : ""}`}>
                                     <FormControl>
                                       <Checkbox
                                         checked={field.value?.includes(channel.value)}
+                                        disabled={channel.status === "planned"}
                                         onCheckedChange={(checked) => {
                                           const current = field.value || [];
                                           if (checked) {
@@ -1638,8 +1646,13 @@ export function NotificationRuleWizard({
                                       />
                                     </FormControl>
                                     <div className="flex-1">
-                                      <FormLabel className="text-sm font-medium cursor-pointer">
+                                      <FormLabel className={`text-sm font-medium ${channel.status === "planned" ? "text-muted-foreground" : "cursor-pointer"}`}>
                                         {channel.label}
+                                        {channel.status === "planned" && (
+                                          <span className="ml-2 inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                                            Planned
+                                          </span>
+                                        )}
                                       </FormLabel>
                                       <p className="text-xs text-muted-foreground">
                                         {channel.description}
@@ -1728,7 +1741,7 @@ export function NotificationRuleWizard({
                             <MultiStepActionEditor
                               actions={field.value || []}
                               onChange={field.onChange}
-                              availableChannels={metadata?.channels || ["browser", "email", "zalo", "sms"]}
+                              availableChannels={(metadata?.channels || dynamicChannels).filter((ch) => ch.status === "live").map((ch) => ch.value)}
                             />
                           </FormControl>
                           <FormMessage />

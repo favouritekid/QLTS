@@ -135,10 +135,10 @@ const NOTIFICATION_TYPES = [
 ];
 
 const CHANNELS = [
-  { value: "browser", label: "Browser" },
-  { value: "email", label: "Email" },
-  { value: "sms", label: "SMS" },
-  { value: "zalo", label: "Zalo" },
+  { value: "browser", label: "Browser", status: "live" as const },
+  { value: "email", label: "Email", status: "live" as const },
+  { value: "sms", label: "SMS", status: "planned" as const },
+  { value: "zalo", label: "Zalo", status: "planned" as const },
 ];
 
 const RESOLVER_TYPES = [
@@ -433,6 +433,7 @@ export function NotificationRuleForm({
                               <FormControl>
                                 <Checkbox
                                   checked={field.value?.includes(channel.value)}
+                                  disabled={channel.status === "planned"}
                                   onCheckedChange={(checked) => {
                                     const current = field.value || [];
                                     if (checked) {
@@ -445,8 +446,13 @@ export function NotificationRuleForm({
                                   }}
                                 />
                               </FormControl>
-                              <FormLabel className="text-sm font-normal cursor-pointer">
+                              <FormLabel className={`text-sm font-normal ${channel.status === "planned" ? "text-muted-foreground" : "cursor-pointer"}`}>
                                 {channel.label}
+                                {channel.status === "planned" && (
+                                  <span className="ml-2 inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                                    Planned
+                                  </span>
+                                )}
                               </FormLabel>
                             </FormItem>
                           )}

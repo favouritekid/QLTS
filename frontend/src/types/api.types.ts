@@ -529,9 +529,14 @@ export interface OperatorOption {
   description: string;
 }
 
+export interface ChannelInfo {
+  value: string;
+  status: "live" | "planned";
+}
+
 export interface NotificationMetadata {
   events: EventMetadata[];
-  channels: string[]; // ["socket", "email", "zalo", "sms"]
+  channels: ChannelInfo[];
   resolver_types: ResolverTypeOption[];
   operators: OperatorOption[];
 }

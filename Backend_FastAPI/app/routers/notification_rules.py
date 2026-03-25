@@ -46,10 +46,16 @@ class OperatorOption(BaseModel):
     label: str
 
 
+class ChannelInfo(BaseModel):
+    """Channel with live/planned status"""
+    value: str
+    status: str  # "live" | "planned"
+
+
 class MetadataResponse(BaseModel):
     """Complete metadata for building notification rules dynamically"""
     events: List[Dict[str, Any]]  # ✅ FIX: Changed from Dict to List
-    channels: List[str]
+    channels: List[ChannelInfo]
     resolver_types: List[ResolverTypeOption]
     operators: List[OperatorOption]
 
@@ -79,7 +85,12 @@ async def get_notification_metadata(
 
     return {
         "events": events_list,
-        "channels": ["browser", "email", "zalo", "sms"],
+        "channels": [
+            {"value": "browser", "status": "live"},
+            {"value": "email", "status": "live"},
+            {"value": "zalo", "status": "planned"},
+            {"value": "sms", "status": "planned"},
+        ],
         "resolver_types": [
             {
                 "value": "lead_owner",
