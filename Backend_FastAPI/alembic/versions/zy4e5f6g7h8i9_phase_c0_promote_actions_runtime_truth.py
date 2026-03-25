@@ -113,10 +113,11 @@ def upgrade() -> None:
     for (rule_id,) in rules_with_actions:
         # Derive channels from actions in step order
         action_channels = conn.execute(sa.text("""
-            SELECT DISTINCT channel
+            SELECT channel, MIN(step) AS first_step
             FROM notification_action
             WHERE rule_id = :rule_id
-            ORDER BY MIN(step)
+            GROUP BY channel
+            ORDER BY first_step
         """), {"rule_id": rule_id}).fetchall()
 
         import json

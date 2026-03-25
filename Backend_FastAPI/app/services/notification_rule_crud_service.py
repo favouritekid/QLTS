@@ -43,6 +43,13 @@ def _validate_actions_c0(actions) -> None:
                 "All actions must have delay_minutes=0."
             )
 
+        template_code = action.template_code if hasattr(action, 'template_code') else action.get('template_code')
+        if template_code:
+            raise BadRequest(
+                f"Phase C0: per-action template_code not yet supported (step {step}). "
+                "Use rule-level template_id instead."
+            )
+
         if step in steps:
             raise BadRequest(f"Duplicate step number: {step}")
         steps.add(step)
@@ -153,8 +160,8 @@ async def update_rule(
     old_template_id = rule.template_id
     updated_fields = []
 
-    # Update basic fields
-    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions"})
+    # Update basic fields (exclude actions + channels — channels is derived from actions)
+    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions", "channels"})
     for field, value in update_data.items():
         if value is not None:
             setattr(rule, field, value)
