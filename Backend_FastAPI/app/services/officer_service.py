@@ -696,7 +696,7 @@ async def get_enhanced_dashboard_stats(
         active_direction = "up" if active_diff_pct > 0 else "down" if active_diff_pct < 0 else "neutral"
     else:
         active_diff_pct = 0
-        active_direction = "up" if active_leads_in_period > 0 else "neutral"
+        active_direction = "neutral"
     active_leads_trend = {
         "value": abs(round(active_diff_pct, 1)),
         "direction": active_direction,
@@ -768,20 +768,23 @@ async def get_enhanced_dashboard_stats(
     sla_stats = await repo.get_sla_compliance_stats(officer_id, filter_start, filter_end, sla_hours)
     prev_sla_stats = await repo.get_sla_compliance_stats(officer_id, prev_filter_start, prev_filter_end, sla_hours)
     sla_diff = sla_stats["rate"] - prev_sla_stats["rate"]
+    # No meaningful trend when previous period had no SLA-eligible leads
+    sla_has_baseline = prev_sla_stats["total"] > 0
     sla_compliance_trend = {
-        "value": abs(round(sla_diff, 1)),
-        "direction": "up" if sla_diff > 0 else "down" if sla_diff < 0 else "neutral",
-        "comparison": f"vs {filter_days} ngày trước",
+        "value": abs(round(sla_diff, 1)) if sla_has_baseline else 0,
+        "direction": ("up" if sla_diff > 0 else "down" if sla_diff < 0 else "neutral") if sla_has_baseline else "neutral",
+        "comparison": f"vs {filter_days} ngày trước" if sla_has_baseline else "Chưa có dữ liệu kỳ trước",
     }
 
     # === 6. CONSULTATION EFFECTIVENESS ===
     effectiveness_stats = await repo.get_consultation_effectiveness_stats(officer_id, filter_start, filter_end)
     prev_effectiveness_stats = await repo.get_consultation_effectiveness_stats(officer_id, prev_filter_start, prev_filter_end)
     eff_diff = effectiveness_stats["effectiveness"] - prev_effectiveness_stats["effectiveness"]
+    eff_has_baseline = prev_effectiveness_stats["total_final_consulted"] > 0
     effectiveness_trend = {
-        "value": abs(round(eff_diff, 1)),
-        "direction": "up" if eff_diff > 0 else "down" if eff_diff < 0 else "neutral",
-        "comparison": f"vs {filter_days} ngày trước",
+        "value": abs(round(eff_diff, 1)) if eff_has_baseline else 0,
+        "direction": ("up" if eff_diff > 0 else "down" if eff_diff < 0 else "neutral") if eff_has_baseline else "neutral",
+        "comparison": f"vs {filter_days} ngày trước" if eff_has_baseline else "Chưa có dữ liệu kỳ trước",
     }
 
     # === 6b. ENROLLMENTS MONTHLY ===
@@ -856,10 +859,11 @@ async def get_enhanced_dashboard_stats(
     ) if (_prev_enrolled + _prev_lost) > 0 else 0.0
 
     ncr_diff = current_ncr - prev_ncr
+    ncr_has_baseline = (_prev_enrolled + _prev_lost) > 0
     funnel_net_conversion_trend = {
-        "value": abs(round(ncr_diff, 1)),
-        "direction": "up" if ncr_diff > 0 else "down" if ncr_diff < 0 else "neutral",
-        "comparison": f"vs {filter_days} ngày trước"
+        "value": abs(round(ncr_diff, 1)) if ncr_has_baseline else 0,
+        "direction": ("up" if ncr_diff > 0 else "down" if ncr_diff < 0 else "neutral") if ncr_has_baseline else "neutral",
+        "comparison": f"vs {filter_days} ngày trước" if ncr_has_baseline else "Chưa có dữ liệu kỳ trước"
     }
 
     # === 10. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
@@ -964,13 +968,17 @@ async def get_enhanced_dashboard_stats(
 
 
 def _calc_trend(current: float, previous: float, label: str) -> Dict[str, Any]:
-    """Calculate trend direction and percentage change."""
+    """Calculate trend direction and percentage change.
+
+    When previous=0 there is no meaningful baseline for comparison,
+    so direction is always "neutral" regardless of current value.
+    """
     if previous > 0:
         pct = ((current - previous) / previous) * 100
         direction = "up" if pct > 0 else "down" if pct < 0 else "neutral"
     else:
         pct = 0
-        direction = "up" if current > 0 else "neutral"
+        direction = "neutral"
     return {"value": abs(round(pct, 1)), "direction": direction, "comparison": label}
 
 
@@ -1219,10 +1227,11 @@ async def get_aggregated_dashboard_stats(
     ) if (_prev_ncr_enrolled + _prev_ncr_lost) > 0 else 0.0
 
     ncr_diff = current_ncr - prev_ncr
+    agg_ncr_has_baseline = (_prev_ncr_enrolled + _prev_ncr_lost) > 0
     funnel_net_conversion_trend = {
-        "value": abs(round(ncr_diff, 1)),
-        "direction": "up" if ncr_diff > 0 else "down" if ncr_diff < 0 else "neutral",
-        "comparison": comparison_label,
+        "value": abs(round(ncr_diff, 1)) if agg_ncr_has_baseline else 0,
+        "direction": ("up" if ncr_diff > 0 else "down" if ncr_diff < 0 else "neutral") if agg_ncr_has_baseline else "neutral",
+        "comparison": comparison_label if agg_ncr_has_baseline else "Chưa có dữ liệu kỳ trước",
     }
 
     # ==========================================================================
