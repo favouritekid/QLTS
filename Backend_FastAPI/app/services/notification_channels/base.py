@@ -37,7 +37,7 @@ class BaseChannel(ABC):
         )
     """
 
-    channel_name: str  # e.g., "socket", "email", "zalo", "sms"
+    channel_name: str  # e.g., "browser", "email", "zalo", "sms"
 
     @abstractmethod
     async def send(

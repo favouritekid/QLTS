@@ -133,7 +133,7 @@ async def _send_via_channel(
     Helper function for parallel channel delivery using asyncio.gather().
 
     Args:
-        channel_name: Name of the channel ("socket", "email", etc.)
+        channel_name: Name of the channel ("browser", "email", etc.)
         notifications: List of notification objects to send
         recipient_ids: List of recipient user IDs
         context: Event payload context

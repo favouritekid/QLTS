@@ -1,7 +1,11 @@
 # app/services/notification_workflow.py
 """
-✅ NOTIFICATION 2.0 - Multi-Step Workflow Executor
+⚠️ DEPRECATED — Use dispatch() from notification_dispatcher.py instead.
 
+This module is scheduled for removal. All new notification paths must use
+dispatch() or safe_dispatch() as the sole production entrypoint.
+
+Legacy: NOTIFICATION 2.0 - Multi-Step Workflow Executor
 Executes notification rules with multi-step action workflows.
 Handles sequential delivery across multiple channels with delays.
 
@@ -428,6 +432,18 @@ async def execute_notification_workflow(
             }
         )
     """
+    import warnings
+    warnings.warn(
+        "execute_notification_workflow() is deprecated. "
+        "Use dispatch() or safe_dispatch() from notification_dispatcher instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    log.warning(
+        "DEPRECATED: execute_notification_workflow() called — migrate to dispatch()",
+        event_type=event.value,
+        caller_module=__name__,
+    )
     try:
         log.info("Executing notification workflow", event_name=event.value)
 

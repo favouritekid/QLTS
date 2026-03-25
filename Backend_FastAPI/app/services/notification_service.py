@@ -78,7 +78,25 @@ async def create_notification(
 
     Returns:
         Tuple of (notification, post_commit_callback)
+
+    .. deprecated::
+        Use dispatch() or safe_dispatch() from notification_dispatcher instead.
+        This function bypasses the per-channel preference filtering and
+        multi-channel delivery pipeline.
     """
+    import warnings
+    warnings.warn(
+        "create_notification() is deprecated. "
+        "Use dispatch() or safe_dispatch() from notification_dispatcher instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    log.warning(
+        "DEPRECATED: create_notification() called directly — migrate to dispatcher",
+        user_id=user_id,
+        notification_type=notification_type,
+        title=title[:50],
+    )
     # Check user preferences
     should_send = await notification_preference_service.should_send_notification(
         db, user_id, notification_type
