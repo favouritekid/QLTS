@@ -64,6 +64,22 @@
 
 ---
 
+### 4. DB constraint phòng ngừa NULL pipeline_stage (chờ chạy trên production)
+- **Priority:** Low
+- **SQL:** `ALTER TABLE consultation_status ADD CONSTRAINT ck_pipeline_update_requires_stage CHECK (updates_pipeline = false OR stage_id IS NOT NULL);`
+
+---
+
+## Noted — Không phải bug
+
+### Unit 19 "TT đào tạo ngắn hạn" chưa có KpiPlan
+- 3 officers (19, 20, 21) thuộc unit 19 không có enrollment target
+- `annual_progress.officer_count = 5` chỉ đếm unit 14 — đúng theo design
+- `consultations_target = 180` = 5×30 (unit 14) + 3×10 (unit 19 default) — đúng
+- **Không cần fix:** Unit 19 chưa chính thức hoạt động. Khi chính thức, tạo KpiPlan cho unit 19.
+
+---
+
 ## Deferred — Cần quyết định product
 
 ### 4. Leaderboard / team average: human-only hay all-consultations
