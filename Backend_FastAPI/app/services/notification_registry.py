@@ -26,7 +26,7 @@ from string import Template
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from app.core.events import SystemEvents
-from app.core.event_groups import NotificationEventGroup, EVENT_GROUP_MAPPING
+from app.core.event_groups import NotificationEventGroup, NotificationChannel, EVENT_GROUP_MAPPING
 from app.services.notification_resolvers import (
     BaseResolver,
     LeadOwnerResolver,
@@ -50,12 +50,7 @@ log = logging.getLogger(__name__)
 # =============================================================================
 
 
-class NotificationChannel(str, Enum):
-    """Supported notification delivery channels."""
-    BROWSER = "browser"  # In-browser notifications (delivered via Socket.IO)
-    EMAIL = "email"
-    SMS = "sms"
-    ZALO = "zalo"
+# NotificationChannel is imported from app.core.event_groups (single canonical enum)
 
 
 class NotificationType(str, Enum):

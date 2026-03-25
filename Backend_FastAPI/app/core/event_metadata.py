@@ -240,6 +240,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
 
     # =========================================================================
     # APPLICATION EVENTS (4 events)
+    # NOTE: APPLICATION_* is a legacy notification namespace for AdmissionProfile.
     # =========================================================================
 
     SystemEvents.APPLICATION_CREATED: EventMetadata(
@@ -555,6 +556,29 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         filter_fields=["officer_id", "new_status", "unit_id"],
         default_channels=["browser"],
         category="operational"
+    ),
+
+    # =========================================================================
+    # SECURITY EVENTS
+    # =========================================================================
+
+    SystemEvents.SUSPICIOUS_LOGIN: EventMetadata(
+        event=SystemEvents.SUSPICIOUS_LOGIN,
+        display_name="Đăng nhập đáng ngờ",
+        description="Khi phát hiện đăng nhập bất thường (IP mới, thiết bị mới, vị trí mới)",
+        variables=[
+            EventVariable("user_id", "integer", "ID người dùng"),
+            EventVariable("login_history_id", "integer", "ID lịch sử đăng nhập"),
+            EventVariable("ip_address", "string", "Địa chỉ IP"),
+            EventVariable("location", "string", "Vị trí (thành phố, quốc gia)", required=False),
+            EventVariable("device", "string", "Thông tin thiết bị/trình duyệt", required=False),
+            EventVariable("risk_score", "integer", "Điểm rủi ro (0-100)", required=False),
+            EventVariable("anomalies", "string", "Danh sách bất thường", required=False),
+            EventVariable("actor_id", "integer", "ID người đăng nhập"),
+        ],
+        filter_fields=["user_id", "risk_score", "ip_address"],
+        default_channels=["browser", "email"],
+        category="security"
     ),
 }
 

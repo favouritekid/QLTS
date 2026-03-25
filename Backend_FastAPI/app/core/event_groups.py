@@ -145,16 +145,18 @@ def get_event_group(event: SystemEvents) -> NotificationEventGroup:
         event: The system event
 
     Returns:
-        The NotificationEventGroup for this event
-
-    Raises:
-        KeyError: If event is not mapped to a group (configuration error)
+        The NotificationEventGroup for this event.
+        Falls back to SYSTEM group with warning if event is not explicitly mapped.
     """
     if event not in EVENT_GROUP_MAPPING:
-        raise KeyError(
-            f"Event {event} is not mapped to any group. "
-            "Please update EVENT_GROUP_MAPPING in event_groups.py"
+        import structlog
+        log = structlog.get_logger(__name__)
+        log.warning(
+            "Event not in EVENT_GROUP_MAPPING, falling back to SYSTEM group",
+            event=event.value if hasattr(event, 'value') else str(event),
+            action="Add event to EVENT_GROUP_MAPPING in event_groups.py",
         )
+        return NotificationEventGroup.SYSTEM
     return EVENT_GROUP_MAPPING[event]
 
 

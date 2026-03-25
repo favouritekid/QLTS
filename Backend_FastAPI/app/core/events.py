@@ -216,6 +216,9 @@ class SystemEvents(str, Enum):
 
     # =========================================================================
     # APPLICATION EVENTS
+    # NOTE: APPLICATION_* is a legacy notification namespace for AdmissionProfile.
+    # The active domain entity is AdmissionProfile, not Application.
+    # Do not reuse APPLICATION_CREATED for approval/enrollment — use APPLICATION_STATUS_CHANGED.
     # =========================================================================
 
     APPLICATION_CREATED = "application_created"
