@@ -129,15 +129,35 @@ class TestOrganizationEventsPolicy:
                     "Promote properly before adding."
                 )
 
-    def test_org_events_blocked_in_rule_creation(self):
-        """Rule CRUD service must reject broadcast-only events."""
+    def test_org_events_in_broadcast_only_set(self):
+        """All org events must be listed in BROADCAST_ONLY_EVENTS."""
         from app.services.notification_rule_crud_service import BROADCAST_ONLY_EVENTS
 
         for event_value in self.ORG_EVENT_VALUES:
             assert event_value in BROADCAST_ONLY_EVENTS, (
-                f"'{event_value}' must be in BROADCAST_ONLY_EVENTS to prevent "
-                "admin from creating notification rules for broadcast-only events."
+                f"'{event_value}' must be in BROADCAST_ONLY_EVENTS"
             )
+
+    @pytest.mark.asyncio
+    async def test_create_rule_rejects_org_events(self):
+        """create_rule() must raise BadRequest for broadcast-only events."""
+        from unittest.mock import MagicMock
+        from app.services.notification_rule_crud_service import create_rule
+        from app.utils.exceptions import BadRequest
+        from app.schemas.notification import NotificationRuleCreate
+
+        mock_db = MagicMock()  # DB not touched — rejection is before any DB call
+
+        for event_value in self.ORG_EVENT_VALUES:
+            rule_data = NotificationRuleCreate(
+                event=event_value,
+                title_template="Test",
+                message_template="Test",
+                channels=["browser"],
+                recipient_config={"resolver_type": "all_admins", "params": {}},
+            )
+            with pytest.raises(BadRequest, match="broadcast-only"):
+                await create_rule(mock_db, rule_data)
 
 
 # =============================================================================
