@@ -40,7 +40,7 @@ Usage:
 import asyncio
 import structlog
 from datetime import datetime, timezone
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # from sqlalchemy import and_, cast, insert, select, String (removed - using repository)
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -292,38 +292,62 @@ async def dispatch(
         recipient_count=len(user_ids)
     )
 
-    # Step 3: Filter by preferences
-    if not skip_preference_check:
-        group = get_event_group(event)
-        user_ids = await notification_preference_service.filter_users_by_group(
-            db=db,
-            user_ids=user_ids,
-            group=group.value,
-            channel=NotificationChannel.BROWSER.value
-        )
+    # Step 3: Per-channel preference filtering
+    # Build a dict of {channel: [user_ids]} so each channel gets its own recipient list.
+    # Inbox Notification rows are created for users who have browser enabled.
+    group = get_event_group(event)
+    channel_recipient_map: Dict[str, List[int]] = {}
 
-        if not user_ids:
-            log.info(
-                "All recipients filtered out by preferences (still emitting domain event)",
-                event_type=event.value,
-                group=group.value
+    if skip_preference_check:
+        # All users get all channels
+        for ch in config.channel_values:
+            channel_recipient_map[ch] = list(user_ids)
+    else:
+        for ch in config.channel_values:
+            filtered = await notification_preference_service.filter_users_by_group(
+                db=db,
+                user_ids=user_ids,
+                group=group.value,
+                channel=ch,
             )
-            async def _domain_only_callback():
-                await _emit_domain_event(event, payload)
-            return [], _domain_only_callback
+            channel_recipient_map[ch] = filtered
 
+    # Inbox (Notification rows) are for browser-eligible users
+    inbox_user_ids = channel_recipient_map.get("browser", [])
+
+    # If no channel has any recipients, short-circuit
+    all_recipients = set()
+    for ids in channel_recipient_map.values():
+        all_recipients.update(ids)
+
+    if not all_recipients:
         log.info(
-            "Recipients after preference filtering",
+            "All recipients filtered out by per-channel preferences (still emitting domain event)",
             event_type=event.value,
-            filtered_count=len(user_ids)
+            group=group.value
         )
+        async def _domain_only_callback():
+            await _emit_domain_event(event, payload)
+        return [], _domain_only_callback
 
-    # Step 4: Apply deduplication
+    log.info(
+        "Recipients after per-channel preference filtering",
+        event_type=event.value,
+        channel_counts={ch: len(ids) for ch, ids in channel_recipient_map.items()},
+    )
+
+    # Step 4: Apply deduplication to inbox recipients and each channel
     if dedupe_key:
-        original_count = len(user_ids)
-        user_ids = await _apply_deduplication(db, user_ids, dedupe_key)
+        original_count = len(inbox_user_ids)
+        inbox_user_ids = await _apply_deduplication(db, inbox_user_ids, dedupe_key)
 
-        if not user_ids:
+        # Also dedup each channel's recipient list
+        for ch in channel_recipient_map:
+            channel_recipient_map[ch] = await _apply_deduplication(
+                db, channel_recipient_map[ch], dedupe_key
+            )
+
+        if not inbox_user_ids and not any(channel_recipient_map.values()):
             log.info(
                 "All recipients filtered out by deduplication (still emitting domain event)",
                 event_type=event.value,
@@ -336,9 +360,9 @@ async def dispatch(
         log.info(
             "Recipients after deduplication",
             event_type=event.value,
-            original_count=original_count,
-            deduplicated_count=len(user_ids),
-            filtered_out=original_count - len(user_ids)
+            original_inbox_count=original_count,
+            deduplicated_inbox_count=len(inbox_user_ids),
+            filtered_out=original_count - len(inbox_user_ids)
         )
 
     # Step 5: Render notification content
@@ -358,29 +382,31 @@ async def dispatch(
     if dedupe_key:
         notification_data["dedupe_key"] = dedupe_key
 
-    # Step 6: Bulk insert notifications
-    notification_ids = await _bulk_create_notifications(
-        db=db,
-        user_ids=user_ids,
-        title=title,
-        message=message,
-        notification_type=notification_type,
-        link=link,
-        data=notification_data
-    )
+    # Step 6: Bulk insert inbox Notification rows (for browser-eligible users only)
+    notification_ids = []
+    if inbox_user_ids:
+        notification_ids = await _bulk_create_notifications(
+            db=db,
+            user_ids=inbox_user_ids,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+            link=link,
+            data=notification_data
+        )
 
-    if not notification_ids:
+    if not notification_ids and not any(channel_recipient_map.values()):
         log.error(
-            "Failed to create notifications for event",
+            "Failed to create notifications and no channel recipients for event",
             event_type=event.value
         )
-        # Return empty with empty callback
         async def _empty_callback():
             pass
         return [], _empty_callback
 
     # ✅ TRANSACTION FIX: Flush instead of commit
-    await db.flush()
+    if notification_ids:
+        await db.flush()
 
     # ✅ Create post-commit callback with all post-commit actions
     async def _post_commit():
@@ -389,40 +415,37 @@ async def dispatch(
             "Notifications committed successfully",
             event_type=event.value,
             notification_count=len(notification_ids),
-            notification_type=notification_type
+            notification_type=notification_type,
+            channel_counts={ch: len(ids) for ch, ids in channel_recipient_map.items()},
         )
 
         # Step 7.25: ✅ REAL-TIME SYNC: Emit domain event for UI refresh
-        # This broadcasts to ALL connected clients (separate from per-user notifications)
         await _emit_domain_event(event, payload)
 
         # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
-        await _prepend_to_inbox_cache(user_ids, notification_ids)
+        if notification_ids and inbox_user_ids:
+            await _prepend_to_inbox_cache(inbox_user_ids, notification_ids)
 
-        # ✅ NOTIFICATION 2.0 - PHASE 3.1: Parallel Multi-Channel Delivery
-        # Step 8: Send notifications through configured channels IN PARALLEL
+        # ✅ NOTIFICATION 2.0 - PHASE 3.1: Per-Channel Delivery
+        # Step 8: Send notifications through configured channels
+        # Each channel only sends to its own filtered recipient list.
         try:
-            # Fetch notifications from database for channel delivery
-            repo = NotificationRepository(db)
-            notifications = await repo.get_by_ids(notification_ids)
+            notifications = []
+            if notification_ids:
+                repo = NotificationRepository(db)
+                notifications = await repo.get_by_ids(notification_ids)
 
-            if not notifications:
-                log.warning(
-                    "No notifications found for channel delivery",
-                    requested_ids=notification_ids
-                )
-                return
-
-            # Create parallel tasks for all channels
+            # Create parallel tasks for channels that have recipients
             channel_tasks = [
                 _send_via_channel(
                     channel_name=channel_name,
                     notifications=notifications,
-                    recipient_ids=user_ids,
+                    recipient_ids=channel_recipient_map[channel_name],
                     context=payload,
                     event=event.value
                 )
                 for channel_name in config.channel_values
+                if channel_recipient_map.get(channel_name)
             ]
 
             # Execute all channel deliveries in parallel
