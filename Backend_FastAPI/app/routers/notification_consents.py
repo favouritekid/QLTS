@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core.deps import CasbinAuth, get_current_active_user
+from app.core.deps import CasbinAuth
 from app.core.rate_limits import limiter, RateLimits
 from app.repositories.notification_consent_repository import NotificationConsentRepository
 
