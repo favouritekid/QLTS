@@ -708,20 +708,22 @@ async def get_enhanced_dashboard_stats(
     prev_rate = (converted_prev / total_prev) * 100
 
     conversion_diff = new_lead_conversion_rate - prev_rate
+    conv_has_baseline = (prev_kpi_data["total_leads"] or 0) > 0
     new_lead_conversion_trend = {
-        "value": abs(round(conversion_diff, 1)),
-        "direction": "up" if conversion_diff > 0 else "down" if conversion_diff < 0 else "neutral",
-        "comparison": f"vs {filter_days} ngày trước"
+        "value": abs(round(conversion_diff, 1)) if conv_has_baseline else 0,
+        "direction": ("up" if conversion_diff > 0 else "down" if conversion_diff < 0 else "neutral") if conv_has_baseline else "neutral",
+        "comparison": f"vs {filter_days} ngày trước" if conv_has_baseline else "Chưa có dữ liệu kỳ trước",
     }
 
     # === Activity-based Win Rate ===
     win_rate_data = await repo.get_win_rate_stats(officer_id, filter_start, filter_end)
     prev_win_rate_data = await repo.get_win_rate_stats(officer_id, prev_filter_start, prev_filter_end)
     win_rate_diff = win_rate_data["win_rate"] - prev_win_rate_data["win_rate"]
+    wr_has_baseline = prev_win_rate_data["total_closed"] > 0
     win_rate_trend = {
-        "value": abs(round(win_rate_diff, 1)),
-        "direction": "up" if win_rate_diff > 0 else "down" if win_rate_diff < 0 else "neutral",
-        "comparison": f"vs {filter_days} ngày trước"
+        "value": abs(round(win_rate_diff, 1)) if wr_has_baseline else 0,
+        "direction": ("up" if win_rate_diff > 0 else "down" if win_rate_diff < 0 else "neutral") if wr_has_baseline else "neutral",
+        "comparison": f"vs {filter_days} ngày trước" if wr_has_baseline else "Chưa có dữ liệu kỳ trước",
     }
 
     # === 4. AVERAGE RESPONSE TIME ===
