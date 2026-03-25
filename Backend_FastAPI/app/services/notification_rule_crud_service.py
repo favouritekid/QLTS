@@ -31,6 +31,14 @@ async def get_rules(
     return await repo.list_rules(skip, limit, event, enabled)
 
 
+    # Events that are broadcast-only and must NOT have user notification rules
+BROADCAST_ONLY_EVENTS = frozenset({
+    "unit_created", "unit_updated", "unit_deleted",
+    "program_created", "program_updated", "program_deleted",
+    "offering_created", "offering_updated", "offering_deleted",
+})
+
+
 async def create_rule(
     db: AsyncSession,
     rule_data: schemas.NotificationRuleCreate,
@@ -38,8 +46,15 @@ async def create_rule(
     """
     Create a new notification rule.
     """
+    # Reject broadcast-only events — these are domain events, not user notifications
+    if rule_data.event in BROADCAST_ONLY_EVENTS:
+        raise BadRequest(
+            f"Event '{rule_data.event}' is broadcast-only and cannot have notification rules. "
+            "Organization events are domain broadcasts, not user notifications."
+        )
+
     repo = NotificationRuleRepository(db)
-    
+
     # Check if rule already exists for this event
     existing_rule = await repo.get_by_event(rule_data.event)
     if existing_rule:

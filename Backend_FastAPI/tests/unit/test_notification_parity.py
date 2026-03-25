@@ -103,6 +103,12 @@ class TestOrganizationEventsPolicy:
         'OFFERING_CREATED', 'OFFERING_UPDATED', 'OFFERING_DELETED',
     ]
 
+    ORG_EVENT_VALUES = {
+        "unit_created", "unit_updated", "unit_deleted",
+        "program_created", "program_updated", "program_deleted",
+        "offering_created", "offering_updated", "offering_deleted",
+    }
+
     def test_org_events_not_in_group_mapping(self):
         """Organization events must be excluded from user notification contract."""
         for event_name in self.ORG_EVENTS:
@@ -122,6 +128,16 @@ class TestOrganizationEventsPolicy:
                     f"{event_name} must NOT be in NOTIFICATION_REGISTRY. "
                     "Promote properly before adding."
                 )
+
+    def test_org_events_blocked_in_rule_creation(self):
+        """Rule CRUD service must reject broadcast-only events."""
+        from app.services.notification_rule_crud_service import BROADCAST_ONLY_EVENTS
+
+        for event_value in self.ORG_EVENT_VALUES:
+            assert event_value in BROADCAST_ONLY_EVENTS, (
+                f"'{event_value}' must be in BROADCAST_ONLY_EVENTS to prevent "
+                "admin from creating notification rules for broadcast-only events."
+            )
 
 
 # =============================================================================
