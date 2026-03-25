@@ -9,12 +9,14 @@ This module handles:
 4. ✅ Caching rules for performance (Edge Case #6 fix)
 """
 import json
+from dataclasses import dataclass, field
 from string import Template
 from typing import Any, Dict, List, Optional
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app import models
 from app.core.events import SystemEvents
@@ -328,6 +330,54 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
 
 
 # =============================================================================
+# ACTION CONFIGURATION (Phase C0)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class ActionConfig:
+    """
+    Configuration for a single notification action step.
+
+    Phase C0: actions are the runtime truth for channel delivery.
+    Each action represents one channel + step in the delivery pipeline.
+    """
+    step: int
+    channel: str
+    delay_minutes: int = 0
+    template_code: Optional[str] = None
+    config: Optional[Dict[str, Any]] = field(default=None, hash=False)
+
+
+def synthesize_actions_from_channels(channels: List[str]) -> List[ActionConfig]:
+    """
+    Create synthetic ActionConfig list from a channels array.
+
+    Used for backward compatibility when a rule has channels but no
+    NotificationAction rows (legacy rules before C0 migration).
+    """
+    return [
+        ActionConfig(step=i, channel=ch, delay_minutes=0)
+        for i, ch in enumerate(channels, start=1)
+    ]
+
+
+def derive_channels_from_actions(actions: List[ActionConfig]) -> List[str]:
+    """
+    Derive unique channel list from actions, preserving step order.
+
+    Used to keep the top-level `channels` field in sync with actions.
+    """
+    seen: set = set()
+    result: List[str] = []
+    for a in sorted(actions, key=lambda x: x.step):
+        if a.channel not in seen:
+            result.append(a.channel)
+            seen.add(a.channel)
+    return result
+
+
+# =============================================================================
 # RULE CONFIGURATION CLASS
 # =============================================================================
 
@@ -353,6 +403,7 @@ class DatabaseRuleConfig:
         condition: Optional[Dict[str, Any]],
         priority: int = 100,
         dedup_key_template: Optional[str] = None,
+        actions: Optional[List[ActionConfig]] = None,
     ):
         self.rule_id = rule_id
         self.event = event
@@ -360,11 +411,15 @@ class DatabaseRuleConfig:
         self.message_template = message_template
         self.notification_type = notification_type
         self.link_template = link_template
-        self._channels = channels  # Store raw strings
+        self._channels = channels  # Legacy / derived field
         self.resolver = resolver
         self.condition = condition
         self.priority = priority
         self.dedup_key_template = dedup_key_template
+
+        # Phase C0: actions are the runtime truth.
+        # If not provided, synthesize from channels for backward compat.
+        self._actions = actions if actions else synthesize_actions_from_channels(channels)
 
         # Derive group from event
         try:
@@ -381,14 +436,19 @@ class DatabaseRuleConfig:
             self.group = NotificationEventGroup.SYSTEM
 
     @property
+    def actions(self) -> List[ActionConfig]:
+        """Get action configs — the runtime truth for delivery pipeline."""
+        return self._actions
+
+    @property
     def channels(self) -> List[str]:
-        """Get channels as list of strings (matches NotificationConfig.channel_values)."""
-        return self._channels
-    
+        """Derived from actions. Kept for backward compat."""
+        return derive_channels_from_actions(self._actions)
+
     @property
     def channel_values(self) -> List[str]:
         """Alias for channels for interface compatibility with NotificationConfig."""
-        return self._channels
+        return self.channels
 
     def render_title(self, payload: dict) -> str:
         """Render title template with payload data."""
@@ -473,6 +533,20 @@ async def get_rule_for_event(
                 await safe_redis_delete(cache_key)
                 # Fall through to DB query
             else:
+                # Deserialize cached actions
+                cached_actions = rule_data.get("actions")
+                action_configs = None
+                if cached_actions:
+                    action_configs = [
+                        ActionConfig(
+                            step=a["step"], channel=a["channel"],
+                            delay_minutes=a.get("delay_minutes", 0),
+                            template_code=a.get("template_code"),
+                            config=a.get("config"),
+                        )
+                        for a in cached_actions
+                    ]
+
                 # Successfully loaded from cache
                 config = DatabaseRuleConfig(
                     rule_id=rule_data["id"],
@@ -481,9 +555,10 @@ async def get_rule_for_event(
                     message_template=rule_data["message_template"],
                     notification_type=rule_data["notification_type"],
                     link_template=rule_data.get("link_template"),
-                    channels=rule_data["channels"],
+                    channels=rule_data.get("channels", []),
                     resolver=resolver,
                     condition=rule_data.get("condition"),
+                    actions=action_configs,
                 )
                 return config
     except Exception as e:
@@ -494,8 +569,10 @@ async def get_rule_for_event(
         )
 
     # ✅ Query database for enabled rule (cache miss or error)
+    # Phase C0: eager-load actions for action-based execution
     result = await db.execute(
         select(models.NotificationRule)
+        .options(selectinload(models.NotificationRule.actions))
         .where(
             models.NotificationRule.event == event_name,
             models.NotificationRule.enabled == True
@@ -563,6 +640,22 @@ async def get_rule_for_event(
                 error=str(e)
             )
 
+    # Phase C0: Build ActionConfig list from DB actions (or synthesize from channels)
+    db_actions = sorted(rule.actions, key=lambda a: a.step) if rule.actions else []
+    if db_actions:
+        action_configs = [
+            ActionConfig(
+                step=a.step,
+                channel=a.channel,
+                delay_minutes=a.delay_minutes,
+                template_code=a.template_code,
+                config=a.config,
+            )
+            for a in db_actions
+        ]
+    else:
+        action_configs = None  # Will fall back to synthesize from channels
+
     # Create config
     config = DatabaseRuleConfig(
         rule_id=rule.id,
@@ -571,13 +664,22 @@ async def get_rule_for_event(
         message_template=message_template,
         notification_type=rule.notification_type,
         link_template=link_template,
-        channels=rule.channels,
+        channels=rule.channels or [],
         resolver=resolver,
         condition=rule.condition,
+        actions=action_configs,
     )
 
     # ✅ Cache the rule data for future requests
     try:
+        # Serialize actions for cache
+        actions_cache = [
+            {"step": a.step, "channel": a.channel,
+             "delay_minutes": a.delay_minutes,
+             "template_code": a.template_code, "config": a.config}
+            for a in config.actions
+        ]
+
         rule_data = {
             "id": rule.id,
             "event": rule.event,
@@ -585,7 +687,8 @@ async def get_rule_for_event(
             "message_template": message_template,
             "notification_type": rule.notification_type,
             "link_template": link_template,
-            "channels": rule.channels,
+            "channels": rule.channels or [],
+            "actions": actions_cache,
             "recipient_config": rule.recipient_config,  # Will deserialize on each request
             "condition": rule.condition,
         }

@@ -12,9 +12,53 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models, schemas
 from app.utils.exceptions import BadRequest
 from app.repositories import NotificationRuleRepository
-from .notification_rule_loader import invalidate_rule_cache
+from .notification_rule_loader import invalidate_rule_cache, derive_channels_from_actions, ActionConfig
 
 log = structlog.get_logger(__name__)
+
+
+def _validate_actions_c0(actions) -> None:
+    """
+    Validate NotificationAction constraints for Phase C0.
+
+    C0 rules:
+      - delay_minutes must be 0 (delayed execution not yet supported)
+      - steps must be contiguous 1..n
+      - no duplicate steps
+      - no duplicate channels within same rule
+    """
+    if not actions:
+        return
+
+    steps = set()
+    channels = set()
+    for action in actions:
+        step = action.step if hasattr(action, 'step') else action.get('step')
+        channel = action.channel if hasattr(action, 'channel') else action.get('channel')
+        delay = action.delay_minutes if hasattr(action, 'delay_minutes') else action.get('delay_minutes', 0)
+
+        if delay and delay > 0:
+            raise BadRequest(
+                f"Phase C0: delayed actions not yet supported (step {step} has delay_minutes={delay}). "
+                "All actions must have delay_minutes=0."
+            )
+
+        if step in steps:
+            raise BadRequest(f"Duplicate step number: {step}")
+        steps.add(step)
+
+        if channel in channels:
+            raise BadRequest(
+                f"Duplicate channel '{channel}' in rule actions. "
+                "Phase C0 requires unique channels per rule."
+            )
+        channels.add(channel)
+
+    # Verify steps are contiguous 1..n
+    if steps and steps != set(range(1, len(steps) + 1)):
+        raise BadRequest(
+            f"Action steps must be contiguous 1..{len(steps)}, got: {sorted(steps)}"
+        )
 
 
 async def get_rules(
@@ -62,6 +106,16 @@ async def create_rule(
             f"Notification rule for event '{rule_data.event}' already exists (ID: {existing_rule.id})"
         )
 
+    # Phase C0: Validate action constraints
+    _validate_actions_c0(rule_data.actions)
+
+    # Phase C0: Derive channels from actions if actions are provided
+    if rule_data.actions:
+        derived = [a.channel for a in rule_data.actions]
+        # Dedupe preserving order
+        seen = set()
+        rule_data.channels = [c for c in derived if not (c in seen or seen.add(c))]
+
     # Create rule via repository
     new_rule = await repo.create_with_actions(rule_data)
 
@@ -108,9 +162,16 @@ async def update_rule(
 
     # Handle actions update
     if rule_update.actions is not None:
+        _validate_actions_c0(rule_update.actions)
         await repo.delete_actions(rule.id)
         await repo.add_actions(rule.id, rule_update.actions)
         updated_fields.append("actions")
+        # Phase C0: Sync channels from actions
+        derived = [a.channel for a in rule_update.actions]
+        seen = set()
+        rule.channels = [c for c in derived if not (c in seen or seen.add(c))]
+        if "channels" not in updated_fields:
+            updated_fields.append("channels")
 
     # Update usage_count if template_id changed
     if "template_id" in updated_fields:

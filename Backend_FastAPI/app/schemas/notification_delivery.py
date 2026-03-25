@@ -20,6 +20,9 @@ class NotificationDeliveryResponse(BaseModel):
     status: str
     error_reason: Optional[str] = None
     dedupe_key: Optional[str] = None
+    rule_id: Optional[int] = None
+    action_step: Optional[int] = None
+    template_code: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     sent_at: Optional[datetime] = None

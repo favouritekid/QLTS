@@ -96,6 +96,9 @@ async def create_deliveries_for_dispatch(
     payload_snapshot: dict | None = None,
     source_type: str | None = None,
     source_id: int | None = None,
+    rule_id: int | None = None,
+    channel_step_map: Dict[str, int] | None = None,
+    channel_template_map: Dict[str, str | None] | None = None,
 ) -> Dict[str, List[int]]:
     """
     Create NotificationDelivery rows for a dispatch.
@@ -109,12 +112,17 @@ async def create_deliveries_for_dispatch(
         payload_snapshot: Rendered content snapshot
         source_type: Business entity type (lead, admission_profile, etc.)
         source_id: Business entity ID
+        rule_id: Phase C0 — FK to notification_rule that triggered this dispatch
+        channel_step_map: Phase C0 — {channel: action_step} from action configs
+        channel_template_map: Phase C0 — {channel: template_code} from action configs
 
     Returns:
         Dict mapping channel -> list of delivery IDs created for that channel.
         Example: {"browser": [1, 2], "email": [3]}
     """
     repo = NotificationDeliveryRepository(db)
+    _step_map = channel_step_map or {}
+    _template_map = channel_template_map or {}
 
     # Build all delivery rows, tracking which indices belong to which channel
     deliveries_data: List[Dict[str, Any]] = []
@@ -135,6 +143,9 @@ async def create_deliveries_for_dispatch(
                 "status": "queued",
                 "dedupe_key": dedupe_key,
                 "payload_snapshot": payload_snapshot,
+                "rule_id": rule_id,
+                "action_step": _step_map.get(channel),
+                "template_code": _template_map.get(channel),
             })
         channel_ranges[channel] = (start, len(user_ids))
 

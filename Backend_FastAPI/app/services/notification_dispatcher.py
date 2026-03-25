@@ -335,25 +335,28 @@ async def dispatch(
         recipient_count=len(user_ids)
     )
 
-    # Step 3: Per-channel preference filtering
-    # Build a dict of {channel: [user_ids]} so each channel gets its own recipient list.
+    # Step 3: Per-action preference filtering (Phase C0: actions are runtime truth)
+    # Build a dict of {channel: [user_ids]} so each action/channel gets its own recipient list.
     # Inbox Notification rows are created for users who have browser enabled.
     group = get_event_group(event)
     channel_recipient_map: Dict[str, List[int]] = {}
 
+    # Use actions (runtime truth) to determine channels
+    action_configs = config.actions  # List[ActionConfig]
+
     if skip_preference_check:
-        # All users get all channels
-        for ch in config.channel_values:
-            channel_recipient_map[ch] = list(user_ids)
+        for action in action_configs:
+            channel_recipient_map[action.channel] = list(user_ids)
     else:
-        for ch in config.channel_values:
-            filtered = await notification_preference_service.filter_users_by_group(
-                db=db,
-                user_ids=user_ids,
-                group=group.value,
-                channel=ch,
-            )
-            channel_recipient_map[ch] = filtered
+        for action in action_configs:
+            if action.channel not in channel_recipient_map:
+                filtered = await notification_preference_service.filter_users_by_group(
+                    db=db,
+                    user_ids=user_ids,
+                    group=group.value,
+                    channel=action.channel,
+                )
+                channel_recipient_map[action.channel] = filtered
 
     # Notification rows (inbox) are created for ALL internal users who have
     # at least one channel enabled. This is needed because channel adapters
@@ -452,12 +455,16 @@ async def dispatch(
             pass
         return [], _empty_callback
 
-    # Step 6.5: Create NotificationDelivery rows for tracking
+    # Step 6.5: Create NotificationDelivery rows for tracking (Phase C0: action-based)
     from app.services import notification_delivery_service
     notification_id_map = dict(zip(inbox_user_ids, notification_ids)) if notification_ids else {}
 
     # Extract source context from payload for delivery tracking
     _source_type, _source_id = _extract_source_from_payload(event, payload)
+
+    # Build action_step map: {channel -> step} from actions
+    _channel_step_map = {a.channel: a.step for a in action_configs}
+    _channel_template_map = {a.channel: a.template_code for a in action_configs}
 
     try:
         channel_delivery_ids = await notification_delivery_service.create_deliveries_for_dispatch(
@@ -469,6 +476,9 @@ async def dispatch(
             payload_snapshot={"title": title, "message": message, "link": link},
             source_type=_source_type,
             source_id=_source_id,
+            rule_id=config.rule_id if hasattr(config, 'rule_id') else None,
+            channel_step_map=_channel_step_map,
+            channel_template_map=_channel_template_map,
         )
     except Exception as e:
         log.error(

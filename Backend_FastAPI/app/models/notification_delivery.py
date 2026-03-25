@@ -90,6 +90,22 @@ class NotificationDelivery(Base):
         comment="Deduplication key for tracing",
     )
 
+    # Phase C0: Action-based execution tracking
+    rule_id = Column(
+        Integer,
+        ForeignKey("notification_rule.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="FK to the rule that triggered this delivery",
+    )
+    action_step = Column(
+        Integer, nullable=True,
+        comment="Step number from NotificationAction (1-based)",
+    )
+    template_code = Column(
+        String(100), nullable=True,
+        comment="Template code used for this delivery",
+    )
+
     # Timestamps
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,

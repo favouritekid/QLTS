@@ -251,21 +251,21 @@ function ActionStep({
             )}
           </div>
 
-          {/* Delay Configuration */}
+          {/* Delay Configuration — Phase C0: locked to 0 */}
           <div className="space-y-2">
-            <Label>Độ trễ (phút)</Label>
+            <Label className="text-muted-foreground">Độ trễ (phút)</Label>
             <Input
               type="number"
               min="0"
+              max="0"
               step="1"
-              value={action.delay_minutes || 0}
-              onChange={(e) => onUpdate({ delay_minutes: parseInt(e.target.value) || 0 })}
+              value={0}
+              disabled
               placeholder="0"
+              className="bg-muted"
             />
             <p className="text-xs text-muted-foreground">
-              {action.delay_minutes === 0
-                ? "Gửi ngay lập tức"
-                : `Gửi sau ${formatDelay(action.delay_minutes || 0)}`}
+              Gửi ngay lập tức. Delayed steps sẽ hỗ trợ ở Phase C1.
             </p>
           </div>
 

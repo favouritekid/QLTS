@@ -439,6 +439,9 @@ export interface NotificationDelivery {
   status: string; // "queued" | "sent" | "failed" | "skipped"
   error_reason: string | null;
   dedupe_key: string | null;
+  rule_id: number | null;
+  action_step: number | null;
+  template_code: string | null;
   created_at: string;
   updated_at: string;
   sent_at: string | null;
