@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core.deps import CasbinAuth
+from app.core.deps import RequireAdmin
 from app.core.rate_limits import limiter, RateLimits
 from app.repositories.notification_consent_repository import NotificationConsentRepository
 
@@ -41,7 +41,7 @@ async def list_consents(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = CasbinAuth,
+    current_admin: models.User = RequireAdmin,
 ):
     """List consent records with optional filters. Admin-only."""
     repo = NotificationConsentRepository(db)
@@ -70,7 +70,7 @@ async def upsert_consent(
     request: Request,
     body: schemas.NotificationConsentUpsert,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireAdmin,
 ):
     """
     Upsert a single consent record.
@@ -111,7 +111,7 @@ async def bulk_import_consents(
     request: Request,
     file: UploadFile = File(..., description="CSV file with consent records"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
+    current_user: models.User = RequireAdmin,
 ):
     """
     Bulk import consent records from CSV.

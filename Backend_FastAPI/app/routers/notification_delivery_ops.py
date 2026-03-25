@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core.deps import CasbinAuth
+from app.core.deps import RequireAdmin
 from app.core.rate_limits import limiter, RateLimits
 from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
 
@@ -38,7 +38,7 @@ async def list_deliveries(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = CasbinAuth,
+    current_admin: models.User = RequireAdmin,
 ):
     """
     List notification delivery records with filters.
@@ -75,7 +75,7 @@ async def get_delivery(
     request: Request,
     delivery_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = CasbinAuth,
+    current_admin: models.User = RequireAdmin,
 ):
     """Get a single delivery record by ID."""
     repo = NotificationDeliveryRepository(db)
