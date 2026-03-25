@@ -419,9 +419,20 @@ async def dispatch(
             pass
         return [], _empty_callback
 
+    # Step 6.5: Create NotificationDelivery rows for tracking
+    from app.services import notification_delivery_service
+    notification_id_map = dict(zip(inbox_user_ids, notification_ids)) if notification_ids else {}
+    delivery_ids = await notification_delivery_service.create_deliveries_for_dispatch(
+        db=db,
+        event=event.value,
+        channel_recipient_map=channel_recipient_map,
+        notification_id_map=notification_id_map,
+        dedupe_key=dedupe_key,
+        payload_snapshot={"title": title, "message": message, "link": link},
+    )
+
     # ✅ TRANSACTION FIX: Flush instead of commit
-    if notification_ids:
-        await db.flush()
+    await db.flush()
 
     # ✅ Create post-commit callback with all post-commit actions
     async def _post_commit():
@@ -438,10 +449,19 @@ async def dispatch(
         await _emit_domain_event(event, payload)
 
         # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
-        # Only cache for browser-eligible users (bell icon / dropdown)
-        browser_user_ids = channel_recipient_map.get("browser", [])
-        if notification_ids and browser_user_ids:
-            await _prepend_to_inbox_cache(browser_user_ids, notification_ids)
+        # Only cache for browser-eligible users (bell icon / dropdown).
+        # notification_ids[i] matches inbox_user_ids[i], so filter both lists
+        # to only browser-eligible users.
+        browser_set = set(channel_recipient_map.get("browser", []))
+        if notification_ids and browser_set:
+            browser_notif_pairs = [
+                (uid, nid)
+                for uid, nid in zip(inbox_user_ids, notification_ids)
+                if uid in browser_set
+            ]
+            if browser_notif_pairs:
+                b_uids, b_nids = zip(*browser_notif_pairs)
+                await _prepend_to_inbox_cache(list(b_uids), list(b_nids))
 
         # ✅ NOTIFICATION 2.0 - PHASE 3.1: Per-Channel Delivery
         # Step 8: Send notifications through configured channels
@@ -468,7 +488,7 @@ async def dispatch(
             # Execute all channel deliveries in parallel
             channel_results = await asyncio.gather(*channel_tasks, return_exceptions=True)
 
-            # Process results and log per-channel statistics
+            # Process results, log per-channel stats, and update delivery records
             for result in channel_results:
                 if isinstance(result, Exception):
                     log.error(
@@ -480,32 +500,54 @@ async def dispatch(
 
                 channel_name, channel_result, error_msg = result
 
-                if error_msg:
+                if channel_result is None and error_msg is None:
+                    # Channel not implemented — mark skipped
+                    await notification_delivery_service.mark_channel_skipped(
+                        db, event.value, channel_name,
+                        channel_recipient_map.get(channel_name, []),
+                        error_reason="channel_not_implemented",
+                    )
+                elif error_msg:
                     log.error(
                         "Channel delivery failed",
                         event_type=event.value,
                         channel=channel_name,
                         error=error_msg,
-                        notification_count=len(notifications)
+                    )
+                    await notification_delivery_service.mark_channel_failed(
+                        db, event.value, channel_name,
+                        channel_recipient_map.get(channel_name, []),
+                        error_reason=error_msg,
                     )
                 elif channel_result:
+                    # Mark successful sends
+                    sent_ids = [
+                        uid for uid in channel_recipient_map.get(channel_name, [])
+                        if uid not in channel_result.failed_ids
+                    ]
+                    if sent_ids:
+                        await notification_delivery_service.mark_channel_sent(
+                            db, event.value, channel_name, sent_ids,
+                        )
+
+                    # Mark failed sends
+                    if channel_result.failed_ids:
+                        await notification_delivery_service.mark_channel_failed(
+                            db, event.value, channel_name,
+                            channel_result.failed_ids,
+                            error_reason=channel_result.error_message or "delivery_failed",
+                        )
+
                     log.info(
                         "Channel delivery completed",
                         event_type=event.value,
                         channel=channel_name,
                         sent_count=channel_result.sent_count,
                         failed_count=len(channel_result.failed_ids),
-                        success=channel_result.success
                     )
 
-                    if channel_result.failed_ids:
-                        log.warning(
-                            "Some recipients failed for channel",
-                            event_type=event.value,
-                            channel=channel_name,
-                            failed_ids=channel_result.failed_ids[:10],
-                            failed_count=len(channel_result.failed_ids)
-                        )
+            # Commit delivery status updates
+            await db.commit()
 
         except Exception as e:
             log.error(

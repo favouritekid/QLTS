@@ -45,6 +45,8 @@ def upgrade() -> None:
         sa.Column('sent_at', sa.DateTime(timezone=True), nullable=True),
     )
 
+    op.create_index('ix_delivery_notification_id',
+                     'notification_delivery', ['notification_id'])
     op.create_index('ix_delivery_channel_status_created',
                      'notification_delivery',
                      ['channel', 'status', sa.text('created_at DESC')])
