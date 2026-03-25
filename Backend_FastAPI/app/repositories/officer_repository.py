@@ -837,15 +837,17 @@ class OfficerRepository(BaseRepository[models.User]):
         # Query 1: Consultations (range + today in one query with conditional)
         # D5: filter method IS DISTINCT FROM 'system' (NULL-safe)
         # today_count uses VN timezone range [day_start, day_end) instead of DATE()
+        # DISTINCT lead_id: count unique leads consulted, not total consultation events.
+        # Prevents inflation from multiple consultations on same lead in same day.
         consult_query = (
             select(
-                func.count(models.Consultation.id).label("range_count"),
-                func.count(
+                func.count(func.distinct(models.Consultation.lead_id)).label("range_count"),
+                func.count(func.distinct(
                     case((and_(
                         models.Consultation.consultation_date >= today_start,
                         models.Consultation.consultation_date < today_end,
-                    ), 1))
-                ).label("today_count"),
+                    ), models.Consultation.lead_id))
+                )).label("today_count"),
             )
             .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .where(
@@ -1439,15 +1441,16 @@ class OfficerRepository(BaseRepository[models.User]):
         today_end = today_start + timedelta(days=1)
 
         # Query 1: Consultations (batch, exclude soft-deleted + system)
+        # DISTINCT lead_id: count unique leads consulted, matching personal path.
         consult_query = (
             select(
-                func.count(models.Consultation.id).label("range_count"),
-                func.count(
+                func.count(func.distinct(models.Consultation.lead_id)).label("range_count"),
+                func.count(func.distinct(
                     case((and_(
                         models.Consultation.consultation_date >= today_start,
                         models.Consultation.consultation_date < today_end,
-                    ), 1))
-                ).label("today_count"),
+                    ), models.Consultation.lead_id))
+                )).label("today_count"),
             )
             .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .where(
