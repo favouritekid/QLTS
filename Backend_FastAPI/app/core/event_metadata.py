@@ -2,8 +2,9 @@
 """
 ✅ NOTIFICATION 2.0 - PHASE 2: Event Metadata Registry
 
-Central registry defining metadata for all system events. This is the "source of truth"
-for notification variable definitions, making the frontend completely dynamic.
+Derived contract defining metadata for admin UI and frontend rule builders.
+NOT the runtime source of truth — dispatch() uses notification_registry.py and DB rules.
+This registry drives the admin metadata API for dynamic form generation.
 
 Backend defines:
     - Available variables for each event
@@ -449,6 +450,21 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("expires_at", "datetime", "Thời gian hết hạn", required=False),
         ],
         filter_fields=["severity"],
+        default_channels=["browser", "email"],
+        category="system"
+    ),
+
+    SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE: EventMetadata(
+        event=SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE,
+        display_name="Lịch nghỉ lễ chưa đầy đủ",
+        description="Lịch nghỉ lễ âm lịch cho năm tới chưa được cấu hình",
+        variables=[
+            EventVariable("severity", "string", "Mức độ"),
+            EventVariable("message", "string", "Nội dung cảnh báo"),
+            EventVariable("action_url", "string", "URL cấu hình lịch nghỉ", required=False),
+            EventVariable("year", "integer", "Năm chưa đầy đủ"),
+        ],
+        filter_fields=["year"],
         default_channels=["browser", "email"],
         category="system"
     ),

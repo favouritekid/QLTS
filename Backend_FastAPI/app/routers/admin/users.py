@@ -51,8 +51,7 @@ from app.config import settings
 from app.core import deps
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
-from app.services import activity_service, lead_service, notification_service, user_service
-from app.routers.notifications import send_realtime_notification
+from app.services import activity_service, lead_service, user_service
 from app.tasks import process_automatic_lead_assignment_task
 from app.core.constants import UserRole
 from app.utils.exceptions import (
@@ -1027,7 +1026,7 @@ async def update_existing_user(
 
         await safe_dispatch(
             db=db,
-            event=SystemEvents.SYSTEM_NOTIFICATION,
+            event=SystemEvents.SYSTEM_ALERT,
             payload={
                 "user_id": updated_user.id,
                 "title": "Your profile has been updated",

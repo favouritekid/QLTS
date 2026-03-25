@@ -111,19 +111,17 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     # Pipeline events
     SystemEvents.PIPELINE_CONFIG_UPDATED: NotificationEventGroup.PIPELINE,
 
-    # Organization events
-    SystemEvents.UNIT_CREATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.UNIT_UPDATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.UNIT_DELETED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.PROGRAM_CREATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.PROGRAM_UPDATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.PROGRAM_DELETED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.OFFERING_CREATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.OFFERING_UPDATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.OFFERING_DELETED: NotificationEventGroup.ORGANIZATION,
+    # Organization events — domain broadcast only, no user notifications.
+    # These events are dispatched for Socket.IO real-time UI refresh but have
+    # no registry config or metadata. Intentionally excluded from group mapping
+    # to avoid implying user-facing notification capability.
+    # If user notifications are needed, add registry + metadata entries first.
 
     # Security events
     SystemEvents.SUSPICIOUS_LOGIN: NotificationEventGroup.SECURITY,
+
+    # System operational events
+    SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE: NotificationEventGroup.SYSTEM,
 
     # CTV events
     SystemEvents.CTV_CLAIM_SUBMITTED: NotificationEventGroup.CTV,

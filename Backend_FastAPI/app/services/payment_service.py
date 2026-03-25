@@ -315,7 +315,15 @@ class PaymentService:
         profile = await self._get_profile_for_fee(fee)
         _lead_id = profile.lead_id if profile else None
 
+        # Resolve lead's assigned officer for notification recipient
+        _officer_id = None
+        if profile and hasattr(profile, 'lead') and profile.lead:
+            _officer_id = profile.lead.assigned_officer_id
+
         # Capture data for post-commit closure
+        # Recipient: the officer who owns the lead (not the verifier)
+        # Phase 1 internal: notify officer about payment confirmation
+        # Phase 2 external (Zalo ZNS): will also notify applicant via lead phone
         _notify_payload = {
             "payment_id": payment.id,
             "invoice_id": invoice.id,
@@ -330,8 +338,8 @@ class PaymentService:
             "admission_profile_id": fee.admission_profile_id,
             "lead_id": _lead_id,
             "unit_id": unit_id,
-            # SpecificUsersResolver requires user_id or user_ids
-            "user_id": verifier_id,
+            # SpecificUsersResolver: notify lead's officer
+            "user_id": _officer_id or verifier_id,
         }
         _db = self.db
 

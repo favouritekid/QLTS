@@ -717,16 +717,17 @@ async def submit_admission_profile(
         # Transaction commit
         await db.commit()
 
-        # If approved, dispatch notification
+        # If approved, dispatch status change notification
+        # NOTE: APPLICATION_* events are legacy aliases for AdmissionProfile operations
         if result["status"] == "approved":
             await safe_dispatch(
                 db=db,
-                event=SystemEvents.APPLICATION_CREATED,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
                 payload={
                     "application_id": profile_id,
-                    "lead_id": None,
+                    "old_status": "submitted",
+                    "new_status": "approved",
                     "officer_id": current_user.id,
-                    "status": "approved",
                     "actor_id": current_user.id,
                 },
                 dedupe_key=f"admission_profile_approved:{profile_id}"
@@ -1056,17 +1057,18 @@ async def enroll_student(
         # Transaction commit (Router responsibility)
         await db.commit()
 
-        # Dispatch notification (non-blocking)
+        # Dispatch enrollment status change notification
+        # NOTE: APPLICATION_* events are legacy aliases for AdmissionProfile operations
         await safe_dispatch(
             db=db,
-            event=SystemEvents.APPLICATION_CREATED,
+            event=SystemEvents.APPLICATION_STATUS_CHANGED,
             payload={
                 "application_id": profile_id,
+                "old_status": "approved",
+                "new_status": "enrolled",
                 "student_id": result["student_id"],
                 "student_code": result["student_code"],
-                "lead_id": None,
                 "officer_id": current_user.id,
-                "status": "enrolled",
                 "actor_id": current_user.id,
             },
             dedupe_key=f"student_enrolled:{result['student_id']}"
