@@ -140,6 +140,36 @@ async def get_quotas(
 
 
 @limiter.limit(RateLimits.DATA_READ)
+@router.get("/circuit-breakers", response_model=schemas.CircuitBreakerListResponse)
+async def get_circuit_breakers(
+    request: Request,
+    current_admin: models.User = RequireAdmin,
+):
+    """Get circuit breaker states for all channels. Admin-only."""
+    from app.services.notification_circuit_breaker import get_all_breaker_states
+
+    states = get_all_breaker_states()
+    return schemas.CircuitBreakerListResponse(
+        breakers=[schemas.CircuitBreakerState(**s) for s in states],
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.post("/circuit-breakers/{channel}/reset")
+async def reset_circuit_breaker(
+    request: Request,
+    channel: str,
+    current_admin: models.User = RequireAdmin,
+):
+    """Manually reset a channel's circuit breaker. Admin-only."""
+    from app.services.notification_circuit_breaker import reset_breaker
+
+    await reset_breaker(channel)
+    log.info("Circuit breaker reset by admin", channel=channel, admin_id=current_admin.id)
+    return {"channel": channel, "state": "closed", "message": f"Breaker for {channel} reset"}
+
+
+@limiter.limit(RateLimits.DATA_READ)
 @router.post("/{delivery_id}/replay", response_model=schemas.ReplayResponse)
 async def replay_delivery(
     request: Request,

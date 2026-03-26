@@ -94,3 +94,20 @@ class QuotaResponse(BaseModel):
 class QuotaListResponse(BaseModel):
     """List of quota records."""
     quotas: List[QuotaResponse] = []
+
+
+# --- Phase D2: Circuit Breaker schemas ---
+
+class CircuitBreakerState(BaseModel):
+    """Single channel breaker state."""
+    channel: str
+    state: str  # "closed", "open", "half-open"
+    fail_count: int = 0
+    fail_max: int = 10
+    timeout_duration: int = 300
+    opened_at: Optional[datetime] = None
+
+
+class CircuitBreakerListResponse(BaseModel):
+    """All channel breaker states."""
+    breakers: List[CircuitBreakerState] = []

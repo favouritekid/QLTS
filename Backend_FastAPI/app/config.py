@@ -406,6 +406,14 @@ class Settings(BaseSettings):
         default=50, validation_alias="NOTIFICATION_RATE_LIMIT_PER_HOUR"
     )  # Max notifications per user per hour
 
+    # -- Notification Circuit Breaker (Phase D2) --
+    CIRCUIT_BREAKER_FAIL_MAX: int = Field(
+        default=10, validation_alias="CIRCUIT_BREAKER_FAIL_MAX"
+    )  # Failures before tripping breaker for a channel
+    CIRCUIT_BREAKER_TIMEOUT: int = Field(
+        default=300, validation_alias="CIRCUIT_BREAKER_TIMEOUT"
+    )  # Seconds before breaker transitions from open → half-open
+
     # -- Notification Quota (Phase D1) --
     ZALO_DAILY_QUOTA_LIMIT: int = Field(
         default=500, validation_alias="ZALO_DAILY_QUOTA_LIMIT"
