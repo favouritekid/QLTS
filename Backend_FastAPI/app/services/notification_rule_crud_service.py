@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.utils.exceptions import BadRequest
-from app.repositories import NotificationRuleRepository
+from app.repositories import NotificationRuleRepository, NotificationTemplateRepository
 from .notification_rule_loader import invalidate_rule_cache, derive_channels_from_actions, ActionConfig
 
 log = structlog.get_logger(__name__)
@@ -49,14 +49,16 @@ def _validate_external_resolver(step: int, resolver_type: str) -> None:
 
 def _validate_actions(actions) -> None:
     """
-    Validate NotificationAction constraints.
+    Validate NotificationAction constraints (synchronous checks only).
 
     Rules:
       - C1: delay_minutes >= 0 allowed (worker handles delayed execution)
-      - template_code still deferred to D8 (rejected here)
       - steps must be contiguous 1..n
       - no duplicate steps
       - no duplicate channels within same rule
+
+    Note: template_code existence + channel support is validated asynchronously
+    by _validate_action_template_codes() which must be called separately.
     """
     if not actions:
         return
@@ -71,14 +73,6 @@ def _validate_actions(actions) -> None:
         if delay is not None and delay < 0:
             raise BadRequest(
                 f"delay_minutes must be >= 0 (step {step} has delay_minutes={delay})."
-            )
-
-        # template_code deferred to D8 per worklog
-        template_code = action.template_code if hasattr(action, 'template_code') else action.get('template_code')
-        if template_code:
-            raise BadRequest(
-                f"Per-action template_code not yet supported (step {step}). "
-                "Use rule-level template_id instead. (Deferred to Phase D8)"
             )
 
         if step in steps:
@@ -107,6 +101,47 @@ def _validate_actions(actions) -> None:
         raise BadRequest(
             f"Action steps must be contiguous 1..{len(steps)}, got: {sorted(steps)}"
         )
+
+
+async def _validate_action_template_codes(
+    db: AsyncSession,
+    actions,
+) -> None:
+    """
+    Phase E2: Validate template_code references in actions.
+
+    For each action that specifies a template_code:
+      1. The template must exist in the database.
+      2. The template's supported_channels must include the action's channel.
+
+    Raises BadRequest on validation failure.
+    """
+    if not actions:
+        return
+
+    repo = NotificationTemplateRepository(db)
+
+    for action in actions:
+        step = action.step if hasattr(action, 'step') else action.get('step')
+        channel = action.channel if hasattr(action, 'channel') else action.get('channel')
+        template_code = action.template_code if hasattr(action, 'template_code') else action.get('template_code')
+
+        if not template_code:
+            continue
+
+        template = await repo.get_by_template_code(template_code)
+        if not template:
+            raise BadRequest(
+                f"Action step {step}: template_code '{template_code}' does not exist."
+            )
+
+        # Check channel support
+        supported = template.supported_channels or []
+        if channel not in supported:
+            raise BadRequest(
+                f"Action step {step}: template '{template_code}' does not support "
+                f"channel '{channel}'. Supported channels: {supported}"
+            )
 
 
 async def get_rules(
@@ -154,8 +189,11 @@ async def create_rule(
             f"Notification rule for event '{rule_data.event}' already exists (ID: {existing_rule.id})"
         )
 
-    # Validate action constraints
+    # Validate action constraints (sync checks)
     _validate_actions(rule_data.actions)
+
+    # Phase E2: Validate template_code references (async DB lookup)
+    await _validate_action_template_codes(db, rule_data.actions)
 
     # Phase C1: channels is ALWAYS derived from actions (input ignored)
     if rule_data.actions:
@@ -212,6 +250,8 @@ async def update_rule(
     # Handle actions update
     if rule_update.actions is not None:
         _validate_actions(rule_update.actions)
+        # Phase E2: Validate template_code references (async DB lookup)
+        await _validate_action_template_codes(db, rule_update.actions)
         await repo.delete_actions(rule.id)
         await repo.add_actions(rule.id, rule_update.actions)
         updated_fields.append("actions")

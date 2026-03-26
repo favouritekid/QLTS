@@ -54,7 +54,7 @@ from app.database import (
 )
 from app.services.notification_registry import get_event_config, NotificationConfig
 from app.services import notification_preference_service
-from app.repositories import NotificationRepository
+from app.repositories import NotificationRepository, NotificationTemplateRepository
 # ✅ PHASE 2.3: Import database rule loader
 from app.services.notification_rule_loader import get_rule_for_event
 
@@ -109,6 +109,75 @@ def _render_channel_config_placeholders(
             result[key] = rendered
 
     return result
+
+
+# =============================================================================
+# PHASE E2: PER-ACTION TEMPLATE RESOLUTION
+# =============================================================================
+
+async def _resolve_action_templates(
+    db: AsyncSession,
+    action_configs: List[Any],
+) -> Dict[str, "models.NotificationTemplate"]:
+    """
+    Pre-fetch NotificationTemplate objects for actions that have template_code.
+
+    Returns a dict of {template_code: NotificationTemplate} for all distinct
+    template_codes found in the action list.  Templates that don't exist in the
+    database are silently skipped (a warning is logged).
+
+    This is called once per dispatch so template lookup is O(distinct codes)
+    rather than O(channels).
+    """
+    codes = {a.template_code for a in action_configs if a.template_code}
+    if not codes:
+        return {}
+
+    repo = NotificationTemplateRepository(db)
+    result: Dict[str, models.NotificationTemplate] = {}
+    for code in codes:
+        try:
+            tpl = await repo.get_by_template_code(code)
+            if tpl:
+                result[code] = tpl
+            else:
+                log.warning(
+                    "Action template_code not found in database, will use rule defaults",
+                    template_code=code,
+                )
+        except Exception as e:
+            log.warning(
+                "Failed to fetch template for action, will use rule defaults",
+                template_code=code,
+                error=str(e),
+            )
+    return result
+
+
+def _render_template_snapshot(
+    template: "models.NotificationTemplate",
+    payload: dict,
+    fallback_snapshot: dict,
+) -> dict:
+    """
+    Render title/message/link from a NotificationTemplate using payload
+    placeholders, then return a snapshot dict compatible with _base_snapshot.
+
+    Falls back to the provided fallback_snapshot values for any fields the
+    template does not define.
+    """
+    from string import Template
+
+    title = Template(template.title_template).safe_substitute(payload) if template.title_template else fallback_snapshot.get("title", "")
+    message = Template(template.message_template).safe_substitute(payload) if template.message_template else fallback_snapshot.get("message", "")
+    link = Template(template.link_template).safe_substitute(payload) if template.link_template else fallback_snapshot.get("link")
+
+    return {
+        "title": title,
+        "message": message,
+        "link": link,
+        "type": fallback_snapshot.get("type", "info"),
+    }
 
 
 # =============================================================================
@@ -551,17 +620,37 @@ async def dispatch(
         "link": link,
         "type": notification_type,
     }
+
+    # Phase E2: Pre-fetch templates referenced by action template_code
+    _action_template_map = await _resolve_action_templates(db, action_configs)
+
     _channel_snapshot_map: Dict[str, dict] = {}
     for ch in channel_recipient_map:
+        # Phase E2: If the action for this channel has a template_code that
+        # resolved to a real template, render from that template instead of
+        # the rule-level defaults.
+        tpl_code = _channel_template_map.get(ch)
+        tpl_obj = _action_template_map.get(tpl_code) if tpl_code else None
+
+        if tpl_obj:
+            ch_snapshot = _render_template_snapshot(tpl_obj, payload, _base_snapshot)
+            log.debug(
+                "Using per-action template for channel snapshot",
+                channel=ch,
+                template_code=tpl_code,
+            )
+        else:
+            ch_snapshot = dict(_base_snapshot)
+
         ch_config = _action_config_map.get(ch)
         if ch_config:
             # Merge channel config into snapshot, rendering placeholders in template_data
-            merged = {**_base_snapshot, **ch_config}
+            merged = {**ch_snapshot, **ch_config}
             # P1: Render {placeholder} values inside zalo_template_data from payload
             merged = _render_channel_config_placeholders(merged, payload)
             _channel_snapshot_map[ch] = merged
         else:
-            _channel_snapshot_map[ch] = _base_snapshot
+            _channel_snapshot_map[ch] = ch_snapshot
 
     try:
         channel_delivery_ids = await notification_delivery_service.create_deliveries_for_dispatch(
