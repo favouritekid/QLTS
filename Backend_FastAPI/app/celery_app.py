@@ -183,6 +183,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute="*/15"),  # Every 15 minutes
         "options": {"queue": "default"},
     },
+
+    # --- Phase D1: Quota sync ---
+    "sync-notification-quotas": {
+        "task": "sync_notification_quotas",
+        "schedule": crontab(minute=0, hour="*/6"),  # Every 6 hours
+        "options": {"queue": "default"},
+    },
 }
 
 # =============================================================================

@@ -124,6 +124,22 @@ async def get_delivery(
 
 
 @limiter.limit(RateLimits.DATA_READ)
+@router.get("/quotas", response_model=schemas.QuotaListResponse)
+async def get_quotas(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = RequireAdmin,
+):
+    """Get quota summary for all channels (today). Admin-only."""
+    from app.services import notification_quota_service
+
+    summary = await notification_quota_service.get_quota_summary(db)
+    return schemas.QuotaListResponse(
+        quotas=[schemas.QuotaResponse(**q) for q in summary],
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
 @router.post("/{delivery_id}/replay", response_model=schemas.ReplayResponse)
 async def replay_delivery(
     request: Request,

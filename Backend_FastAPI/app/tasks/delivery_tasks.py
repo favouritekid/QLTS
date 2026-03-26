@@ -139,6 +139,24 @@ def execute_notification_delivery(self, delivery_id: int):
                 task_log.info(f"Delivery {delivery_id} skipped: {skip_reason}")
                 return {"status": "skipped", "reason": skip_reason, "delivery_id": delivery_id}
 
+            # 4b. Check quota (D1) — external channels only
+            if delivery.channel in ("zalo", "sms"):
+                from app.services import notification_quota_service
+                quota_ok = await notification_quota_service.check_quota(session, delivery.channel)
+                if not quota_ok:
+                    next_retry = _calculate_next_retry(delivery.attempt_count or 0)
+                    from app.services import notification_delivery_service as nds
+                    await nds.mark_for_retry(
+                        session, delivery_id,
+                        next_retry_at=next_retry,
+                        error_reason="quota_exhausted",
+                    )
+                    await session.commit()
+                    task_log.warning(
+                        f"Delivery {delivery_id} deferred — {delivery.channel} quota exhausted"
+                    )
+                    return {"status": "retry_scheduled", "delivery_id": delivery_id}
+
             # 5. Get channel adapter
             channel = get_channel(delivery.channel)
             if channel is None:
@@ -179,6 +197,12 @@ def execute_notification_delivery(self, delivery_id: int):
                 if result.provider_message_id:
                     delivery.provider_message_id = result.provider_message_id
                     await session.flush()
+
+                # D1: Record send for quota tracking
+                if delivery.channel in ("zalo", "sms"):
+                    from app.services import notification_quota_service
+                    await notification_quota_service.record_send(session, delivery.channel)
+
                 await session.commit()
                 task_log.info(f"Delivery {delivery_id} sent via {delivery.channel}")
                 return {"status": "sent", "delivery_id": delivery_id, "channel": delivery.channel}
@@ -415,3 +439,64 @@ async def _check_delivery_eligibility(session, delivery) -> str | None:
             pass
 
     return None
+
+
+# =============================================================================
+# D1: Quota sync task
+# =============================================================================
+
+@celery_app.task(
+    name="sync_notification_quotas",
+    bind=True,
+    max_retries=0,
+)
+def sync_notification_quotas(self):
+    """
+    Celery Beat task: sync quota records (create today's row if missing).
+
+    Runs every 6 hours. Ensures daily quota rows exist for configured channels.
+    """
+    task_name = "sync_notification_quotas"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Starting quota sync...")
+
+    async def _run():
+        from datetime import date as date_type
+        from app.utils.redis_lock import acquire_redis_lock
+        from app.repositories.notification_quota_repository import NotificationQuotaRepository
+        from app.config import settings
+
+        async with acquire_redis_lock("sync_notification_quotas", timeout=60) as acquired:
+            if not acquired:
+                return {"synced": 0, "skipped_lock": True}
+
+            async with task_db_session() as session:
+                repo = NotificationQuotaRepository(session)
+                today = date_type.today()
+                synced = 0
+
+                # Ensure Zalo quota row exists for today
+                zalo_quota = await repo.get_current_quota(
+                    "zalo", "zalo_zns", "daily", today,
+                )
+                if zalo_quota is None and settings.ZALO_ENABLED:
+                    await repo.upsert_quota(
+                        channel="zalo",
+                        provider="zalo_zns",
+                        period="daily",
+                        period_start=today,
+                        quota_limit=settings.ZALO_DAILY_QUOTA_LIMIT,
+                    )
+                    synced += 1
+                    await session.commit()
+
+                task_log.info(f"Quota sync done: {synced} rows created")
+                return {"synced": synced}
+
+    result = run_async_task(
+        async_func=_run,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["synced"],
+    )
+    return result

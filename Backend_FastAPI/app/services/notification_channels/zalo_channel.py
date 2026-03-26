@@ -130,6 +130,16 @@ class ZaloChannel(BaseChannel):
         )
 
         if result.success:
+            # D1: Sync quota from provider response
+            if result.quota_remaining is not None:
+                try:
+                    from app.services import notification_quota_service
+                    await notification_quota_service.sync_zalo_quota(
+                        db, result.quota_remaining,
+                    )
+                except Exception as e:
+                    log.warning("Failed to sync Zalo quota", error=str(e))
+
             log.info(
                 "Zalo delivery sent",
                 delivery_id=delivery.id,

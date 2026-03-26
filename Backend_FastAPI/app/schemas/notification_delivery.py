@@ -73,3 +73,24 @@ class DeliveryFailureSummary(BaseModel):
     """Failure analytics grouped by reason."""
     total_failures: int = 0
     by_reason: List[FailureReasonCount] = []
+
+
+# --- Phase D1: Quota schemas ---
+
+class QuotaResponse(BaseModel):
+    """Single quota record."""
+    id: int
+    channel: str
+    provider: str
+    period: str
+    period_start: str
+    quota_limit: int
+    quota_used: int
+    quota_remaining: Optional[int] = None
+    blocked: bool = False
+    usage_pct: float = 0.0
+
+
+class QuotaListResponse(BaseModel):
+    """List of quota records."""
+    quotas: List[QuotaResponse] = []

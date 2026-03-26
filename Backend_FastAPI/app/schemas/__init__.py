@@ -299,6 +299,8 @@ from .notification_delivery import (
     DeliveryStatsResponse,
     FailureReasonCount,
     DeliveryFailureSummary,
+    QuotaResponse,
+    QuotaListResponse,
 )
 
 # --- Từ notification_consent.py ---

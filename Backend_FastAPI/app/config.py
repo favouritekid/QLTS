@@ -406,6 +406,17 @@ class Settings(BaseSettings):
         default=50, validation_alias="NOTIFICATION_RATE_LIMIT_PER_HOUR"
     )  # Max notifications per user per hour
 
+    # -- Notification Quota (Phase D1) --
+    ZALO_DAILY_QUOTA_LIMIT: int = Field(
+        default=500, validation_alias="ZALO_DAILY_QUOTA_LIMIT"
+    )  # Zalo ZNS daily send limit per OA
+    QUOTA_WARN_THRESHOLD_PCT: int = Field(
+        default=80, validation_alias="QUOTA_WARN_THRESHOLD_PCT"
+    )  # Alert when quota usage exceeds this %
+    QUOTA_BLOCK_THRESHOLD_PCT: int = Field(
+        default=100, validation_alias="QUOTA_BLOCK_THRESHOLD_PCT"
+    )  # Block sends when quota usage exceeds this %
+
     # -- Zalo ZNS Integration (Phase C1) --
     # Get credentials from Zalo Business portal (business.zalo.me)
     ZALO_ENABLED: bool = Field(
