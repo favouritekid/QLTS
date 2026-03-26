@@ -347,7 +347,7 @@ export interface ChannelHealthItem {
   breaker_state: string;
   quota_used: number | null;
   quota_limit: number | null;
-  quota_pct: number | null;
+  quota_blocked: boolean;
   failure_rate_24h: number | null;
 }
 
