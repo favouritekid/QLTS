@@ -110,6 +110,64 @@ async def get_delivery_failures(
     return summary
 
 
+# --- D5: Dashboard analytics endpoints ---
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/stats/time-series", response_model=schemas.TimeSeriesResponse)
+async def get_time_series(request: Request, interval: str = Query("hour", regex="^(hour|day)$"),
+    date_from: Optional[datetime] = Query(None), date_to: Optional[datetime] = Query(None),
+    channel: Optional[str] = Query(None), db: AsyncSession = Depends(database.get_db),
+    scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter)):
+    """Time series delivery counts."""
+    repo = NotificationDeliveryRepository(db)
+    buckets = await repo.get_time_series(interval=interval, date_from=date_from, date_to=date_to, channel=channel, allowed_user_ids=scope.allowed_user_ids)
+    return schemas.TimeSeriesResponse(interval=interval, buckets=[schemas.TimeSeriesBucket(**b) for b in buckets])
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/stats/top-events", response_model=schemas.TopEventsResponse)
+async def get_top_events(request: Request, limit: int = Query(10, ge=1, le=50),
+    date_from: Optional[datetime] = Query(None), date_to: Optional[datetime] = Query(None),
+    db: AsyncSession = Depends(database.get_db), scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter)):
+    """Top events by volume."""
+    repo = NotificationDeliveryRepository(db)
+    events = await repo.get_top_events(limit=limit, date_from=date_from, date_to=date_to, allowed_user_ids=scope.allowed_user_ids)
+    return schemas.TopEventsResponse(events=[schemas.TopEventStats(**e) for e in events])
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/stats/latency", response_model=schemas.LatencyStats)
+async def get_latency_stats(request: Request, date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None), db: AsyncSession = Depends(database.get_db),
+    _: models.User = RequireAdmin):
+    """Processing latency P50/P95. Admin-only."""
+    repo = NotificationDeliveryRepository(db)
+    return await repo.get_processing_latency_stats(date_from=date_from, date_to=date_to)
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/health", response_model=schemas.HealthSummaryResponse)
+async def get_health_summary(request: Request, db: AsyncSession = Depends(database.get_db),
+    _: models.User = RequireAdmin):
+    """Combined health: quota + breaker + backlog + failure rate. Admin-only."""
+    from app.services.notification_circuit_breaker import get_all_breaker_states
+    from app.services import notification_quota_service
+    repo = NotificationDeliveryRepository(db)
+    breaker_states = get_all_breaker_states()
+    breaker_map = {s["channel"]: s["state"] for s in breaker_states}
+    quota_summary = await notification_quota_service.get_quota_summary(db)
+    quota_map = {q["channel"]: q for q in quota_summary}
+    channels = []
+    for ch in ("browser", "email", "zalo", "sms"):
+        item = {"channel": ch, "breaker_state": breaker_map.get(ch, "closed")}
+        if ch in quota_map:
+            item["quota_used"] = quota_map[ch]["quota_used"]
+            item["quota_limit"] = quota_map[ch]["quota_limit"]
+            item["quota_blocked"] = quota_map[ch]["blocked"]
+        channels.append(item)
+    backlog = await repo.get_queued_backlog_count()
+    failure_rate = await repo.get_failure_rate(minutes=30)
+    alerts_active = sum(1 for s in breaker_states if s["state"] == "open")
+    return schemas.HealthSummaryResponse(channels=[schemas.ChannelHealthItem(**c) for c in channels],
+        total_queued=backlog, failure_rate_30m=failure_rate, alerts_active=alerts_active)
+
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/{delivery_id}", response_model=schemas.NotificationDeliveryResponse)
 async def get_delivery(

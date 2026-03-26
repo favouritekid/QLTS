@@ -111,3 +111,45 @@ class CircuitBreakerState(BaseModel):
 class CircuitBreakerListResponse(BaseModel):
     """All channel breaker states."""
     breakers: List[CircuitBreakerState] = []
+
+
+# --- Phase D5: Dashboard schemas ---
+
+class TimeSeriesBucket(BaseModel):
+    bucket: datetime
+    total: int = 0
+    sent: int = 0
+    failed: int = 0
+    queued: int = 0
+
+class TimeSeriesResponse(BaseModel):
+    interval: str
+    buckets: List[TimeSeriesBucket] = []
+
+class TopEventStats(BaseModel):
+    event: str
+    total: int = 0
+    failed: int = 0
+    fail_rate: float = 0.0
+
+class TopEventsResponse(BaseModel):
+    events: List[TopEventStats] = []
+
+class LatencyStats(BaseModel):
+    p50_seconds: Optional[float] = None
+    p95_seconds: Optional[float] = None
+    sample_count: int = 0
+
+class ChannelHealthItem(BaseModel):
+    channel: str
+    breaker_state: str = "closed"
+    quota_used: Optional[int] = None
+    quota_limit: Optional[int] = None
+    quota_blocked: bool = False
+    failure_rate_24h: Optional[float] = None
+
+class HealthSummaryResponse(BaseModel):
+    channels: List[ChannelHealthItem] = []
+    total_queued: int = 0
+    failure_rate_30m: Optional[float] = None
+    alerts_active: int = 0

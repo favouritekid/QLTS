@@ -364,3 +364,45 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
             )
         )
         return (await self.db.execute(q)).scalar() or 0
+
+    # --- D5: Dashboard analytics ---
+
+    async def get_time_series(self, interval="hour", date_from=None, date_to=None, channel=None, allowed_user_ids=None):
+        """Delivery counts bucketed by hour/day."""
+        from sqlalchemy import case, text
+        if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=7)
+        if not date_to: date_to = datetime.now(timezone.utc)
+        trunc = func.date_trunc(interval, NotificationDelivery.created_at)
+        conds = [NotificationDelivery.created_at >= date_from, NotificationDelivery.created_at <= date_to]
+        if channel: conds.append(NotificationDelivery.channel == channel)
+        if allowed_user_ids is not None: conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+        q = select(trunc.label("bucket"), func.count().label("total"),
+            func.count(case((NotificationDelivery.status.in_(["sent","delivered","read"]),1))).label("sent"),
+            func.count(case((NotificationDelivery.status.in_(["failed","dead_lettered"]),1))).label("failed"),
+            func.count(case((NotificationDelivery.status=="queued",1))).label("queued"),
+        ).where(and_(*conds)).group_by(text("1")).order_by(text("1"))
+        return [{"bucket":r[0],"total":r[1],"sent":r[2],"failed":r[3],"queued":r[4]} for r in (await self.db.execute(q)).all()]
+
+    async def get_top_events(self, limit=10, date_from=None, date_to=None, allowed_user_ids=None):
+        """Top events by volume with failure rates."""
+        from sqlalchemy import case
+        if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=7)
+        conds = [NotificationDelivery.created_at >= date_from]
+        if date_to: conds.append(NotificationDelivery.created_at <= date_to)
+        if allowed_user_ids is not None: conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+        q = select(NotificationDelivery.event, func.count().label("total"),
+            func.count(case((NotificationDelivery.status.in_(["failed","dead_lettered"]),1))).label("failed"),
+        ).where(and_(*conds)).group_by(NotificationDelivery.event).order_by(func.count().desc()).limit(limit)
+        return [{"event":r[0],"total":r[1],"failed":r[2],"fail_rate":round(r[2]/r[1]*100,1) if r[1]>0 else 0.0} for r in (await self.db.execute(q)).all()]
+
+    async def get_processing_latency_stats(self, date_from=None, date_to=None):
+        """P50/P95 processing latency (created_at → sent_at)."""
+        from sqlalchemy import extract
+        if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=1)
+        conds = [NotificationDelivery.status.in_(["sent","delivered","read"]), NotificationDelivery.sent_at.isnot(None), NotificationDelivery.created_at >= date_from]
+        if date_to: conds.append(NotificationDelivery.created_at <= date_to)
+        lat = extract("epoch", NotificationDelivery.sent_at - NotificationDelivery.created_at)
+        q = select(func.percentile_cont(0.5).within_group(lat), func.percentile_cont(0.95).within_group(lat), func.count()).where(and_(*conds))
+        r = (await self.db.execute(q)).first()
+        if not r or r[2]==0: return {"p50_seconds":None,"p95_seconds":None,"sample_count":0}
+        return {"p50_seconds":round(float(r[0]),2) if r[0] else None,"p95_seconds":round(float(r[1]),2) if r[1] else None,"sample_count":r[2]}
