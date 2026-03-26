@@ -8,6 +8,7 @@ import structlog
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 
+from app import database
 from app.config import settings
 from app.repositories.notification_quota_repository import NotificationQuotaRepository
 
@@ -28,7 +29,6 @@ async def check_quota(
 
     Fast path: Redis cache. Slow path: DB lookup.
     """
-    from app import database
 
     today = date.today()
     cache_key = _QUOTA_CACHE_KEY.format(channel=channel, date=today.isoformat())

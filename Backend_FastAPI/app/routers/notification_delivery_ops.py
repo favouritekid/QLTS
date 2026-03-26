@@ -114,7 +114,7 @@ async def get_delivery_failures(
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/stats/time-series", response_model=schemas.TimeSeriesResponse)
-async def get_time_series(request: Request, interval: str = Query("hour", regex="^(hour|day)$"),
+async def get_time_series(request: Request, interval: str = Query("hour", pattern="^(hour|day)$"),
     date_from: Optional[datetime] = Query(None), date_to: Optional[datetime] = Query(None),
     channel: Optional[str] = Query(None), db: AsyncSession = Depends(database.get_db),
     scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter)):

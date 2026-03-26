@@ -133,11 +133,11 @@ class TestValidateActions:
         with pytest.raises(BadRequest, match="delay_minutes must be >= 0"):
             self._validate(actions)
 
-    def test_template_code_still_rejected(self):
-        from app.utils.exceptions import BadRequest
+    def test_template_code_accepted_after_e2(self):
+        """E2 unlocked template_code — no longer rejected in sync validation."""
         actions = [MagicMock(step=1, channel="email", delay_minutes=0, template_code="TPL_FOO", config=None)]
-        with pytest.raises(BadRequest, match="template_code not yet supported"):
-            self._validate(actions)
+        # Should NOT raise — template_code is now accepted (validated async in E2)
+        self._validate(actions)
 
     def test_duplicate_channel_rejected(self):
         from app.utils.exceptions import BadRequest

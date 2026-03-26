@@ -8,7 +8,10 @@ import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from app import database
 from app.config import settings
+from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+from app.services.notification_circuit_breaker import get_all_breaker_states
 
 log = structlog.get_logger(__name__)
 
@@ -19,7 +22,6 @@ _ALERT_DEDUP_TTL = 3600  # 1 hour
 
 async def check_failure_rate_alert(db) -> Optional[Dict]:
     """Check if failure rate exceeds threshold in last 30 minutes."""
-    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
 
     repo = NotificationDeliveryRepository(db)
     rate = await repo.get_failure_rate(minutes=30)
@@ -36,7 +38,6 @@ async def check_failure_rate_alert(db) -> Optional[Dict]:
 
 async def check_backlog_alert(db) -> Optional[Dict]:
     """Check if queued backlog exceeds threshold."""
-    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
 
     repo = NotificationDeliveryRepository(db)
     backlog = await repo.get_queued_backlog_count()
@@ -53,7 +54,6 @@ async def check_backlog_alert(db) -> Optional[Dict]:
 
 async def check_webhook_lag_alert(db) -> Optional[Dict]:
     """Check for stale sent deliveries without webhook confirmation."""
-    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
 
     repo = NotificationDeliveryRepository(db)
     stale = await repo.get_stale_sent_count(lag_minutes=settings.ALERT_WEBHOOK_LAG_MINUTES)
@@ -70,7 +70,6 @@ async def check_webhook_lag_alert(db) -> Optional[Dict]:
 
 async def check_breaker_alert() -> Optional[Dict]:
     """Check if any circuit breaker is open."""
-    from app.services.notification_circuit_breaker import get_all_breaker_states
 
     states = get_all_breaker_states()
     open_channels = [s["channel"] for s in states if s["state"] == "open"]
@@ -114,7 +113,7 @@ async def run_all_checks(db) -> List[Dict]:
 async def _is_deduped(alert_type: str) -> bool:
     """Check if alert was already fired within dedup window."""
     try:
-        from app import database
+
         redis = await database.get_redis()
         key = _ALERT_DEDUP_KEY.format(alert_type=alert_type)
         return await redis.exists(key)
@@ -125,7 +124,7 @@ async def _is_deduped(alert_type: str) -> bool:
 async def _set_dedup(alert_type: str) -> None:
     """Mark alert type as fired for dedup window."""
     try:
-        from app import database
+
         redis = await database.get_redis()
         key = _ALERT_DEDUP_KEY.format(alert_type=alert_type)
         await redis.set(key, "1", ex=_ALERT_DEDUP_TTL)

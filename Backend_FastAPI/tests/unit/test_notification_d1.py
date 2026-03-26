@@ -85,8 +85,8 @@ class TestQuotaCheck:
 
             result = await check_quota(mock_db, "zalo")
             assert result is True
-            # DB should NOT be queried
-            MockRepo.return_value.is_over_quota.assert_not_awaited()
+            # DB should NOT be queried (cache hit)
+            MockRepo.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_check_quota_uses_redis_cache_blocked(self):
@@ -236,8 +236,10 @@ class TestSyncZaloQuota:
         with patch(
             "app.services.notification_quota_service.NotificationQuotaRepository"
         ) as MockRepo:
+            repo_instance = AsyncMock()
+            MockRepo.return_value = repo_instance
             await sync_zalo_quota(mock_db, quota_remaining=None)
-            MockRepo.return_value.upsert_quota.assert_not_awaited()
+            repo_instance.upsert_quota.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

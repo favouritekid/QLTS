@@ -11,7 +11,8 @@ import structlog
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from aiobreaker import CircuitBreaker, STATE_CLOSED, STATE_OPEN, STATE_HALF_OPEN
+from aiobreaker import CircuitBreaker
+from aiobreaker.state import CircuitBreakerState
 
 from app.config import settings
 
@@ -41,7 +42,7 @@ async def check_channel_health(channel: str) -> bool:
     Returns True if OK to send, False if breaker is open.
     """
     breaker = get_breaker(channel)
-    return breaker.current_state != STATE_OPEN
+    return breaker.current_state != CircuitBreakerState.OPEN
 
 
 async def record_success(channel: str) -> None:
@@ -49,9 +50,10 @@ async def record_success(channel: str) -> None:
     breaker = get_breaker(channel)
     # aiobreaker tracks success internally when calls succeed via call_async
     # For manual tracking, we reset fail counter on success
-    if breaker.current_state == STATE_HALF_OPEN:
+    if breaker.current_state == CircuitBreakerState.HALF_OPEN:
         # Success in half-open → close the breaker
-        breaker._state_storage.reset_state()
+        breaker._state_storage.state = CircuitBreakerState.CLOSED
+        breaker._state_storage.reset_counter()
         log.info("Circuit breaker closed after success", channel=channel)
     await _sync_breaker_to_redis(channel)
 
@@ -63,8 +65,8 @@ async def record_failure(channel: str) -> None:
 
     # Check if we should trip
     if breaker._state_storage.counter >= breaker._fail_max:
-        if breaker.current_state != STATE_OPEN:
-            breaker._state_storage.state = STATE_OPEN
+        if breaker.current_state != CircuitBreakerState.OPEN:
+            breaker._state_storage.state = CircuitBreakerState.OPEN
             breaker._state_storage.opened_at = datetime.now(timezone.utc)
             log.warning(
                 "Circuit breaker OPEN — channel disabled",
@@ -78,7 +80,8 @@ async def record_failure(channel: str) -> None:
 async def reset_breaker(channel: str) -> None:
     """Manual reset — admin action."""
     breaker = get_breaker(channel)
-    breaker._state_storage.reset_state()
+    breaker._state_storage.state = CircuitBreakerState.CLOSED
+    breaker._state_storage.reset_counter()
     await _sync_breaker_to_redis(channel)
     log.info("Circuit breaker manually reset", channel=channel)
 
