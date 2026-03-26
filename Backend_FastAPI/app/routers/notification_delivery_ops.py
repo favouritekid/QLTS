@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core.deps import RequireAdmin
+from app.core.deps import RequireAdmin, get_delivery_scope_filter, get_delivery_for_user, DeliveryScopeFilter
 from app.core.rate_limits import limiter, RateLimits
 from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
 
@@ -38,11 +38,11 @@ async def list_deliveries(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = RequireAdmin,
+    scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter),
 ):
     """
     List notification delivery records with filters.
-    Admin-only endpoint for delivery visibility.
+    D4: Scoped by user role (admin=all, manager=unit, officer=self).
     """
     repo = NotificationDeliveryRepository(db)
     skip = (page - 1) * page_size
@@ -58,6 +58,7 @@ async def list_deliveries(
         date_to=date_to,
         skip=skip,
         limit=page_size,
+        allowed_user_ids=scope.allowed_user_ids,
     )
 
     return schemas.NotificationDeliveriesPage(
@@ -78,12 +79,13 @@ async def get_delivery_stats(
     event: Optional[str] = Query(None),
     channel: Optional[str] = Query(None),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = RequireAdmin,
+    scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter),
 ):
-    """Aggregate delivery stats (counts by status and channel)."""
+    """Aggregate delivery stats. D4: scoped by role."""
     repo = NotificationDeliveryRepository(db)
     stats = await repo.get_aggregate_stats(
         date_from=date_from, date_to=date_to, event=event, channel=channel,
+        allowed_user_ids=scope.allowed_user_ids,
     )
     return stats
 
@@ -97,12 +99,13 @@ async def get_delivery_failures(
     channel: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = RequireAdmin,
+    scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter),
 ):
-    """Failure analytics — grouped by error reason."""
+    """Failure analytics. D4: scoped by role."""
     repo = NotificationDeliveryRepository(db)
     summary = await repo.get_failure_summary(
         date_from=date_from, date_to=date_to, channel=channel, limit=limit,
+        allowed_user_ids=scope.allowed_user_ids,
     )
     return summary
 
@@ -111,15 +114,9 @@ async def get_delivery_failures(
 @router.get("/{delivery_id}", response_model=schemas.NotificationDeliveryResponse)
 async def get_delivery(
     request: Request,
-    delivery_id: int,
-    db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = RequireAdmin,
+    record=Depends(get_delivery_for_user),
 ):
-    """Get a single delivery record by ID."""
-    repo = NotificationDeliveryRepository(db)
-    record = await repo.get_by_id(delivery_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Delivery record not found")
+    """Get a single delivery record by ID. D4: IDOR-scoped."""
     return schemas.NotificationDeliveryResponse.model_validate(record)
 
 
@@ -175,12 +172,11 @@ async def replay_delivery(
     request: Request,
     delivery_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = RequireAdmin,
+    record=Depends(get_delivery_for_user),
 ):
     """
     Replay a failed/dead-lettered/skipped delivery.
-
-    Resets status to queued and enqueues to Celery worker.
+    D4: IDOR-scoped — user can only replay deliveries they can see.
     """
     from app.services import notification_delivery_service
     from app.tasks.delivery_tasks import execute_notification_delivery
@@ -195,7 +191,7 @@ async def replay_delivery(
     # Enqueue to worker
     execute_notification_delivery.apply_async(args=[delivery_id])
 
-    log.info("Delivery replayed", delivery_id=delivery_id, admin_id=current_admin.id)
+    log.info("Delivery replayed", delivery_id=delivery_id)
     return schemas.ReplayResponse(
         replayed=True,
         delivery_id=delivery_id,

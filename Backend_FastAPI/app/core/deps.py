@@ -1726,6 +1726,74 @@ RequireManager = Depends(require_admin_or_manager)
 RequireStaff = Depends(require_any_staff)
 
 
+# ============================================================================
+# D4: DELIVERY OPS IDOR SCOPING
+# ============================================================================
+
+
+class DeliveryScopeFilter:
+    """Pre-resolved scope for notification delivery queries."""
+    __slots__ = ("scope_kind", "allowed_user_ids")
+
+    def __init__(self, scope_kind: str, allowed_user_ids: Optional[List[int]] = None):
+        self.scope_kind = scope_kind
+        self.allowed_user_ids = allowed_user_ids
+
+
+async def get_delivery_scope_filter(
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> DeliveryScopeFilter:
+    """Resolve delivery scope: Admin=all, Manager=unit hierarchy, Officer=self."""
+    if current_user.role == UserRole.ADMIN:
+        return DeliveryScopeFilter(scope_kind="all")
+
+    if current_user.role == UserRole.MANAGER and current_user.unit_id:
+        from ..repositories.organization_repository import OrganizationRepository
+        org_repo = OrganizationRepository(db)
+        descendant_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+        from sqlalchemy import select
+        user_q = select(models.User.id).where(models.User.unit_id.in_(descendant_unit_ids))
+        result = await db.execute(user_q)
+        allowed_ids = [row[0] for row in result.all()]
+        return DeliveryScopeFilter(scope_kind="unit", allowed_user_ids=allowed_ids)
+
+    return DeliveryScopeFilter(scope_kind="self", allowed_user_ids=[current_user.id])
+
+
+async def get_delivery_for_user(
+    delivery_id: int = Path(..., description="Delivery record ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Get single delivery with IDOR check. Returns 404 on scope violation."""
+    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+    repo = NotificationDeliveryRepository(db)
+    record = await repo.get_by_id(delivery_id)
+    if not record:
+        raise ResourceNotFoundError(detail="Delivery record not found")
+
+    if current_user.role == UserRole.ADMIN:
+        return record
+
+    if current_user.role == UserRole.MANAGER and current_user.unit_id:
+        from ..repositories.organization_repository import OrganizationRepository
+        org_repo = OrganizationRepository(db)
+        descendant_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+        from sqlalchemy import select
+        if record.user_id:
+            user_q = select(models.User.unit_id).where(models.User.id == record.user_id)
+            result = await db.execute(user_q)
+            row = result.first()
+            if row and row[0] in descendant_unit_ids:
+                return record
+        raise ResourceNotFoundError(detail="Delivery record not found")
+
+    if record.user_id == current_user.id:
+        return record
+    raise ResourceNotFoundError(detail="Delivery record not found")
+
+
 async def get_config_filter(
     active_only: bool = True,
     current_user: models.User = Depends(get_current_active_user),

@@ -170,6 +170,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         date_to: datetime | None = None,
         skip: int = 0,
         limit: int = 50,
+        allowed_user_ids: list[int] | None = None,
     ) -> Tuple[List[NotificationDelivery], int]:
         """List deliveries with filters. Returns (records, total_count)."""
         conditions = []
@@ -190,6 +191,8 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
             conditions.append(NotificationDelivery.created_at >= date_from)
         if date_to:
             conditions.append(NotificationDelivery.created_at <= date_to)
+        if allowed_user_ids is not None:
+            conditions.append(NotificationDelivery.user_id.in_(allowed_user_ids))
 
         where = and_(*conditions) if conditions else True
 
@@ -216,6 +219,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         date_to: "datetime | None" = None,
         event: str | None = None,
         channel: str | None = None,
+        allowed_user_ids: list[int] | None = None,
     ) -> dict:
         """
         Aggregate delivery stats: counts by status and channel.
@@ -231,6 +235,8 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
             conditions.append(NotificationDelivery.event == event)
         if channel:
             conditions.append(NotificationDelivery.channel == channel)
+        if allowed_user_ids is not None:
+            conditions.append(NotificationDelivery.user_id.in_(allowed_user_ids))
 
         where = and_(*conditions) if conditions else True
 
@@ -269,6 +275,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         date_to: "datetime | None" = None,
         channel: str | None = None,
         limit: int = 20,
+        allowed_user_ids: list[int] | None = None,
     ) -> dict:
         """
         Failure analytics: grouped by error_reason.
@@ -284,6 +291,8 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
             conditions.append(NotificationDelivery.created_at <= date_to)
         if channel:
             conditions.append(NotificationDelivery.channel == channel)
+        if allowed_user_ids is not None:
+            conditions.append(NotificationDelivery.user_id.in_(allowed_user_ids))
 
         where = and_(*conditions)
 
