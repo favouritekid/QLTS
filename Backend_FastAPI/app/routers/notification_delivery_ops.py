@@ -159,16 +159,6 @@ async def get_health_summary(request: Request, db: AsyncSession = Depends(databa
     )
 
 @limiter.limit(RateLimits.DATA_READ)
-@router.get("/{delivery_id}", response_model=schemas.NotificationDeliveryResponse)
-async def get_delivery(
-    request: Request,
-    record=Depends(get_delivery_for_user),
-):
-    """Get a single delivery record by ID. D4: IDOR-scoped."""
-    return schemas.NotificationDeliveryResponse.model_validate(record)
-
-
-@limiter.limit(RateLimits.DATA_READ)
 @router.get("/quotas", response_model=schemas.QuotaListResponse)
 async def get_quotas(
     request: Request,
@@ -212,6 +202,16 @@ async def reset_circuit_breaker(
     await reset_breaker(channel)
     log.info("Circuit breaker reset by admin", channel=channel, admin_id=current_admin.id)
     return {"channel": channel, "state": "closed", "message": f"Breaker for {channel} reset"}
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/{delivery_id}", response_model=schemas.NotificationDeliveryResponse)
+async def get_delivery(
+    request: Request,
+    record=Depends(get_delivery_for_user),
+):
+    """Get a single delivery record by ID. D4: IDOR-scoped."""
+    return schemas.NotificationDeliveryResponse.model_validate(record)
 
 
 @limiter.limit(RateLimits.DATA_WRITE)
