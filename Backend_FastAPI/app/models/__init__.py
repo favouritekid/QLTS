@@ -59,6 +59,7 @@ from .notification import Notification, NotificationAction, NotificationRule, No
 from .notification_preference import NotificationPreference
 from .notification_delivery import NotificationDelivery
 from .notification_consent import NotificationConsent
+from .notification_consent_history import NotificationConsentHistory
 from .notification_quota import NotificationQuota
 from .zalo_token_store import ZaloTokenStore
 
@@ -171,6 +172,7 @@ __all__ = [
     "NotificationPreference",
     "NotificationDelivery",
     "NotificationConsent",
+    "NotificationConsentHistory",
     "NotificationQuota",
     "ZaloTokenStore",
     # Organization (Legacy)

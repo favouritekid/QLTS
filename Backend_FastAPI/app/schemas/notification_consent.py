@@ -51,3 +51,29 @@ class NotificationConsentImportResult(BaseModel):
     revoked: int
     skipped: int
     errors: List[Dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# Phase E1: Consent History schemas
+# ---------------------------------------------------------------------------
+
+class ConsentHistoryResponse(BaseModel):
+    """Single consent history entry response."""
+    id: int
+    consent_id: Optional[int] = None
+    channel: str
+    source_type: str
+    source_id: int
+    action: str
+    old_status: Optional[str] = None
+    new_status: str
+    performed_by: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConsentHistoryPage(BaseModel):
+    """Paginated consent history list response."""
+    total_count: int
+    history: List[ConsentHistoryResponse]

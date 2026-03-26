@@ -318,6 +318,8 @@ from .notification_consent import (
     NotificationConsentResponse,
     NotificationConsentsPage,
     NotificationConsentImportResult,
+    ConsentHistoryResponse,
+    ConsentHistoryPage,
 )
 
 # --- Từ notification_preference.py ---

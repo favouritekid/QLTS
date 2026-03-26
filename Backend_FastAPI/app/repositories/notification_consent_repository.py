@@ -11,6 +11,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models.notification_consent import NotificationConsent
 from app.repositories.base import BaseRepository
+from app.repositories.notification_consent_history_repository import (
+    NotificationConsentHistoryRepository,
+)
 
 
 class NotificationConsentRepository(BaseRepository[NotificationConsent]):
@@ -43,8 +46,15 @@ class NotificationConsentRepository(BaseRepository[NotificationConsent]):
     async def upsert_latest(self, data: Dict[str, Any]) -> NotificationConsent:
         """
         Upsert consent — insert or update on (channel, source_type, source_id).
+        After upsert, appends a history row capturing old->new status.
         Returns the resulting row.
         """
+        # Capture old state before upsert (for history logging)
+        old_consent = await self.get_latest(
+            data["channel"], data["source_type"], data["source_id"]
+        )
+        old_status = old_consent.consent_status if old_consent else None
+
         stmt = pg_insert(NotificationConsent).values(**data)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_consent_channel_source",
@@ -71,6 +81,21 @@ class NotificationConsentRepository(BaseRepository[NotificationConsent]):
         )
         if existing:
             await self.db.refresh(existing)
+
+        # Append history row (Phase E1)
+        new_status = data.get("consent_status", "granted")
+        history_repo = NotificationConsentHistoryRepository(self.db)
+        await history_repo.append({
+            "consent_id": existing.id if existing else None,
+            "channel": data["channel"],
+            "source_type": data["source_type"],
+            "source_id": data["source_id"],
+            "action": new_status,  # granted or revoked
+            "old_status": old_status,
+            "new_status": new_status,
+            "performed_by": data.get("granted_by"),
+        })
+
         return existing
 
     async def bulk_upsert(

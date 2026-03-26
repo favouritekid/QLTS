@@ -20,6 +20,7 @@ from app import database, models, schemas
 from app.core.deps import RequireAdmin
 from app.core.rate_limits import limiter, RateLimits
 from app.repositories.notification_consent_repository import NotificationConsentRepository
+from app.repositories.notification_consent_history_repository import NotificationConsentHistoryRepository
 
 log = structlog.get_logger(__name__)
 router = APIRouter(
@@ -202,4 +203,69 @@ async def bulk_import_consents(
         revoked=summary["revoked"],
         skipped=summary["skipped"] + len(parse_errors),
         errors=all_errors,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase E1: Consent History endpoints
+# ---------------------------------------------------------------------------
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/history", response_model=schemas.ConsentHistoryPage)
+async def list_entity_consent_history(
+    request: Request,
+    source_type: str = Query(..., description="Entity type (lead, admission_profile, etc.)"),
+    source_id: int = Query(..., description="Entity ID"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = RequireAdmin,
+):
+    """List consent history for an entity (source_type + source_id). Admin-only."""
+    repo = NotificationConsentHistoryRepository(db)
+    skip = (page - 1) * page_size
+
+    records, total = await repo.list_for_entity(
+        source_type=source_type,
+        source_id=source_id,
+        skip=skip,
+        limit=page_size,
+    )
+
+    return schemas.ConsentHistoryPage(
+        total_count=total,
+        history=[
+            schemas.ConsentHistoryResponse.model_validate(r)
+            for r in records
+        ],
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/{consent_id}/history", response_model=schemas.ConsentHistoryPage)
+async def list_consent_history(
+    request: Request,
+    consent_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = RequireAdmin,
+):
+    """List history for a specific consent record. Admin-only."""
+    repo = NotificationConsentHistoryRepository(db)
+    skip = (page - 1) * page_size
+
+    records, total = await repo.list_for_consent(
+        consent_id=consent_id,
+        skip=skip,
+        limit=page_size,
+    )
+
+    return schemas.ConsentHistoryPage(
+        total_count=total,
+        history=[
+            schemas.ConsentHistoryResponse.model_validate(r)
+            for r in records
+        ],
     )
