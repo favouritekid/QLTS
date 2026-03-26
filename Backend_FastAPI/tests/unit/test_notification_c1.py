@@ -342,7 +342,7 @@ class TestExecuteNotificationDelivery:
 
     async def test_skips_non_queued_delivery(self):
         """Already-sent delivery should be skipped (idempotent)."""
-        from app.tasks.delivery_tasks import _check_delivery_eligibility
+        from app.services.notification_delivery_service import check_delivery_eligibility
 
         mock_delivery = MagicMock()
         mock_delivery.status = "sent"
@@ -358,13 +358,13 @@ class TestExecuteNotificationDelivery:
         mock_delivery.source_id = None
 
         # No reason to skip — eligibility check is for consent/preference
-        result = await _check_delivery_eligibility(AsyncMock(), mock_delivery)
+        result = await check_delivery_eligibility(AsyncMock(), mock_delivery)
         # Internal user without event in SystemEvents → passes (no preference check crash)
         assert result is None  # None means "OK to proceed"
 
     async def test_consent_revoked_returns_skip_reason(self):
         """External delivery with revoked consent should return skip reason."""
-        from app.tasks.delivery_tasks import _check_delivery_eligibility
+        from app.services.notification_delivery_service import check_delivery_eligibility
 
         mock_delivery = MagicMock()
         mock_delivery.recipient_kind = "external"
@@ -382,13 +382,13 @@ class TestExecuteNotificationDelivery:
             "app.repositories.notification_consent_repository.NotificationConsentRepository",
             return_value=mock_consent_repo,
         ):
-            result = await _check_delivery_eligibility(mock_session, mock_delivery)
+            result = await check_delivery_eligibility(mock_session, mock_delivery)
 
         assert result == "consent_revoked"
 
     async def test_consent_granted_passes(self):
         """External delivery with granted consent should pass eligibility."""
-        from app.tasks.delivery_tasks import _check_delivery_eligibility
+        from app.services.notification_delivery_service import check_delivery_eligibility
 
         mock_delivery = MagicMock()
         mock_delivery.recipient_kind = "external"
@@ -406,7 +406,7 @@ class TestExecuteNotificationDelivery:
             "app.repositories.notification_consent_repository.NotificationConsentRepository",
             return_value=mock_consent_repo,
         ):
-            result = await _check_delivery_eligibility(mock_session, mock_delivery)
+            result = await check_delivery_eligibility(mock_session, mock_delivery)
 
         assert result is None  # None = OK
 

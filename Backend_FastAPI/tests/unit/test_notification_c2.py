@@ -265,7 +265,7 @@ class TestReplayDelivery:
         db.flush = AsyncMock()
 
         with patch(
-            "app.tasks.delivery_tasks._check_delivery_eligibility",
+            "app.services.notification_delivery_service.check_delivery_eligibility",
             new_callable=AsyncMock, return_value=None,
         ):
             from app.services.notification_delivery_service import replay_delivery
@@ -289,7 +289,7 @@ class TestReplayDelivery:
         db.flush = AsyncMock()
 
         with patch(
-            "app.tasks.delivery_tasks._check_delivery_eligibility",
+            "app.services.notification_delivery_service.check_delivery_eligibility",
             new_callable=AsyncMock, return_value=None,
         ):
             from app.services.notification_delivery_service import replay_delivery
@@ -305,7 +305,7 @@ class TestReplayDelivery:
         db.flush = AsyncMock()
 
         with patch(
-            "app.tasks.delivery_tasks._check_delivery_eligibility",
+            "app.services.notification_delivery_service.check_delivery_eligibility",
             new_callable=AsyncMock, return_value=None,
         ):
             from app.services.notification_delivery_service import replay_delivery
@@ -330,7 +330,7 @@ class TestReplayDelivery:
         db.get = AsyncMock(return_value=delivery)
 
         with patch(
-            "app.tasks.delivery_tasks._check_delivery_eligibility",
+            "app.services.notification_delivery_service.check_delivery_eligibility",
             new_callable=AsyncMock, return_value="consent_revoked",
         ):
             from app.services.notification_delivery_service import replay_delivery
@@ -720,7 +720,7 @@ class TestBeatSchedule:
 class TestCheckDeliveryEligibility:
 
     async def test_external_consent_revoked_returns_reason(self):
-        from app.tasks.delivery_tasks import _check_delivery_eligibility
+        from app.services.notification_delivery_service import check_delivery_eligibility
 
         delivery = MagicMock()
         delivery.recipient_kind = "external"
@@ -737,12 +737,12 @@ class TestCheckDeliveryEligibility:
             "app.repositories.notification_consent_repository.NotificationConsentRepository",
             return_value=mock_consent_repo,
         ):
-            result = await _check_delivery_eligibility(session, delivery)
+            result = await check_delivery_eligibility(session, delivery)
 
         assert result == "consent_revoked"
 
     async def test_external_consent_granted_returns_none(self):
-        from app.tasks.delivery_tasks import _check_delivery_eligibility
+        from app.services.notification_delivery_service import check_delivery_eligibility
 
         delivery = MagicMock()
         delivery.recipient_kind = "external"
@@ -758,7 +758,7 @@ class TestCheckDeliveryEligibility:
             "app.repositories.notification_consent_repository.NotificationConsentRepository",
             return_value=mock_consent_repo,
         ):
-            result = await _check_delivery_eligibility(session, delivery)
+            result = await check_delivery_eligibility(session, delivery)
 
         assert result is None
 

@@ -44,36 +44,11 @@ if os.path.exists(_env_test_path):
 else:
     print(f"WARNING [conftest.py]: .env.test not found at {_env_test_path}")
 
-# --- PATCH REDIS BEFORE APP IMPORT ---
-print("INFO [conftest.py]: Patching Redis with FakeRedis before app import...")
-import redis
-import redis.asyncio
-import fakeredis
-
-# Create a shared FakeServer to enable LUA script support
-_fake_server = fakeredis.FakeServer()
-print(f"INFO [conftest.py]: Created shared FakeServer for LUA script support")
-
-# Save originals
-_original_from_url_async = redis.asyncio.from_url
-_original_from_url_sync = redis.from_url
-
-# Create patch functions
-def _fake_redis_from_url_async(*args, **kwargs):
-    print(f"INFO [conftest.py]: FakeRedis (async) intercepted from_url call")
-    decode_responses = kwargs.get('decode_responses', True)
-    return fakeredis.aioredis.FakeRedis(server=_fake_server, decode_responses=decode_responses)
-
-def _fake_redis_from_url_sync(*args, **kwargs):
-    print(f"INFO [conftest.py]: FakeRedis (sync) intercepted from_url call")
-    decode_responses = kwargs.get('decode_responses', True)
-    # Use shared server for LUA script support
-    return fakeredis.FakeStrictRedis(server=_fake_server, decode_responses=decode_responses)
-
-# Patch them globally
-redis.asyncio.from_url = _fake_redis_from_url_async
-redis.from_url = _fake_redis_from_url_sync
-print("INFO [conftest.py]: Redis patched with FakeRedis successfully")
+# --- PATCH REDIS BEFORE APP IMPORT (Track T: delegated to fixtures/redis.py) ---
+from tests.fixtures.redis import patch_redis, get_fake_server
+patch_redis()
+_fake_server = get_fake_server()
+print("INFO [conftest.py]: Redis patched via fixtures/redis.py")
 
 # --- IMPORT APP COMPONENTS ---
 print("INFO [conftest.py]: Importing app components...")
@@ -176,55 +151,19 @@ def create_mock_lead_file(
 
 async def _create_user_and_role(
     user_data: dict, casbin_role: str, unit_id: int = None
-):  # ✅ Thêm tham số unit_id
-    """Creates a user in DB and assigns Casbin role."""
-    user_info = {}
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            user = models.User(
-                username=user_data["username"],
-                email=user_data["email"],
-                password_hash=get_password_hash(user_data["password"]),
-                role=user_data["role"],
-                status=user_data["status"],
-                unit_id=unit_id,  # ✅ Gán unit_id
-            )
-            session.add(user)
-            await session.flush()
-            db_user_id = user.id
-            if not db_user_id:
-                raise Exception(
-                    f"Failed to get auto-generated ID for user {user_data['username']}"
-                )
-
-            if CasbinRule:
-                casbin_policy = insert(CasbinRule).values(
-                    ptype="g", v0=f"user:{db_user_id}", v1=casbin_role
-                )
-                await session.execute(casbin_policy)
-            else:
-                log.warning(
-                    f"CasbinRule not available, skipping role assignment for {user_data['username']}."
-                )
-
-            user_info = {
-                "id": db_user_id,
-                "username": user_data["username"],
-                "email": user_data["email"],  # ✅ ADDED: Include email
-                "password": user_data["password"],
-            }
-    # Reload Casbin policies sau khi thay đổi (nên làm ở đây HOẶC trong client fixture)
-    if hasattr(app.state, "enforcer") and app.state.enforcer:
-        try:
-            await app.state.enforcer.load_policy()
-            log.info(
-                f"Casbin policies reloaded after creating user {user_data['username']}"
-            )
-        except Exception as e:
-            log.error(
-                f"Failed to reload Casbin policies after creating user {user_data['username']}: {e}"
-            )
-    return user_info
+):
+    """Track T: Delegated to fixtures/users.py."""
+    from tests.fixtures.users import create_user_with_role
+    return await create_user_with_role(
+        session_factory=AsyncSessionLocal,
+        user_data=user_data,
+        casbin_role=casbin_role,
+        unit_id=unit_id,
+        models=models,
+        get_password_hash=get_password_hash,
+        CasbinRule=CasbinRule,
+        app=app,
+    )
 
 
 # ===============================================================
@@ -252,79 +191,9 @@ async def manage_engine():
 
 
 def _verify_test_database_safety():
-    """
-    🚨 CRITICAL SAFETY CHECK 🚨
-
-    Verify we're using a safe test database before allowing DROP operations.
-    This prevents accidentally dropping production database tables.
-
-    Safety criteria:
-    1. APP_ENV must be "test"
-    2. DATABASE_URL must meet ONE of these conditions:
-       - Contains ":memory:" (SQLite in-memory)
-       - Database name contains "test" (case-insensitive)
-       - Database name ends with "_test"
-
-    Production database indicators (BLOCKED):
-    - Database names: production, prod, main, qlts_dev, qlts (without _test)
-    """
-    # Check 1: APP_ENV must be "test"
-    current_env = settings.APP_ENV
-    if current_env != "test":
-        pytest.fail(
-            f"🚨 SAFETY CHECK FAILED! 🚨\n"
-            f"APP_ENV is '{current_env}', not 'test'.\n"
-            f"Tests will NOT run to prevent production database deletion!\n"
-            f"Set APP_ENV=test before running tests."
-        )
-
-    # Check 2: DATABASE_URL must be safe
-    db_url = settings.DATABASE_URL
-    db_url_lower = db_url.lower()
-
-    # Safe patterns
-    is_memory = ":memory:" in db_url_lower
-    has_test_in_name = "test" in db_url_lower or "_test" in db_url_lower
-
-    # Dangerous patterns (production database indicators)
-    dangerous_patterns = [
-        "/qlts_dev",        # Development database
-        "/qlts_prod",       # Production database
-        "/qlts_production", # Production database
-        "/qlts/",           # Production database (without suffix)
-        "/qlts ",           # Production database (space after)
-        "/production",      # Generic production
-        "/prod/",           # Generic production
-        "/main/",           # Main database
-    ]
-
-    is_dangerous = any(pattern in db_url_lower for pattern in dangerous_patterns)
-
-    # Final decision
-    if is_dangerous and not has_test_in_name:
-        pytest.fail(
-            f"🚨 SAFETY CHECK FAILED! 🚨\n"
-            f"DATABASE_URL appears to be a PRODUCTION database:\n"
-            f"  {db_url}\n\n"
-            f"Dangerous patterns detected: {[p for p in dangerous_patterns if p in db_url_lower]}\n\n"
-            f"Tests will NOT run to prevent production database deletion!\n\n"
-            f"For safe testing, use:\n"
-            f"  - ':memory:' for SQLite in-memory\n"
-            f"  - Database name containing 'test' (e.g., qlts_test, your_test_db_name)\n"
-        )
-
-    if not (is_memory or has_test_in_name):
-        pytest.fail(
-            f"🚨 SAFETY CHECK FAILED! 🚨\n"
-            f"DATABASE_URL does not appear to be a test database:\n"
-            f"  {db_url}\n\n"
-            f"Tests will NOT run to prevent production database deletion!\n\n"
-            f"For safe testing, use:\n"
-            f"  - ':memory:' for SQLite in-memory\n"
-            f"  - Database name containing 'test' (e.g., qlts_test, your_test_db_name)\n"
-        )
-
-    log.info(f"✅ Safety check passed: APP_ENV={current_env}, DB_URL={db_url[:60]}...")
+    """Track T: Delegated to fixtures/database.py."""
+    from tests.fixtures.database import verify_test_database_safety
+    verify_test_database_safety(settings, pytest.fail)
 
 
 # ===============================================================
@@ -347,152 +216,15 @@ _schema_initialized = False
 
 
 async def _init_schema_once():
-    """Create the full schema from scratch. Called once per pytest session."""
-    from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
-    from sqlalchemy.pool import NullPool
-
-    # Use a SEPARATE short-lived engine (NullPool) for schema DDL.
-    # NullPool creates a fresh connection each time and closes it immediately,
-    # eliminating asyncpg prepared-statement cache pollution entirely.
-    setup_engine = _create_engine(
-        settings.DATABASE_URL,
-        poolclass=NullPool,
-        connect_args={"command_timeout": 60},
-    )
-
-    try:
-        # Step 1: Nuke everything via DROP SCHEMA CASCADE (clean slate).
-        # First terminate other connections to avoid deadlocks — the app
-        # engine or Casbin adapter may hold idle connections from import.
-        async with setup_engine.begin() as conn:
-            await conn.execute(text(
-                "SELECT pg_terminate_backend(pid) "
-                "FROM pg_stat_activity "
-                "WHERE datname = current_database() "
-                "AND pid <> pg_backend_pid()"
-            ))
-            await conn.execute(text("DROP SCHEMA public CASCADE"))
-            await conn.execute(text("CREATE SCHEMA public"))
-        log.info("[Schema Init] Step 1: DROP SCHEMA CASCADE complete")
-
-        # Must dispose to clear any residual state
-        await setup_engine.dispose()
-
-        # Step 2: Recreate with a fresh engine (NullPool = no stale cache)
-        setup_engine = _create_engine(
-            settings.DATABASE_URL,
-            poolclass=NullPool,
-            connect_args={"command_timeout": 60},
-        )
-        async with setup_engine.begin() as conn:
-            # Drop stale enum types that may conflict with create_all
-            # (SQLAlchemy Enum tracking + asyncpg type cache can cause duplicates)
-            await conn.execute(text("DROP TYPE IF EXISTS discount_type_enum CASCADE"))
-            await conn.execute(text("DROP TYPE IF EXISTS outcometype CASCADE"))
-            await conn.execute(text("DROP TYPE IF EXISTS statustype CASCADE"))
-            await conn.execute(text("DROP TYPE IF EXISTS selectablemode CASCADE"))
-            await conn.execute(text("DROP TYPE IF EXISTS triggertype CASCADE"))
-            await conn.execute(text("DROP TYPE IF EXISTS administrativenodelevel CASCADE"))
-
-            # Re-create enum types that have create_type=False in models
-            # (migration-managed enums that create_all() won't auto-create)
-            await conn.execute(text(
-                "CREATE TYPE discount_type_enum AS ENUM ('amount', 'percentage')"
-            ))
-
-            await conn.run_sync(AppBase.metadata.create_all)
-
-            # Create sequences not tracked by SQLAlchemy metadata
-            # (created via raw SQL in Alembic migrations)
-            await conn.execute(text(
-                "CREATE SEQUENCE IF NOT EXISTS collaborator_code_seq "
-                "START WITH 1 INCREMENT BY 1"
-            ))
-
-            # Create partial unique index for email per unit (matches Alembic migration)
-            await conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_email_unit_active "
-                "ON lead (lower(email), unit_id) "
-                "WHERE email IS NOT NULL AND deleted_at IS NULL"
-            ))
-
-            # Create partial unique index for phone identity (PR3: True Phone Identity)
-            await conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_phone_active "
-                "ON lead_phone_identity (phone_normalized) "
-                "WHERE deleted_at IS NULL"
-            ))
-
-            if CasbinBase:
-                await conn.run_sync(CasbinBase.metadata.create_all)
-                await conn.execute(text("""
-                    DO $$ BEGIN
-                        ALTER TABLE casbin_rule
-                        ADD COLUMN IF NOT EXISTS template_id VARCHAR(50),
-                        ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP,
-                        ADD COLUMN IF NOT EXISTS applied_by INTEGER;
-                        CREATE INDEX IF NOT EXISTS ix_casbin_rule_template_id
-                        ON casbin_rule(template_id);
-                    EXCEPTION WHEN undefined_table THEN
-                        NULL;
-                    END $$;
-                """))
-
-            tc = await conn.execute(text(
-                "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"
-            ))
-            table_count = tc.scalar()
-            log.info(f"[Schema Init] Step 2: Created {table_count} tables")
-            if table_count == 0:
-                raise RuntimeError(
-                    "Schema init produced 0 tables! "
-                    "Fix: DROP DATABASE qlts_test; CREATE DATABASE qlts_test;"
-                )
-    finally:
-        await setup_engine.dispose()
-
-    log.info("[Schema Init] Schema initialization complete")
+    """Track T: Delegated to fixtures/database.py."""
+    from tests.fixtures.database import init_schema_once
+    await init_schema_once(settings, AppBase, CasbinBase)
 
 
 async def _truncate_all_tables():
-    """Truncate all data from all tables in a single statement.
-
-    Uses a DEDICATED short-lived engine (NullPool) to avoid deadlocks
-    with the app's connection pool. The app engine may hold idle connections
-    that lock tables, causing deadlock when TRUNCATE CASCADE acquires
-    AccessExclusiveLock in a different order.
-    """
-    from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
-    from sqlalchemy.pool import NullPool
-
-    truncate_engine = _create_engine(
-        settings.DATABASE_URL,
-        poolclass=NullPool,
-        connect_args={"command_timeout": 60},
-    )
-    try:
-        # Dispose app engine first to release any held connections
-        await engine.dispose()
-
-        async with truncate_engine.begin() as conn:
-            # Disable statement_timeout for bulk truncate
-            await conn.execute(text("SET LOCAL statement_timeout = 0"))
-            result = await conn.execute(text(
-                "SELECT string_agg(quote_ident(tablename), ', ') "
-                "FROM pg_tables WHERE schemaname = 'public'"
-            ))
-            tables = result.scalar()
-            if tables:
-                await conn.execute(
-                    text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
-                )
-                # Reset standalone sequences not owned by any table column
-                # (RESTART IDENTITY only resets column-owned sequences)
-                await conn.execute(text(
-                    "SELECT setval('collaborator_code_seq', 1, false)"
-                ))
-    finally:
-        await truncate_engine.dispose()
+    """Track T: Delegated to fixtures/database.py."""
+    from tests.fixtures.database import truncate_all_tables
+    await truncate_all_tables(settings, engine)
 
 
 @pytest_asyncio.fixture(scope="function", autouse=False)
@@ -689,33 +421,9 @@ async def test_user_in_db(setup_test_database):
 
 
 async def _get_token_headers(client: AsyncClient, user_info: dict) -> dict:
-    """
-    Helper to login and get auth headers.
-
-    ✅ FIX-5: Auth now uses httpOnly cookies. The httpx AsyncClient automatically
-    manages cookies, so we don't need to manually pass Authorization headers.
-    However, for backward compatibility with tests that use headers parameter,
-    we extract the token from the cookie and return it as an Authorization header.
-    """
-    login_data = {"username": user_info["username"], "password": user_info["password"]}
-    res = await client.post(
-        AuthURLs.LOGIN, data=login_data
-    )
-    if res.status_code != 200:
-        pytest.fail(
-            f"{user_info['username']} login failed: Status {res.status_code} - {res.text}"
-        )
-
-    # ✅ FIX: Extract access_token from cookie (not JSON response)
-    access_token = res.cookies.get("access_token")
-    if not access_token:
-        pytest.fail(
-            f"{user_info['username']} login succeeded but access_token cookie not found"
-        )
-
-    # Return as Authorization header for backward compatibility
-    # (Backend supports both cookie and header auth)
-    return {"Authorization": f"Bearer {access_token}"}
+    """Track T: Delegated to fixtures/users.py."""
+    from tests.fixtures.users import get_auth_headers
+    return await get_auth_headers(client, user_info, AuthURLs.LOGIN)
 
 
 @pytest_asyncio.fixture(scope="function")
