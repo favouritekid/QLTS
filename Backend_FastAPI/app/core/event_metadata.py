@@ -56,11 +56,25 @@ class EventMetadata:
     variables: List[EventVariable]
     filter_fields: List[str]
     default_channels: List[str] = field(default_factory=lambda: ["browser"])
+    # NOTE: default_channels currently only includes "browser" and "email".
+    # "zalo" and "sms" are planned/gated channels (see NotificationChannel in
+    # event_groups.py). They are defined in the enum but default to False in
+    # DEFAULT_GROUP_CHANNELS and are NOT listed in any event's default_channels
+    # here until their delivery backends are production-ready.
+    # See NOTIFICATION_PLAN_SPEC_ADDENDUM.md for the gating roadmap.
     category: str = "general"
 
 
 # =============================================================================
 # ✅ EVENT METADATA REGISTRY - 27 EVENTS DEFINED
+#
+# Channel inventory:
+#   browser  — active, delivered via Socket.IO + DB row
+#   email    — active, delivered via EmailService / Celery worker
+#   zalo     — planned (ZNS Phase 1), gated behind feature flag, not in any
+#              default_channels list below until delivery backend is live
+#   sms      — planned (future), gated behind feature flag, not in any
+#              default_channels list below until delivery backend is live
 # =============================================================================
 
 EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {

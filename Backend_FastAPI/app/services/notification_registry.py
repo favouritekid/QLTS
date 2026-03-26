@@ -125,6 +125,16 @@ class NotificationConfig:
 
 # =============================================================================
 # NOTIFICATION REGISTRY
+#
+# This registry maps SystemEvents -> NotificationConfig and is consumed by
+# notification_dispatcher.dispatch() at runtime.
+#
+# NOTE on NotificationAction (models/notification.py):
+#   NotificationAction is the DB model for multi-step workflow actions stored
+#   alongside NotificationRule. It is a future capability -- not wired into
+#   the production dispatch() path. dispatch() reads NotificationConfig from
+#   this in-memory registry, NOT NotificationAction rows from the DB.
+#   See Addendum Section 6 for the planned integration roadmap.
 # =============================================================================
 
 # Shorthand aliases for cleaner registry entries
