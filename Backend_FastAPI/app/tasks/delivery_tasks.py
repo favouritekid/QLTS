@@ -124,7 +124,9 @@ def execute_notification_delivery(self, delivery_id: int):
                 return {"status": "re_enqueued", "delivery_id": delivery_id}
 
             # 4. Re-check eligibility (consent/preference)
-            skip_reason = await _check_delivery_eligibility(session, delivery)
+            # M10: Import from service (not local) to avoid import cycle
+            from app.services.notification_delivery_service import check_delivery_eligibility
+            skip_reason = await check_delivery_eligibility(session, delivery)
             if skip_reason:
                 if _is_permanent_error(skip_reason):
                     # Permanent: dead-letter
@@ -429,45 +431,7 @@ def reconcile_stale_deliveries(self):
 # Eligibility check (shared by execute task)
 # =============================================================================
 
-async def _check_delivery_eligibility(session, delivery) -> str | None:
-    """
-    Re-check if delivery should proceed.
-
-    Returns skip reason string if delivery should be skipped, None if OK.
-    """
-    # External recipients: check consent
-    if delivery.recipient_kind == "external" and delivery.source_type and delivery.source_id:
-        from app.repositories.notification_consent_repository import NotificationConsentRepository
-        consent_repo = NotificationConsentRepository(session)
-        granted = await consent_repo.is_consent_granted(
-            channel=delivery.channel,
-            source_type=delivery.source_type,
-            source_id=delivery.source_id,
-        )
-        if not granted:
-            return "consent_revoked"
-
-    # Internal recipients: check user preference
-    if delivery.recipient_kind == "internal" and delivery.user_id:
-        from app.services import notification_preference_service
-        from app.core.events import SystemEvents
-        from app.core.event_groups import get_event_group
-
-        try:
-            event_enum = SystemEvents(delivery.event)
-            group = get_event_group(event_enum)
-            filtered = await notification_preference_service.filter_users_by_group(
-                db=session,
-                user_ids=[delivery.user_id],
-                group=group.value,
-                channel=delivery.channel,
-            )
-            if delivery.user_id not in filtered:
-                return "preference_disabled"
-        except ValueError:
-            pass
-
-    return None
+# _check_delivery_eligibility moved to notification_delivery_service.py (M10 fix)
 
 
 # =============================================================================

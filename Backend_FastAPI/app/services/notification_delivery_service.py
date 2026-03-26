@@ -283,9 +283,8 @@ async def replay_delivery(
     if delivery.status not in ("failed", "dead_lettered", "skipped"):
         return False, f"Cannot replay delivery with status '{delivery.status}'"
 
-    # Re-check eligibility before replay
-    from app.tasks.delivery_tasks import _check_delivery_eligibility
-    skip_reason = await _check_delivery_eligibility(db, delivery)
+    # Re-check eligibility before replay (M10: use local function, no tasks import)
+    skip_reason = await check_delivery_eligibility(db, delivery)
     if skip_reason:
         return False, f"Replay blocked: {skip_reason}"
 
@@ -299,6 +298,50 @@ async def replay_delivery(
     await db.flush()
 
     return True, "Delivery replayed"
+
+
+async def check_delivery_eligibility(session: AsyncSession, delivery) -> str | None:
+    """
+    Re-check if delivery should proceed (consent + preference).
+
+    Returns skip reason string if delivery should be skipped, None if OK.
+
+    M10: Moved from delivery_tasks.py to avoid import cycle (tasks→service).
+    Called by both delivery task and replay_delivery.
+    """
+    # External recipients: check consent
+    if delivery.recipient_kind == "external" and delivery.source_type and delivery.source_id:
+        from app.repositories.notification_consent_repository import NotificationConsentRepository
+        consent_repo = NotificationConsentRepository(session)
+        granted = await consent_repo.is_consent_granted(
+            channel=delivery.channel,
+            source_type=delivery.source_type,
+            source_id=delivery.source_id,
+        )
+        if not granted:
+            return "consent_revoked"
+
+    # Internal recipients: check user preference
+    if delivery.recipient_kind == "internal" and delivery.user_id:
+        from app.services import notification_preference_service
+        from app.core.events import SystemEvents
+        from app.core.event_groups import get_event_group
+
+        try:
+            event_enum = SystemEvents(delivery.event)
+            group = get_event_group(event_enum)
+            filtered = await notification_preference_service.filter_users_by_group(
+                db=session,
+                user_ids=[delivery.user_id],
+                group=group.value,
+                channel=delivery.channel,
+            )
+            if delivery.user_id not in filtered:
+                return "preference_disabled"
+        except ValueError:
+            pass
+
+    return None
 
 
 async def mark_delivery_ids_delivered(

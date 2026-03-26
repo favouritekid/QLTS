@@ -28,8 +28,8 @@ router = APIRouter(
 async def list_deliveries(
     request: Request,
     event: Optional[str] = Query(None, description="Filter by event name"),
-    channel: Optional[str] = Query(None, description="Filter by channel"),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    channel: Optional[str] = Query(None, description="Filter by channel", pattern="^(browser|email|zalo|sms)$"),
+    status: Optional[str] = Query(None, description="Filter by status", pattern="^(queued|sent|delivered|read|failed|skipped|dead_lettered)$"),
     user_id: Optional[int] = Query(None, description="Filter by user ID"),
     source_type: Optional[str] = Query(None, description="Filter by source type"),
     source_id: Optional[int] = Query(None, description="Filter by source ID"),
@@ -147,37 +147,16 @@ async def get_latency_stats(request: Request, date_from: Optional[datetime] = Qu
 async def get_health_summary(request: Request, db: AsyncSession = Depends(database.get_db),
     _: models.User = RequireAdmin):
     """Combined health: quota + breaker + backlog + failure rate. Admin-only."""
-    from app.services.notification_circuit_breaker import get_all_breaker_states
     from app.services import notification_quota_service
-    repo = NotificationDeliveryRepository(db)
 
-    # C4 fix: wrap service calls in try-except for resilience
-    try:
-        breaker_states = get_all_breaker_states()
-    except Exception:
-        breaker_states = []
-    breaker_map = {s["channel"]: s["state"] for s in breaker_states}
-
-    try:
-        quota_summary = await notification_quota_service.get_quota_summary(db)
-    except Exception:
-        quota_summary = []
-    quota_map = {q["channel"]: q for q in quota_summary}
-
-    channels = []
-    for ch in ("browser", "email", "zalo", "sms"):
-        item = {"channel": ch, "breaker_state": breaker_map.get(ch, "closed")}
-        if ch in quota_map:
-            item["quota_used"] = quota_map[ch]["quota_used"]
-            item["quota_limit"] = quota_map[ch]["quota_limit"]
-            item["quota_blocked"] = quota_map[ch]["blocked"]
-        channels.append(item)
-
-    backlog = await repo.get_queued_backlog_count()
-    failure_rate = await repo.get_failure_rate(minutes=30)
-    alerts_active = sum(1 for s in breaker_states if s["state"] == "open")
-    return schemas.HealthSummaryResponse(channels=[schemas.ChannelHealthItem(**c) for c in channels],
-        total_queued=backlog, failure_rate_30m=failure_rate, alerts_active=alerts_active)
+    # H1: Business logic extracted to service layer
+    summary = await notification_quota_service.get_health_summary(db)
+    return schemas.HealthSummaryResponse(
+        channels=[schemas.ChannelHealthItem(**c) for c in summary["channels"]],
+        total_queued=summary["total_queued"],
+        failure_rate_30m=summary["failure_rate_30m"],
+        alerts_active=summary["alerts_active"],
+    )
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/{delivery_id}", response_model=schemas.NotificationDeliveryResponse)
@@ -220,7 +199,7 @@ async def get_circuit_breakers(
     )
 
 
-@limiter.limit(RateLimits.DATA_READ)
+@limiter.limit(RateLimits.DATA_WRITE)
 @router.post("/circuit-breakers/{channel}/reset")
 async def reset_circuit_breaker(
     request: Request,
@@ -235,7 +214,7 @@ async def reset_circuit_breaker(
     return {"channel": channel, "state": "closed", "message": f"Breaker for {channel} reset"}
 
 
-@limiter.limit(RateLimits.DATA_READ)
+@limiter.limit(RateLimits.DATA_WRITE)
 @router.post("/{delivery_id}/replay", response_model=schemas.ReplayResponse)
 async def replay_delivery(
     request: Request,
@@ -250,15 +229,20 @@ async def replay_delivery(
     from app.services import notification_delivery_service
     from app.tasks.delivery_tasks import execute_notification_delivery
 
-    success, message = await notification_delivery_service.replay_delivery(db, delivery_id)
+    # H2: Use IDOR-validated record.id instead of raw delivery_id
+    success, message = await notification_delivery_service.replay_delivery(db, record.id)
 
     if not success:
         raise HTTPException(status_code=400, detail=message)
 
     await db.commit()
 
-    # Enqueue to worker
-    execute_notification_delivery.apply_async(args=[delivery_id])
+    # Enqueue to worker (wrap in try-except per M4)
+    try:
+        execute_notification_delivery.apply_async(args=[record.id])
+    except Exception as e:
+        log.error("Failed to enqueue replay task", delivery_id=record.id, error=str(e))
+        raise HTTPException(status_code=500, detail="Delivery replayed but failed to enqueue")
 
     log.info("Delivery replayed", delivery_id=delivery_id)
     return schemas.ReplayResponse(

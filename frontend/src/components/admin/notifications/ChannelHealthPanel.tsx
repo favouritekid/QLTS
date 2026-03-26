@@ -32,9 +32,9 @@ function BreakerBadge({ state }: { state: string }) {
 
 function ChannelCard({ ch }: { ch: ChannelHealthItem }) {
   const resetMutation = useResetCircuitBreaker();
-  const quotaPct = ch.quota_limit && ch.quota_limit > 0
+  const quotaPct = ch.quota_limit != null && ch.quota_limit > 0
     ? Math.round((ch.quota_used ?? 0) / ch.quota_limit * 100)
-    : 0;
+    : null; // H4: null = no quota configured or zero limit
 
   return (
     <Card>
@@ -50,9 +50,9 @@ function ChannelCard({ ch }: { ch: ChannelHealthItem }) {
           <div className="space-y-1">
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>Quota</span>
-              <span>{ch.quota_used}/{ch.quota_limit} ({quotaPct}%)</span>
+              <span>{ch.quota_used}/{ch.quota_limit} ({quotaPct != null ? `${quotaPct}%` : "N/A"})</span>
             </div>
-            <Progress value={quotaPct} className="h-2" />
+            <Progress value={quotaPct ?? 0} className="h-2" />
           </div>
         )}
 

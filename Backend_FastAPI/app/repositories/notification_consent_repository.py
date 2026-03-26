@@ -49,10 +49,20 @@ class NotificationConsentRepository(BaseRepository[NotificationConsent]):
         After upsert, appends a history row capturing old->new status.
         Returns the resulting row.
         """
-        # Capture old state before upsert (for history logging)
-        old_consent = await self.get_latest(
-            data["channel"], data["source_type"], data["source_id"]
+        # H7: Capture old state with row lock to prevent race condition
+        # SELECT FOR UPDATE prevents concurrent upserts from reading stale old_status
+        from sqlalchemy import select
+        lock_q = (
+            select(NotificationConsent)
+            .where(
+                NotificationConsent.channel == data["channel"],
+                NotificationConsent.source_type == data["source_type"],
+                NotificationConsent.source_id == data["source_id"],
+            )
+            .with_for_update()
         )
+        lock_result = await self.db.execute(lock_q)
+        old_consent = lock_result.scalars().first()
         old_status = old_consent.consent_status if old_consent else None
 
         stmt = pg_insert(NotificationConsent).values(**data)

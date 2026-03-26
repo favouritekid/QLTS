@@ -190,6 +190,12 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=0, hour="*/6"),  # Every 6 hours
         "options": {"queue": "default"},
     },
+    # M3: Ensure quota row exists at midnight for new day
+    "sync-notification-quotas-midnight": {
+        "task": "sync_notification_quotas",
+        "schedule": crontab(minute=1, hour=0),  # 00:01 daily
+        "options": {"queue": "default"},
+    },
 
     # --- Phase D3: Notification alert checks ---
     "check-notification-alerts": {

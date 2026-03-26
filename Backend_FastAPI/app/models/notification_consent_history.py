@@ -6,7 +6,7 @@ Append-only table. Every grant/revoke action on NotificationConsent produces
 one row here, capturing old_status -> new_status along with who performed it.
 """
 from sqlalchemy import (
-    Column, Integer, String, Text, ForeignKey, DateTime,
+    Column, Integer, String, Text, ForeignKey, DateTime, Index,
 )
 from sqlalchemy.sql import func
 
@@ -66,6 +66,11 @@ class NotificationConsentHistory(Base):
     # Immutable timestamp
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    # M1: Declare indexes to match migration (prevents autogenerate drift)
+    __table_args__ = (
+        Index("ix_consent_history_source", "source_type", "source_id"),
     )
 
     def __repr__(self) -> str:

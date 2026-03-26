@@ -354,7 +354,7 @@ export interface ChannelHealthItem {
 export interface HealthSummaryResponse {
   channels: ChannelHealthItem[];
   total_queued: number;
-  failure_rate_30m: number;
+  failure_rate_30m: number | null;
   alerts_active: number;
 }
 

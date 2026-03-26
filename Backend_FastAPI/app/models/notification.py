@@ -222,9 +222,9 @@ class NotificationTemplate(Base):
                           comment='Template type: system, zalo_zns, email_html, sms')
 
     # System and usage tracking
-    is_system = Column(Boolean, nullable=False, default=False, index=True,
+    is_system = Column(Boolean, nullable=False, default=False, server_default="false", index=True,
                       comment="System template (cannot be deleted)")
-    usage_count = Column(Integer, nullable=False, default=0,
+    usage_count = Column(Integer, nullable=False, default=0, server_default="0",
                         comment="Number of rules using this template")
 
     # Audit fields

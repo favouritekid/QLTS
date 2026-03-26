@@ -141,14 +141,18 @@ async def _resolve_action_templates(
             if tpl:
                 result[code] = tpl
             else:
+                # H6: Distinguish "not found" (expected) from DB error
                 log.warning(
-                    "Action template_code not found in database, will use rule defaults",
+                    "Action template_code not found — using rule defaults",
                     template_code=code,
+                    resolution="not_found",
                 )
         except Exception as e:
-            log.warning(
-                "Failed to fetch template for action, will use rule defaults",
+            # H6: DB error is unexpected — log at ERROR level
+            log.error(
+                "DB error fetching template — using rule defaults",
                 template_code=code,
+                resolution="db_error",
                 error=str(e),
             )
     return result
