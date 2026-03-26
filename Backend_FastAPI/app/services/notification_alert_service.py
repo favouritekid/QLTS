@@ -4,8 +4,8 @@ Phase D3: Automated alerting for notification delivery health.
 
 4 check functions, Redis dedup to prevent alert storms, dispatches via SYSTEM_ALERT.
 """
+import asyncio
 import structlog
-from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from app import database
@@ -22,7 +22,6 @@ _ALERT_DEDUP_TTL = 3600  # 1 hour
 
 async def check_failure_rate_alert(db) -> Optional[Dict]:
     """Check if failure rate exceeds threshold in last 30 minutes."""
-
     repo = NotificationDeliveryRepository(db)
     rate = await repo.get_failure_rate(minutes=30)
 
@@ -38,7 +37,6 @@ async def check_failure_rate_alert(db) -> Optional[Dict]:
 
 async def check_backlog_alert(db) -> Optional[Dict]:
     """Check if queued backlog exceeds threshold."""
-
     repo = NotificationDeliveryRepository(db)
     backlog = await repo.get_queued_backlog_count()
 
@@ -54,7 +52,6 @@ async def check_backlog_alert(db) -> Optional[Dict]:
 
 async def check_webhook_lag_alert(db) -> Optional[Dict]:
     """Check for stale sent deliveries without webhook confirmation."""
-
     repo = NotificationDeliveryRepository(db)
     stale = await repo.get_stale_sent_count(lag_minutes=settings.ALERT_WEBHOOK_LAG_MINUTES)
 
@@ -70,7 +67,6 @@ async def check_webhook_lag_alert(db) -> Optional[Dict]:
 
 async def check_breaker_alert() -> Optional[Dict]:
     """Check if any circuit breaker is open."""
-
     states = get_all_breaker_states()
     open_channels = [s["channel"] for s in states if s["state"] == "open"]
 
@@ -85,48 +81,41 @@ async def check_breaker_alert() -> Optional[Dict]:
 
 
 async def run_all_checks(db) -> List[Dict]:
-    """Run all alert checks and return fired alerts (after dedup)."""
-    alerts = []
-
-    checks = [
+    """Run all alert checks in parallel and return fired alerts (after dedup)."""
+    # C3 fix: use asyncio.gather for parallel execution
+    results = await asyncio.gather(
         check_failure_rate_alert(db),
         check_backlog_alert(db),
         check_webhook_lag_alert(db),
         check_breaker_alert(),
-    ]
+        return_exceptions=True,
+    )
 
-    for coro in checks:
-        try:
-            result = await coro
-            if result:
-                # Dedup check
-                deduped = await _is_deduped(result["alert_type"])
-                if not deduped:
-                    alerts.append(result)
-                    await _set_dedup(result["alert_type"])
-        except Exception as e:
-            log.error("Alert check failed", error=str(e))
+    alerts = []
+    for result in results:
+        if isinstance(result, Exception):
+            log.error("Alert check raised exception", error=str(result), exc_type=type(result).__name__)
+            continue
+        if result is None:
+            continue
+        # Atomic dedup: SET NX (set-if-not-exists)
+        if not await _try_set_dedup(result["alert_type"]):
+            continue  # Already fired within dedup window
+        alerts.append(result)
 
     return alerts
 
 
-async def _is_deduped(alert_type: str) -> bool:
-    """Check if alert was already fired within dedup window."""
+async def _try_set_dedup(alert_type: str) -> bool:
+    """
+    Atomic dedup: SET key NX EX ttl. Returns True if set succeeded (not deduped).
+    Uses Redis SET NX for race-condition safety.
+    """
     try:
-
         redis = await database.get_redis()
         key = _ALERT_DEDUP_KEY.format(alert_type=alert_type)
-        return await redis.exists(key)
+        # SET NX returns True if key was set (not existing), False if already exists
+        was_set = await redis.set(key, "1", ex=_ALERT_DEDUP_TTL, nx=True)
+        return bool(was_set)
     except Exception:
-        return False  # Redis down → allow alert through
-
-
-async def _set_dedup(alert_type: str) -> None:
-    """Mark alert type as fired for dedup window."""
-    try:
-
-        redis = await database.get_redis()
-        key = _ALERT_DEDUP_KEY.format(alert_type=alert_type)
-        await redis.set(key, "1", ex=_ALERT_DEDUP_TTL)
-    except Exception:
-        pass
+        return True  # Redis down → allow alert through

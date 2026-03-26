@@ -139,24 +139,7 @@ def execute_notification_delivery(self, delivery_id: int):
                 task_log.info(f"Delivery {delivery_id} skipped: {skip_reason}")
                 return {"status": "skipped", "reason": skip_reason, "delivery_id": delivery_id}
 
-            # 4b. Check circuit breaker (D2)
-            from app.services import notification_circuit_breaker
-            breaker_ok = await notification_circuit_breaker.check_channel_health(delivery.channel)
-            if not breaker_ok:
-                next_retry = _calculate_next_retry(delivery.attempt_count or 0)
-                from app.services import notification_delivery_service as nds2
-                await nds2.mark_for_retry(
-                    session, delivery_id,
-                    next_retry_at=next_retry,
-                    error_reason="circuit_breaker_open",
-                )
-                await session.commit()
-                task_log.warning(
-                    f"Delivery {delivery_id} deferred — {delivery.channel} breaker open"
-                )
-                return {"status": "retry_scheduled", "delivery_id": delivery_id}
-
-            # 4c. Check quota (D1) — external channels only
+            # 4b. Check quota (D1) — external channels, fail fast
             if delivery.channel in ("zalo", "sms"):
                 from app.services import notification_quota_service
                 quota_ok = await notification_quota_service.check_quota(session, delivery.channel)
@@ -173,6 +156,23 @@ def execute_notification_delivery(self, delivery_id: int):
                         f"Delivery {delivery_id} deferred — {delivery.channel} quota exhausted"
                     )
                     return {"status": "retry_scheduled", "delivery_id": delivery_id}
+
+            # 4c. Check circuit breaker (D2)
+            from app.services import notification_circuit_breaker
+            breaker_ok = await notification_circuit_breaker.check_channel_health(delivery.channel)
+            if not breaker_ok:
+                next_retry = _calculate_next_retry(delivery.attempt_count or 0)
+                from app.services import notification_delivery_service as nds2
+                await nds2.mark_for_retry(
+                    session, delivery_id,
+                    next_retry_at=next_retry,
+                    error_reason="circuit_breaker_open",
+                )
+                await session.commit()
+                task_log.warning(
+                    f"Delivery {delivery_id} deferred — {delivery.channel} breaker open"
+                )
+                return {"status": "retry_scheduled", "delivery_id": delivery_id}
 
             # 5. Get channel adapter
             channel = get_channel(delivery.channel)

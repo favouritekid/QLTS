@@ -370,6 +370,9 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
     async def get_time_series(self, interval="hour", date_from=None, date_to=None, channel=None, allowed_user_ids=None):
         """Delivery counts bucketed by hour/day."""
         from sqlalchemy import case, text
+        # H8 fix: whitelist interval to prevent SQL injection
+        if interval not in ("hour", "day"):
+            interval = "hour"
         if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=7)
         if not date_to: date_to = datetime.now(timezone.utc)
         trunc = func.date_trunc(interval, NotificationDelivery.created_at)

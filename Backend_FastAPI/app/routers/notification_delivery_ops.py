@@ -150,10 +150,20 @@ async def get_health_summary(request: Request, db: AsyncSession = Depends(databa
     from app.services.notification_circuit_breaker import get_all_breaker_states
     from app.services import notification_quota_service
     repo = NotificationDeliveryRepository(db)
-    breaker_states = get_all_breaker_states()
+
+    # C4 fix: wrap service calls in try-except for resilience
+    try:
+        breaker_states = get_all_breaker_states()
+    except Exception:
+        breaker_states = []
     breaker_map = {s["channel"]: s["state"] for s in breaker_states}
-    quota_summary = await notification_quota_service.get_quota_summary(db)
+
+    try:
+        quota_summary = await notification_quota_service.get_quota_summary(db)
+    except Exception:
+        quota_summary = []
     quota_map = {q["channel"]: q for q in quota_summary}
+
     channels = []
     for ch in ("browser", "email", "zalo", "sms"):
         item = {"channel": ch, "breaker_state": breaker_map.get(ch, "closed")}
@@ -162,6 +172,7 @@ async def get_health_summary(request: Request, db: AsyncSession = Depends(databa
             item["quota_limit"] = quota_map[ch]["quota_limit"]
             item["quota_blocked"] = quota_map[ch]["blocked"]
         channels.append(item)
+
     backlog = await repo.get_queued_backlog_count()
     failure_rate = await repo.get_failure_rate(minutes=30)
     alerts_active = sum(1 for s in breaker_states if s["state"] == "open")

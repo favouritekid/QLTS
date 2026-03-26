@@ -3,18 +3,30 @@
 Phase D1: Repository for NotificationQuota CRUD and quota checks.
 """
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification_quota import NotificationQuota
+from app.repositories.base import BaseRepository
 
 
-class NotificationQuotaRepository:
+class NotificationQuotaRepository(BaseRepository[NotificationQuota]):
     def __init__(self, db: AsyncSession):
-        self.db = db
+        super().__init__(db, NotificationQuota)
+
+    async def get_filtered(
+        self, skip: int = 0, limit: int = 100, **filters
+    ) -> Tuple[List[NotificationQuota], int]:
+        """Required by BaseRepository."""
+        query = select(self.model).offset(skip).limit(limit)
+        result = await self.db.execute(query)
+        records = list(result.scalars().all())
+        count_q = select(self.model)
+        total = len(records)  # Simplified for quota (small table)
+        return records, total
 
     async def get_current_quota(
         self,
