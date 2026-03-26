@@ -1,6 +1,6 @@
 # tests/unit/test_notification_parity.py
 """
-Notification contract parity tests — Phase A.
+Notification contract parity tests — Phase A + P1 automated parity checks.
 
 These tests lock the notification contract so drift cannot be reintroduced silently.
 Covers:
@@ -9,9 +9,11 @@ Covers:
 - A3: Organization events not in user notification contract
 - A5: Event-to-group-mapping parity for all registry events
 - A5: Metadata parity for admin-manageable events
+- P1: Automated parity checks (Addendum Section 10)
 """
 import ast
 import inspect
+from pathlib import Path
 import pytest
 
 from app.core.events import SystemEvents
@@ -242,3 +244,194 @@ class TestCanonicalChannelValues:
                     f"Event {event.value} has non-canonical channel '{ch}' "
                     f"in registry. Must be one of {self.CANONICAL}"
                 )
+
+
+# =============================================================================
+# P1: Automated Parity Checks (Addendum Section 10)
+# =============================================================================
+
+# Known broadcast-only events — these are domain broadcast events (Socket.IO
+# real-time UI refresh) with no user notification contract.  They are
+# intentionally excluded from EVENT_GROUP_MAPPING, NOTIFICATION_REGISTRY, and
+# EVENT_METADATA_REGISTRY.
+_BROADCAST_ONLY_PREFIXES = ("UNIT_", "PROGRAM_", "OFFERING_")
+
+
+@pytest.mark.unit
+def test_all_system_events_have_group_mapping():
+    """
+    P1-1: Every SystemEvents value must exist in EVENT_GROUP_MAPPING keys,
+    except known broadcast-only events (UNIT_*, PROGRAM_*, OFFERING_*).
+
+    If a new SystemEvents member is added without a group mapping, dispatch()
+    will fall back to the SYSTEM group with a runtime warning.  This test
+    catches that drift at CI time.
+    """
+    unmapped = set()
+    for event in SystemEvents:
+        # Skip known broadcast-only events
+        if any(event.name.startswith(prefix) for prefix in _BROADCAST_ONLY_PREFIXES):
+            continue
+        if event not in EVENT_GROUP_MAPPING:
+            unmapped.add(event.name)
+
+    assert not unmapped, (
+        f"SystemEvents missing from EVENT_GROUP_MAPPING "
+        f"(not broadcast-only): {sorted(unmapped)}. "
+        "Add them to EVENT_GROUP_MAPPING in app/core/event_groups.py or "
+        "add the prefix to _BROADCAST_ONLY_PREFIXES if they are broadcast-only."
+    )
+
+
+@pytest.mark.unit
+def test_all_notification_events_have_runtime_config():
+    """
+    P1-2: Every event in EVENT_GROUP_MAPPING should have config in
+    NOTIFICATION_REGISTRY.
+
+    Events in the group mapping are part of the user notification contract.
+    Without a registry entry, dispatch() has nothing to render or deliver.
+    Broadcast-only events are allowed to be missing.
+    """
+    missing = []
+    for event in EVENT_GROUP_MAPPING:
+        # Skip known broadcast-only events
+        if any(event.name.startswith(prefix) for prefix in _BROADCAST_ONLY_PREFIXES):
+            continue
+        if event not in NOTIFICATION_REGISTRY:
+            missing.append(event.value)
+
+    assert not missing, (
+        f"Events in EVENT_GROUP_MAPPING but missing from NOTIFICATION_REGISTRY: "
+        f"{sorted(missing)}. "
+        "dispatch() will silently skip these events. "
+        "Add a NotificationConfig entry in app/services/notification_registry.py."
+    )
+
+
+@pytest.mark.unit
+def test_admin_events_have_metadata():
+    """
+    P1-3: Every admin-manageable event (in NOTIFICATION_REGISTRY) must have
+    metadata in EVENT_METADATA_REGISTRY.
+
+    The admin UI rule builder depends on metadata to render variable pickers,
+    filter fields, and channel defaults.  Missing metadata means the admin
+    cannot create custom rules for that event.
+
+    CTV events are temporarily exempted pending metadata backfill.
+    """
+    # CTV events pending metadata backfill
+    CTV_EVENTS_PENDING = {
+        "ctv_claim_submitted", "ctv_claim_approved", "ctv_claim_rejected",
+        "ctv_approved", "ctv_suspended", "ctv_lead_converted",
+        "ctv_attribution_expiring", "ctv_attribution_expired",
+        "ctv_commission_created", "ctv_weekly_summary",
+    }
+
+    missing = []
+    for event in NOTIFICATION_REGISTRY:
+        if event.value in CTV_EVENTS_PENDING:
+            continue
+        if event not in EVENT_METADATA_REGISTRY:
+            missing.append(event.value)
+
+    assert not missing, (
+        f"Events in NOTIFICATION_REGISTRY but missing from "
+        f"EVENT_METADATA_REGISTRY: {sorted(missing)}. "
+        "Admin UI cannot build rules for these events. "
+        "Add metadata in app/core/event_metadata.py or add to "
+        "CTV_EVENTS_PENDING exemption if backfill is planned."
+    )
+
+
+@pytest.mark.unit
+def test_metadata_channels_are_implemented_or_gated():
+    """
+    P1-4: Every channel referenced in EVENT_METADATA_REGISTRY default_channels
+    must be either implemented (in CHANNEL_REGISTRY) or a known planned channel.
+
+    This prevents metadata from advertising channels that have no delivery
+    backend, which would cause silent delivery failures at runtime.
+    """
+    from app.services.notification_channels import CHANNEL_REGISTRY
+
+    implemented = set(CHANNEL_REGISTRY.keys())
+    planned_gated = {"sms", "zalo"}  # Known planned/gated channels
+    allowed = implemented | planned_gated
+
+    violations = []
+    for event, metadata in EVENT_METADATA_REGISTRY.items():
+        for ch in metadata.default_channels:
+            if ch not in allowed:
+                violations.append(
+                    f"{event.value}: channel '{ch}' not in "
+                    f"implemented {sorted(implemented)} or "
+                    f"planned {sorted(planned_gated)}"
+                )
+
+    assert not violations, (
+        f"Metadata references channels that are neither implemented nor planned:\n"
+        + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
+@pytest.mark.unit
+def test_deprecated_entrypoints_have_no_production_callers():
+    """
+    P1-5: Deprecated functions create_notification() and
+    execute_notification_workflow() must not be called from production code
+    (app/ directory).
+
+    Callers in test files and the definition files themselves are excluded.
+    All production code must use dispatch() / safe_dispatch() instead.
+    """
+    # The definition files where the deprecated functions live
+    definition_files = {
+        "notification_service.py",
+        "notification_workflow.py",
+    }
+
+    deprecated_patterns = [
+        "create_notification(",
+        "execute_notification_workflow(",
+    ]
+
+    app_dir = Path(__file__).resolve().parent.parent.parent / "app"
+    callers = []
+
+    for py_file in app_dir.rglob("*.py"):
+        filename = py_file.name
+
+        # Skip definition files (they contain the def and docstring references)
+        if filename in definition_files:
+            continue
+
+        # Skip test files
+        if "test" in filename or "conftest" in filename:
+            continue
+
+        try:
+            source = py_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        for pattern in deprecated_patterns:
+            # Search for actual calls (not just imports or comments)
+            for line_num, line in enumerate(source.splitlines(), start=1):
+                stripped = line.lstrip()
+                # Skip comments and docstrings
+                if stripped.startswith("#"):
+                    continue
+                if stripped.startswith('"""') or stripped.startswith("'''"):
+                    continue
+                if pattern in line:
+                    callers.append(
+                        f"{py_file.relative_to(app_dir)}:{line_num} -> {pattern.rstrip('(')}"
+                    )
+
+    assert not callers, (
+        f"Deprecated notification entrypoints still called in production code:\n"
+        + "\n".join(f"  - {c}" for c in callers)
+        + "\nMigrate all callers to dispatch() / safe_dispatch()."
+    )
