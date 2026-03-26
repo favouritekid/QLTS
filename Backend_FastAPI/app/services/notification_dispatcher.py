@@ -641,6 +641,14 @@ async def dispatch(
             )
         else:
             ch_snapshot = dict(_base_snapshot)
+            # M7: Log when action has template_code but template not found/resolved
+            if tpl_code:
+                log.warning(
+                    "Action template_code set but template not resolved — using rule defaults",
+                    channel=ch,
+                    template_code=tpl_code,
+                    event=event.value,
+                )
 
         ch_config = _action_config_map.get(ch)
         if ch_config:

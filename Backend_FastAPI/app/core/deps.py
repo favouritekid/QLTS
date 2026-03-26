@@ -1744,7 +1744,14 @@ async def get_delivery_scope_filter(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(get_current_active_user),
 ) -> DeliveryScopeFilter:
-    """Resolve delivery scope: Admin=all, Manager=unit hierarchy, Officer=self."""
+    """
+    Resolve delivery scope: Admin=all, Manager=unit hierarchy, Officer=self.
+
+    Performance note (H4): For managers, executes 2 queries per request
+    (hierarchy CTE + user IDs). Acceptable for current scale (<100 units).
+    If this becomes a bottleneck, consider caching allowed_user_ids in Redis
+    with TTL keyed by (user_id, unit_id) and invalidating on unit changes.
+    """
     if current_user.role == UserRole.ADMIN:
         return DeliveryScopeFilter(scope_kind="all")
 

@@ -39,8 +39,8 @@ async def check_quota(
         cached = await redis.get(cache_key)
         if cached is not None:
             return cached != b"blocked"
-    except Exception:
-        pass  # Redis down → fall through to DB
+    except Exception as e:
+        log.warning("Redis quota cache read failed, falling through to DB", error=str(e))
 
     # Slow path: DB check
     repo = NotificationQuotaRepository(db)
@@ -51,8 +51,8 @@ async def check_quota(
         redis = await database.get_redis()
         value = "blocked" if over else "ok"
         await redis.set(cache_key, value, ex=_QUOTA_CACHE_TTL)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Redis quota cache write failed", error=str(e))
 
     return not over
 

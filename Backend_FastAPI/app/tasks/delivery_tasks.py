@@ -189,7 +189,8 @@ def execute_notification_delivery(self, delivery_id: int):
             delivery.last_attempt_at = now
             await session.flush()
 
-            # 6. Execute
+            # 6. Execute (M4: try-finally for symmetric breaker recording)
+            error_msg = None  # M3: explicit init instead of 'in dir()'
             try:
                 result = await channel.execute_delivery(delivery, session)
             except NotImplementedError:
@@ -204,7 +205,6 @@ def execute_notification_delivery(self, delivery_id: int):
                 error_msg = f"Unexpected error: {str(e)}"
                 task_log.error(f"Delivery {delivery_id} exception: {e}", exc_info=True)
                 result = None  # Will be handled in failure path below
-                # Fall through to failure handling
 
             # 7. Process result
             if result and result.success:
@@ -221,21 +221,27 @@ def execute_notification_delivery(self, delivery_id: int):
                     await notification_quota_service.record_send(session, delivery.channel)
 
                 # D2: Record success for circuit breaker
-                await notification_circuit_breaker.record_success(delivery.channel)
+                try:
+                    await notification_circuit_breaker.record_success(delivery.channel)
+                except Exception as breaker_err:
+                    task_log.warning(f"Breaker record_success failed: {breaker_err}")
 
                 await session.commit()
                 task_log.info(f"Delivery {delivery_id} sent via {delivery.channel}")
                 return {"status": "sent", "delivery_id": delivery_id, "channel": delivery.channel}
 
             # --- Failure path ---
-            # D2: Record failure for circuit breaker
-            await notification_circuit_breaker.record_failure(delivery.channel)
+            # D2: Record failure for circuit breaker (M4: wrapped in try)
+            try:
+                await notification_circuit_breaker.record_failure(delivery.channel)
+            except Exception as breaker_err:
+                task_log.warning(f"Breaker record_failure failed: {breaker_err}")
 
             error_reason = ""
             if result:
                 error_reason = result.error_message or "delivery_failed"
-            elif not result:
-                error_reason = error_msg if 'error_msg' in dir() else "unknown_error"
+            else:
+                error_reason = error_msg or "unknown_error"
 
             if _is_permanent_error(error_reason):
                 # Permanent failure → dead-letter immediately

@@ -367,7 +367,14 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
 
     # --- D5: Dashboard analytics ---
 
-    async def get_time_series(self, interval="hour", date_from=None, date_to=None, channel=None, allowed_user_ids=None):
+    async def get_time_series(
+        self,
+        interval: str = "hour",
+        date_from: "datetime | None" = None,
+        date_to: "datetime | None" = None,
+        channel: str | None = None,
+        allowed_user_ids: list[int] | None = None,
+    ) -> list[dict]:
         """Delivery counts bucketed by hour/day."""
         from sqlalchemy import case, text
         # H8 fix: whitelist interval to prevent SQL injection
@@ -386,7 +393,13 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         ).where(and_(*conds)).group_by(text("1")).order_by(text("1"))
         return [{"bucket":r[0],"total":r[1],"sent":r[2],"failed":r[3],"queued":r[4]} for r in (await self.db.execute(q)).all()]
 
-    async def get_top_events(self, limit=10, date_from=None, date_to=None, allowed_user_ids=None):
+    async def get_top_events(
+        self,
+        limit: int = 10,
+        date_from: "datetime | None" = None,
+        date_to: "datetime | None" = None,
+        allowed_user_ids: list[int] | None = None,
+    ) -> list[dict]:
         """Top events by volume with failure rates."""
         from sqlalchemy import case
         if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=7)
@@ -398,7 +411,11 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         ).where(and_(*conds)).group_by(NotificationDelivery.event).order_by(func.count().desc()).limit(limit)
         return [{"event":r[0],"total":r[1],"failed":r[2],"fail_rate":round(r[2]/r[1]*100,1) if r[1]>0 else 0.0} for r in (await self.db.execute(q)).all()]
 
-    async def get_processing_latency_stats(self, date_from=None, date_to=None):
+    async def get_processing_latency_stats(
+        self,
+        date_from: "datetime | None" = None,
+        date_to: "datetime | None" = None,
+    ) -> dict:
         """P50/P95 processing latency (created_at → sent_at)."""
         from sqlalchemy import extract
         if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=1)
