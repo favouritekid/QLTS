@@ -27,6 +27,27 @@ _breaker_states: Dict[str, str] = {}  # "closed", "open", "half_open"
 _opened_at: Dict[str, Optional[datetime]] = {}
 
 
+async def bootstrap_from_redis() -> None:
+    """Load breaker state from Redis on worker startup (H3 fix)."""
+    try:
+        from app import database
+        redis = await database.get_redis()
+        for ch in _CANONICAL_CHANNELS:
+            raw = await redis.get(_BREAKER_REDIS_KEY.format(channel=ch))
+            if raw:
+                data = json.loads(raw)
+                _breaker_states[ch] = data.get("state", "closed")
+                _fail_counters[ch] = data.get("fail_count", 0)
+                opened_at_str = data.get("opened_at")
+                if opened_at_str:
+                    _opened_at[ch] = datetime.fromisoformat(opened_at_str)
+                else:
+                    _opened_at[ch] = None
+        log.info("Circuit breaker state bootstrapped from Redis")
+    except Exception as e:
+        log.warning("Failed to bootstrap breaker state from Redis", error=str(e))
+
+
 async def check_channel_health(channel: str) -> bool:
     """
     Check if channel is healthy. Returns True if OK to send.
@@ -78,6 +99,7 @@ async def record_failure(channel: str) -> None:
     if count >= fail_max and state != "open":
         _breaker_states[channel] = "open"
         _opened_at[channel] = datetime.now(timezone.utc)
+        _fail_counters[channel] = 0  # M4 fix: reset counter on trip to avoid stale accumulation
         log.warning(
             "Circuit breaker OPEN — channel disabled",
             channel=channel,

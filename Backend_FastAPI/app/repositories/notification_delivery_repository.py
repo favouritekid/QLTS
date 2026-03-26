@@ -382,6 +382,9 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
             interval = "hour"
         if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=7)
         if not date_to: date_to = datetime.now(timezone.utc)
+        # M2 fix: cap max range to 30 days to prevent unbounded queries
+        if (date_to - date_from).days > 30:
+            date_from = date_to - timedelta(days=30)
         trunc = func.date_trunc(interval, NotificationDelivery.created_at)
         conds = [NotificationDelivery.created_at >= date_from, NotificationDelivery.created_at <= date_to]
         if channel: conds.append(NotificationDelivery.channel == channel)

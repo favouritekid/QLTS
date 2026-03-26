@@ -2,6 +2,7 @@
 Phase D2: Circuit Breaker — Unit Tests
 
 Covers: breaker trip, half-open recovery, manual reset, delivery task integration.
+Updated for dict-based implementation (no aiobreaker internals).
 """
 
 import pytest
@@ -15,22 +16,21 @@ class TestCircuitBreakerTrip:
     async def test_breaker_trips_after_fail_max(self):
         """After fail_max failures, channel should be unhealthy."""
         from app.services.notification_circuit_breaker import (
-            check_channel_health, record_failure, get_breaker, _breakers,
+            check_channel_health, record_failure,
+            _fail_counters, _breaker_states, _opened_at,
         )
 
-        # Use a test channel to avoid polluting real breakers
         channel = "_test_trip"
-        _breakers.pop(channel, None)
+        # Clean state
+        _fail_counters.pop(channel, None)
+        _breaker_states.pop(channel, None)
+        _opened_at.pop(channel, None)
 
-        with patch("app.services.notification_circuit_breaker.settings") as mock_settings:
+        with patch("app.services.notification_circuit_breaker.settings") as mock_settings, \
+             patch("app.services.notification_circuit_breaker._sync_to_redis", new_callable=AsyncMock):
             mock_settings.CIRCUIT_BREAKER_FAIL_MAX = 3
             mock_settings.CIRCUIT_BREAKER_TIMEOUT = 300
 
-        # Force create fresh breaker with low threshold
-        from aiobreaker import CircuitBreaker
-        _breakers[channel] = CircuitBreaker(fail_max=3, timeout_duration=300, name=f"test_{channel}")
-
-        with patch("app.services.notification_circuit_breaker._sync_breaker_to_redis", new_callable=AsyncMock):
             # Initially healthy
             assert await check_channel_health(channel) is True
 
@@ -42,20 +42,28 @@ class TestCircuitBreakerTrip:
             assert await check_channel_health(channel) is False
 
         # Cleanup
-        _breakers.pop(channel, None)
+        _fail_counters.pop(channel, None)
+        _breaker_states.pop(channel, None)
+        _opened_at.pop(channel, None)
 
     @pytest.mark.asyncio
     async def test_manual_reset_closes_breaker(self):
         """Admin reset should close an open breaker."""
         from app.services.notification_circuit_breaker import (
-            check_channel_health, record_failure, reset_breaker, _breakers,
+            check_channel_health, record_failure, reset_breaker,
+            _fail_counters, _breaker_states, _opened_at,
         )
-        from aiobreaker import CircuitBreaker
 
         channel = "_test_reset"
-        _breakers[channel] = CircuitBreaker(fail_max=2, timeout_duration=300, name=f"test_{channel}")
+        _fail_counters.pop(channel, None)
+        _breaker_states.pop(channel, None)
+        _opened_at.pop(channel, None)
 
-        with patch("app.services.notification_circuit_breaker._sync_breaker_to_redis", new_callable=AsyncMock):
+        with patch("app.services.notification_circuit_breaker.settings") as mock_settings, \
+             patch("app.services.notification_circuit_breaker._sync_to_redis", new_callable=AsyncMock):
+            mock_settings.CIRCUIT_BREAKER_FAIL_MAX = 2
+            mock_settings.CIRCUIT_BREAKER_TIMEOUT = 300
+
             # Trip the breaker
             for _ in range(2):
                 await record_failure(channel)
@@ -65,7 +73,36 @@ class TestCircuitBreakerTrip:
             await reset_breaker(channel)
             assert await check_channel_health(channel) is True
 
-        _breakers.pop(channel, None)
+        _fail_counters.pop(channel, None)
+        _breaker_states.pop(channel, None)
+        _opened_at.pop(channel, None)
+
+    @pytest.mark.asyncio
+    async def test_counter_resets_on_trip(self):
+        """M4: fail counter should reset to 0 when breaker trips to open."""
+        from app.services.notification_circuit_breaker import (
+            record_failure, _fail_counters, _breaker_states, _opened_at,
+        )
+
+        channel = "_test_m4"
+        _fail_counters.pop(channel, None)
+        _breaker_states.pop(channel, None)
+        _opened_at.pop(channel, None)
+
+        with patch("app.services.notification_circuit_breaker.settings") as mock_settings, \
+             patch("app.services.notification_circuit_breaker._sync_to_redis", new_callable=AsyncMock):
+            mock_settings.CIRCUIT_BREAKER_FAIL_MAX = 3
+            mock_settings.CIRCUIT_BREAKER_TIMEOUT = 300
+
+            for _ in range(3):
+                await record_failure(channel)
+
+            assert _breaker_states[channel] == "open"
+            assert _fail_counters[channel] == 0  # Reset after trip
+
+        _fail_counters.pop(channel, None)
+        _breaker_states.pop(channel, None)
+        _opened_at.pop(channel, None)
 
 
 class TestCircuitBreakerState:

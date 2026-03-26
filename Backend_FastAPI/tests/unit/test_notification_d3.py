@@ -131,7 +131,7 @@ class TestBreakerAlert:
 
 
 class TestAlertDedup:
-    """Test that same alert type within 1h is deduped."""
+    """Test that same alert type within 1h is deduped (SET NX pattern)."""
 
     @pytest.mark.asyncio
     async def test_dedup_prevents_duplicate_alert(self):
@@ -140,13 +140,12 @@ class TestAlertDedup:
         mock_db = AsyncMock()
 
         with patch(
-            "app.services.notification_alert_service.check_failure_rate_alert"
-        ) as mock_check, patch(
-            "app.services.notification_alert_service._is_deduped"
-        ) as mock_dedup, patch(
-            "app.services.notification_alert_service._set_dedup",
+            "app.services.notification_alert_service.check_failure_rate_alert",
             new_callable=AsyncMock,
-        ), patch(
+        ) as mock_check, patch(
+            "app.services.notification_alert_service._try_set_dedup",
+            new_callable=AsyncMock,
+        ) as mock_dedup, patch(
             "app.services.notification_alert_service.check_backlog_alert",
             new_callable=AsyncMock, return_value=None,
         ), patch(
@@ -162,12 +161,12 @@ class TestAlertDedup:
                 "message": "test",
                 "details": {},
             }
-            # First call: not deduped → fires
-            mock_dedup.return_value = False
+            # First call: SET NX succeeds (not deduped) → fires
+            mock_dedup.return_value = True
             alerts = await run_all_checks(mock_db)
             assert len(alerts) == 1
 
-            # Second call: deduped → suppressed
-            mock_dedup.return_value = True
+            # Second call: SET NX fails (already exists) → suppressed
+            mock_dedup.return_value = False
             alerts = await run_all_checks(mock_db)
             assert len(alerts) == 0

@@ -334,7 +334,10 @@ async def dispatch(
     Args:
         db: Async database session
         event: The system event to dispatch
-        payload: Event payload with data for resolution and templates
+        payload: Event payload with data for resolution and templates.
+                 Caller is responsible for sanitizing user-facing values.
+                 Template rendering uses string.Template.safe_substitute()
+                 which leaves unresolved $placeholders as-is (safe).
         dedupe_key: Optional key for deduplication (e.g., "lead_assigned:123:456")
                    If provided, prevents duplicate notifications for same key+user
         skip_preference_check: If True, skip user preference filtering
