@@ -189,6 +189,15 @@ export const API_ENDPOINTS = {
     FAILURES: "/api/notification-deliveries/failures",
     DETAIL: (id: number) => `/api/notification-deliveries/${id}`,
     REPLAY: (id: number) => `/api/notification-deliveries/${id}/replay`,
+    // D5: Mature monitoring dashboard
+    TIME_SERIES: "/api/notification-deliveries/stats/time-series",
+    TOP_EVENTS: "/api/notification-deliveries/stats/top-events",
+    LATENCY: "/api/notification-deliveries/stats/latency",
+    HEALTH: "/api/notification-deliveries/health",
+    QUOTAS: "/api/notification-deliveries/quotas",
+    CIRCUIT_BREAKERS: "/api/notification-deliveries/circuit-breakers",
+    CIRCUIT_BREAKER_RESET: (channel: string) =>
+      `/api/notification-deliveries/circuit-breakers/${channel}/reset`,
   },
   // ✅ PHASE B7: Notification Consents (Admin-only)
   NOTIFICATION_CONSENTS: {

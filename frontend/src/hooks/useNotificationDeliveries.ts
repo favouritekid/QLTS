@@ -59,6 +59,17 @@ export const notificationDeliveryKeys = {
     [...notificationDeliveryKeys.all, "stats", params] as const,
   failures: (params?: Record<string, unknown>) =>
     [...notificationDeliveryKeys.all, "failures", params] as const,
+  // D5: Mature monitoring dashboard
+  timeSeries: (params?: Record<string, unknown>) =>
+    [...notificationDeliveryKeys.all, "time-series", params] as const,
+  topEvents: (params?: Record<string, unknown>) =>
+    [...notificationDeliveryKeys.all, "top-events", params] as const,
+  latency: (params?: Record<string, unknown>) =>
+    [...notificationDeliveryKeys.all, "latency", params] as const,
+  health: () => [...notificationDeliveryKeys.all, "health"] as const,
+  quotas: () => [...notificationDeliveryKeys.all, "quotas"] as const,
+  circuitBreakers: () =>
+    [...notificationDeliveryKeys.all, "circuit-breakers"] as const,
 };
 
 // ============================================
@@ -225,5 +236,217 @@ export function useReplayDelivery() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: notificationDeliveryKeys.all });
     },
+  });
+}
+
+// ============================================
+// D5: TIME SERIES
+// ============================================
+
+export interface TimeSeriesBucket {
+  bucket: string;
+  total: number;
+  sent: number;
+  failed: number;
+  queued: number;
+}
+
+export interface TimeSeriesResponse {
+  interval: string;
+  buckets: TimeSeriesBucket[];
+}
+
+export function useDeliveryTimeSeries(params: {
+  interval?: "hour" | "day";
+  date_from?: string;
+  date_to?: string;
+  channel?: string;
+} = {}) {
+  return useQuery<TimeSeriesResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.timeSeries(params),
+    queryFn: async () => {
+      const { data } = await api.get<TimeSeriesResponse>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.TIME_SERIES,
+        { params: { interval: "hour", ...params } }
+      );
+      return data;
+    },
+    staleTime: 30 * 1000,
+    refetchInterval: 30_000,
+  });
+}
+
+// ============================================
+// D5: TOP EVENTS
+// ============================================
+
+export interface TopEventStats {
+  event: string;
+  total: number;
+  failed: number;
+  fail_rate: number;
+}
+
+export interface TopEventsResponse {
+  events: TopEventStats[];
+}
+
+export function useTopEvents(params: {
+  limit?: number;
+  date_from?: string;
+  date_to?: string;
+} = {}) {
+  return useQuery<TopEventsResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.topEvents(params),
+    queryFn: async () => {
+      const { data } = await api.get<TopEventsResponse>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.TOP_EVENTS,
+        { params: { limit: 10, ...params } }
+      );
+      return data;
+    },
+    staleTime: 30 * 1000,
+    refetchInterval: 30_000,
+  });
+}
+
+// ============================================
+// D5: LATENCY
+// ============================================
+
+export interface LatencyStats {
+  p50_seconds: number | null;
+  p95_seconds: number | null;
+  sample_count: number;
+}
+
+export function useDeliveryLatency(params: {
+  date_from?: string;
+  date_to?: string;
+} = {}) {
+  return useQuery<LatencyStats, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.latency(params),
+    queryFn: async () => {
+      const { data } = await api.get<LatencyStats>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.LATENCY,
+        { params: { ...params } }
+      );
+      return data;
+    },
+    staleTime: 60 * 1000,
+    refetchInterval: 30_000,
+  });
+}
+
+// ============================================
+// D5: CHANNEL HEALTH
+// ============================================
+
+export interface ChannelHealthItem {
+  channel: string;
+  breaker_state: string;
+  quota_used: number | null;
+  quota_limit: number | null;
+  quota_pct: number | null;
+  failure_rate_24h: number | null;
+}
+
+export interface HealthSummaryResponse {
+  channels: ChannelHealthItem[];
+  total_queued: number;
+  failure_rate_30m: number;
+  alerts_active: number;
+}
+
+export function useNotificationHealth() {
+  return useQuery<HealthSummaryResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.health(),
+    queryFn: async () => {
+      const { data } = await api.get<HealthSummaryResponse>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.HEALTH
+      );
+      return data;
+    },
+    staleTime: 15 * 1000,
+    refetchInterval: 30_000,
+  });
+}
+
+// ============================================
+// D5: CIRCUIT BREAKERS
+// ============================================
+
+export interface CircuitBreakerState {
+  channel: string;
+  state: string;
+  fail_count: number;
+  fail_max: number;
+  timeout_duration: number;
+  opened_at: string | null;
+}
+
+export function useCircuitBreakers() {
+  return useQuery<{ breakers: CircuitBreakerState[] }, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.circuitBreakers(),
+    queryFn: async () => {
+      const { data } = await api.get<{ breakers: CircuitBreakerState[] }>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.CIRCUIT_BREAKERS
+      );
+      return data;
+    },
+    staleTime: 15 * 1000,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useResetCircuitBreaker() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ message: string }, AxiosError<ApiErrorResponse>, string>({
+    mutationFn: async (channel: string) => {
+      const { data } = await api.post<{ message: string }>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.CIRCUIT_BREAKER_RESET(channel)
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: notificationDeliveryKeys.circuitBreakers(),
+      });
+      queryClient.invalidateQueries({
+        queryKey: notificationDeliveryKeys.health(),
+      });
+    },
+  });
+}
+
+// ============================================
+// D5: QUOTAS
+// ============================================
+
+export interface QuotaResponse {
+  id: number;
+  channel: string;
+  provider: string;
+  period: string;
+  period_start: string;
+  quota_limit: number;
+  quota_used: number;
+  quota_remaining: number;
+  blocked: boolean;
+  usage_pct: number;
+}
+
+export function useQuotas() {
+  return useQuery<{ quotas: QuotaResponse[] }, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.quotas(),
+    queryFn: async () => {
+      const { data } = await api.get<{ quotas: QuotaResponse[] }>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.QUOTAS
+      );
+      return data;
+    },
+    staleTime: 30 * 1000,
+    refetchInterval: 30_000,
   });
 }
