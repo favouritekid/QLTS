@@ -523,3 +523,61 @@ def sync_notification_quotas(self):
         validate_keys=["synced"],
     )
     return result
+
+
+# =============================================================================
+# D3: Alert check task
+# =============================================================================
+
+@celery_app.task(
+    name="check_notification_alerts",
+    bind=True,
+    max_retries=0,
+)
+def check_notification_alerts(self):
+    """
+    Celery Beat task: run all notification alert checks.
+
+    Runs every 5 minutes. Dispatches SYSTEM_ALERT for any fired alerts.
+    Redis dedup prevents alert storms (same alert type within 1 hour).
+    """
+    task_name = "check_notification_alerts"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Running notification alert checks...")
+
+    async def _run():
+        from app.services.notification_alert_service import run_all_checks
+
+        async with task_db_session() as session:
+            alerts = await run_all_checks(session)
+
+            if not alerts:
+                return {"fired": 0}
+
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+
+            for alert in alerts:
+                try:
+                    await safe_dispatch(
+                        db=session,
+                        event=SystemEvents.SYSTEM_ALERT,
+                        payload={
+                            "severity": alert.get("severity", "warning"),
+                            "message": alert["message"],
+                        },
+                    )
+                except Exception as e:
+                    task_log.error(f"Failed to dispatch alert: {e}")
+
+            await session.commit()
+            task_log.info(f"Notification alerts fired: {len(alerts)}")
+            return {"fired": len(alerts), "types": [a["alert_type"] for a in alerts]}
+
+    result = run_async_task(
+        async_func=_run,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["fired"],
+    )
+    return result

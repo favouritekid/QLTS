@@ -406,6 +406,17 @@ class Settings(BaseSettings):
         default=50, validation_alias="NOTIFICATION_RATE_LIMIT_PER_HOUR"
     )  # Max notifications per user per hour
 
+    # -- Notification Alerting (Phase D3) --
+    ALERT_FAILURE_RATE_THRESHOLD: float = Field(
+        default=0.20, validation_alias="ALERT_FAILURE_RATE_THRESHOLD"
+    )  # Alert when failure rate exceeds 20%
+    ALERT_BACKLOG_THRESHOLD: int = Field(
+        default=500, validation_alias="ALERT_BACKLOG_THRESHOLD"
+    )  # Alert when queued backlog exceeds count
+    ALERT_WEBHOOK_LAG_MINUTES: int = Field(
+        default=60, validation_alias="ALERT_WEBHOOK_LAG_MINUTES"
+    )  # Alert when sent deliveries without webhook > this many minutes
+
     # -- Notification Circuit Breaker (Phase D2) --
     CIRCUIT_BREAKER_FAIL_MAX: int = Field(
         default=10, validation_alias="CIRCUIT_BREAKER_FAIL_MAX"

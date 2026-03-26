@@ -190,6 +190,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=0, hour="*/6"),  # Every 6 hours
         "options": {"queue": "default"},
     },
+
+    # --- Phase D3: Notification alert checks ---
+    "check-notification-alerts": {
+        "task": "check_notification_alerts",
+        "schedule": 300,  # Every 5 minutes
+        "options": {"queue": "default"},
+    },
 }
 
 # =============================================================================

@@ -2,7 +2,7 @@
 """
 Repository for NotificationDelivery — per-channel delivery tracking.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select, func, and_, update
@@ -327,3 +327,40 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
             "total_failures": total_failures,
             "by_reason": by_reason,
         }
+
+    # --- D3: Alerting helper methods ---
+
+    async def get_failure_rate(self, minutes: int = 30) -> float | None:
+        """Get failure rate for last N minutes. None if no deliveries."""
+        since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        where = NotificationDelivery.created_at >= since
+        total_q = select(func.count()).select_from(NotificationDelivery).where(where)
+        total = (await self.db.execute(total_q)).scalar() or 0
+        if total == 0:
+            return None
+        fail_q = (
+            select(func.count()).select_from(NotificationDelivery)
+            .where(where, NotificationDelivery.status.in_(["failed", "dead_lettered"]))
+        )
+        failures = (await self.db.execute(fail_q)).scalar() or 0
+        return failures / total
+
+    async def get_queued_backlog_count(self) -> int:
+        """Count deliveries currently in queued status."""
+        q = select(func.count()).select_from(NotificationDelivery).where(
+            NotificationDelivery.status == "queued"
+        )
+        return (await self.db.execute(q)).scalar() or 0
+
+    async def get_stale_sent_count(self, lag_minutes: int = 60) -> int:
+        """Count deliveries sent > lag_minutes ago without webhook confirmation."""
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=lag_minutes)
+        q = (
+            select(func.count()).select_from(NotificationDelivery)
+            .where(
+                NotificationDelivery.status == "sent",
+                NotificationDelivery.channel.in_(["zalo", "sms"]),
+                NotificationDelivery.sent_at <= cutoff,
+            )
+        )
+        return (await self.db.execute(q)).scalar() or 0
