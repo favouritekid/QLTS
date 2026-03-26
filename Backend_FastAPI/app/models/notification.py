@@ -104,8 +104,10 @@ class NotificationRule(Base):
                           comment="Optional link template (e.g., /leads/{lead_id})")
 
     # Delivery configuration
+    # DEPRECATED (Phase C1): Derived from actions. Do not read at runtime.
+    # Kept for backward compat in API responses. Will be removed in Phase D.
     channels = Column(JSON, nullable=False, default=["browser"],
-                     comment="Delivery channels: [\"browser\", \"email\", \"sms\"]")
+                     comment="DEPRECATED (C1): Derived from actions. Will be removed in Phase D.")
 
     # Recipient resolution configuration
     recipient_config = Column(JSON, nullable=False,

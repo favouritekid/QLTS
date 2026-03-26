@@ -92,6 +92,7 @@ celery_app.conf.update(
 #
 #     # Notification tasks -> default queue (or dedicated if needed)
 #     "broadcast_notification_task": {"queue": "default"},
+#     "execute_notification_delivery": {"queue": "notifications"},  # Phase C1
 #     "check_consultation_reminders_task": {"queue": "default"},
 #     "cleanup_old_notifications_task": {"queue": "default"},
 #

@@ -714,7 +714,7 @@ export function NotificationRuleWizard({
     const fallback = [
       { value: "browser", status: "live" as const },
       { value: "email", status: "live" as const },
-      { value: "zalo", status: "planned" as const },
+      { value: "zalo", status: "live" as const },    // Phase C1
       { value: "sms", status: "planned" as const },
     ];
     const channels = metadata?.channels || fallback;

@@ -69,6 +69,46 @@ BULK_INSERT_CHUNK_SIZE = 100
 
 
 # =============================================================================
+# CHANNEL CONFIG PLACEHOLDER RENDERING (Phase C1/P1)
+# =============================================================================
+
+def _render_channel_config_placeholders(
+    snapshot: dict,
+    payload: dict,
+) -> dict:
+    """
+    Render $placeholder values inside channel-specific config fields.
+
+    Uses string.Template.safe_substitute — same pattern as render_title/render_message
+    in DatabaseRuleConfig. Renders string values in any *_template_data dict.
+
+    Placeholder syntax: $lead_name or ${lead_name} (standard string.Template).
+    Unresolved placeholders are left as-is (safe_substitute).
+
+    Example:
+        config: {"zalo_template_data": {"customer": "$lead_name", "phone": "$lead_phone"}}
+        payload: {"lead_name": "Nguyen Van A", "lead_phone": "0901234567"}
+        → {"zalo_template_data": {"customer": "Nguyen Van A", "phone": "0901234567"}}
+    """
+    from string import Template
+
+    result = dict(snapshot)
+
+    # Render placeholders in any *_template_data dict
+    for key in list(result.keys()):
+        if key.endswith("_template_data") and isinstance(result[key], dict):
+            rendered = {}
+            for k, v in result[key].items():
+                if isinstance(v, str) and "$" in v:
+                    rendered[k] = Template(v).safe_substitute(payload)
+                else:
+                    rendered[k] = v
+            result[key] = rendered
+
+    return result
+
+
+# =============================================================================
 # SOURCE EXTRACTION — Derive source_type/source_id from event + payload
 # =============================================================================
 
@@ -358,15 +398,12 @@ async def dispatch(
                 )
                 channel_recipient_map[action.channel] = filtered
 
-    # Notification rows (inbox) are created for ALL internal users who have
-    # at least one channel enabled. This is needed because channel adapters
-    # (e.g. EmailChannel) depend on Notification rows for content/user_id matching.
-    all_channel_user_ids = set()
-    for ids in channel_recipient_map.values():
-        all_channel_user_ids.update(ids)
-    inbox_user_ids = sorted(all_channel_user_ids)
+    # Phase C1: Inbox Notification rows are ONLY for browser recipients.
+    # Non-browser channels (email, zalo, sms) use payload_snapshot via worker —
+    # they do NOT depend on Notification rows.
+    inbox_user_ids = sorted(set(channel_recipient_map.get("browser", [])))
 
-    # If no channel has any recipients, short-circuit
+    # All recipients across all channels (for short-circuit check)
     all_recipients = set()
     for ids in channel_recipient_map.values():
         all_recipients.update(ids)
@@ -387,18 +424,24 @@ async def dispatch(
         channel_counts={ch: len(ids) for ch, ids in channel_recipient_map.items()},
     )
 
-    # Step 4: Apply deduplication to inbox recipients and each channel
+    # Step 4: Apply deduplication to each channel + inbox
     if dedupe_key:
-        original_count = len(inbox_user_ids)
-        inbox_user_ids = await _apply_deduplication(db, inbox_user_ids, dedupe_key)
-
-        # Also dedup each channel's recipient list
+        # Dedup each channel's recipient list
         for ch in channel_recipient_map:
             channel_recipient_map[ch] = await _apply_deduplication(
                 db, channel_recipient_map[ch], dedupe_key
             )
 
-        if not inbox_user_ids and not any(channel_recipient_map.values()):
+        # Re-derive inbox from deduped browser list
+        original_inbox_count = len(inbox_user_ids)
+        inbox_user_ids = sorted(set(channel_recipient_map.get("browser", [])))
+
+        # Re-check all recipients
+        all_recipients = set()
+        for ids in channel_recipient_map.values():
+            all_recipients.update(ids)
+
+        if not all_recipients:
             log.info(
                 "All recipients filtered out by deduplication (still emitting domain event)",
                 event_type=event.value,
@@ -411,9 +454,8 @@ async def dispatch(
         log.info(
             "Recipients after deduplication",
             event_type=event.value,
-            original_inbox_count=original_count,
+            original_inbox_count=original_inbox_count,
             deduplicated_inbox_count=len(inbox_user_ids),
-            filtered_out=original_count - len(inbox_user_ids)
         )
 
     # Step 5: Render notification content
@@ -446,6 +488,8 @@ async def dispatch(
             data=notification_data
         )
 
+    # Phase C1: notification_ids can be empty (no browser recipients) while
+    # other channels still have recipients. Only short-circuit if truly nothing.
     if not notification_ids and not any(channel_recipient_map.values()):
         log.error(
             "Failed to create notifications and no channel recipients for event",
@@ -462,9 +506,32 @@ async def dispatch(
     # Extract source context from payload for delivery tracking
     _source_type, _source_id = _extract_source_from_payload(event, payload)
 
-    # Build action_step map: {channel -> step} from actions
+    # Build action maps: {channel -> step/template/delay/config} from actions
     _channel_step_map = {a.channel: a.step for a in action_configs}
     _channel_template_map = {a.channel: a.template_code for a in action_configs}
+    _action_delay_map = {a.channel: a.delay_minutes for a in action_configs}
+    _action_config_map = {a.channel: a.config for a in action_configs if a.config}
+
+    # Phase C1/G2: Build per-channel payload snapshot.
+    # Base snapshot has rendered content. Channel-specific config (e.g. zalo_template_id)
+    # is merged from ActionConfig.config so the worker has everything it needs.
+    _base_snapshot = {
+        "title": title,
+        "message": message,
+        "link": link,
+        "type": notification_type,
+    }
+    _channel_snapshot_map: Dict[str, dict] = {}
+    for ch in channel_recipient_map:
+        ch_config = _action_config_map.get(ch)
+        if ch_config:
+            # Merge channel config into snapshot, rendering placeholders in template_data
+            merged = {**_base_snapshot, **ch_config}
+            # P1: Render {placeholder} values inside zalo_template_data from payload
+            merged = _render_channel_config_placeholders(merged, payload)
+            _channel_snapshot_map[ch] = merged
+        else:
+            _channel_snapshot_map[ch] = _base_snapshot
 
     try:
         channel_delivery_ids = await notification_delivery_service.create_deliveries_for_dispatch(
@@ -473,12 +540,14 @@ async def dispatch(
             channel_recipient_map=channel_recipient_map,
             notification_id_map=notification_id_map,
             dedupe_key=dedupe_key,
-            payload_snapshot={"title": title, "message": message, "link": link},
+            payload_snapshot=_base_snapshot,
+            channel_snapshot_map=_channel_snapshot_map,
             source_type=_source_type,
             source_id=_source_id,
             rule_id=config.rule_id if hasattr(config, 'rule_id') else None,
             channel_step_map=_channel_step_map,
             channel_template_map=_channel_template_map,
+            action_delay_map=_action_delay_map,
         )
     except Exception as e:
         log.error(
@@ -491,6 +560,149 @@ async def dispatch(
             await db.rollback()
         except Exception:
             pass
+
+    # Step 6.6: External recipient resolution (Phase C1/G3)
+    # For non-browser actions with external_resolver in config, resolve external
+    # contacts and create external delivery rows.
+    _external_delivery_ids: Dict[str, List[int]] = {}
+    for action in action_configs:
+        if action.channel == "browser":
+            continue  # Browser is internal-only
+        if not action.config or "external_resolver" not in action.config:
+            continue
+
+        ext_resolver_type = action.config["external_resolver"]
+        try:
+            from app.services.notification_recipients import EXTERNAL_RESOLVER_REGISTRY
+
+            resolver_fn = EXTERNAL_RESOLVER_REGISTRY.get(ext_resolver_type)
+            if not resolver_fn:
+                log.warning(
+                    "Unknown external resolver type",
+                    resolver_type=ext_resolver_type,
+                    event=event.value,
+                )
+                continue
+
+            # Determine source ID from payload
+            _ext_source_key_map = {
+                "lead_contact": "lead_id",
+                "admission_contact": ("profile_id", "admission_profile_id"),
+                "collaborator_contact": "collaborator_id",
+            }
+            source_keys = _ext_source_key_map.get(ext_resolver_type, ())
+            if isinstance(source_keys, str):
+                source_keys = (source_keys,)
+
+            source_id_val = None
+            for sk in source_keys:
+                source_id_val = payload.get(sk)
+                if source_id_val is not None:
+                    break
+
+            if source_id_val is None:
+                continue
+
+            recipient = await resolver_fn(db, int(source_id_val))
+            if not recipient:
+                continue
+
+            # FP2: Collaborator fallback — if resolver returns an internal user
+            # (e.g. collaborator with linked user_id), create an internal
+            # delivery row instead of an external one.
+            if recipient.recipient_kind == "internal" and recipient.user_id:
+                ch = action.channel
+                ch_snapshot = _channel_snapshot_map.get(ch, _base_snapshot)
+                delay_minutes = _action_delay_map.get(ch, 0)
+                int_scheduled_for = None
+                if delay_minutes > 0:
+                    from datetime import timedelta
+                    int_scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+
+                from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+                repo = NotificationDeliveryRepository(db)
+                fallback_ids = await repo.bulk_create_deliveries([{
+                    "notification_id": notification_id_map.get(recipient.user_id),
+                    "event": event.value,
+                    "channel": ch,
+                    "recipient_kind": "internal",
+                    "user_id": recipient.user_id,
+                    "source_type": recipient.source_type,
+                    "source_id": recipient.source_id,
+                    "status": "queued",
+                    "dedupe_key": dedupe_key,
+                    "payload_snapshot": ch_snapshot,
+                    "rule_id": config.rule_id if hasattr(config, 'rule_id') else None,
+                    "action_step": _channel_step_map.get(ch),
+                    "template_code": _channel_template_map.get(ch),
+                    "scheduled_for": int_scheduled_for,
+                }])
+                if fallback_ids:
+                    channel_delivery_ids.setdefault(ch, []).extend(fallback_ids)
+                log.info(
+                    "External resolver returned internal user, created internal delivery",
+                    event_type=event.value,
+                    channel=ch,
+                    user_id=recipient.user_id,
+                    resolver=ext_resolver_type,
+                )
+                continue
+
+            # Determine destination based on channel (external recipients)
+            destination = None
+            if action.channel in ("zalo", "sms"):
+                destination = recipient.destination_phone
+            elif action.channel == "email":
+                destination = recipient.destination_email
+
+            if not destination:
+                continue
+
+            ch_snapshot = _channel_snapshot_map.get(action.channel, _base_snapshot)
+            delay_minutes = _action_delay_map.get(action.channel, 0)
+            ext_scheduled_for = None
+            if delay_minutes > 0:
+                from datetime import timedelta
+                ext_scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+
+            ext_ids = await notification_delivery_service.prepare_external_deliveries(
+                db=db,
+                event=event.value,
+                channel=action.channel,
+                recipients=[{
+                    "source_type": recipient.source_type,
+                    "source_id": recipient.source_id,
+                    "destination": destination,
+                }],
+                dedupe_key=dedupe_key,
+                payload_snapshot=ch_snapshot,
+                rule_id=config.rule_id if hasattr(config, 'rule_id') else None,
+                action_step=_channel_step_map.get(action.channel),
+                template_code=_channel_template_map.get(action.channel),
+                scheduled_for=ext_scheduled_for,
+            )
+            if ext_ids:
+                _external_delivery_ids.setdefault(action.channel, []).extend(ext_ids)
+                log.info(
+                    "External delivery rows created",
+                    event_type=event.value,
+                    channel=action.channel,
+                    resolver=ext_resolver_type,
+                    count=len(ext_ids),
+                )
+
+        except Exception as e:
+            log.warning(
+                "External recipient resolution failed (non-critical)",
+                event_type=event.value,
+                channel=action.channel,
+                resolver_type=ext_resolver_type,
+                error=str(e),
+            )
+
+    # Merge external delivery IDs into channel_delivery_ids for worker enqueueing
+    for ch, ext_ids in _external_delivery_ids.items():
+        channel_delivery_ids.setdefault(ch, []).extend(ext_ids)
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -524,112 +736,106 @@ async def dispatch(
                 b_uids, b_nids = zip(*browser_notif_pairs)
                 await _prepend_to_inbox_cache(list(b_uids), list(b_nids))
 
-        # ✅ NOTIFICATION 2.0 - PHASE 3.1: Per-Channel Delivery
-        # Step 8: Send notifications through configured channels
-        # Each channel only sends to its own filtered recipient list.
+        # ✅ Phase C1: Split delivery paths — browser inline, non-browser via worker
+        # Step 8a: Browser channel — inline (real-time requirement)
         try:
-            notifications = []
-            if notification_ids:
+            browser_del_ids = channel_delivery_ids.get("browser", [])
+            browser_recipients = channel_recipient_map.get("browser", [])
+
+            if browser_recipients and notification_ids:
+                notifications = []
                 repo = NotificationRepository(db)
                 notifications = await repo.get_by_ids(notification_ids)
 
-            # Create parallel tasks for channels that have recipients
-            channel_tasks = [
-                _send_via_channel(
-                    channel_name=channel_name,
+                ch_name, ch_result, error_msg = await _send_via_channel(
+                    channel_name="browser",
                     notifications=notifications,
-                    recipient_ids=channel_recipient_map[channel_name],
+                    recipient_ids=browser_recipients,
                     context=payload,
-                    event=event.value
+                    event=event.value,
                 )
-                for channel_name in config.channel_values
-                if channel_recipient_map.get(channel_name)
-            ]
 
-            # Execute all channel deliveries in parallel
-            channel_results = await asyncio.gather(*channel_tasks, return_exceptions=True)
-
-            # Process results, log per-channel stats, and update delivery records
-            for result in channel_results:
-                if isinstance(result, Exception):
-                    log.error(
-                        "Unexpected channel delivery exception",
-                        event_type=event.value,
-                        error=str(result)
-                    )
-                    continue
-
-                channel_name, channel_result, error_msg = result
-
-                # Get delivery IDs for this channel (scoped to this batch)
-                ch_del_ids = channel_delivery_ids.get(channel_name, [])
-
-                if channel_result is None and error_msg is None:
-                    # Channel not implemented — mark skipped
-                    if ch_del_ids:
+                # Update browser delivery statuses
+                if browser_del_ids:
+                    if ch_result is None and error_msg is None:
                         await notification_delivery_service.mark_delivery_ids_skipped(
-                            db, ch_del_ids,
+                            db, browser_del_ids,
                             error_reason="channel_not_implemented",
                         )
-                elif error_msg:
-                    log.error(
-                        "Channel delivery failed",
-                        event_type=event.value,
-                        channel=channel_name,
-                        error=error_msg,
-                    )
-                    if ch_del_ids:
+                    elif error_msg:
                         await notification_delivery_service.mark_delivery_ids_failed(
-                            db, ch_del_ids,
-                            error_reason=error_msg,
+                            db, browser_del_ids, error_reason=error_msg,
                         )
-                elif channel_result:
-                    # Build user_id -> delivery_id map for this channel
-                    ch_user_ids = channel_recipient_map.get(channel_name, [])
-                    uid_to_did = dict(zip(ch_user_ids, ch_del_ids))
+                    elif ch_result:
+                        uid_to_did = dict(zip(browser_recipients, browser_del_ids))
+                        sent_ids = [
+                            uid_to_did[uid]
+                            for uid in browser_recipients
+                            if uid not in ch_result.failed_ids and uid in uid_to_did
+                        ]
+                        if sent_ids:
+                            await notification_delivery_service.mark_delivery_ids_sent(
+                                db, sent_ids,
+                            )
+                        failed_ids = [
+                            uid_to_did[uid]
+                            for uid in ch_result.failed_ids
+                            if uid in uid_to_did
+                        ]
+                        if failed_ids:
+                            await notification_delivery_service.mark_delivery_ids_failed(
+                                db, failed_ids,
+                                error_reason=ch_result.error_message or "delivery_failed",
+                            )
 
-                    # Mark successful sends
-                    sent_del_ids = [
-                        uid_to_did[uid]
-                        for uid in ch_user_ids
-                        if uid not in channel_result.failed_ids and uid in uid_to_did
-                    ]
-                    if sent_del_ids:
-                        await notification_delivery_service.mark_delivery_ids_sent(
-                            db, sent_del_ids,
-                        )
-
-                    # Mark failed sends
-                    failed_del_ids = [
-                        uid_to_did[uid]
-                        for uid in channel_result.failed_ids
-                        if uid in uid_to_did
-                    ]
-                    if failed_del_ids:
-                        await notification_delivery_service.mark_delivery_ids_failed(
-                            db, failed_del_ids,
-                            error_reason=channel_result.error_message or "delivery_failed",
-                        )
-
-                    log.info(
-                        "Channel delivery completed",
-                        event_type=event.value,
-                        channel=channel_name,
-                        sent_count=channel_result.sent_count,
-                        failed_count=len(channel_result.failed_ids),
-                    )
-
-            # Commit delivery status updates
-            await db.commit()
+                await db.commit()
 
         except Exception as e:
             log.error(
-                "Channel delivery system failed",
+                "Browser inline delivery failed",
                 event_type=event.value,
                 error=str(e),
-                notification_count=len(notification_ids),
-                channels=config.channel_values,
-                fallback="Notifications are in DB but delivery failed"
+                fallback="Browser notifications failed but inbox rows are in DB",
+            )
+
+        # Step 8b: Non-browser channels — enqueue to Celery worker
+        try:
+            from app.tasks.delivery_tasks import execute_notification_delivery
+
+            worker_enqueued = 0
+            for channel_name, del_ids in channel_delivery_ids.items():
+                if channel_name == "browser":
+                    continue  # Already handled inline
+                if not del_ids:
+                    continue
+
+                delay_minutes = _action_delay_map.get(channel_name, 0)
+                countdown = delay_minutes * 60  # 0 for immediate
+
+                for did in del_ids:
+                    execute_notification_delivery.apply_async(
+                        args=[did],
+                        countdown=countdown,
+                    )
+                    worker_enqueued += 1
+
+            if worker_enqueued:
+                log.info(
+                    "Non-browser deliveries enqueued to worker",
+                    event_type=event.value,
+                    enqueued_count=worker_enqueued,
+                    channels=[
+                        ch for ch in channel_delivery_ids
+                        if ch != "browser" and channel_delivery_ids[ch]
+                    ],
+                )
+
+        except Exception as e:
+            log.error(
+                "Failed to enqueue worker deliveries (non-critical)",
+                event_type=event.value,
+                error=str(e),
+                fallback="Delivery rows are in DB as queued, can be retried",
             )
 
     return notification_ids, _post_commit

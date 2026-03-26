@@ -59,6 +59,7 @@ from .notification import Notification, NotificationAction, NotificationRule, No
 from .notification_preference import NotificationPreference
 from .notification_delivery import NotificationDelivery
 from .notification_consent import NotificationConsent
+from .zalo_token_store import ZaloTokenStore
 
 # Organization models (includes temporal models)
 # OLD: from .organization import Major  # REMOVED after 3-tier migration
@@ -169,6 +170,7 @@ __all__ = [
     "NotificationPreference",
     "NotificationDelivery",
     "NotificationConsent",
+    "ZaloTokenStore",
     # Organization (Legacy)
     # "Major",  # REMOVED after 3-tier migration k6l7m8n9o0p1
     # "MajorAcademicInfo",  # REMOVED after 3-tier migration k6l7m8n9o0p1

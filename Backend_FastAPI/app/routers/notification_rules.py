@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from .. import database, models, schemas
+from ..config import settings
 from app.core.deps import CasbinAuth, get_notification_rule_for_admin  # Phase 2.2
 from ..core.event_metadata import get_all_events_metadata
 from ..services import notification_rule_crud_service
@@ -88,7 +89,7 @@ async def get_notification_metadata(
         "channels": [
             {"value": "browser", "status": "live"},
             {"value": "email", "status": "live"},
-            {"value": "zalo", "status": "planned"},
+            {"value": "zalo", "status": "live" if settings.ZALO_ENABLED else "planned"},
             {"value": "sms", "status": "planned"},
         ],
         "resolver_types": [

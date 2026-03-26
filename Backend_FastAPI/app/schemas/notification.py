@@ -134,7 +134,11 @@ class NotificationRuleBase(BaseModel):
     message_template: str  # Message template
     notification_type: str = "info"  # info, success, warning, error
     link_template: Optional[str] = None  # Optional link template
-    channels: List[str] = ["browser"]  # ["browser", "email", "zalo", "sms"]
+
+    # Phase C1: channels is DEPRECATED on write path.
+    # It is accepted but IGNORED — channels are derived from actions.
+    # Kept in response schema as read-only for backward compat.
+    channels: Optional[List[str]] = None
 
     # ✅ Now typed with validation
     recipient_config: RecipientConfig  # Validated resolver config
@@ -148,10 +152,7 @@ class NotificationRuleCreate(NotificationRuleBase):
     """Schema for creating a notification rule"""
     actions: List[NotificationActionCreate] = []  # ✅ NOTIFICATION 2.0: Workflow actions
 
-    @field_validator("channels")
-    @classmethod
-    def reject_socket_channels(cls, v: List[str]) -> List[str]:
-        return validate_channels_for_write(v)
+    # Phase C1: channels ignored on write — derived from actions
 
 
 class NotificationRuleUpdate(BaseModel):
@@ -160,23 +161,19 @@ class NotificationRuleUpdate(BaseModel):
     message_template: Optional[str] = None
     notification_type: Optional[str] = None
     link_template: Optional[str] = None
-    channels: Optional[List[str]] = None
+    channels: Optional[List[str]] = None  # DEPRECATED (C1): ignored, derived from actions
     recipient_config: Optional[Dict[str, Any]] = None
     condition: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
     actions: Optional[List[NotificationActionCreate]] = None  # ✅ NOTIFICATION 2.0: Update actions
 
-    @field_validator("channels")
-    @classmethod
-    def reject_socket_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        if v is not None:
-            return validate_channels_for_write(v)
-        return v
+    # Phase C1: channels ignored on write — derived from actions
 
 
 class NotificationRule(NotificationRuleBase):
     """Schema for reading notification rule (response)"""
     id: int
+    channels: List[str] = []  # Read-only, derived from actions
     actions: List[NotificationAction] = []  # ✅ NOTIFICATION 2.0: Include workflow actions
     created_at: datetime
     updated_at: datetime
@@ -186,7 +183,9 @@ class NotificationRule(NotificationRuleBase):
     @field_validator("channels")
     @classmethod
     def normalize_legacy_channels(cls, v: List[str]) -> List[str]:
-        return normalize_channels(v)
+        if v:
+            return normalize_channels(v)
+        return v
 
 
 class NotificationRulesPage(BaseModel):

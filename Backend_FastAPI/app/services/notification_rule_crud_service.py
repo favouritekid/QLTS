@@ -17,12 +17,43 @@ from .notification_rule_loader import invalidate_rule_cache, derive_channels_fro
 log = structlog.get_logger(__name__)
 
 
-def _validate_actions_c0(actions) -> None:
-    """
-    Validate NotificationAction constraints for Phase C0.
+_VALID_EXTERNAL_RESOLVERS = frozenset({
+    "lead_contact", "admission_contact", "collaborator_contact",
+})
 
-    C0 rules:
-      - delay_minutes must be 0 (delayed execution not yet supported)
+
+def _validate_zalo_action_config(step: int, config) -> None:
+    """Validate Zalo action config — requires zalo_template_id."""
+    if not config or not isinstance(config, dict):
+        raise BadRequest(
+            f"Action step {step}: channel 'zalo' requires config with 'zalo_template_id'. "
+            "Example: {\"zalo_template_id\": \"abc123\"}"
+        )
+    if not config.get("zalo_template_id"):
+        raise BadRequest(
+            f"Action step {step}: channel 'zalo' requires 'zalo_template_id' in config."
+        )
+    ext_resolver = config.get("external_resolver")
+    if ext_resolver:
+        _validate_external_resolver(step, ext_resolver)
+
+
+def _validate_external_resolver(step: int, resolver_type: str) -> None:
+    """Validate external_resolver is a known type."""
+    if resolver_type not in _VALID_EXTERNAL_RESOLVERS:
+        raise BadRequest(
+            f"Action step {step}: unknown external_resolver '{resolver_type}'. "
+            f"Valid resolvers: {sorted(_VALID_EXTERNAL_RESOLVERS)}"
+        )
+
+
+def _validate_actions(actions) -> None:
+    """
+    Validate NotificationAction constraints.
+
+    Rules:
+      - C1: delay_minutes >= 0 allowed (worker handles delayed execution)
+      - template_code still deferred to D8 (rejected here)
       - steps must be contiguous 1..n
       - no duplicate steps
       - no duplicate channels within same rule
@@ -37,17 +68,17 @@ def _validate_actions_c0(actions) -> None:
         channel = action.channel if hasattr(action, 'channel') else action.get('channel')
         delay = action.delay_minutes if hasattr(action, 'delay_minutes') else action.get('delay_minutes', 0)
 
-        if delay and delay > 0:
+        if delay is not None and delay < 0:
             raise BadRequest(
-                f"Phase C0: delayed actions not yet supported (step {step} has delay_minutes={delay}). "
-                "All actions must have delay_minutes=0."
+                f"delay_minutes must be >= 0 (step {step} has delay_minutes={delay})."
             )
 
+        # template_code deferred to D8 per worklog
         template_code = action.template_code if hasattr(action, 'template_code') else action.get('template_code')
         if template_code:
             raise BadRequest(
-                f"Phase C0: per-action template_code not yet supported (step {step}). "
-                "Use rule-level template_id instead."
+                f"Per-action template_code not yet supported (step {step}). "
+                "Use rule-level template_id instead. (Deferred to Phase D8)"
             )
 
         if step in steps:
@@ -57,9 +88,19 @@ def _validate_actions_c0(actions) -> None:
         if channel in channels:
             raise BadRequest(
                 f"Duplicate channel '{channel}' in rule actions. "
-                "Phase C0 requires unique channels per rule."
+                "Each channel must be unique within a rule."
             )
         channels.add(channel)
+
+        # FP3: Channel-specific config validation
+        config = action.config if hasattr(action, 'config') else action.get('config')
+        if channel == "zalo":
+            _validate_zalo_action_config(step, config)
+        elif config and isinstance(config, dict):
+            # Validate external_resolver for any channel that has it
+            ext_resolver = config.get("external_resolver")
+            if ext_resolver:
+                _validate_external_resolver(step, ext_resolver)
 
     # Verify steps are contiguous 1..n
     if steps and steps != set(range(1, len(steps) + 1)):
@@ -113,15 +154,16 @@ async def create_rule(
             f"Notification rule for event '{rule_data.event}' already exists (ID: {existing_rule.id})"
         )
 
-    # Phase C0: Validate action constraints
-    _validate_actions_c0(rule_data.actions)
+    # Validate action constraints
+    _validate_actions(rule_data.actions)
 
-    # Phase C0: Derive channels from actions if actions are provided
+    # Phase C1: channels is ALWAYS derived from actions (input ignored)
     if rule_data.actions:
         derived = [a.channel for a in rule_data.actions]
-        # Dedupe preserving order
         seen = set()
         rule_data.channels = [c for c in derived if not (c in seen or seen.add(c))]
+    else:
+        rule_data.channels = []
 
     # Create rule via repository
     new_rule = await repo.create_with_actions(rule_data)
@@ -169,7 +211,7 @@ async def update_rule(
 
     # Handle actions update
     if rule_update.actions is not None:
-        _validate_actions_c0(rule_update.actions)
+        _validate_actions(rule_update.actions)
         await repo.delete_actions(rule.id)
         await repo.add_actions(rule.id, rule_update.actions)
         updated_fields.append("actions")

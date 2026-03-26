@@ -107,6 +107,43 @@ def validate_vietnam_phone(phone: Optional[str], normalize: bool = True) -> bool
     return bool(VIETNAM_PHONE_REGEX.match(phone))
 
 
+def to_zalo_phone(phone: Optional[str]) -> Optional[str]:
+    """
+    Convert a Vietnam phone number to Zalo format (84xxx).
+
+    Zalo API requires phone numbers in international format without '+':
+    - 0901234567 → 84901234567
+    - +84901234567 → 84901234567
+    - 84901234567 → 84901234567
+
+    Args:
+        phone: Raw phone input
+
+    Returns:
+        Phone in 84xxx format, or None if invalid
+
+    Examples:
+        >>> to_zalo_phone("0901234567")
+        "84901234567"
+        >>> to_zalo_phone("+84 321 234 567")
+        "84321234567"
+        >>> to_zalo_phone("invalid")
+        None
+    """
+    normalized = normalize_vietnam_phone(phone)
+    if not normalized:
+        return None
+
+    if not validate_vietnam_phone(normalized, normalize=False):
+        return None
+
+    # 0xxxxxxxxx → 84xxxxxxxxx
+    if normalized.startswith("0"):
+        return "84" + normalized[1:]
+
+    return None
+
+
 def normalize_and_validate_vietnam_phone(phone: Optional[str]) -> tuple[Optional[str], bool]:
     """
     Normalize and validate a phone number in one call.

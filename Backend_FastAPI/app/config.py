@@ -398,6 +398,27 @@ class Settings(BaseSettings):
         validation_alias="VNPAY_API_URL"
     )  # Query API URL
 
+    # -- Zalo ZNS Integration (Phase C1) --
+    # Get credentials from Zalo Business portal (business.zalo.me)
+    ZALO_ENABLED: bool = Field(
+        default=False, validation_alias="ZALO_ENABLED"
+    )  # Master switch — must be True to register Zalo channel
+    ZALO_APP_ID: str = Field(
+        default="", validation_alias="ZALO_APP_ID"
+    )  # Zalo app ID from developer portal
+    ZALO_APP_SECRET: str = Field(
+        default="", validation_alias="ZALO_APP_SECRET"
+    )  # Secret key for HMAC webhook verification + OAuth
+    ZALO_OA_ID: str = Field(
+        default="", validation_alias="ZALO_OA_ID"
+    )  # Official Account ID
+    ZALO_REFRESH_TOKEN: str = Field(
+        default="", validation_alias="ZALO_REFRESH_TOKEN"
+    )  # Initial seed refresh token (used only on first bootstrap)
+    ZALO_WEBHOOK_SECRET: str = Field(
+        default="", validation_alias="ZALO_WEBHOOK_SECRET"
+    )  # Secret for verifying webhook HMAC signatures
+
     # -- MoMo Payment Gateway Settings --
     # Get credentials from MoMo merchant portal
     # Docs: https://developers.momo.vn/v3/docs/payment/api/collection-link/

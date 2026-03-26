@@ -106,6 +106,20 @@ class NotificationDelivery(Base):
         comment="Template code used for this delivery",
     )
 
+    # Phase C1: Worker execution scheduling
+    scheduled_for = Column(
+        DateTime(timezone=True), nullable=True,
+        comment="When this delivery should execute (NULL = immediate)",
+    )
+    attempt_count = Column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Number of execution attempts",
+    )
+    last_attempt_at = Column(
+        DateTime(timezone=True), nullable=True,
+        comment="When last execution attempt was made",
+    )
+
     # Timestamps
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
@@ -124,6 +138,11 @@ class NotificationDelivery(Base):
         Index("ix_delivery_event_created", "event", created_at.desc()),
         Index("ix_delivery_user_created", "user_id", created_at.desc()),
         Index("ix_delivery_source", "source_type", "source_id", created_at.desc()),
+        # NOTE: ix_delivery_worker_poll is a DB-only partial index created in
+        # migration zz5f6g7h8i9j0 (WHERE status='queued'). Not declarable in
+        # SQLAlchemy model without postgresql_where which would require importing
+        # the column expression at class-definition time. The index exists in DB
+        # and is used by the Celery worker polling query.
     )
 
     def __repr__(self) -> str:

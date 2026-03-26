@@ -43,6 +43,10 @@ async def prepare_external_deliveries(
     recipients: list,
     dedupe_key: str | None = None,
     payload_snapshot: dict | None = None,
+    rule_id: int | None = None,
+    action_step: int | None = None,
+    template_code: str | None = None,
+    scheduled_for: "datetime | None" = None,
 ) -> List[int]:
     """
     Create NotificationDelivery rows for external (non-user) recipients.
@@ -51,6 +55,9 @@ async def prepare_external_deliveries(
       - source_type, source_id
       - destination (email or phone)
     Optional: normalized_phone, normalized_email
+
+    Phase C1/P2: accepts rule_id, action_step, template_code, scheduled_for
+    for parity with internal delivery metadata.
 
     Returns list of delivery IDs created.
     """
@@ -70,6 +77,10 @@ async def prepare_external_deliveries(
             "status": "queued",
             "dedupe_key": dedupe_key,
             "payload_snapshot": payload_snapshot,
+            "rule_id": rule_id,
+            "action_step": action_step,
+            "template_code": template_code,
+            "scheduled_for": scheduled_for,
         })
 
     if not deliveries_data:
@@ -94,11 +105,13 @@ async def create_deliveries_for_dispatch(
     notification_id_map: Dict[int, int],
     dedupe_key: str | None = None,
     payload_snapshot: dict | None = None,
+    channel_snapshot_map: Dict[str, dict] | None = None,
     source_type: str | None = None,
     source_id: int | None = None,
     rule_id: int | None = None,
     channel_step_map: Dict[str, int] | None = None,
     channel_template_map: Dict[str, str | None] | None = None,
+    action_delay_map: Dict[str, int] | None = None,
 ) -> Dict[str, List[int]]:
     """
     Create NotificationDelivery rows for a dispatch.
@@ -109,20 +122,29 @@ async def create_deliveries_for_dispatch(
         channel_recipient_map: {channel: [user_ids]} from dispatcher
         notification_id_map: {user_id: notification_id} for linking
         dedupe_key: Optional dedup key
-        payload_snapshot: Rendered content snapshot
+        payload_snapshot: Default rendered content snapshot (fallback)
+        channel_snapshot_map: Phase C1/G2 — per-channel snapshot with channel-specific config
+            e.g. {"zalo": {title, message, link, zalo_template_id, zalo_template_data}}
         source_type: Business entity type (lead, admission_profile, etc.)
         source_id: Business entity ID
         rule_id: Phase C0 — FK to notification_rule that triggered this dispatch
         channel_step_map: Phase C0 — {channel: action_step} from action configs
         channel_template_map: Phase C0 — {channel: template_code} from action configs
+        action_delay_map: Phase C1 — {channel: delay_minutes} for scheduling
 
     Returns:
         Dict mapping channel -> list of delivery IDs created for that channel.
         Example: {"browser": [1, 2], "email": [3]}
     """
+    from datetime import timedelta
+
     repo = NotificationDeliveryRepository(db)
     _step_map = channel_step_map or {}
     _template_map = channel_template_map or {}
+    _delay_map = action_delay_map or {}
+    _snapshot_map = channel_snapshot_map or {}
+
+    now = datetime.now(timezone.utc)
 
     # Build all delivery rows, tracking which indices belong to which channel
     deliveries_data: List[Dict[str, Any]] = []
@@ -130,6 +152,11 @@ async def create_deliveries_for_dispatch(
 
     for channel, user_ids in channel_recipient_map.items():
         start = len(deliveries_data)
+        delay_minutes = _delay_map.get(channel, 0)
+        scheduled_for = (now + timedelta(minutes=delay_minutes)) if delay_minutes > 0 else None
+        # Use per-channel snapshot if available, else fallback to base
+        ch_snapshot = _snapshot_map.get(channel, payload_snapshot)
+
         for user_id in user_ids:
             notification_id = notification_id_map.get(user_id)
             deliveries_data.append({
@@ -142,10 +169,11 @@ async def create_deliveries_for_dispatch(
                 "source_id": source_id,
                 "status": "queued",
                 "dedupe_key": dedupe_key,
-                "payload_snapshot": payload_snapshot,
+                "payload_snapshot": ch_snapshot,
                 "rule_id": rule_id,
                 "action_step": _step_map.get(channel),
                 "template_code": _template_map.get(channel),
+                "scheduled_for": scheduled_for,
             })
         channel_ranges[channel] = (start, len(user_ids))
 

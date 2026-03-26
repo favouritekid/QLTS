@@ -12,7 +12,6 @@ from typing import Dict, List, Optional, Type
 from .base import BaseChannel, ChannelResult
 from .socket_channel import SocketChannel
 from .email_channel import EmailChannel
-# from .zalo_channel import ZaloChannel  # TODO: Zalo ZNS Phase 1
 # from .sms_channel import SMSChannel    # TODO: Future
 
 
@@ -95,9 +94,21 @@ def validate_channels_for_write(values: List[str]) -> List[str]:
 CHANNEL_REGISTRY: Dict[str, Type[BaseChannel]] = {
     "browser": SocketChannel,  # Real-time notifications via Socket.IO
     "email": EmailChannel,
-    # "zalo": ZaloChannel,    # TODO: Zalo ZNS Phase 1
     # "sms": SMSChannel,      # TODO: Future
 }
+
+# Phase C1: Register Zalo channel conditionally
+def _register_zalo_channel():
+    """Register ZaloChannel if ZALO_ENABLED is True."""
+    try:
+        from app.config import settings
+        if settings.ZALO_ENABLED:
+            from .zalo_channel import ZaloChannel
+            CHANNEL_REGISTRY["zalo"] = ZaloChannel
+    except Exception:
+        pass  # Config not available yet (import time)
+
+_register_zalo_channel()
 
 
 def get_channel(channel_name: str) -> Optional[BaseChannel]:
@@ -132,4 +143,5 @@ __all__ = [
     "get_available_channels",
     "SocketChannel",
     "EmailChannel",
+    # Phase C1: ZaloChannel registered conditionally in CHANNEL_REGISTRY
 ]
