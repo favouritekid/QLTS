@@ -14,6 +14,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useTopEvents } from "@/hooks/useNotificationDeliveries";
 
+const FAIL_RATE_WARN_THRESHOLD = 0.1;
+
 interface TopEventsTableProps {
   onEventClick?: (event: string) => void;
 }
@@ -54,7 +56,7 @@ export default function TopEventsTable({ onEventClick }: TopEventsTableProps) {
                   <TableCell className="text-right">{ev.total}</TableCell>
                   <TableCell className="text-right text-red-600">{ev.failed}</TableCell>
                   <TableCell className="text-right">
-                    <span className={ev.fail_rate > 0.1 ? "text-red-600 font-medium" : ""}>
+                    <span className={ev.fail_rate > FAIL_RATE_WARN_THRESHOLD ? "text-red-600 font-medium" : ""}>
                       {(ev.fail_rate * 100).toFixed(1)}%
                     </span>
                   </TableCell>

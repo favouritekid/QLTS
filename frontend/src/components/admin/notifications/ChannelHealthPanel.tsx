@@ -15,6 +15,8 @@ import {
   type ChannelHealthItem,
 } from "@/hooks/useNotificationDeliveries";
 
+const FAIL_RATE_WARN_THRESHOLD = 0.1;
+
 function BreakerBadge({ state }: { state: string }) {
   switch (state) {
     case "closed":
@@ -58,7 +60,7 @@ function ChannelCard({ ch }: { ch: ChannelHealthItem }) {
         {ch.failure_rate_24h != null && (
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Fail rate (24h)</span>
-            <span className={ch.failure_rate_24h > 0.1 ? "text-red-600 font-medium" : ""}>
+            <span className={ch.failure_rate_24h > FAIL_RATE_WARN_THRESHOLD ? "text-red-600 font-medium" : ""}>
               {(ch.failure_rate_24h * 100).toFixed(1)}%
             </span>
           </div>

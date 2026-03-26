@@ -367,6 +367,10 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
 
     # --- D5: Dashboard analytics ---
 
+    # Status constants for analytics queries
+    _SUCCESS_STATUSES = ("sent", "delivered", "read")
+    _FAILURE_STATUSES = ("failed", "dead_lettered")
+
     async def get_time_series(
         self,
         interval: str = "hour",
@@ -375,26 +379,45 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         channel: str | None = None,
         allowed_user_ids: list[int] | None = None,
     ) -> list[dict]:
-        """Delivery counts bucketed by hour/day."""
-        from sqlalchemy import case, text
-        # H8 fix: whitelist interval to prevent SQL injection
+        """Delivery counts bucketed by hour/day. Max 30-day range."""
+        from sqlalchemy import case
+
         if interval not in ("hour", "day"):
             interval = "hour"
-        if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=7)
-        if not date_to: date_to = datetime.now(timezone.utc)
-        # M2 fix: cap max range to 30 days to prevent unbounded queries
+        if not date_from:
+            date_from = datetime.now(timezone.utc) - timedelta(days=7)
+        if not date_to:
+            date_to = datetime.now(timezone.utc)
         if (date_to - date_from).days > 30:
             date_from = date_to - timedelta(days=30)
+
         trunc = func.date_trunc(interval, NotificationDelivery.created_at)
-        conds = [NotificationDelivery.created_at >= date_from, NotificationDelivery.created_at <= date_to]
-        if channel: conds.append(NotificationDelivery.channel == channel)
-        if allowed_user_ids is not None: conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
-        q = select(trunc.label("bucket"), func.count().label("total"),
-            func.count(case((NotificationDelivery.status.in_(["sent","delivered","read"]),1))).label("sent"),
-            func.count(case((NotificationDelivery.status.in_(["failed","dead_lettered"]),1))).label("failed"),
-            func.count(case((NotificationDelivery.status=="queued",1))).label("queued"),
-        ).where(and_(*conds)).group_by(text("1")).order_by(text("1"))
-        return [{"bucket":r[0],"total":r[1],"sent":r[2],"failed":r[3],"queued":r[4]} for r in (await self.db.execute(q)).all()]
+        conds = [
+            NotificationDelivery.created_at >= date_from,
+            NotificationDelivery.created_at <= date_to,
+        ]
+        if channel:
+            conds.append(NotificationDelivery.channel == channel)
+        if allowed_user_ids is not None:
+            conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+
+        q = (
+            select(
+                trunc.label("bucket"),
+                func.count().label("total"),
+                func.count(case((NotificationDelivery.status.in_(self._SUCCESS_STATUSES), 1))).label("sent"),
+                func.count(case((NotificationDelivery.status.in_(self._FAILURE_STATUSES), 1))).label("failed"),
+                func.count(case((NotificationDelivery.status == "queued", 1))).label("queued"),
+            )
+            .where(and_(*conds))
+            .group_by(trunc)
+            .order_by(trunc)
+        )
+        rows = (await self.db.execute(q)).all()
+        return [
+            {"bucket": r[0], "total": r[1], "sent": r[2], "failed": r[3], "queued": r[4]}
+            for r in rows
+        ]
 
     async def get_top_events(
         self,
@@ -405,27 +428,67 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
     ) -> list[dict]:
         """Top events by volume with failure rates."""
         from sqlalchemy import case
-        if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=7)
+
+        if not date_from:
+            date_from = datetime.now(timezone.utc) - timedelta(days=7)
         conds = [NotificationDelivery.created_at >= date_from]
-        if date_to: conds.append(NotificationDelivery.created_at <= date_to)
-        if allowed_user_ids is not None: conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
-        q = select(NotificationDelivery.event, func.count().label("total"),
-            func.count(case((NotificationDelivery.status.in_(["failed","dead_lettered"]),1))).label("failed"),
-        ).where(and_(*conds)).group_by(NotificationDelivery.event).order_by(func.count().desc()).limit(limit)
-        return [{"event":r[0],"total":r[1],"failed":r[2],"fail_rate":round(r[2]/r[1]*100,1) if r[1]>0 else 0.0} for r in (await self.db.execute(q)).all()]
+        if date_to:
+            conds.append(NotificationDelivery.created_at <= date_to)
+        if allowed_user_ids is not None:
+            conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+
+        q = (
+            select(
+                NotificationDelivery.event,
+                func.count().label("total"),
+                func.count(case((NotificationDelivery.status.in_(self._FAILURE_STATUSES), 1))).label("failed"),
+            )
+            .where(and_(*conds))
+            .group_by(NotificationDelivery.event)
+            .order_by(func.count().desc())
+            .limit(limit)
+        )
+        rows = (await self.db.execute(q)).all()
+        return [
+            {
+                "event": r[0],
+                "total": r[1],
+                "failed": r[2],
+                "fail_rate": round(r[2] / r[1] * 100, 1) if r[1] > 0 else 0.0,
+            }
+            for r in rows
+        ]
 
     async def get_processing_latency_stats(
         self,
         date_from: "datetime | None" = None,
         date_to: "datetime | None" = None,
     ) -> dict:
-        """P50/P95 processing latency (created_at → sent_at)."""
+        """P50/P95 processing latency (created_at → sent_at). PostgreSQL only."""
         from sqlalchemy import extract
-        if not date_from: date_from = datetime.now(timezone.utc) - timedelta(days=1)
-        conds = [NotificationDelivery.status.in_(["sent","delivered","read"]), NotificationDelivery.sent_at.isnot(None), NotificationDelivery.created_at >= date_from]
-        if date_to: conds.append(NotificationDelivery.created_at <= date_to)
+
+        if not date_from:
+            date_from = datetime.now(timezone.utc) - timedelta(days=1)
+        conds = [
+            NotificationDelivery.status.in_(self._SUCCESS_STATUSES),
+            NotificationDelivery.sent_at.isnot(None),
+            NotificationDelivery.created_at >= date_from,
+        ]
+        if date_to:
+            conds.append(NotificationDelivery.created_at <= date_to)
+
         lat = extract("epoch", NotificationDelivery.sent_at - NotificationDelivery.created_at)
-        q = select(func.percentile_cont(0.5).within_group(lat), func.percentile_cont(0.95).within_group(lat), func.count()).where(and_(*conds))
+        q = select(
+            func.percentile_cont(0.5).within_group(lat),
+            func.percentile_cont(0.95).within_group(lat),
+            func.count(),
+        ).where(and_(*conds))
+
         r = (await self.db.execute(q)).first()
-        if not r or r[2]==0: return {"p50_seconds":None,"p95_seconds":None,"sample_count":0}
-        return {"p50_seconds":round(float(r[0]),2) if r[0] else None,"p95_seconds":round(float(r[1]),2) if r[1] else None,"sample_count":r[2]}
+        if not r or r[2] == 0:
+            return {"p50_seconds": None, "p95_seconds": None, "sample_count": 0}
+        return {
+            "p50_seconds": round(float(r[0]), 2) if r[0] else None,
+            "p95_seconds": round(float(r[1]), 2) if r[1] else None,
+            "sample_count": r[2],
+        }

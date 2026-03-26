@@ -101,7 +101,7 @@ class QuotaListResponse(BaseModel):
 class CircuitBreakerState(BaseModel):
     """Single channel breaker state."""
     channel: str
-    state: str  # "closed", "open", "half-open"
+    state: str  # "closed", "open", "half_open"
     fail_count: int = 0
     fail_max: int = 10
     timeout_duration: int = 300

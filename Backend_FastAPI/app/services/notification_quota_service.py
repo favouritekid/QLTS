@@ -8,6 +8,8 @@ import structlog
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app import database
 from app.config import settings
 from app.repositories.notification_quota_repository import NotificationQuotaRepository
@@ -20,7 +22,7 @@ _QUOTA_CACHE_TTL = 300  # 5 minutes
 
 
 async def check_quota(
-    db,
+    db: AsyncSession,
     channel: str,
     provider: str = "default",
 ) -> bool:
@@ -58,7 +60,7 @@ async def check_quota(
 
 
 async def record_send(
-    db,
+    db: AsyncSession,
     channel: str,
     provider: str = "default",
 ) -> None:
@@ -99,7 +101,7 @@ async def record_send(
 
 
 async def sync_zalo_quota(
-    db,
+    db: AsyncSession,
     quota_remaining: Optional[int],
 ) -> None:
     """
@@ -129,7 +131,6 @@ async def sync_zalo_quota(
 
     # Update cache
     try:
-        from app import database
         redis = await database.get_redis()
         cache_key = _QUOTA_CACHE_KEY.format(channel="zalo", date=today.isoformat())
         value = "blocked" if blocked else "ok"
@@ -147,7 +148,7 @@ async def sync_zalo_quota(
 
 
 async def get_quota_summary(
-    db,
+    db: AsyncSession,
     period_start: Optional[date] = None,
 ) -> List[Dict]:
     """Get quota summary for all channels."""
@@ -164,7 +165,7 @@ async def get_quota_summary(
             "quota_used": q.quota_used,
             "quota_remaining": q.quota_remaining,
             "blocked": q.blocked,
-            "usage_pct": round(q.quota_used / q.quota_limit * 100, 1) if q.quota_limit else 0,
+            "usage_pct": round(q.quota_used / q.quota_limit * 100, 1) if q.quota_limit and q.quota_limit > 0 else 0.0,
         }
         for q in quotas
     ]

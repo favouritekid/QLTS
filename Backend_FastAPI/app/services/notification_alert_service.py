@@ -8,6 +8,8 @@ import asyncio
 import structlog
 from typing import Dict, List, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app import database
 from app.config import settings
 from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
@@ -20,7 +22,7 @@ _ALERT_DEDUP_KEY = "notif:alert:dedup:{alert_type}"
 _ALERT_DEDUP_TTL = 3600  # 1 hour
 
 
-async def check_failure_rate_alert(db) -> Optional[Dict]:
+async def check_failure_rate_alert(db: AsyncSession) -> Optional[Dict]:
     """Check if failure rate exceeds threshold in last 30 minutes."""
     repo = NotificationDeliveryRepository(db)
     rate = await repo.get_failure_rate(minutes=30)
@@ -35,7 +37,7 @@ async def check_failure_rate_alert(db) -> Optional[Dict]:
     return None
 
 
-async def check_backlog_alert(db) -> Optional[Dict]:
+async def check_backlog_alert(db: AsyncSession) -> Optional[Dict]:
     """Check if queued backlog exceeds threshold."""
     repo = NotificationDeliveryRepository(db)
     backlog = await repo.get_queued_backlog_count()
@@ -50,7 +52,7 @@ async def check_backlog_alert(db) -> Optional[Dict]:
     return None
 
 
-async def check_webhook_lag_alert(db) -> Optional[Dict]:
+async def check_webhook_lag_alert(db: AsyncSession) -> Optional[Dict]:
     """Check for stale sent deliveries without webhook confirmation."""
     repo = NotificationDeliveryRepository(db)
     stale = await repo.get_stale_sent_count(lag_minutes=settings.ALERT_WEBHOOK_LAG_MINUTES)
@@ -80,7 +82,7 @@ async def check_breaker_alert() -> Optional[Dict]:
     return None
 
 
-async def run_all_checks(db) -> List[Dict]:
+async def run_all_checks(db: AsyncSession) -> List[Dict]:
     """Run all alert checks in parallel and return fired alerts (after dedup)."""
     # C3 fix: use asyncio.gather for parallel execution
     results = await asyncio.gather(
