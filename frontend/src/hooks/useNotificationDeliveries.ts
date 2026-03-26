@@ -1,8 +1,11 @@
 // src/hooks/useNotificationDeliveries.ts
 /**
- * Phase B8: React Query hooks for Notification Delivery Ops (admin read-only)
+ * Phase B8 + C2: React Query hooks for Notification Delivery Ops
+ *
+ * B8: list + detail (admin read-only)
+ * C2: stats, failures, replay (admin actions)
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
 import { api } from "@/lib/api/client";
@@ -12,6 +15,34 @@ import type {
   NotificationDeliveriesPage,
   NotificationDelivery,
 } from "@/types/api.types";
+
+// ============================================
+// TYPES (C2)
+// ============================================
+
+export interface DeliveryStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_channel: Record<string, number>;
+  success_rate: number;
+}
+
+export interface FailureReasonCount {
+  error_reason: string;
+  count: number;
+  latest_at: string | null;
+}
+
+export interface DeliveryFailureSummary {
+  total_failures: number;
+  by_reason: FailureReasonCount[];
+}
+
+export interface ReplayResponse {
+  replayed: boolean;
+  delivery_id: number;
+  message: string;
+}
 
 // ============================================
 // QUERY KEYS
@@ -24,6 +55,10 @@ export const notificationDeliveryKeys = {
     [...notificationDeliveryKeys.lists(), params] as const,
   details: () => [...notificationDeliveryKeys.all, "detail"] as const,
   detail: (id: number) => [...notificationDeliveryKeys.details(), id] as const,
+  stats: (params?: Record<string, unknown>) =>
+    [...notificationDeliveryKeys.all, "stats", params] as const,
+  failures: (params?: Record<string, unknown>) =>
+    [...notificationDeliveryKeys.all, "failures", params] as const,
 };
 
 // ============================================
@@ -118,5 +153,77 @@ export function useNotificationDeliveryDetail(
     enabled: options?.enabled !== false && id > 0,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
+  });
+}
+
+// ============================================
+// STATS (C2-5)
+// ============================================
+
+export interface UseDeliveryStatsParams {
+  date_from?: string;
+  date_to?: string;
+  event?: string;
+  channel?: string;
+}
+
+export function useDeliveryStats(params: UseDeliveryStatsParams = {}) {
+  return useQuery<DeliveryStats, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.stats(params),
+    queryFn: async () => {
+      const { data } = await api.get<DeliveryStats>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.STATS,
+        { params: { ...params } }
+      );
+      return data;
+    },
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+}
+
+// ============================================
+// FAILURES (C2-5)
+// ============================================
+
+export interface UseDeliveryFailuresParams {
+  date_from?: string;
+  date_to?: string;
+  channel?: string;
+  limit?: number;
+}
+
+export function useDeliveryFailures(params: UseDeliveryFailuresParams = {}) {
+  return useQuery<DeliveryFailureSummary, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationDeliveryKeys.failures(params),
+    queryFn: async () => {
+      const { data } = await api.get<DeliveryFailureSummary>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.FAILURES,
+        { params: { ...params } }
+      );
+      return data;
+    },
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+}
+
+// ============================================
+// REPLAY (C2-2)
+// ============================================
+
+export function useReplayDelivery() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ReplayResponse, AxiosError<ApiErrorResponse>, number>({
+    mutationFn: async (deliveryId: number) => {
+      const { data } = await api.post<ReplayResponse>(
+        API_ENDPOINTS.NOTIFICATION_DELIVERIES.REPLAY(deliveryId)
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: notificationDeliveryKeys.all });
+    },
   });
 }

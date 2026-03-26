@@ -45,6 +45,8 @@ import {
 import { Pagination } from "@/components/common/table/Pagination";
 import {
   useNotificationDeliveries,
+  useDeliveryStats,
+  useReplayDelivery,
   type UseNotificationDeliveriesParams,
 } from "@/hooks/useNotificationDeliveries";
 import type {
@@ -59,9 +61,14 @@ import type {
 const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   queued: { label: "Đang chờ", variant: "secondary" },
   sent: { label: "Đã gửi", variant: "default" },
+  delivered: { label: "Đã nhận", variant: "default" },
+  read: { label: "Đã đọc", variant: "default" },
   failed: { label: "Thất bại", variant: "destructive" },
+  dead_lettered: { label: "Dead Letter", variant: "destructive" },
   skipped: { label: "Bỏ qua", variant: "outline" },
 };
+
+const REPLAYABLE_STATUSES = new Set(["failed", "dead_lettered", "skipped"]);
 
 const CHANNEL_ICON: Record<string, React.ReactNode> = {
   browser: <Monitor className="h-4 w-4" />,
@@ -107,9 +114,17 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
   const { data, isLoading, error } = useNotificationDeliveries(params, {
     initialData,
   });
+  const { data: stats } = useDeliveryStats();
+  const replayMutation = useReplayDelivery();
 
   const deliveries = data?.deliveries ?? [];
   const total = data?.total_count ?? 0;
+
+  const handleReplay = (deliveryId: number) => {
+    if (confirm("Replay delivery này?")) {
+      replayMutation.mutate(deliveryId);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -125,26 +140,35 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
+      {/* Stats Cards (C2: real data from API) */}
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Tổng records</CardDescription>
-            <CardTitle className="text-3xl">{total}</CardTitle>
+            <CardDescription>Tổng deliveries</CardDescription>
+            <CardTitle className="text-3xl">{stats?.total ?? total}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Trang hiện tại</CardDescription>
-            <CardTitle className="text-3xl">{deliveries.length}</CardTitle>
+            <CardDescription>Thành công</CardDescription>
+            <CardTitle className="text-3xl text-green-600">
+              {(stats?.by_status?.sent ?? 0) + (stats?.by_status?.delivered ?? 0) + (stats?.by_status?.read ?? 0)}
+            </CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Bộ lọc</CardDescription>
+            <CardDescription>Thất bại</CardDescription>
+            <CardTitle className="text-3xl text-red-600">
+              {(stats?.by_status?.failed ?? 0) + (stats?.by_status?.dead_lettered ?? 0)}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Success Rate</CardDescription>
             <CardTitle className="text-3xl">
-              {[eventFilter, channelFilter !== "all" ? channelFilter : "", statusFilter !== "all" ? statusFilter : ""]
-                .filter(Boolean).length || "—"}
+              {stats?.success_rate != null ? `${stats.success_rate}%` : "—"}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -206,7 +230,9 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
                 <SelectItem value="all">Tất cả</SelectItem>
                 <SelectItem value="queued">Đang chờ</SelectItem>
                 <SelectItem value="sent">Đã gửi</SelectItem>
+                <SelectItem value="delivered">Đã nhận</SelectItem>
                 <SelectItem value="failed">Thất bại</SelectItem>
+                <SelectItem value="dead_lettered">Dead Letter</SelectItem>
                 <SelectItem value="skipped">Bỏ qua</SelectItem>
               </SelectContent>
             </Select>
@@ -274,6 +300,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
                   <TableHead>Người nhận</TableHead>
                   <TableHead className="w-[110px]">Trạng thái</TableHead>
                   <TableHead>Lỗi</TableHead>
+                  <TableHead className="w-[80px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -303,6 +330,19 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
                       </TableCell>
                       <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">
                         {d.error_reason ?? "—"}
+                      </TableCell>
+                      <TableCell>
+                        {REPLAYABLE_STATUSES.has(d.status) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => handleReplay(d.id)}
+                            disabled={replayMutation.isPending}
+                          >
+                            Replay
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   );

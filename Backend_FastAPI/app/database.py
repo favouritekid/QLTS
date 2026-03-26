@@ -187,6 +187,20 @@ async def safe_redis_expire(key: str, seconds: int):
         return False
 
 
+async def safe_redis_incr(key: str, amount: int = 1):
+    """
+    Increment a Redis key by amount (safe with circuit breaker).
+
+    Phase C2: Used for per-user rate limiting (INCR + EXPIRE pattern).
+    Returns the new value as int, or None on failure.
+    """
+    try:
+        return await redis_breaker.call_async(redis_client.incr, key, amount)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis INCR failed", key=key, amount=amount, exc_info=True)
+        return None
+
+
 # ✅ FIX: Tạo async context manager cho pipeline
 
 

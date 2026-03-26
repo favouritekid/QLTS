@@ -398,6 +398,14 @@ class Settings(BaseSettings):
         validation_alias="VNPAY_API_URL"
     )  # Query API URL
 
+    # -- Notification Anti-spam (Phase C2) --
+    NOTIFICATION_COOLDOWN_SECONDS: int = Field(
+        default=300, validation_alias="NOTIFICATION_COOLDOWN_SECONDS"
+    )  # Min interval (seconds) between same event+user+channel (default 5 min)
+    NOTIFICATION_RATE_LIMIT_PER_HOUR: int = Field(
+        default=50, validation_alias="NOTIFICATION_RATE_LIMIT_PER_HOUR"
+    )  # Max notifications per user per hour
+
     # -- Zalo ZNS Integration (Phase C1) --
     # Get credentials from Zalo Business portal (business.zalo.me)
     ZALO_ENABLED: bool = Field(

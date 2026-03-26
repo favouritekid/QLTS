@@ -69,7 +69,7 @@ class NotificationDelivery(Base):
     # Status
     status = Column(
         String(32), nullable=False, default="queued",
-        comment="queued, sent, failed, skipped",
+        comment="queued, sent, delivered, read, failed, skipped, dead_lettered",
     )
     error_reason = Column(
         Text, nullable=True,
@@ -120,6 +120,20 @@ class NotificationDelivery(Base):
         comment="When last execution attempt was made",
     )
 
+    # Phase C2: Retry + dead-letter
+    next_retry_at = Column(
+        DateTime(timezone=True), nullable=True,
+        comment="When next retry should execute (NULL = not scheduled for retry)",
+    )
+    max_retries = Column(
+        Integer, nullable=False, default=5, server_default="5",
+        comment="Max retry attempts before dead-lettering",
+    )
+    dead_lettered_at = Column(
+        DateTime(timezone=True), nullable=True,
+        comment="When delivery was permanently failed (dead-lettered)",
+    )
+
     # Timestamps
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
@@ -138,11 +152,9 @@ class NotificationDelivery(Base):
         Index("ix_delivery_event_created", "event", created_at.desc()),
         Index("ix_delivery_user_created", "user_id", created_at.desc()),
         Index("ix_delivery_source", "source_type", "source_id", created_at.desc()),
-        # NOTE: ix_delivery_worker_poll is a DB-only partial index created in
-        # migration zz5f6g7h8i9j0 (WHERE status='queued'). Not declarable in
-        # SQLAlchemy model without postgresql_where which would require importing
-        # the column expression at class-definition time. The index exists in DB
-        # and is used by the Celery worker polling query.
+        # NOTE: ix_delivery_retry_poll is a DB-only partial index created in
+        # migration c2_001 (WHERE status IN ('queued','failed') AND next_retry_at IS NOT NULL).
+        # Replaces C1's ix_delivery_worker_poll. Used by sweep_retry_deliveries task.
     )
 
     def __repr__(self) -> str:

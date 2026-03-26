@@ -295,6 +295,10 @@ from .notification import (
 from .notification_delivery import (
     NotificationDeliveryResponse,
     NotificationDeliveriesPage,
+    ReplayResponse,
+    DeliveryStatsResponse,
+    FailureReasonCount,
+    DeliveryFailureSummary,
 )
 
 # --- Từ notification_consent.py ---

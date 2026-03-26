@@ -1,47 +1,96 @@
 # app/tasks/delivery_tasks.py
 """
-Phase C1: Celery task for executing notification deliveries.
+Phase C1+C2: Celery tasks for executing notification deliveries.
 
-Non-browser channels (email, zalo, sms) are executed asynchronously via this task.
-The dispatcher enqueues one task per delivery_id after DB commit.
+C1: execute_notification_delivery — worker for non-browser channels
+C2: exponential backoff retry, permanent/transient error classification,
+    dead-letter pipeline, sweep_retry_deliveries Beat task
 
 Flow:
   1. Load delivery by ID
-  2. Check idempotency (skip if not queued)
+  2. Check idempotency (skip if not in queued/failed)
   3. Re-check scheduled_for (re-enqueue if too early)
-  4. Re-check consent/preference (skip if revoked/disabled)
+  4. Re-check consent/preference (permanent skip if revoked)
   5. Call channel.execute_delivery(delivery, db)
-  6. Update delivery status (sent/failed/skipped)
+  6. On success: mark_sent
+  7. On failure: classify error → transient (retry w/ backoff) or permanent (dead-letter)
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..celery_app import celery_app
 from .utils import task_db_session, run_async_task
 
 
+# =============================================================================
+# Error classification
+# =============================================================================
+
+PERMANENT_ERRORS = frozenset({
+    "consent_revoked",
+    "consent_not_granted",
+    "preference_disabled",
+    "user_not_found",
+    "no_email",
+    "no_phone",
+    "invalid_phone",
+    "channel_not_implemented",
+    "execute_delivery_not_supported",
+    # Zalo permanent errors
+    "Zalo error -216",   # Template không tồn tại
+    "Zalo error -230",   # SĐT không dùng Zalo
+    "Zalo error -202",   # App không có quyền
+    "Zalo error -204",   # OA bị khoá
+})
+# -217 (template chưa duyệt) = TRANSIENT — template có thể được duyệt sau
+# -210 (quota hết) = TRANSIENT — quota reset theo ngày
+# All other errors = transient → retry
+
+RETRY_BACKOFF_BASE = 60      # seconds
+RETRY_BACKOFF_MAX = 3600     # cap at 1 hour
+
+
+def _is_permanent_error(error_reason: str) -> bool:
+    """Check if error is permanent (no point retrying)."""
+    if not error_reason:
+        return False
+    for pe in PERMANENT_ERRORS:
+        if pe in error_reason:
+            return True
+    return False
+
+
+def _calculate_next_retry(attempt_count: int) -> datetime:
+    """Exponential backoff: 60s * 2^attempt, capped at 1 hour."""
+    delay = min(RETRY_BACKOFF_BASE * (2 ** attempt_count), RETRY_BACKOFF_MAX)
+    return datetime.now(timezone.utc) + timedelta(seconds=delay)
+
+
+# =============================================================================
+# Main delivery execution task
+# =============================================================================
+
 @celery_app.task(
     name="execute_notification_delivery",
     bind=True,
-    autoretry_for=(Exception,),
-    max_retries=3,
-    default_retry_delay=60,
+    max_retries=0,  # C2: manual retry management, no Celery autoretry
     acks_late=True,
 )
 def execute_notification_delivery(self, delivery_id: int):
     """
     Execute a single notification delivery.
 
-    Idempotent: skips if delivery.status != 'queued'.
-    Supports delayed execution via scheduled_for.
-    Re-checks consent and user preference before sending.
+    C2 changes:
+    - No autoretry — retry managed via next_retry_at + sweep task
+    - Exponential backoff: 60s, 120s, 240s, ... cap 1h
+    - Permanent errors → dead-letter immediately
+    - Transient errors → schedule retry if under max_retries
     """
     task_name = "execute_notification_delivery"
     task_log = logging.getLogger(task_name)
     task_log.info(f"Executing delivery {delivery_id}")
 
     async def _run():
-        from sqlalchemy import select
         from app.models.notification_delivery import NotificationDelivery
         from app.services.notification_channels import get_channel
         from app.services import notification_delivery_service
@@ -53,10 +102,10 @@ def execute_notification_delivery(self, delivery_id: int):
                 task_log.warning(f"Delivery {delivery_id} not found")
                 return {"status": "not_found", "delivery_id": delivery_id}
 
-            # 2. Idempotency: skip if already processed
-            if delivery.status != "queued":
+            # 2. Idempotency: only process queued or failed (retry)
+            if delivery.status not in ("queued", "failed"):
                 task_log.info(
-                    f"Delivery {delivery_id} already {delivery.status}, skipping"
+                    f"Delivery {delivery_id} status={delivery.status}, skipping"
                 )
                 return {"status": "skipped_idempotent", "delivery_id": delivery_id}
 
@@ -74,79 +123,108 @@ def execute_notification_delivery(self, delivery_id: int):
                 )
                 return {"status": "re_enqueued", "delivery_id": delivery_id}
 
-            # 4. Re-check consent (external recipients)
-            skip_reason = await _check_delivery_eligibility(
-                session, delivery
-            )
+            # 4. Re-check eligibility (consent/preference)
+            skip_reason = await _check_delivery_eligibility(session, delivery)
             if skip_reason:
-                task_log.info(
-                    f"Delivery {delivery_id} skipped: {skip_reason}"
-                )
-                await notification_delivery_service.mark_delivery_ids_skipped(
-                    session, [delivery_id], error_reason=skip_reason,
-                )
+                if _is_permanent_error(skip_reason):
+                    # Permanent: dead-letter
+                    await notification_delivery_service.mark_dead_lettered(
+                        session, [delivery_id], error_reason=skip_reason,
+                    )
+                else:
+                    await notification_delivery_service.mark_delivery_ids_skipped(
+                        session, [delivery_id], error_reason=skip_reason,
+                    )
                 await session.commit()
+                task_log.info(f"Delivery {delivery_id} skipped: {skip_reason}")
                 return {"status": "skipped", "reason": skip_reason, "delivery_id": delivery_id}
 
-            # 5. Get channel adapter and execute
+            # 5. Get channel adapter
             channel = get_channel(delivery.channel)
             if channel is None:
-                task_log.warning(
-                    f"Channel '{delivery.channel}' not implemented, skipping delivery {delivery_id}"
-                )
-                await notification_delivery_service.mark_delivery_ids_skipped(
+                await notification_delivery_service.mark_dead_lettered(
                     session, [delivery_id],
                     error_reason="channel_not_implemented",
                 )
                 await session.commit()
-                return {"status": "skipped", "reason": "channel_not_implemented", "delivery_id": delivery_id}
+                return {"status": "dead_lettered", "reason": "channel_not_implemented", "delivery_id": delivery_id}
 
             # Update attempt tracking
             delivery.attempt_count = (delivery.attempt_count or 0) + 1
             delivery.last_attempt_at = now
             await session.flush()
 
+            # 6. Execute
             try:
                 result = await channel.execute_delivery(delivery, session)
             except NotImplementedError:
-                task_log.warning(
-                    f"Channel '{delivery.channel}' does not support execute_delivery, skipping"
-                )
-                await notification_delivery_service.mark_delivery_ids_skipped(
+                await notification_delivery_service.mark_dead_lettered(
                     session, [delivery_id],
                     error_reason="execute_delivery_not_supported",
                 )
                 await session.commit()
-                return {"status": "skipped", "reason": "not_supported", "delivery_id": delivery_id}
+                return {"status": "dead_lettered", "reason": "not_supported", "delivery_id": delivery_id}
+            except Exception as e:
+                # Unexpected exception — treat as transient
+                error_msg = f"Unexpected error: {str(e)}"
+                task_log.error(f"Delivery {delivery_id} exception: {e}", exc_info=True)
+                result = None  # Will be handled in failure path below
+                # Fall through to failure handling
 
-            # 6. Update delivery status based on result
-            if result.success:
+            # 7. Process result
+            if result and result.success:
                 await notification_delivery_service.mark_delivery_ids_sent(
                     session, [delivery_id],
                 )
-                # Store provider message ID if available (Zalo/SMS)
                 if result.provider_message_id:
                     delivery.provider_message_id = result.provider_message_id
                     await session.flush()
+                await session.commit()
+                task_log.info(f"Delivery {delivery_id} sent via {delivery.channel}")
+                return {"status": "sent", "delivery_id": delivery_id, "channel": delivery.channel}
 
-                task_log.info(
-                    f"Delivery {delivery_id} sent successfully via {delivery.channel}"
+            # --- Failure path ---
+            error_reason = ""
+            if result:
+                error_reason = result.error_message or "delivery_failed"
+            elif not result:
+                error_reason = error_msg if 'error_msg' in dir() else "unknown_error"
+
+            if _is_permanent_error(error_reason):
+                # Permanent failure → dead-letter immediately
+                await notification_delivery_service.mark_dead_lettered(
+                    session, [delivery_id], error_reason=error_reason,
                 )
-            else:
-                await notification_delivery_service.mark_delivery_ids_failed(
+                await session.commit()
+                task_log.warning(f"Delivery {delivery_id} dead-lettered: {error_reason}")
+                return {"status": "dead_lettered", "delivery_id": delivery_id}
+
+            # Transient failure → retry with backoff or dead-letter if max exceeded
+            max_retries = delivery.max_retries or 5
+            if delivery.attempt_count >= max_retries:
+                await notification_delivery_service.mark_dead_lettered(
                     session, [delivery_id],
-                    error_reason=result.error_message or "delivery_failed",
+                    error_reason=f"max_retries_exceeded ({max_retries}): {error_reason}",
                 )
+                await session.commit()
                 task_log.warning(
-                    f"Delivery {delivery_id} failed: {result.error_message}"
+                    f"Delivery {delivery_id} dead-lettered after {delivery.attempt_count} attempts"
                 )
+                return {"status": "dead_lettered", "delivery_id": delivery_id}
 
+            # Schedule retry
+            next_retry = _calculate_next_retry(delivery.attempt_count)
+            await notification_delivery_service.mark_for_retry(
+                session, delivery_id,
+                next_retry_at=next_retry,
+                error_reason=error_reason,
+            )
             await session.commit()
-            return {
-                "status": "sent" if result.success else "failed",
-                "delivery_id": delivery_id,
-                "channel": delivery.channel,
-            }
+            task_log.info(
+                f"Delivery {delivery_id} failed, retry scheduled at {next_retry.isoformat()} "
+                f"(attempt {delivery.attempt_count}/{max_retries})"
+            )
+            return {"status": "retry_scheduled", "delivery_id": delivery_id}
 
     result = run_async_task(
         async_func=_run,
@@ -157,15 +235,152 @@ def execute_notification_delivery(self, delivery_id: int):
     return result
 
 
+# =============================================================================
+# Sweep task: pick up deliveries ready for retry
+# =============================================================================
+
+@celery_app.task(
+    name="sweep_retry_deliveries",
+    bind=True,
+    max_retries=0,
+)
+def sweep_retry_deliveries(self):
+    """
+    Celery Beat task: find deliveries with next_retry_at <= now and enqueue them.
+
+    Runs every 2 minutes. Uses distributed lock to prevent concurrent sweeps.
+    """
+    task_name = "sweep_retry_deliveries"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Starting retry sweep...")
+
+    async def _run():
+        from app.utils.redis_lock import acquire_redis_lock
+        from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+
+        async with acquire_redis_lock("sweep_retry_deliveries", timeout=120) as acquired:
+            if not acquired:
+                task_log.info("Sweep lock held by another worker, skipping")
+                return {"enqueued": 0, "skipped_lock": True}
+
+            async with task_db_session() as session:
+                repo = NotificationDeliveryRepository(session)
+                ready = await repo.find_ready_for_retry(limit=100)
+
+                if not ready:
+                    return {"enqueued": 0}
+
+                enqueued = 0
+                for delivery in ready:
+                    execute_notification_delivery.apply_async(args=[delivery.id])
+                    enqueued += 1
+
+                task_log.info(f"Sweep enqueued {enqueued} deliveries for retry")
+                return {"enqueued": enqueued}
+
+    result = run_async_task(
+        async_func=_run,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["enqueued"],
+    )
+    return result
+
+
+# =============================================================================
+# Reconciliation: stale delivery cleanup
+# =============================================================================
+
+@celery_app.task(
+    name="reconcile_stale_deliveries",
+    bind=True,
+    max_retries=0,
+)
+def reconcile_stale_deliveries(self):
+    """
+    Celery Beat task: find and resolve stale deliveries.
+
+    1. Queued stale (external channels, >30min): re-enqueue or dead-letter
+    2. Sent stale (external channels, >60min, no webhook): mark as delivered (assume success)
+
+    Runs every 15 minutes with distributed lock.
+    """
+    task_name = "reconcile_stale_deliveries"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Starting delivery reconciliation...")
+
+    async def _run():
+        from app.utils.redis_lock import acquire_redis_lock
+        from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+        from app.services import notification_delivery_service
+
+        async with acquire_redis_lock("reconcile_stale_deliveries", timeout=300) as acquired:
+            if not acquired:
+                return {"queued_resolved": 0, "sent_resolved": 0, "skipped_lock": True}
+
+            async with task_db_session() as session:
+                repo = NotificationDeliveryRepository(session)
+                queued_resolved = 0
+                sent_resolved = 0
+
+                # 1. Queued stale: external channels stuck >30min
+                stale_queued = await repo.find_stale_deliveries(
+                    status="queued",
+                    channels=["email", "zalo", "sms"],
+                    max_age_minutes=30,
+                    limit=50,
+                )
+                for delivery in stale_queued:
+                    max_retries = delivery.max_retries or 5
+                    if (delivery.attempt_count or 0) >= max_retries:
+                        await notification_delivery_service.mark_dead_lettered(
+                            session, [delivery.id],
+                            error_reason="reconcile: queued_stale_max_retries",
+                        )
+                    else:
+                        execute_notification_delivery.apply_async(args=[delivery.id])
+                    queued_resolved += 1
+
+                # 2. Sent stale: external channels sent >60min without webhook confirm
+                stale_sent = await repo.find_stale_deliveries(
+                    status="sent",
+                    channels=["zalo", "sms"],
+                    max_age_minutes=60,
+                    limit=50,
+                )
+                for delivery in stale_sent:
+                    # Assume delivered if no negative callback after 60min
+                    await notification_delivery_service.mark_delivery_ids_delivered(
+                        session, [delivery.id],
+                    )
+                    sent_resolved += 1
+
+                if queued_resolved or sent_resolved:
+                    await session.commit()
+
+                task_log.info(
+                    f"Reconciliation done: {queued_resolved} queued, {sent_resolved} sent resolved"
+                )
+                return {"queued_resolved": queued_resolved, "sent_resolved": sent_resolved}
+
+    result = run_async_task(
+        async_func=_run,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["queued_resolved", "sent_resolved"],
+    )
+    return result
+
+
+# =============================================================================
+# Eligibility check (shared by execute task)
+# =============================================================================
+
 async def _check_delivery_eligibility(session, delivery) -> str | None:
     """
     Re-check if delivery should proceed.
 
     Returns skip reason string if delivery should be skipped, None if OK.
-
-    Checks:
-    - External recipients: consent must still be granted
-    - Internal recipients: user preference for this channel must be enabled
     """
     # External recipients: check consent
     if delivery.recipient_kind == "external" and delivery.source_type and delivery.source_id:
@@ -185,7 +400,6 @@ async def _check_delivery_eligibility(session, delivery) -> str | None:
         from app.core.events import SystemEvents
         from app.core.event_groups import get_event_group
 
-        # Convert event string back to SystemEvents enum for group lookup
         try:
             event_enum = SystemEvents(delivery.event)
             group = get_event_group(event_enum)
@@ -198,7 +412,6 @@ async def _check_delivery_eligibility(session, delivery) -> str | None:
             if delivery.user_id not in filtered:
                 return "preference_disabled"
         except ValueError:
-            # Unknown event — skip preference check, let delivery proceed
             pass
 
     return None

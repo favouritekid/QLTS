@@ -70,6 +70,44 @@ async def list_deliveries(
 
 
 @limiter.limit(RateLimits.DATA_READ)
+@router.get("/stats", response_model=schemas.DeliveryStatsResponse)
+async def get_delivery_stats(
+    request: Request,
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    event: Optional[str] = Query(None),
+    channel: Optional[str] = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = RequireAdmin,
+):
+    """Aggregate delivery stats (counts by status and channel)."""
+    repo = NotificationDeliveryRepository(db)
+    stats = await repo.get_aggregate_stats(
+        date_from=date_from, date_to=date_to, event=event, channel=channel,
+    )
+    return stats
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get("/failures", response_model=schemas.DeliveryFailureSummary)
+async def get_delivery_failures(
+    request: Request,
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    channel: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = RequireAdmin,
+):
+    """Failure analytics — grouped by error reason."""
+    repo = NotificationDeliveryRepository(db)
+    summary = await repo.get_failure_summary(
+        date_from=date_from, date_to=date_to, channel=channel, limit=limit,
+    )
+    return summary
+
+
+@limiter.limit(RateLimits.DATA_READ)
 @router.get("/{delivery_id}", response_model=schemas.NotificationDeliveryResponse)
 async def get_delivery(
     request: Request,
@@ -83,3 +121,37 @@ async def get_delivery(
     if not record:
         raise HTTPException(status_code=404, detail="Delivery record not found")
     return schemas.NotificationDeliveryResponse.model_validate(record)
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.post("/{delivery_id}/replay", response_model=schemas.ReplayResponse)
+async def replay_delivery(
+    request: Request,
+    delivery_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = RequireAdmin,
+):
+    """
+    Replay a failed/dead-lettered/skipped delivery.
+
+    Resets status to queued and enqueues to Celery worker.
+    """
+    from app.services import notification_delivery_service
+    from app.tasks.delivery_tasks import execute_notification_delivery
+
+    success, message = await notification_delivery_service.replay_delivery(db, delivery_id)
+
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+
+    await db.commit()
+
+    # Enqueue to worker
+    execute_notification_delivery.apply_async(args=[delivery_id])
+
+    log.info("Delivery replayed", delivery_id=delivery_id, admin_id=current_admin.id)
+    return schemas.ReplayResponse(
+        replayed=True,
+        delivery_id=delivery_id,
+        message="Delivery replayed and enqueued",
+    )

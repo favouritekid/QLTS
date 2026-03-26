@@ -185,7 +185,10 @@ export const API_ENDPOINTS = {
   // ✅ PHASE B8: Notification Delivery Ops (Admin-only)
   NOTIFICATION_DELIVERIES: {
     LIST: "/api/notification-deliveries",
+    STATS: "/api/notification-deliveries/stats",
+    FAILURES: "/api/notification-deliveries/failures",
     DETAIL: (id: number) => `/api/notification-deliveries/${id}`,
+    REPLAY: (id: number) => `/api/notification-deliveries/${id}/replay`,
   },
   // ✅ PHASE B7: Notification Consents (Admin-only)
   NOTIFICATION_CONSENTS: {

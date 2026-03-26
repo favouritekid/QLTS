@@ -235,6 +235,123 @@ async def mark_delivery_ids_skipped(
 
 
 # ============================================================
+# Phase C2: Retry + dead-letter lifecycle
+# ============================================================
+
+async def mark_for_retry(
+    db: AsyncSession,
+    delivery_id: int,
+    next_retry_at: "datetime",
+    error_reason: str = "",
+) -> int:
+    """
+    Mark delivery as failed with a scheduled retry.
+
+    Sets status=failed, next_retry_at, increments attempt_count, sets last_attempt_at.
+    The sweep_retry_deliveries task will pick this up when next_retry_at <= now().
+    """
+    from app.models.notification_delivery import NotificationDelivery
+    delivery = await db.get(NotificationDelivery, delivery_id)
+    if not delivery:
+        return 0
+
+    delivery.status = "failed"
+    delivery.error_reason = error_reason
+    delivery.next_retry_at = next_retry_at
+    delivery.attempt_count = (delivery.attempt_count or 0) + 1
+    delivery.last_attempt_at = datetime.now(timezone.utc)
+    await db.flush()
+    return 1
+
+
+async def replay_delivery(
+    db: AsyncSession,
+    delivery_id: int,
+) -> tuple:
+    """
+    Replay a failed/dead-lettered/skipped delivery.
+
+    Resets status to queued, clears retry/dead-letter state, enqueues to worker.
+    Returns (success: bool, message: str).
+    """
+    from app.models.notification_delivery import NotificationDelivery
+
+    delivery = await db.get(NotificationDelivery, delivery_id)
+    if not delivery:
+        return False, "Delivery not found"
+
+    if delivery.status not in ("failed", "dead_lettered", "skipped"):
+        return False, f"Cannot replay delivery with status '{delivery.status}'"
+
+    # Re-check eligibility before replay
+    from app.tasks.delivery_tasks import _check_delivery_eligibility
+    skip_reason = await _check_delivery_eligibility(db, delivery)
+    if skip_reason:
+        return False, f"Replay blocked: {skip_reason}"
+
+    # Reset delivery state
+    delivery.status = "queued"
+    delivery.attempt_count = 0
+    delivery.next_retry_at = None
+    delivery.dead_lettered_at = None
+    delivery.error_reason = None
+    delivery.last_attempt_at = None
+    await db.flush()
+
+    return True, "Delivery replayed"
+
+
+async def mark_delivery_ids_delivered(
+    db: AsyncSession,
+    delivery_ids: List[int],
+) -> int:
+    """Mark deliveries as delivered (provider confirmed receipt)."""
+    if not delivery_ids:
+        return 0
+    repo = NotificationDeliveryRepository(db)
+    return await repo.bulk_update_status(delivery_ids, "delivered")
+
+
+async def mark_delivery_ids_read(
+    db: AsyncSession,
+    delivery_ids: List[int],
+) -> int:
+    """Mark deliveries as read (recipient opened/acknowledged)."""
+    if not delivery_ids:
+        return 0
+    repo = NotificationDeliveryRepository(db)
+    return await repo.bulk_update_status(delivery_ids, "read")
+
+
+async def mark_dead_lettered(
+    db: AsyncSession,
+    delivery_ids: List[int],
+    error_reason: str = "max_retries_exceeded",
+) -> int:
+    """
+    Mark deliveries as permanently failed (dead-lettered). No more retries.
+    """
+    if not delivery_ids:
+        return 0
+    repo = NotificationDeliveryRepository(db)
+    from sqlalchemy import update
+    from app.models.notification_delivery import NotificationDelivery
+    now = datetime.now(timezone.utc)
+    stmt = (
+        update(NotificationDelivery)
+        .where(NotificationDelivery.id.in_(delivery_ids))
+        .values(
+            status="dead_lettered",
+            error_reason=error_reason,
+            dead_lettered_at=now,
+            next_retry_at=None,
+        )
+    )
+    result = await db.execute(stmt)
+    return result.rowcount
+
+
+# ============================================================
 # Legacy API (kept for backward compatibility with existing tests)
 # These delegate to the ID-scoped functions above when possible,
 # but fall back to re-query if delivery_ids are not available.

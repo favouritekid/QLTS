@@ -169,6 +169,20 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=9, minute=0, day_of_week=1),  # Monday 09:00
         "options": {"queue": "default"},
     },
+
+    # --- Phase C2: Delivery retry sweep ---
+    "sweep-retry-deliveries": {
+        "task": "sweep_retry_deliveries",
+        "schedule": 120,  # Every 2 minutes
+        "options": {"queue": "default"},
+    },
+
+    # --- Phase C2: Stale delivery reconciliation ---
+    "reconcile-stale-deliveries": {
+        "task": "reconcile_stale_deliveries",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes
+        "options": {"queue": "default"},
+    },
 }
 
 # =============================================================================

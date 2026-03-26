@@ -99,6 +99,54 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         result = await self.db.execute(stmt)
         return result.rowcount
 
+    async def find_stale_deliveries(
+        self,
+        status: str,
+        channels: list[str],
+        max_age_minutes: int,
+        limit: int = 100,
+    ) -> List[NotificationDelivery]:
+        """
+        Find stale deliveries: status matches, channel in list, older than max_age_minutes.
+
+        Used by reconciliation sweep for:
+        - queued deliveries stuck without execution
+        - sent deliveries without webhook confirmation
+        """
+        from datetime import datetime, timezone, timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        result = await self.db.execute(
+            select(NotificationDelivery)
+            .where(
+                NotificationDelivery.status == status,
+                NotificationDelivery.channel.in_(channels),
+                NotificationDelivery.created_at < cutoff,
+            )
+            .order_by(NotificationDelivery.created_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def find_ready_for_retry(self, limit: int = 100) -> List[NotificationDelivery]:
+        """
+        Find deliveries ready for retry: status IN (queued, failed) AND next_retry_at <= now.
+
+        Used by sweep_retry_deliveries Beat task.
+        """
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            select(NotificationDelivery)
+            .where(
+                NotificationDelivery.status.in_(["queued", "failed"]),
+                NotificationDelivery.next_retry_at.isnot(None),
+                NotificationDelivery.next_retry_at <= now,
+            )
+            .order_by(NotificationDelivery.next_retry_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def get_by_notification_id(
         self, notification_id: int
     ) -> List[NotificationDelivery]:
@@ -161,3 +209,112 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         records = list(result.scalars().all())
 
         return records, total
+
+    async def get_aggregate_stats(
+        self,
+        date_from: "datetime | None" = None,
+        date_to: "datetime | None" = None,
+        event: str | None = None,
+        channel: str | None = None,
+    ) -> dict:
+        """
+        Aggregate delivery stats: counts by status and channel.
+
+        Returns dict compatible with DeliveryStatsResponse schema.
+        """
+        conditions = []
+        if date_from:
+            conditions.append(NotificationDelivery.created_at >= date_from)
+        if date_to:
+            conditions.append(NotificationDelivery.created_at <= date_to)
+        if event:
+            conditions.append(NotificationDelivery.event == event)
+        if channel:
+            conditions.append(NotificationDelivery.channel == channel)
+
+        where = and_(*conditions) if conditions else True
+
+        # Count by status
+        status_q = (
+            select(NotificationDelivery.status, func.count())
+            .where(where)
+            .group_by(NotificationDelivery.status)
+        )
+        status_rows = (await self.db.execute(status_q)).all()
+        by_status = {row[0]: row[1] for row in status_rows}
+
+        # Count by channel
+        channel_q = (
+            select(NotificationDelivery.channel, func.count())
+            .where(where)
+            .group_by(NotificationDelivery.channel)
+        )
+        channel_rows = (await self.db.execute(channel_q)).all()
+        by_channel = {row[0]: row[1] for row in channel_rows}
+
+        total = sum(by_status.values())
+        sent = by_status.get("sent", 0) + by_status.get("delivered", 0) + by_status.get("read", 0)
+        success_rate = round((sent / total * 100), 1) if total > 0 else 0.0
+
+        return {
+            "total": total,
+            "by_status": by_status,
+            "by_channel": by_channel,
+            "success_rate": success_rate,
+        }
+
+    async def get_failure_summary(
+        self,
+        date_from: "datetime | None" = None,
+        date_to: "datetime | None" = None,
+        channel: str | None = None,
+        limit: int = 20,
+    ) -> dict:
+        """
+        Failure analytics: grouped by error_reason.
+
+        Returns dict compatible with DeliveryFailureSummary schema.
+        """
+        conditions = [
+            NotificationDelivery.status.in_(["failed", "dead_lettered"]),
+        ]
+        if date_from:
+            conditions.append(NotificationDelivery.created_at >= date_from)
+        if date_to:
+            conditions.append(NotificationDelivery.created_at <= date_to)
+        if channel:
+            conditions.append(NotificationDelivery.channel == channel)
+
+        where = and_(*conditions)
+
+        # Total failures
+        total_q = select(func.count()).select_from(NotificationDelivery).where(where)
+        total_failures = (await self.db.execute(total_q)).scalar() or 0
+
+        # Group by reason
+        reason_q = (
+            select(
+                NotificationDelivery.error_reason,
+                func.count().label("count"),
+                func.max(NotificationDelivery.created_at).label("latest_at"),
+            )
+            .where(where)
+            .group_by(NotificationDelivery.error_reason)
+            .order_by(func.count().desc())
+            .limit(limit)
+        )
+        reason_rows = (await self.db.execute(reason_q)).all()
+
+        by_reason = [
+            {
+                "error_reason": row[0] or "unknown",
+                "count": row[1],
+                "latest_at": row[2],
+            }
+            for row in reason_rows
+        ]
+
+        return {
+            "total_failures": total_failures,
+            "by_reason": by_reason,
+        }

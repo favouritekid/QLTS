@@ -117,9 +117,14 @@ async def _handle_delivery_status(db: AsyncSession, data: dict):
         return
 
     # Update delivery status
+    # C2-7: distinguish sent (API accepted) vs delivered (recipient received)
     if error_code == 0:
-        delivery.status = "sent"
-        delivery.sent_at = datetime.now(timezone.utc)
+        # If delivery was already "sent" (by worker), upgrade to "delivered"
+        if delivery.status == "sent":
+            delivery.status = "delivered"
+        else:
+            delivery.status = "sent"
+            delivery.sent_at = datetime.now(timezone.utc)
         if msg_id:
             delivery.provider_message_id = msg_id
     else:

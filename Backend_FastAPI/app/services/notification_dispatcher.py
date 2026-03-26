@@ -48,7 +48,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.events import SystemEvents
 from app.core.event_groups import get_event_group, NotificationChannel
-from app.database import safe_redis_lpush, safe_redis_ltrim, safe_redis_expire
+from app.database import (
+    safe_redis_lpush, safe_redis_ltrim, safe_redis_expire,
+    safe_redis_exists, safe_redis_set, safe_redis_incr,
+)
 from app.services.notification_registry import get_event_config, NotificationConfig
 from app.services import notification_preference_service
 from app.repositories import NotificationRepository
@@ -397,6 +400,33 @@ async def dispatch(
                     channel=action.channel,
                 )
                 channel_recipient_map[action.channel] = filtered
+
+    # Step 3.5: Cooldown + Rate limit (Phase C2)
+    from app.config import settings as _settings
+
+    for ch in list(channel_recipient_map.keys()):
+        cooled = []
+        for uid in channel_recipient_map[ch]:
+            # Cooldown: skip if same event+user+channel sent recently
+            cooldown_key = f"notif:cooldown:{event.value}:{uid}:{ch}"
+            if await safe_redis_exists(cooldown_key):
+                continue
+
+            # Rate limit: skip if user exceeded per-hour cap
+            rate_key = f"notif:rate:{uid}"
+            count = await safe_redis_incr(rate_key)
+            if count == 1:
+                await safe_redis_expire(rate_key, 3600)
+            if count and count > _settings.NOTIFICATION_RATE_LIMIT_PER_HOUR:
+                log.debug("Rate limited", user_id=uid, count=count)
+                continue
+
+            cooled.append(uid)
+            # Set cooldown after passing all checks
+            await safe_redis_set(
+                cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS,
+            )
+        channel_recipient_map[ch] = cooled
 
     # Phase C1: Inbox Notification rows are ONLY for browser recipients.
     # Non-browser channels (email, zalo, sms) use payload_snapshot via worker —

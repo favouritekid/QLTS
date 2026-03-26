@@ -298,6 +298,21 @@ async def mark_as_read(
         notification.is_read = True
         notification.read_at = now
 
+    # Phase C2: Also mark linked delivery rows as "read"
+    marked_notification_ids = [n.id for n in notifications]
+    if marked_notification_ids:
+        from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+        from app.services import notification_delivery_service
+        delivery_repo = NotificationDeliveryRepository(db)
+        for nid in marked_notification_ids:
+            linked = await delivery_repo.get_by_notification_id(nid)
+            read_ids = [
+                d.id for d in linked
+                if d.channel == "browser" and d.status in ("sent", "delivered")
+            ]
+            if read_ids:
+                await notification_delivery_service.mark_delivery_ids_read(db, read_ids)
+
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
 
@@ -338,6 +353,21 @@ async def mark_all_as_read(
     for notification in notifications:
         notification.is_read = True
         notification.read_at = now
+
+    # Phase C2: Also mark linked delivery rows as "read"
+    marked_notification_ids = [n.id for n in notifications]
+    if marked_notification_ids:
+        from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+        from app.services import notification_delivery_service
+        delivery_repo = NotificationDeliveryRepository(db)
+        for nid in marked_notification_ids:
+            linked = await delivery_repo.get_by_notification_id(nid)
+            read_ids = [
+                d.id for d in linked
+                if d.channel == "browser" and d.status in ("sent", "delivered")
+            ]
+            if read_ids:
+                await notification_delivery_service.mark_delivery_ids_read(db, read_ids)
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
