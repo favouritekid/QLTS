@@ -26,6 +26,7 @@ class TestInitializeDocumentsForProfile:
         """Should create ProfileDocument records for each document type code."""
         # Arrange
         mock_db = AsyncMock()
+        mock_db.add = MagicMock()  # add() is synchronous, not a coroutine
         repo = AdmissionRepository(mock_db)
 
         # Mock ConfigDocumentType records
@@ -83,6 +84,7 @@ class TestInitializeDocumentsForProfile:
         """Should skip document codes that don't exist in config_document_type."""
         # Arrange
         mock_db = AsyncMock()
+        mock_db.add = MagicMock()  # add() is synchronous
         repo = AdmissionRepository(mock_db)
 
         # Only one valid code returned
@@ -356,6 +358,7 @@ class TestEdgeCases:
         """Should handle duplicate document codes gracefully."""
         # Arrange
         mock_db = AsyncMock()
+        mock_db.add = MagicMock()  # add() is synchronous
         repo = AdmissionRepository(mock_db)
 
         doc_type = models.ConfigDocumentType(id=1, code="HOC_BA", name="Học bạ")
