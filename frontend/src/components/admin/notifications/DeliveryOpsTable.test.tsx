@@ -14,9 +14,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { createTestQueryClient } from "@/test/utils/test-utils";
 import type { NotificationDeliveriesPage } from "@/types/api.types";
 
-// Mock the hook
+// Mock the hooks
 vi.mock("@/hooks/useNotificationDeliveries", () => ({
   useNotificationDeliveries: vi.fn(),
+  useDeliveryStats: vi.fn(() => ({ data: null, isLoading: false })),
+  useReplayDelivery: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   notificationDeliveryKeys: {
     all: ["notification-deliveries"],
     lists: () => ["notification-deliveries", "list"],
@@ -59,6 +61,14 @@ const MOCK_DATA: NotificationDeliveriesPage = {
       rule_id: 1,
       action_step: 1,
       template_code: null,
+      payload_snapshot: null,
+      provider_message_id: null,
+      scheduled_for: null,
+      attempt_count: 1,
+      last_attempt_at: "2026-03-25T10:00:01Z",
+      next_retry_at: null,
+      max_retries: 5,
+      dead_lettered_at: null,
       created_at: "2026-03-25T10:00:00Z",
       updated_at: "2026-03-25T10:00:00Z",
       sent_at: "2026-03-25T10:00:01Z",
@@ -79,6 +89,14 @@ const MOCK_DATA: NotificationDeliveriesPage = {
       rule_id: 1,
       action_step: 2,
       template_code: null,
+      payload_snapshot: null,
+      provider_message_id: null,
+      scheduled_for: null,
+      attempt_count: 3,
+      last_attempt_at: "2026-03-25T10:00:05Z",
+      next_retry_at: "2026-03-25T10:05:00Z",
+      max_retries: 5,
+      dead_lettered_at: null,
       created_at: "2026-03-25T10:00:00Z",
       updated_at: "2026-03-25T10:00:05Z",
       sent_at: null,
@@ -99,6 +117,14 @@ const MOCK_DATA: NotificationDeliveriesPage = {
       rule_id: null,
       action_step: null,
       template_code: null,
+      payload_snapshot: null,
+      provider_message_id: null,
+      scheduled_for: null,
+      attempt_count: 0,
+      last_attempt_at: null,
+      next_retry_at: null,
+      max_retries: 5,
+      dead_lettered_at: null,
       created_at: "2026-03-25T11:00:00Z",
       updated_at: "2026-03-25T11:00:00Z",
       sent_at: null,
@@ -116,7 +142,7 @@ describe("DeliveryOpsTable", () => {
       data: MOCK_DATA,
       isLoading: false,
       error: null,
-    } as ReturnType<typeof useNotificationDeliveries>);
+    } as unknown as ReturnType<typeof useNotificationDeliveries>);
 
     render(<DeliveryOpsTable />, { wrapper: createWrapper() });
 
@@ -142,7 +168,7 @@ describe("DeliveryOpsTable", () => {
       data: undefined,
       isLoading: true,
       error: null,
-    } as ReturnType<typeof useNotificationDeliveries>);
+    } as unknown as ReturnType<typeof useNotificationDeliveries>);
 
     const { container } = render(<DeliveryOpsTable />, {
       wrapper: createWrapper(),
@@ -158,7 +184,7 @@ describe("DeliveryOpsTable", () => {
       data: { total_count: 0, deliveries: [] },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof useNotificationDeliveries>);
+    } as unknown as ReturnType<typeof useNotificationDeliveries>);
 
     render(<DeliveryOpsTable />, { wrapper: createWrapper() });
     expect(screen.getByText("Chưa có delivery record")).toBeDefined();
@@ -169,7 +195,7 @@ describe("DeliveryOpsTable", () => {
       data: MOCK_DATA,
       isLoading: false,
       error: null,
-    } as ReturnType<typeof useNotificationDeliveries>);
+    } as unknown as ReturnType<typeof useNotificationDeliveries>);
 
     render(<DeliveryOpsTable />, { wrapper: createWrapper() });
     expect(screen.getByText("3")).toBeDefined(); // total count

@@ -508,7 +508,7 @@ export function MultiStepActionEditor({
           const cumulativeDelay = getTotalDelay(actions, index + 1);
           return (
             <ActionStep
-              key={index}
+              key={`step-${action.step}-${index}`}
               action={action}
               index={index}
               totalSteps={actions.length}

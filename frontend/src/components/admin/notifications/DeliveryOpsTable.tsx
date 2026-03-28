@@ -121,9 +121,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
   const total = data?.total_count ?? 0;
 
   const handleReplay = (deliveryId: number) => {
-    if (confirm("Replay delivery này?")) {
-      replayMutation.mutate(deliveryId);
-    }
+    replayMutation.mutate(deliveryId);
   };
 
   return (

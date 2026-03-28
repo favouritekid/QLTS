@@ -144,7 +144,7 @@ const formSchema = z.object({
   message_template: z.string().min(1, "Vui lòng nhập nội dung"),
   notification_type: z.enum(["info", "success", "warning", "error"]),
   link_template: z.string().optional(),
-  channels: z.array(z.string()).min(1, "Vui lòng chọn ít nhất một kênh"), // Fallback for backward compatibility
+  channels: z.array(z.string()), // DEPRECATED: backend derives from actions. Auto-derived in onSubmit.
   recipient_config: z.record(z.string(), z.unknown()),
   condition: z.record(z.string(), z.unknown()).nullable(),
   enabled: z.boolean(),
@@ -935,14 +935,18 @@ export function NotificationRuleWizard({
 
   const onSubmit = async (data: FormValues) => {
     try {
+      // Auto-derive channels from actions (backend ignores channels field)
+      const derivedChannels = [...new Set((data.actions || []).map(a => a.channel))];
+      const submitData = { ...data, channels: derivedChannels.length > 0 ? derivedChannels : ["browser"] };
+
       if (isEditMode && ruleId) {
         await updateMutation.mutateAsync({
           ruleId,
-          data,
+          data: submitData,
         });
         toast.success("✅ Đã cập nhật quy tắc thông báo");
       } else {
-        await createMutation.mutateAsync(data);
+        await createMutation.mutateAsync(submitData);
         toast.success("✅ Đã tạo quy tắc thông báo mới");
       }
       onOpenChange(false);
@@ -1027,6 +1031,7 @@ export function NotificationRuleWizard({
                         form.setValue("title_template", "Lead mới từ Manager: $lead_name");
                         form.setValue("message_template", "Manager vừa tạo lead $lead_name ($lead_phone). Các officer cùng đơn vị vui lòng theo dõi.");
                         form.setValue("notification_type", "info");
+                        form.setValue("actions", [{ step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null }]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1052,6 +1057,7 @@ export function NotificationRuleWizard({
                         form.setValue("title_template", "Lead được phân công: $lead_name");
                         form.setValue("message_template", "Bạn vừa được phân công lead $lead_name ($lead_phone). Vui lòng liên hệ sớm.");
                         form.setValue("notification_type", "success");
+                        form.setValue("actions", [{ step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null }]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1077,6 +1083,10 @@ export function NotificationRuleWizard({
                         form.setValue("title_template", "Cảnh báo: Phân công lead thất bại");
                         form.setValue("message_template", "Không thể tự động phân công lead $lead_name. Lý do: $reason. Vui lòng phân công thủ công.");
                         form.setValue("notification_type", "warning");
+                        form.setValue("actions", [
+                          { step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null },
+                          { step: 2, channel: "email", template_code: null, delay_minutes: 0, config: null },
+                        ]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1102,6 +1112,7 @@ export function NotificationRuleWizard({
                         form.setValue("title_template", "Nhắc nhở: Tư vấn với $lead_name");
                         form.setValue("message_template", "Bạn có lịch tư vấn với $lead_name ($lead_phone) trong $minutes_until phút nữa.");
                         form.setValue("notification_type", "info");
+                        form.setValue("actions", [{ step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null }]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1772,6 +1783,9 @@ export function NotificationRuleWizard({
                           <FormDescription>
                             Chọn các kênh để gửi thông báo
                           </FormDescription>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Kênh gửi được tự động xác định từ các bước hành động (Step 5). Cấu hình dưới đây chỉ mang tính tham khảo.
+                          </p>
                           <div className="space-y-2">
                             {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
                             {dynamicChannels.map((channel) => (

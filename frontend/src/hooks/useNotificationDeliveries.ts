@@ -55,9 +55,9 @@ export const notificationDeliveryKeys = {
     [...notificationDeliveryKeys.lists(), params] as const,
   details: () => [...notificationDeliveryKeys.all, "detail"] as const,
   detail: (id: number) => [...notificationDeliveryKeys.details(), id] as const,
-  stats: (params?: Record<string, unknown>) =>
+  stats: (params?: object) =>
     [...notificationDeliveryKeys.all, "stats", params] as const,
-  failures: (params?: Record<string, unknown>) =>
+  failures: (params?: object) =>
     [...notificationDeliveryKeys.all, "failures", params] as const,
   // D5: Mature monitoring dashboard
   timeSeries: (params?: Record<string, unknown>) =>

@@ -458,6 +458,14 @@ export interface NotificationDelivery {
   rule_id: number | null;
   action_step: number | null;
   template_code: string | null;
+  payload_snapshot: Record<string, unknown> | null;
+  provider_message_id: string | null;
+  scheduled_for: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  next_retry_at: string | null;
+  max_retries: number;
+  dead_lettered_at: string | null;
   created_at: string;
   updated_at: string;
   sent_at: string | null;
@@ -510,7 +518,7 @@ export interface NotificationConsentImportResult {
   granted: number;
   revoked: number;
   skipped: number;
-  errors: Array<{ line: number; message: string }>;
+  errors: Array<Record<string, unknown>>;
 }
 
 // ============================================

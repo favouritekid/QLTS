@@ -384,7 +384,7 @@ function ImportDialog({
                     <ul className="mt-1 max-h-32 space-y-1 overflow-y-auto text-xs">
                       {result.errors.map((err, i) => (
                         <li key={i} className="text-destructive">
-                          Dòng {err.line}: {err.message}
+                          {err.line != null ? `Dòng ${err.line}: ` : ""}{String(err.message ?? JSON.stringify(err))}
                         </li>
                       ))}
                     </ul>

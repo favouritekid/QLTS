@@ -94,7 +94,7 @@ describe("ConsentManager", () => {
       data: MOCK_DATA,
       isLoading: false,
       error: null,
-    } as ReturnType<typeof useNotificationConsents>);
+    } as unknown as ReturnType<typeof useNotificationConsents>);
 
     render(<ConsentManager />, { wrapper: createWrapper() });
 
@@ -116,7 +116,7 @@ describe("ConsentManager", () => {
       data: { total_count: 0, consents: [] },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof useNotificationConsents>);
+    } as unknown as ReturnType<typeof useNotificationConsents>);
 
     render(<ConsentManager />, { wrapper: createWrapper() });
     expect(screen.getByText("Chưa có consent record")).toBeDefined();
@@ -127,7 +127,7 @@ describe("ConsentManager", () => {
       data: undefined,
       isLoading: true,
       error: null,
-    } as ReturnType<typeof useNotificationConsents>);
+    } as unknown as ReturnType<typeof useNotificationConsents>);
 
     const { container } = render(<ConsentManager />, {
       wrapper: createWrapper(),
@@ -142,7 +142,7 @@ describe("ConsentManager", () => {
       data: MOCK_DATA,
       isLoading: false,
       error: null,
-    } as ReturnType<typeof useNotificationConsents>);
+    } as unknown as ReturnType<typeof useNotificationConsents>);
 
     render(<ConsentManager />, { wrapper: createWrapper() });
 
