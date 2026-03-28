@@ -68,6 +68,7 @@ const CATEGORIES = [
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required").max(100, "Name must be under 100 characters"),
+  template_code: z.string().min(1, "Mã template là bắt buộc").max(100, "Mã template tối đa 100 ký tự"),
   description: z.string().optional(),
   title_template: z.string().min(1, "Title template is required").max(255),
   message_template: z.string().min(1, "Message template is required"),
@@ -105,6 +106,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
+      template_code: "",
       description: "",
       title_template: "",
       message_template: "",
@@ -120,6 +122,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
     if (open && existingTemplate && isEditMode) {
       form.reset({
         name: existingTemplate.name,
+        template_code: existingTemplate.template_code || "",
         description: existingTemplate.description || "",
         title_template: existingTemplate.title_template,
         message_template: existingTemplate.message_template,
@@ -131,6 +134,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
     } else if (open && !isEditMode) {
       form.reset({
         name: "",
+        template_code: "",
         description: "",
         title_template: "",
         message_template: "",
@@ -149,6 +153,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
         // Note: is_system flag cannot be changed after creation
         const updateData: NotificationTemplateUpdate = {
           name: data.name,
+          template_code: data.template_code,
           description: data.description || null,
           title_template: data.title_template,
           message_template: data.message_template,
@@ -162,6 +167,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
         // Create new template
         const createData: NotificationTemplateCreate = {
           name: data.name,
+          template_code: data.template_code,
           description: data.description || null,
           title_template: data.title_template,
           message_template: data.message_template,
@@ -250,6 +256,24 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 )}
               />
 
+              {/* Template Code */}
+              <FormField
+                control={form.control}
+                name="template_code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Mã template *</FormLabel>
+                    <FormControl>
+                      <Input placeholder="VD: TPL_LEAD_ASSIGN" {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      Mã định danh duy nhất cho template (VD: TPL_LEAD_ASSIGN)
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               {/* Description */}
               <FormField
                 control={form.control}
@@ -307,12 +331,12 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <FormLabel>Title Template *</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g., Lead assigned: {lead_name}"
+                        placeholder="e.g., Lead assigned: $lead_name"
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      Use {"{variable_name}"} for placeholders (e.g., {"{lead_name}"})
+                      Use $variable_name for placeholders (e.g., $lead_name)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -328,13 +352,13 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <FormLabel>Message Template *</FormLabel>
                     <FormControl>
                       <Textarea
-                        placeholder="e.g., You have been assigned to lead {lead_name} (Phone: {lead_phone})"
+                        placeholder="e.g., You have been assigned to lead $lead_name (Phone: $lead_phone)"
                         rows={4}
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      Use {"{variable_name}"} for placeholders
+                      Use $variable_name for placeholders
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -350,7 +374,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <FormLabel>Link Template</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g., /leads/{lead_id}"
+                        placeholder="e.g., /leads/$lead_id"
                         {...field}
                       />
                     </FormControl>

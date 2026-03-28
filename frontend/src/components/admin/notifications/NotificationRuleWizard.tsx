@@ -117,7 +117,6 @@ interface RecipientOption {
   value: string;
   label: string;
   description: string;
-  example: string;
 }
 
 interface TemplateVariable {
@@ -396,49 +395,41 @@ const RECIPIENT_OPTIONS: RecipientOption[] = [
     value: "lead_owner",
     label: "Cán bộ phụ trách lead",
     description: "Gửi cho cán bộ đang được gán lead này",
-    example: "VD: Khi có lịch tư vấn mới, gửi cho cán bộ phụ trách",
   },
   {
     value: "unit_staff",
     label: "Nhân viên cùng đơn vị",
     description: "Gửi cho tất cả cán bộ trong cùng phòng/ban",
-    example: "VD: Manager tạo lead → Tất cả officers cùng phòng nhận thông báo",
   },
   {
     value: "unit_managers",
     label: "Quản lý đơn vị",
     description: "Chỉ gửi cho các manager của đơn vị",
-    example: "VD: Phân công lead thất bại → Managers nhận để xử lý",
   },
   {
     value: "all_admins",
     label: "Tất cả Admin",
     description: "Gửi cho tất cả người dùng có quyền Admin",
-    example: "VD: Cập nhật cấu hình hệ thống → Tất cả admins được thông báo",
   },
   {
     value: "all_users",
     label: "Tất cả người dùng",
     description: "Gửi broadcast cho toàn bộ người dùng trong hệ thống",
-    example: "VD: Thông báo bảo trì hệ thống → Tất cả nhận thông báo",
   },
   {
     value: "specific_users",
     label: "Người dùng cụ thể",
     description: "Chọn danh sách người nhận theo tên",
-    example: "VD: Gửi riêng cho một số người nhất định",
   },
   {
     value: "dorm_residents",
     label: "Sinh viên ở ký túc",
     description: "Gửi cho các sinh viên đang ở ký túc xá",
-    example: "VD: Thông báo cắt điện → Tất cả sinh viên KTX nhận",
   },
   {
     value: "dorm_staff",
     label: "Nhân viên ký túc xá",
     description: "Gửi cho đội ngũ quản lý KTX",
-    example: "VD: Yêu cầu sửa chữa → Bảo vệ/quản lý KTX nhận",
   },
 ];
 
@@ -754,12 +745,12 @@ export function NotificationRuleWizard({
       recipient_config: existingRule.recipient_config,
       condition: existingRule.condition,
       enabled: existingRule.enabled,
-      actions: existingRule.actions?.map((a: Record<string, unknown>) => ({
-        step: a.step as number,
-        channel: a.channel as string,
-        template_code: (a.template_code as string) || null,
-        delay_minutes: (a.delay_minutes as number) || 0,
-        config: (a.config as Record<string, unknown>) || null,
+      actions: existingRule.actions?.map((a) => ({
+        step: a.step,
+        channel: a.channel,
+        template_code: a.template_code || null,
+        delay_minutes: a.delay_minutes || 0,
+        config: a.config || null,
       })) ?? [],
     });
 
@@ -786,7 +777,7 @@ export function NotificationRuleWizard({
       }
     }
     setIsHydrated(true);
-  }, [existingRule, isEditMode]);
+  }, [existingRule, isEditMode, form]);
 
   // Watch form values for dynamic behavior
   const selectedEvent = form.watch("event");
@@ -803,7 +794,7 @@ export function NotificationRuleWizard({
     setConditionEnabled(false);
     setIsCompoundCondition(false);
     form.setValue("condition", null);
-  }, [selectedEvent]);
+  }, [selectedEvent, form, isEditMode, isHydrated]);
 
   // ✅ NOTIFICATION 2.0: Dynamic data from metadata
   // Convert metadata events to EventOption format
@@ -849,7 +840,6 @@ export function NotificationRuleWizard({
       value: resolver.value,
       label: resolver.label,
       description: resolver.description,
-      example: resolver.example,
     }));
   }, [metadata]);
 
@@ -935,7 +925,6 @@ export function NotificationRuleWizard({
     }
 
     const condition = {
-      type: "simple",
       field: field,
       operator: operator,
       value: typedValue,
@@ -1269,11 +1258,6 @@ export function NotificationRuleWizard({
                                           <p className="text-xs text-muted-foreground mt-1">
                                             {option.description}
                                           </p>
-                                          <div className="mt-2 bg-info-50 border-l-2 border-info-400 px-2 py-1.5 rounded">
-                                            <p className="text-xs text-info-700">
-                                              💡 {option.example}
-                                            </p>
-                                          </div>
                                         </div>
                                       </div>
                                     </CardContent>
@@ -1320,18 +1304,13 @@ export function NotificationRuleWizard({
                                         key={user.id}
                                         value={`${user.username} ${user.full_name || ""}`}
                                         onSelect={() => {
-                                          setSelectedUserIds((prev) =>
-                                            prev.includes(user.id)
-                                              ? prev.filter((id) => id !== user.id)
-                                              : [...prev, user.id]
-                                          );
-                                          // Update form value
-                                          const currentIds = selectedUserIds.includes(user.id)
+                                          const newIds = selectedUserIds.includes(user.id)
                                             ? selectedUserIds.filter((id) => id !== user.id)
                                             : [...selectedUserIds, user.id];
+                                          setSelectedUserIds(newIds);
                                           form.setValue("recipient_config", {
                                             resolver_type: "specific_users",
-                                            params: { user_ids: currentIds },
+                                            params: { user_ids: newIds },
                                           });
                                         }}
                                       >
@@ -1372,13 +1351,11 @@ export function NotificationRuleWizard({
                                       type="button"
                                       className="ml-1 hover:text-destructive"
                                       onClick={() => {
-                                        setSelectedUserIds((prev) =>
-                                          prev.filter((id) => id !== userId)
-                                        );
-                                        const currentIds = selectedUserIds.filter((id) => id !== userId);
+                                        const newIds = selectedUserIds.filter((id) => id !== userId);
+                                        setSelectedUserIds(newIds);
                                         form.setValue("recipient_config", {
                                           resolver_type: "specific_users",
-                                          params: { user_ids: currentIds },
+                                          params: { user_ids: newIds },
                                         });
                                       }}
                                     >
@@ -1588,7 +1565,7 @@ export function NotificationRuleWizard({
                             <span className="text-muted-foreground">•</span>
                             <div>
                               <p className="font-medium">Chỉ gửi khi Manager tạo lead:</p>
-                              <code className="text-muted-foreground">actor.role == &ldquo;manager&rdquo;</code>
+                              <code className="text-muted-foreground">actor.role eq &ldquo;manager&rdquo;</code>
                             </div>
                           </div>
                           <div className="flex items-start gap-2">
@@ -1602,7 +1579,7 @@ export function NotificationRuleWizard({
                             <span className="text-muted-foreground">•</span>
                             <div>
                               <p className="font-medium">Chỉ gửi khi hồ sơ được duyệt:</p>
-                              <code className="text-muted-foreground">application.status == &ldquo;approved&rdquo;</code>
+                              <code className="text-muted-foreground">event.new_status_id eq &ldquo;approved&rdquo;</code>
                             </div>
                           </div>
                         </div>

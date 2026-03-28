@@ -1,3 +1,6 @@
+// NOTE: Currently unused after NotificationRuleForm was removed. Retained for potential
+// future use in compound condition UI (AND/OR groups).
+
 // src/components/admin/notifications/ConditionBuilder.tsx
 /**
  * ✅ PHASE 3.2: Visual Condition Builder Component

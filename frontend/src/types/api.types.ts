@@ -313,13 +313,15 @@ export interface NotificationPreferenceUpdate {
 
 // ✅ NOTIFICATION 2.0: Multi-Step Workflow Support
 export interface NotificationAction {
-  id?: number; // Optional for create
-  rule_id?: number; // Optional for create
-  step: number; // Step order (1, 2, 3, ...)
-  channel: string; // "socket" | "email" | "zalo" | "sms"
-  template_code: string | null; // Template code to use
-  delay_minutes: number; // Delay before sending (0 = immediate)
-  config: Record<string, unknown> | null; // Additional channel config
+  id: number;
+  rule_id: number;
+  step: number;
+  channel: string; // "browser" | "email" | "zalo" | "sms"
+  template_code: string | null;
+  delay_minutes: number;
+  config: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface NotificationActionCreate {
@@ -332,16 +334,17 @@ export interface NotificationActionCreate {
 
 export interface NotificationRule {
   id: number;
-  event: string; // SystemEvents enum value
+  event: string;
   title_template: string;
   message_template: string;
-  notification_type: string; // info, success, warning, error
+  notification_type: string;
   link_template: string | null;
-  channels: string[]; // ["socket", "email", "zalo", "sms"] - DEPRECATED, use actions
-  recipient_config: Record<string, unknown>; // {resolver_type, params}
-  condition: Record<string, unknown> | null; // Optional activation conditions
+  channels: string[]; // DEPRECATED: derived from actions
+  recipient_config: Record<string, unknown>;
+  condition: Record<string, unknown> | null;
   enabled: boolean;
-  actions: NotificationAction[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
+  template_id: number | null;
+  actions: NotificationAction[];
   created_at: string;
   updated_at: string;
 }
@@ -352,11 +355,12 @@ export interface NotificationRuleCreate {
   message_template: string;
   notification_type: string;
   link_template?: string | null;
-  channels: string[]; // Fallback for backward compatibility
+  channels: string[];
   recipient_config: Record<string, unknown>;
   condition?: Record<string, unknown> | null;
   enabled?: boolean;
-  actions?: NotificationActionCreate[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
+  template_id?: number | null;
+  actions?: NotificationActionCreate[];
 }
 
 export interface NotificationRuleUpdate {
@@ -382,15 +386,19 @@ export interface NotificationRulesPage {
 
 export interface NotificationTemplate {
   id: number;
-  name: string; // Unique template name
+  name: string;
+  template_code: string;
   description: string | null;
   title_template: string;
   message_template: string;
   link_template: string | null;
-  variables: string[] | null; // Available variables like ["lead_name", "officer_id"]
-  category: string | null; // Template category (lead, consultation, etc.)
-  is_system: boolean; // System template (cannot be deleted)
-  usage_count: number; // Number of rules using this template
+  variables: string[] | null;
+  category: string | null;
+  supported_channels: string[];
+  allowed_events: string[] | null;
+  template_type: string;
+  is_system: boolean;
+  usage_count: number;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -398,23 +406,31 @@ export interface NotificationTemplate {
 
 export interface NotificationTemplateCreate {
   name: string;
+  template_code: string;
   description?: string | null;
   title_template: string;
   message_template: string;
   link_template?: string | null;
   variables?: string[] | null;
   category?: string | null;
+  supported_channels?: string[];
+  allowed_events?: string[] | null;
+  template_type?: string;
   is_system?: boolean;
 }
 
 export interface NotificationTemplateUpdate {
   name?: string;
+  template_code?: string;
   description?: string | null;
   title_template?: string;
   message_template?: string;
   link_template?: string | null;
   variables?: string[] | null;
   category?: string | null;
+  supported_channels?: string[];
+  allowed_events?: string[] | null;
+  template_type?: string;
 }
 
 export interface NotificationTemplatesPage {
@@ -527,17 +543,14 @@ export interface EventMetadata {
 }
 
 export interface ResolverTypeOption {
-  value: string; // "assigned_officer" | "lead_owner" | etc.
-  label: string; // Vietnamese label
+  value: string;
+  label: string;
   description: string;
-  example: string;
-  requires_params: boolean;
 }
 
 export interface OperatorOption {
-  value: string; // "==" | "!=" | ">" | "<" | etc.
-  label: string; // Vietnamese label
-  description: string;
+  value: string; // "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "not_in" | "contains"
+  label: string;
 }
 
 export interface ChannelInfo {
