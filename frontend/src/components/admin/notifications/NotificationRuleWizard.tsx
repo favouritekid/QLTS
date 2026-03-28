@@ -361,17 +361,32 @@ const SYSTEM_EVENTS: EventOption[] = [
 ];
 
 /**
- * Nhóm sự kiện theo danh mục
+ * Category display config — UI only (label, icon, sort order).
+ * Categories are derived from metadata at runtime; this map only provides display info.
+ * Unknown categories get sensible defaults and sort to the end.
  */
-const EVENT_CATEGORIES = [
-  { value: "lead", label: "Sự kiện Lead", icon: "👤" },
-  { value: "consultation", label: "Sự kiện Tư vấn", icon: "💬" },
-  { value: "application", label: "Sự kiện Hồ sơ", icon: "📝" },
-  { value: "finance", label: "Sự kiện Tài chính", icon: "💰" },
-  { value: "dorm", label: "Sự kiện Ký túc", icon: "🏠" },
-  { value: "asset", label: "Sự kiện Tài sản", icon: "🔧" },
-  { value: "system", label: "Sự kiện Hệ thống", icon: "🔔" },
-];
+const CATEGORY_DISPLAY: Record<string, { label: string; icon: string; order: number }> = {
+  lead:          { label: "Sự kiện Lead",       icon: "👤", order: 1 },
+  consultation:  { label: "Sự kiện Tư vấn",    icon: "💬", order: 2 },
+  application:   { label: "Sự kiện Hồ sơ",     icon: "📝", order: 3 },
+  finance:       { label: "Sự kiện Tài chính",  icon: "💰", order: 4 },
+  dorm:          { label: "Sự kiện Ký túc",     icon: "🏠", order: 5 },
+  asset:         { label: "Sự kiện Tài sản",    icon: "🔧", order: 6 },
+  pipeline:      { label: "Sự kiện Pipeline",   icon: "📊", order: 7 },
+  operational:   { label: "Sự kiện Vận hành",   icon: "⚙️", order: 8 },
+  security:      { label: "Sự kiện Bảo mật",    icon: "🔒", order: 9 },
+  system:        { label: "Sự kiện Hệ thống",   icon: "🔔", order: 10 },
+};
+
+const FALLBACK_CATEGORY_ORDER = 999;
+
+function getCategoryLabel(category: string): string {
+  return CATEGORY_DISPLAY[category]?.label || `Sự kiện ${category.charAt(0).toUpperCase() + category.slice(1)}`;
+}
+
+function getCategoryOrder(category: string): number {
+  return CATEGORY_DISPLAY[category]?.order ?? FALLBACK_CATEGORY_ORDER;
+}
 
 /**
  * Danh sách người nhận với mô tả và ví dụ rõ ràng
@@ -520,16 +535,7 @@ const TEMPLATE_VARIABLES: Record<string, TemplateVariable[]> = {
  * ✅ NOTIFICATION 2.0: Map category to icon emoji
  */
 function getCategoryIcon(category: string): string {
-  const iconMap: Record<string, string> = {
-    lead: "👤",
-    consultation: "💬",
-    application: "📝",
-    finance: "💰",
-    dorm: "🏠",
-    asset: "🔧",
-    system: "🔔",
-  };
-  return iconMap[category] || "🔔";
+  return CATEGORY_DISPLAY[category]?.icon || "🔔";
 }
 
 // Phase 2: Canonical operator labels
@@ -876,13 +882,21 @@ export function NotificationRuleWizard({
   const groupedEvents = useMemo(() => {
     const groups: Record<string, EventOption[]> = {};
     dynamicEvents.forEach((event) => {
-      if (!groups[event.category]) {
-        groups[event.category] = [];
+      const cat = event.category || "other";
+      if (!groups[cat]) {
+        groups[cat] = [];
       }
-      groups[event.category].push(event);
+      groups[cat].push(event);
     });
     return groups;
   }, [dynamicEvents]);
+
+  // Sorted category keys — known categories by order, unknown at the end
+  const sortedCategoryKeys = useMemo(() => {
+    return Object.keys(groupedEvents).sort(
+      (a, b) => getCategoryOrder(a) - getCategoryOrder(b)
+    );
+  }, [groupedEvents]);
 
   // Insert variable into template
   const insertVariable = (field: "title_template" | "message_template", variable: string) => {
@@ -1138,16 +1152,16 @@ export function NotificationRuleWizard({
                           <FormLabel>Chọn sự kiện</FormLabel>
                           <FormControl>
                             <div className="space-y-4">
-                              {EVENT_CATEGORIES.map((category) => {
-                                const categoryEvents = groupedEvents[category.value] || [];
-                                if (categoryEvents.length === 0) return null;
+                              {sortedCategoryKeys.map((categoryKey) => {
+                                const categoryEvents = groupedEvents[categoryKey];
+                                if (!categoryEvents || categoryEvents.length === 0) return null;
 
                                 return (
-                                  <Card key={category.value}>
+                                  <Card key={categoryKey}>
                                     <CardHeader className="pb-3">
                                       <CardTitle className="text-sm flex items-center gap-2">
-                                        <span className="text-lg">{category.icon}</span>
-                                        {category.label}
+                                        <span className="text-lg">{getCategoryIcon(categoryKey)}</span>
+                                        {getCategoryLabel(categoryKey)}
                                       </CardTitle>
                                     </CardHeader>
                                     <CardContent>
