@@ -320,6 +320,11 @@ export interface NotificationAction {
   template_code: string | null;
   delay_minutes: number;
   config: Record<string, unknown> | null;
+  // Phase 3: delivery branch fields
+  recipient_config: Record<string, unknown> | null;
+  content_mode: string | null; // "inherit_default" | "template_override" | "inline_override" | "channel_native"
+  content_override: Record<string, unknown> | null;
+  branch_key: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -330,6 +335,11 @@ export interface NotificationActionCreate {
   template_code?: string | null;
   delay_minutes?: number;
   config?: Record<string, unknown> | null;
+  // Phase 3: delivery branch fields
+  recipient_config?: Record<string, unknown> | null;
+  content_mode?: string | null;
+  content_override?: Record<string, unknown> | null;
+  branch_key?: string | null;
 }
 
 export interface NotificationRule {

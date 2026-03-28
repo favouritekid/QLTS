@@ -417,6 +417,11 @@ class ActionConfig:
     delay_minutes: int = 0
     template_code: Optional[str] = None
     config: Optional[Dict[str, Any]] = field(default=None, hash=False)
+    # Phase 3: delivery branch fields
+    recipient_config: Optional[Dict[str, Any]] = field(default=None, hash=False)
+    content_mode: Optional[str] = None
+    content_override: Optional[Dict[str, Any]] = field(default=None, hash=False)
+    branch_key: Optional[str] = None
 
 
 def synthesize_actions_from_channels(channels: List[str]) -> List[ActionConfig]:
@@ -609,12 +614,17 @@ async def get_rule_for_event(
                 if cached_actions:
                     action_configs = [
                         ActionConfig(
-                            step=a["step"], channel=a["channel"],
-                            delay_minutes=a.get("delay_minutes", 0),
-                            template_code=a.get("template_code"),
-                            config=a.get("config"),
+                            step=a_data["step"],
+                            channel=a_data["channel"],
+                            delay_minutes=a_data.get("delay_minutes", 0),
+                            template_code=a_data.get("template_code"),
+                            config=a_data.get("config"),
+                            recipient_config=a_data.get("recipient_config"),
+                            content_mode=a_data.get("content_mode"),
+                            content_override=a_data.get("content_override"),
+                            branch_key=a_data.get("branch_key"),
                         )
-                        for a in cached_actions
+                        for a_data in cached_actions
                     ]
 
                 # Successfully loaded from cache
@@ -720,6 +730,10 @@ async def get_rule_for_event(
                 delay_minutes=a.delay_minutes,
                 template_code=a.template_code,
                 config=a.config,
+                recipient_config=a.recipient_config,
+                content_mode=a.content_mode,
+                content_override=a.content_override,
+                branch_key=a.branch_key,
             )
             for a in db_actions
         ]
@@ -746,7 +760,11 @@ async def get_rule_for_event(
         actions_cache = [
             {"step": a.step, "channel": a.channel,
              "delay_minutes": a.delay_minutes,
-             "template_code": a.template_code, "config": a.config}
+             "template_code": a.template_code, "config": a.config,
+             "recipient_config": a.recipient_config,
+             "content_mode": a.content_mode,
+             "content_override": a.content_override,
+             "branch_key": a.branch_key}
             for a in config.actions
         ]
 

@@ -82,6 +82,9 @@ def _validate_actions(actions) -> None:
             raise BadRequest(f"Duplicate step number: {step}")
         steps.add(step)
 
+        # NOTE (Phase 3a): Keep duplicate-channel check until dispatcher supports
+        # multi-action-per-channel (Phase 3b). Removing now would cause dispatcher
+        # to collapse/overwrite actions sharing the same channel.
         if channel in channels:
             raise BadRequest(
                 f"Duplicate channel '{channel}' in rule actions. "
@@ -98,6 +101,37 @@ def _validate_actions(actions) -> None:
             ext_resolver = config.get("external_resolver")
             if ext_resolver:
                 _validate_external_resolver(step, ext_resolver)
+
+    # Phase 3a: content_mode + branch_key validation
+    # Guard: only validate on objects with explicit Phase 3 fields (skip MagicMock, legacy dicts)
+    VALID_CONTENT_MODES = {"inherit_default", "template_override", "inline_override", "channel_native", None}
+    branch_keys: set = set()
+
+    for action in actions:
+        content_mode = getattr(action, 'content_mode', None)
+        # Skip validation if content_mode is not a str/None (e.g. MagicMock attribute)
+        if not isinstance(content_mode, (str, type(None))):
+            continue
+
+        if content_mode not in VALID_CONTENT_MODES:
+            raise BadRequest(f"Invalid content_mode: '{content_mode}'")
+
+        if content_mode == "template_override" and not action.template_code:
+            raise BadRequest(f"Action step {action.step}: content_mode='template_override' requires template_code")
+
+        if content_mode == "inline_override":
+            content_override = getattr(action, 'content_override', None)
+            if not content_override or not isinstance(content_override, dict):
+                raise BadRequest(f"Action step {action.step}: content_mode='inline_override' requires content_override")
+
+        if content_mode == "channel_native" and action.channel not in ("zalo", "sms"):
+            raise BadRequest(f"Action step {action.step}: content_mode='channel_native' only valid for zalo/sms channels")
+
+        bk = getattr(action, 'branch_key', None)
+        if isinstance(bk, str) and bk:
+            if bk in branch_keys:
+                raise BadRequest(f"Duplicate branch_key: '{bk}'")
+            branch_keys.add(bk)
 
     # Verify steps are contiguous 1..n
     if steps and steps != set(range(1, len(steps) + 1)):

@@ -300,6 +300,16 @@ class NotificationAction(Base):
     config = Column(JSON, nullable=True,
                    comment="Channel-specific configuration (e.g., Zalo template ID)")
 
+    # Phase 3: Delivery branch fields
+    recipient_config = Column(JSON, nullable=True,
+        comment="Per-action recipient resolver config. Falls back to rule.recipient_config if null.")
+    content_mode = Column(String(50), nullable=True,
+        comment="Content source: inherit_default, template_override, inline_override, channel_native")
+    content_override = Column(JSON, nullable=True,
+        comment="Inline title/message/link override when content_mode=inline_override")
+    branch_key = Column(String(100), nullable=True,
+        comment="Human-readable branch identifier for debugging and UI round-trip")
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(),
                        nullable=False)

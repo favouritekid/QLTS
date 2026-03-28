@@ -59,6 +59,20 @@ class BulkDeleteRequest(BaseModel):
 # =============================================================================
 
 
+class RecipientConfig(BaseModel):
+    """
+    Schema for recipient resolver configuration.
+
+    Validates resolver_type and params structure.
+
+    Example:
+        {"resolver_type": "lead_owner", "params": {}}
+        {"resolver_type": "composite", "params": {"resolvers": [...]}}
+    """
+    resolver_type: str  # Resolver type (lead_owner, unit_staff, all_admins, etc.)
+    params: Dict[str, Any] = {}  # Resolver-specific parameters
+
+
 class NotificationActionBase(BaseModel):
     """Base schema for notification action (workflow step)"""
     step: int = 1  # Step number in workflow
@@ -66,6 +80,12 @@ class NotificationActionBase(BaseModel):
     template_code: Optional[str] = None  # Optional template code reference
     delay_minutes: int = 0  # Delay before execution (0 = immediate)
     config: Optional[Dict[str, Any]] = None  # Channel-specific config
+
+    # Phase 3: Delivery branch fields
+    recipient_config: Optional[RecipientConfig] = None
+    content_mode: Optional[str] = None
+    content_override: Optional[Dict[str, Any]] = None
+    branch_key: Optional[str] = None
 
 
 class NotificationActionCreate(NotificationActionBase):
@@ -85,12 +105,21 @@ class NotificationActionUpdate(BaseModel):
     delay_minutes: Optional[int] = None
     config: Optional[Dict[str, Any]] = None
 
+    # Phase 3: Delivery branch fields
+    recipient_config: Optional[RecipientConfig] = None
+    content_mode: Optional[str] = None
+    content_override: Optional[Dict[str, Any]] = None
+    branch_key: Optional[str] = None
+
     @field_validator("channel")
     @classmethod
     def reject_socket_channel(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             return validate_channel_for_write(v)
         return v
+
+
+VALID_CONTENT_MODES = {"inherit_default", "template_override", "inline_override", "channel_native"}
 
 
 class NotificationAction(NotificationActionBase):
@@ -107,24 +136,17 @@ class NotificationAction(NotificationActionBase):
     def normalize_legacy_channel(cls, v: str) -> str:
         return normalize_channel(v)
 
+    @field_validator("content_mode")
+    @classmethod
+    def validate_content_mode(cls, v):
+        if v is not None and v not in VALID_CONTENT_MODES:
+            raise ValueError(f"Invalid content_mode: {v}")
+        return v
+
 
 # =============================================================================
 # ✅ PHASE 2.2 + FIX: Notification Rule Schemas (with validation)
 # =============================================================================
-
-
-class RecipientConfig(BaseModel):
-    """
-    Schema for recipient resolver configuration.
-
-    Validates resolver_type and params structure.
-
-    Example:
-        {"resolver_type": "lead_owner", "params": {}}
-        {"resolver_type": "composite", "params": {"resolvers": [...]}}
-    """
-    resolver_type: str  # Resolver type (lead_owner, unit_staff, all_admins, etc.)
-    params: Dict[str, Any] = {}  # Resolver-specific parameters
 
 
 class NotificationRuleBase(BaseModel):
