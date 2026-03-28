@@ -289,6 +289,8 @@ from .notification import (
     SimpleCondition,
     CompoundCondition,
     Condition,
+    # ✅ Phase 2: Condition field metadata schema
+    ConditionFieldSchema,
 )
 
 # --- Từ notification_delivery.py ---

@@ -18,6 +18,7 @@ from ..core.events import SystemEvents
 from ..core.task_constants import AssignmentResult, AssignmentFailureReason
 from ..utils.exceptions import LockContentionError
 from .notification_dispatcher import dispatch
+from .notification_payloads import EventPayload
 from .status_helper import StatusHelper, AssignmentStatus
 
 # Lấy logger chuẩn ở đây, dùng làm fallback
@@ -160,14 +161,7 @@ async def automatically_assign_lead(
                         _, notif_cb = await dispatch(
                             db=db,
                             event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
-                            payload={
-                                "lead_id": lead_id,
-                                "unit_id": lead_unit_id,
-                                "reason": "No officers available",
-                                "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0,
-                                "actor_name": "System",
-                            },
+                            payload=EventPayload.for_lead_assignment_failed(lead, lead_unit_id, "No officers available"),
                             dedupe_key=f"lead_assignment_failed:{lead_id}:no_officers",
                         )
                         if notif_cb:
@@ -262,14 +256,7 @@ async def automatically_assign_lead(
                         _, notif_cb = await dispatch(
                             db=db,
                             event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
-                            payload={
-                                "lead_id": lead_id,
-                                "unit_id": lead_unit_id,
-                                "reason": "All officers at full capacity",
-                                "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0,
-                                "actor_name": "System",
-                            },
+                            payload=EventPayload.for_lead_assignment_failed(lead, lead_unit_id, "All officers at full capacity"),
                             dedupe_key=f"lead_assignment_failed:{lead_id}:capacity",
                         )
                         if notif_cb:
@@ -443,23 +430,16 @@ async def automatically_assign_lead(
             if lead.offering:
                 offering_name = getattr(lead.offering, 'offering_type', 'N/A')
 
-            notification_payload = {
-                "lead_id": lead.id,
-                "officer_id": chosen_one.id,
-                "actor_id": 0,  # System actor for automatic assignments
-                "lead_name": lead.full_name or "Unknown",
-                "lead_phone": lead.phone or "",
-                "offering_name": offering_name,
-                "actor_name": "System (Auto Assignment)",  # ✅ Added for template
-                "is_automatic": True,  # ✅ NEW: For frontend to show "Tự động" badge
-                "assignment_method": "automatic",  # ✅ NEW: Match AssignmentLog.method
-            }
-
             # Dispatch notification (saves to DB via flush, caller commits)
             _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_ASSIGNED,
-                payload=notification_payload,
+                payload=EventPayload.for_lead_assigned(
+                    lead, chosen_one.id, None,
+                    offering_name=offering_name,
+                    is_automatic=True,
+                    assignment_method="automatic",
+                ),
                 dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}",
             )
             if notif_cb:

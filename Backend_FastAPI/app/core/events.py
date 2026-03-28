@@ -144,6 +144,40 @@ class SystemEvents(str, Enum):
     Recipients: Previously assigned officer, unit managers
     """
 
+    LEAD_RESTORED = "lead_restored"
+    """
+    Triggered when a soft-deleted lead is restored.
+
+    Payload Schema:
+        {
+            "lead_id": int,
+            "lead_name": Optional[str],
+            "unit_id": int,
+            "officer_id": Optional[int],
+            "actor_id": int,
+            "actor_name": str
+        }
+
+    Recipients: Lead's assigned officer (if any), unit managers
+    """
+
+    LEAD_IMPORTED = "lead_imported"
+    """
+    Triggered when leads are bulk-imported from a file.
+
+    Payload Schema:
+        {
+            "total_imported": int,
+            "sample_lead_ids": List[int],    # Max 10 IDs for reference
+            "unit_id": int,
+            "filename": str,
+            "actor_id": int,
+            "actor_name": str
+        }
+
+    Recipients: Unit managers (awareness of bulk operations)
+    """
+
     # =========================================================================
     # CONSULTATION EVENTS
     # =========================================================================

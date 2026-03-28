@@ -416,8 +416,19 @@ async def dispatch(
     )
 
     # Step 1.5: ✅ PHASE 2.3: Check activation condition (database rules only)
+    # Phase 2: Build evaluation context (nested dicts) for condition evaluation
     if rule_source == "database" and hasattr(config, 'should_activate'):
-        if not config.should_activate(payload):
+        if config.condition:
+            from app.services.notification_condition_context import (
+                analyze_condition, build_evaluation_context,
+            )
+            proj_ns, enrich_ns = analyze_condition(config.condition)
+            eval_context = await build_evaluation_context(
+                db, event, payload, proj_ns, enrich_ns,
+            )
+        else:
+            eval_context = payload
+        if not config.should_activate(eval_context):
             log.info(
                 "Notification rule condition not met, skipping dispatch",
                 event_type=event.value,

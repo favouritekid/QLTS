@@ -13,6 +13,9 @@ from app import models, schemas
 from app.utils.exceptions import BadRequest
 from app.repositories import NotificationRuleRepository, NotificationTemplateRepository
 from .notification_rule_loader import invalidate_rule_cache, derive_channels_from_actions, ActionConfig
+from app.services.notification_rule_loader import OPERATOR_ALIASES, FIELD_ALIASES_GLOBAL, FIELD_ALIASES_PER_EVENT, _resolve_field_alias
+from app.core.event_metadata import EVENT_METADATA_REGISTRY
+from app.core.events import SystemEvents
 
 log = structlog.get_logger(__name__)
 
@@ -166,6 +169,57 @@ BROADCAST_ONLY_EVENTS = frozenset({
 })
 
 
+def _canonicalize_condition(condition: dict | None, event: str) -> dict | None:
+    """Recursively normalize operators AND field paths in condition tree."""
+    if not condition:
+        return condition
+    if "conditions" in condition:  # compound
+        return {
+            **condition,
+            "operator": condition["operator"],
+            "conditions": [_canonicalize_condition(c, event) for c in condition["conditions"]],
+        }
+    op = condition.get("operator", "")
+    field = condition.get("field", "")
+    return {
+        **condition,
+        "operator": OPERATOR_ALIASES.get(op, op),
+        "field": _resolve_field_alias(field, event),
+    }
+
+
+def _validate_condition_fields(condition: dict | None, allowed_paths: set) -> list:
+    """Return list of invalid field paths (recursive for compound)."""
+    if not condition:
+        return []
+    errors = []
+    if "conditions" in condition:
+        for sub in condition.get("conditions", []):
+            errors.extend(_validate_condition_fields(sub, allowed_paths))
+        return errors
+    field = condition.get("field", "")
+    if field and field not in allowed_paths:
+        errors.append(f"Unknown condition field: '{field}'")
+    return errors
+
+
+def _validate_condition_operators(condition: dict | None, field_operator_map: dict) -> list:
+    """Return list of invalid operator usages (recursive for compound)."""
+    if not condition:
+        return []
+    errors = []
+    if "conditions" in condition:
+        for sub in condition.get("conditions", []):
+            errors.extend(_validate_condition_operators(sub, field_operator_map))
+        return errors
+    field = condition.get("field", "")
+    op = OPERATOR_ALIASES.get(condition.get("operator", ""), condition.get("operator", ""))
+    allowed_ops = field_operator_map.get(field)
+    if allowed_ops is not None and op not in allowed_ops:
+        errors.append(f"Operator '{op}' not allowed for field '{field}' (allowed: {allowed_ops})")
+    return errors
+
+
 async def create_rule(
     db: AsyncSession,
     rule_data: schemas.NotificationRuleCreate,
@@ -179,6 +233,27 @@ async def create_rule(
             f"Event '{rule_data.event}' is broadcast-only and cannot have notification rules. "
             "Organization events are domain broadcasts, not user notifications."
         )
+
+    # Phase 2: Canonicalize condition (normalize operators + field paths)
+    rule_data.condition = _canonicalize_condition(rule_data.condition, rule_data.event) if rule_data.condition else None
+
+    # Phase 2: Validate condition fields and operators against event metadata
+    if rule_data.condition:
+        try:
+            event_enum = SystemEvents(rule_data.event)
+            event_meta = EVENT_METADATA_REGISTRY.get(event_enum)
+            if event_meta and event_meta.condition_fields:
+                allowed_paths = {cf.path for cf in event_meta.condition_fields}
+                field_errors = _validate_condition_fields(rule_data.condition, allowed_paths)
+                if field_errors:
+                    raise BadRequest(f"Invalid condition fields: {'; '.join(field_errors)}")
+
+                field_op_map = {cf.path: cf.operators for cf in event_meta.condition_fields}
+                op_errors = _validate_condition_operators(rule_data.condition, field_op_map)
+                if op_errors:
+                    raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
+        except ValueError:
+            pass  # Unknown event, skip validation
 
     repo = NotificationRuleRepository(db)
 
@@ -242,6 +317,28 @@ async def update_rule(
 
     # Update basic fields (exclude actions + channels — channels is derived from actions)
     update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions", "channels"})
+
+    # Phase 2: If condition is being updated, canonicalize and validate
+    if 'condition' in update_data and update_data['condition'] is not None:
+        event_name = rule.event
+        update_data['condition'] = _canonicalize_condition(update_data['condition'], event_name)
+
+        try:
+            event_enum = SystemEvents(event_name)
+            event_meta = EVENT_METADATA_REGISTRY.get(event_enum)
+            if event_meta and event_meta.condition_fields:
+                allowed_paths = {cf.path for cf in event_meta.condition_fields}
+                field_errors = _validate_condition_fields(update_data['condition'], allowed_paths)
+                if field_errors:
+                    raise BadRequest(f"Invalid condition fields: {'; '.join(field_errors)}")
+
+                field_op_map = {cf.path: cf.operators for cf in event_meta.condition_fields}
+                op_errors = _validate_condition_operators(update_data['condition'], field_op_map)
+                if op_errors:
+                    raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
+        except ValueError:
+            pass  # Unknown event, skip validation
+
     for field, value in update_data.items():
         if value is not None:
             setattr(rule, field, value)

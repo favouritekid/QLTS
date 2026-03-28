@@ -39,6 +39,64 @@ from app.services.notification_resolvers import (
 log = structlog.get_logger(__name__)
 
 # =============================================================================
+# Phase 2: Operator & field alias maps for backward-compatible condition eval
+# =============================================================================
+
+# Phase 2: Operator aliases for legacy symbolic operators
+OPERATOR_ALIASES = {
+    "==": "eq", "!=": "ne",
+    ">": "gt", ">=": "gte",
+    "<": "lt", "<=": "lte",
+}
+
+# Phase 2: Legacy flat field -> canonical nested path (global, unambiguous)
+FIELD_ALIASES_GLOBAL = {
+    "new_status": "event.new_status_id",
+    "old_status": "event.old_status_id",
+    "old_stage": "event.old_stage_id",
+    "new_stage": "event.new_stage_id",
+    "lead_id": "lead.id",
+    "lead_name": "lead.name",
+    "officer_id": "lead.officer_id",
+    "actor_id": "actor.id",
+    "actor_name": "actor.name",
+    "consultation_id": "consultation.id",
+    "status_changed": "event.status_changed",
+    "updated_fields": "event.updated_fields",
+}
+
+# Ambiguous aliases resolved per-event
+FIELD_ALIASES_PER_EVENT = {
+    "lead_imported": {"unit_id": "event.unit_id"},
+    "_default": {"unit_id": "lead.unit_id"},
+}
+
+
+def _resolve_field_alias(field: str, event: str = "") -> str:
+    """Resolve legacy flat field to canonical nested path, event-aware."""
+    if field in FIELD_ALIASES_GLOBAL:
+        return FIELD_ALIASES_GLOBAL[field]
+    per_event = FIELD_ALIASES_PER_EVENT.get(event, FIELD_ALIASES_PER_EVENT["_default"])
+    return per_event.get(field, field)
+
+
+def _resolve_field(field: str, context: dict):
+    """Resolve field value from evaluation context.
+    Supports dotted paths (actor.role) and flat keys (lead_id).
+    """
+    if "." in field:
+        parts = field.split(".")
+        current = context
+        for part in parts:
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                return None
+        return current
+    return context.get(field)
+
+
+# =============================================================================
 # ✅ FIX: Edge Case #6 - Redis Caching for Rules
 # =============================================================================
 
@@ -151,7 +209,7 @@ def deserialize_resolver(config: Dict[str, Any]) -> BaseResolver:
 # =============================================================================
 
 
-def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bool:
+def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict, event: str = "") -> bool:
     """
     Evaluate activation condition for a notification rule.
 
@@ -243,7 +301,7 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
         try:
             if operator == "and":
                 # ALL conditions must be true
-                result = all(evaluate_condition(cond, payload) for cond in sub_conditions)
+                result = all(evaluate_condition(cond, payload, event) for cond in sub_conditions)
                 log.debug(
                     "AND condition evaluated",
                     sub_count=len(sub_conditions),
@@ -252,7 +310,7 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
                 return result
             elif operator == "or":
                 # AT LEAST ONE condition must be true
-                result = any(evaluate_condition(cond, payload) for cond in sub_conditions)
+                result = any(evaluate_condition(cond, payload, event) for cond in sub_conditions)
                 log.debug(
                     "OR condition evaluated",
                     sub_count=len(sub_conditions),
@@ -269,6 +327,9 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
             return False
 
     # ✅ Handle simple conditions (original logic)
+    # Phase 2: Normalize operator aliases (e.g. "==" -> "eq")
+    operator = OPERATOR_ALIASES.get(operator, operator)
+
     field = condition.get("field")
     expected_value = condition.get("value")
 
@@ -280,8 +341,17 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
         )
         return False
 
-    # Get actual value from payload (support nested fields with dot notation)
-    actual_value = payload.get(field)
+    # Phase 2: Resolve legacy flat field names to canonical nested paths
+    original_field = field
+    field = _resolve_field_alias(field, event)
+
+    # Get actual value from context (supports dotted paths like actor.role)
+    actual_value = _resolve_field(field, payload)
+
+    # Fallback: if alias resolved to dotted path but context is flat,
+    # try original flat key for backward compat
+    if actual_value is None and original_field != field:
+        actual_value = payload.get(original_field)
 
     # Handle missing field
     if actual_value is None:
@@ -472,7 +542,7 @@ class DatabaseRuleConfig:
 
     def should_activate(self, payload: dict) -> bool:
         """Check if this rule should activate for the given payload."""
-        return evaluate_condition(self.condition, payload)
+        return evaluate_condition(self.condition, payload, self.event)
 
 
 # =============================================================================

@@ -14,6 +14,7 @@ from ..schemas.collaborator import LeadValidityUpdate
 from ..services import distribution_service, insights_service, lead_service
 from ..utils.csv_helpers import sanitize_csv_cell
 from ..services.notification_dispatcher import safe_dispatch  # ✅ NOTIFICATION 2.0
+from ..services.notification_payloads import EventPayload  # ✅ Phase 1
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..core.constants import UserRole
 from ..utils.exceptions import BusinessRuleViolation, ConflictError
@@ -650,19 +651,15 @@ async def update_existing_lead(
         await safe_dispatch(
             db=db,
             event=SystemEvents.LEAD_STATUS_CHANGED,
-            payload={
-                "lead_id": result.id,
-                "lead_name": result.full_name or result.email or f"Lead #{result.id}",
-                "officer_id": result.assigned_officer_id,
-                "officer_name": result.assigned_officer.full_name if result.assigned_officer else "Unknown",
-                "old_status": lead.consultation_status_id or "none",
-                "new_status": result.consultation_status_id or "none",
-                "old_stage": lead.pipeline_stage_id,
-                "new_stage": result.pipeline_stage_id,
-                "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,
-                "updated_fields": updated_fields,
-            },
+            payload=EventPayload.for_lead_status_changed(
+                result, current_user,
+                old_status=lead.consultation_status_id or "none",
+                new_status=result.consultation_status_id or "none",
+                officer_name=result.assigned_officer.full_name if result.assigned_officer else "Unknown",
+                old_stage=lead.pipeline_stage_id,
+                new_stage=result.pipeline_stage_id,
+                updated_fields=updated_fields,
+            ),
             dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
         )
 
@@ -678,17 +675,11 @@ async def update_existing_lead(
     await safe_dispatch(
         db=db,
         event=SystemEvents.LEAD_UPDATED,
-        payload={
-            "lead_id": result.id,
-            "updated_fields": updated_fields,
-            "status_changed": status_changed,
-            "actor_id": current_user.id,
-            "updated_by": current_user.full_name or current_user.username,
-            "actor_name": current_user.full_name or current_user.username,
-            "updated_summary": ", ".join(updated_fields[:3]) + ("..." if len(updated_fields) > 3 else ""),
-            "updated_at": datetime.now().isoformat(),
-            "message": f"Lead updated by {current_user.full_name or current_user.username}",
-        },
+        payload=EventPayload.for_lead_updated(
+            result, current_user,
+            updated_fields=updated_fields,
+            status_changed=status_changed,
+        ),
         dedupe_key=f"lead_updated:{result.id}:{int(datetime.now().timestamp())}",
     )
 
@@ -742,14 +733,7 @@ async def delete_lead(
     await safe_dispatch(
         db=db,
         event=SystemEvents.LEAD_DELETED,
-        payload={
-            "lead_id": deleted_lead.id,
-            "lead_name": deleted_lead.full_name or "Unknown",
-            "unit_id": deleted_lead.unit_id,
-            "officer_id": deleted_lead.assigned_officer_id,
-            "actor_id": current_user.id,
-            "actor_name": current_user.full_name or current_user.username,
-        },
+        payload=EventPayload.for_lead_deleted(deleted_lead, current_user),
         dedupe_key=f"lead_deleted:{deleted_lead.id}",
     )
 
@@ -791,6 +775,14 @@ async def restore_lead(
         restored_by_user_id=current_user.id
     )
 
+    # ✅ NOTIFICATION: Dispatch LEAD_RESTORED
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.LEAD_RESTORED,
+        payload=EventPayload.for_lead_restored(restored_lead, current_user),
+        dedupe_key=EventPayload.dedupe_key("lead_restored", restored_lead.id),
+    )
+
     return restored_lead
 
 
@@ -819,15 +811,7 @@ async def add_new_consultation(
     await safe_dispatch(
         db=db,
         event=SystemEvents.CONSULTATION_CREATED,
-        payload={
-            "consultation_id": consultation.id,
-            "lead_id": lead.id,
-            "officer_id": lead.assigned_officer_id,
-            "status_id": consultation.consultation_status_id or "",
-            "actor_id": current_user.id,
-            "actor_name": current_user.full_name or current_user.username,
-            "unit_id": lead.unit_id,
-        },
+        payload=EventPayload.for_consultation_created(consultation, lead, current_user),
         dedupe_key=f"consultation_created:{consultation.id}",
     )
 
@@ -1013,15 +997,7 @@ async def update_a_consultation(
         await safe_dispatch(
             db=db,
             event=SystemEvents.CONSULTATION_UPDATED,
-            payload={
-                "consultation_id": result.id,
-                "lead_id": lead.id,
-                "officer_id": lead.assigned_officer_id,
-                "old_status_id": old_status_id,
-                "new_status_id": result.consultation_status_id,
-                "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,
-            },
+            payload=EventPayload.for_consultation_updated(result, lead, current_user, old_status_id=old_status_id),
             dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
         )
 
@@ -1066,13 +1042,7 @@ async def delete_a_consultation(
     await safe_dispatch(
         db=db,
         event=SystemEvents.CONSULTATION_DELETED,
-        payload={
-            "consultation_id": consultation_id,
-            "lead_id": lead.id,
-            "officer_id": lead.assigned_officer_id,
-            "actor_id": current_user.id,
-            "actor_name": current_user.full_name or current_user.username,
-        },
+        payload=EventPayload.for_consultation_deleted(consultation_id, lead, current_user),
         dedupe_key=f"consultation_deleted:{consultation_id}",
     )
 
@@ -1460,6 +1430,21 @@ async def officer_import_leads(
         )
         await db.commit()
         await callback()
+
+        # ✅ NOTIFICATION: Dispatch LEAD_IMPORTED for officer import
+        if result.successful_imports > 0:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_IMPORTED,
+                payload=EventPayload.for_lead_imported(
+                    unit_id=current_user.unit_id,
+                    actor=current_user,
+                    total_imported=result.successful_imports,
+                    filename=file.filename or "unknown",
+                    created_lead_ids=result.created_lead_ids,
+                ),
+            )
+
         return result
 
     except ValueError as e:
@@ -1595,16 +1580,12 @@ async def update_lead_consultation_status(
     await safe_dispatch(
         db=db,
         event=SystemEvents.LEAD_STATUS_CHANGED,
-        payload={
-            "lead_id": lead.id,
-            "lead_name": lead.full_name or lead.email or f"Lead #{lead.id}",
-            "officer_id": lead.assigned_officer_id,
-            "officer_name": lead.assigned_officer.full_name if lead.assigned_officer else "Unknown",
-            "old_status": old_status_id or "none",
-            "new_status": validated_status.id,
-            "actor_id": current_user.id,
-            "actor_name": current_user.full_name or current_user.username,
-        },
+        payload=EventPayload.for_lead_status_changed(
+            lead, current_user,
+            old_status=old_status_id or "none",
+            new_status=validated_status.id,
+            officer_name=lead.assigned_officer.full_name if lead.assigned_officer else "Unknown",
+        ),
         dedupe_key=f"lead_status_changed:{lead.id}:{validated_status.id}",
     )
 

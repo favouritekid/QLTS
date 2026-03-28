@@ -16,7 +16,7 @@
  */
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
@@ -532,6 +532,55 @@ function getCategoryIcon(category: string): string {
   return iconMap[category] || "🔔";
 }
 
+// Phase 2: Canonical operator labels
+const OPERATOR_LABELS: Record<string, string> = {
+  eq: "Bằng (=)",
+  ne: "Khác (≠)",
+  gt: "Lớn hơn (>)",
+  gte: "Lớn hơn hoặc bằng (≥)",
+  lt: "Nhỏ hơn (<)",
+  lte: "Nhỏ hơn hoặc bằng (≤)",
+  in: "Trong danh sách",
+  not_in: "Không trong danh sách",
+  contains: "Chứa",
+};
+
+// Phase 2: Legacy operator alias map
+const OPERATOR_ALIAS_MAP: Record<string, string> = {
+  "==": "eq", "!=": "ne",
+  ">": "gt", ">=": "gte",
+  "<": "lt", "<=": "lte",
+};
+
+// Phase 2: Legacy flat field alias map (mirror of backend FIELD_ALIASES_GLOBAL)
+// "unit_id" intentionally omitted — ambiguous, resolved event-aware below.
+const FIELD_ALIAS_MAP: Record<string, string> = {
+  new_status: "event.new_status_id",
+  old_status: "event.old_status_id",
+  old_stage: "event.old_stage_id",
+  new_stage: "event.new_stage_id",
+  lead_id: "lead.id",
+  lead_name: "lead.name",
+  officer_id: "lead.officer_id",
+  actor_id: "actor.id",
+  actor_name: "actor.name",
+  consultation_id: "consultation.id",
+  status_changed: "event.status_changed",
+  updated_fields: "event.updated_fields",
+};
+
+// Phase 2: Event-aware alias for ambiguous fields
+const FIELD_ALIAS_PER_EVENT: Record<string, Record<string, string>> = {
+  lead_imported: { unit_id: "event.unit_id" },
+};
+const FIELD_ALIAS_DEFAULT: Record<string, string> = { unit_id: "lead.unit_id" };
+
+function resolveFieldAlias(field: string, event: string): string {
+  if (field in FIELD_ALIAS_MAP) return FIELD_ALIAS_MAP[field];
+  const perEvent = FIELD_ALIAS_PER_EVENT[event] ?? FIELD_ALIAS_DEFAULT;
+  return perEvent[field] ?? FIELD_ALIAS_DEFAULT[field] ?? field;
+}
+
 // ============================================
 // HELPER COMPONENTS
 // ============================================
@@ -639,8 +688,10 @@ export function NotificationRuleWizard({
   // Condition builder state
   const [conditionEnabled, setConditionEnabled] = useState(false);
   const [conditionField, setConditionField] = useState<string>("");
-  const [conditionOperator, setConditionOperator] = useState<string>("==");
+  const [conditionOperator, setConditionOperator] = useState<string>("eq");
   const [conditionValue, setConditionValue] = useState<string>("");
+  const [isCompoundCondition, setIsCompoundCondition] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   // Fetch users for user picker
   const { data: usersData } = useAdminUsersList({
@@ -652,7 +703,7 @@ export function NotificationRuleWizard({
   const { data: metadata } = useNotificationMetadata();
 
   // Fetch existing rule if in edit mode
-  const { isLoading: loadingRule } = useNotificationRule(ruleId);
+  const { data: existingRule, isLoading: loadingRule } = useNotificationRule(ruleId);
 
   // Mutations
   const createMutation = useCreateNotificationRule();
@@ -683,11 +734,70 @@ export function NotificationRuleWizard({
     },
   });
 
+  // Phase 2: Hydrate form when editing existing rule
+  useEffect(() => {
+    if (!existingRule || !isEditMode) return;
+
+    form.reset({
+      event: existingRule.event,
+      title_template: existingRule.title_template,
+      message_template: existingRule.message_template,
+      notification_type: existingRule.notification_type as "info" | "success" | "warning" | "error",
+      link_template: existingRule.link_template ?? "",
+      channels: existingRule.channels,
+      recipient_config: existingRule.recipient_config,
+      condition: existingRule.condition,
+      enabled: existingRule.enabled,
+      actions: existingRule.actions?.map((a: Record<string, unknown>) => ({
+        step: a.step as number,
+        channel: a.channel as string,
+        template_code: (a.template_code as string) || null,
+        delay_minutes: (a.delay_minutes as number) || 0,
+        config: (a.config as Record<string, unknown>) || null,
+      })) ?? [],
+    });
+
+    // Hydrate condition state
+    if (existingRule.condition) {
+      const cond = existingRule.condition as Record<string, unknown>;
+      if ("conditions" in cond) {
+        setConditionEnabled(true);
+        setIsCompoundCondition(true);
+      } else {
+        setConditionEnabled(true);
+        setIsCompoundCondition(false);
+        const rawField = String(cond.field ?? "");
+        setConditionField(resolveFieldAlias(rawField, existingRule.event));
+        const rawOp = String(cond.operator ?? "eq");
+        setConditionOperator(OPERATOR_ALIAS_MAP[rawOp] ?? rawOp);
+        // Hydrate value — arrays become comma-separated, others toString
+        const rawVal = cond.value;
+        if (Array.isArray(rawVal)) {
+          setConditionValue(rawVal.join(", "));
+        } else {
+          setConditionValue(String(rawVal ?? ""));
+        }
+      }
+    }
+    setIsHydrated(true);
+  }, [existingRule, isEditMode]);
+
   // Watch form values for dynamic behavior
   const selectedEvent = form.watch("event");
   const selectedRecipient = form.watch("recipient_config.resolver_type") as string;
   const titleTemplate = form.watch("title_template");
   const messageTemplate = form.watch("message_template");
+
+  // Phase 2: Reset condition state on event change (only if not hydrating)
+  useEffect(() => {
+    if (isEditMode && !isHydrated) return;
+    setConditionField("");
+    setConditionOperator("eq");
+    setConditionValue("");
+    setConditionEnabled(false);
+    setIsCompoundCondition(false);
+    form.setValue("condition", null);
+  }, [selectedEvent]);
 
   // ✅ NOTIFICATION 2.0: Dynamic data from metadata
   // Convert metadata events to EventOption format
@@ -780,19 +890,41 @@ export function NotificationRuleWizard({
     form.setValue(field, `${currentValue}${variable} `);
   };
 
-  // Update condition in form
-  const updateCondition = (field: string, operator: string, value: string) => {
-    if (!field || !value) {
+  // Update condition in form — coerce value to match field type
+  const updateCondition = (field: string, operator: string, rawValue: string) => {
+    if (!field || !rawValue) {
       form.setValue("condition", null);
       return;
     }
 
-    // Build condition object based on backend format
+    // Phase 2: Coerce value based on field type from metadata
+    const fieldMeta = selectedEventMetadata?.condition_fields?.find(
+      (cf: { path: string; type: string }) => cf.path === field
+    );
+    const fieldType = fieldMeta?.type ?? "string";
+
+    let typedValue: unknown = rawValue;
+    if (operator === "in" || operator === "not_in") {
+      // Parse comma-separated string into array
+      typedValue = rawValue.split(",").map((v) => {
+        const trimmed = v.trim();
+        if (fieldType === "integer") return parseInt(trimmed, 10) || 0;
+        if (fieldType === "float") return parseFloat(trimmed) || 0;
+        return trimmed;
+      });
+    } else if (fieldType === "integer") {
+      typedValue = parseInt(rawValue, 10) || 0;
+    } else if (fieldType === "float") {
+      typedValue = parseFloat(rawValue) || 0;
+    } else if (fieldType === "boolean") {
+      typedValue = rawValue === "true";
+    }
+
     const condition = {
       type: "simple",
       field: field,
       operator: operator,
-      value: value,
+      value: typedValue,
     };
 
     form.setValue("condition", condition);
@@ -886,9 +1018,9 @@ export function NotificationRuleWizard({
                         });
                         setConditionEnabled(true);
                         setConditionField("actor.role");
-                        setConditionOperator("==");
+                        setConditionOperator("eq");
                         setConditionValue("manager");
-                        updateCondition("actor.role", "==", "manager");
+                        updateCondition("actor.role", "eq", "manager");
                         form.setValue("title_template", "Lead mới từ Manager: $lead_name");
                         form.setValue("message_template", "Manager vừa tạo lead $lead_name ($lead_phone). Các officer cùng đơn vị vui lòng theo dõi.");
                         form.setValue("notification_type", "info");
@@ -1278,8 +1410,9 @@ export function NotificationRuleWizard({
                           if (!checked) {
                             form.setValue("condition", null);
                             setConditionField("");
-                            setConditionOperator("==");
+                            setConditionOperator("eq");
                             setConditionValue("");
+                            setIsCompoundCondition(false);
                           }
                         }}
                       />
@@ -1295,108 +1428,136 @@ export function NotificationRuleWizard({
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
-                          {/* Condition Field */}
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium">Trường dữ liệu</label>
-                            <Select
-                              value={conditionField}
-                              onValueChange={(value) => {
-                                setConditionField(value);
-                                updateCondition(value, conditionOperator, conditionValue);
-                              }}
-                            >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Chọn trường..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="actor.role">Vai trò người thực hiện</SelectItem>
-                                <SelectItem value="actor.unit_id">Đơn vị người thực hiện</SelectItem>
-                                <SelectItem value="lead.status">Trạng thái lead</SelectItem>
-                                <SelectItem value="lead.source">Nguồn lead</SelectItem>
-                                <SelectItem value="application.status">Trạng thái hồ sơ</SelectItem>
-                                <SelectItem value="amount">Số tiền</SelectItem>
-                              </SelectContent>
-                            </Select>
-                            <p className="text-xs text-muted-foreground">
-                              💡 VD: &ldquo;actor.role&rdquo; để lọc theo vai trò của người thực hiện hành động
-                            </p>
-                          </div>
-
-                          {/* Condition Operator */}
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium">Phép so sánh</label>
-                            <Select
-                              value={conditionOperator}
-                              onValueChange={(value) => {
-                                setConditionOperator(value);
-                                updateCondition(conditionField, value, conditionValue);
-                              }}
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="==">Bằng (==)</SelectItem>
-                                <SelectItem value="!=">Khác (!=)</SelectItem>
-                                <SelectItem value=">">Lớn hơn ({">"}</SelectItem>
-                                <SelectItem value="<">Nhỏ hơn ({"<"})</SelectItem>
-                                <SelectItem value=">=">Lớn hơn hoặc bằng ({">"}=)</SelectItem>
-                                <SelectItem value="<=">Nhỏ hơn hoặc bằng ({"<"}=)</SelectItem>
-                                <SelectItem value="contains">Chứa (contains)</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-
-                          {/* Condition Value */}
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium">Giá trị</label>
-                            {conditionField === "actor.role" ? (
-                              <Select
-                                value={conditionValue}
-                                onValueChange={(value) => {
-                                  setConditionValue(value);
-                                  updateCondition(conditionField, conditionOperator, value);
-                                }}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Chọn vai trò..." />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="manager">Manager</SelectItem>
-                                  <SelectItem value="officer">Officer</SelectItem>
-                                  <SelectItem value="admin">Admin</SelectItem>
-                                  <SelectItem value="support">Support</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <Input
-                                placeholder={
-                                  conditionField === "amount"
-                                    ? "VD: 10000000"
-                                    : "VD: manager"
-                                }
-                                value={conditionValue}
-                                onChange={(e) => {
-                                  setConditionValue(e.target.value);
-                                  updateCondition(conditionField, conditionOperator, e.target.value);
-                                }}
-                              />
-                            )}
-                            <p className="text-xs text-muted-foreground">
-                              💡 Giá trị để so sánh với trường dữ liệu
-                            </p>
-                          </div>
-
-                          {/* Preview */}
-                          {conditionField && conditionValue && (
-                            <div className="bg-info-50 border-l-2 border-info-400 px-3 py-2 rounded">
-                              <p className="text-xs font-medium text-info-900 mb-1">
-                                📝 Điều kiện hiện tại:
+                          {isCompoundCondition ? (
+                            <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 space-y-2">
+                              <p className="text-sm font-medium text-yellow-800">
+                                Điều kiện phức hợp (AND/OR)
                               </p>
-                              <code className="text-xs text-info-700">
-                                {conditionField} {conditionOperator} &ldquo;{conditionValue}&rdquo;
-                              </code>
+                              <p className="text-xs text-yellow-700">
+                                Rule này có điều kiện phức hợp. Chỉnh sửa qua API.
+                                Nếu bạn tắt điều kiện, dữ liệu cũ sẽ bị mất.
+                              </p>
+                              <pre className="text-xs p-2 bg-white rounded border overflow-auto max-h-32">
+                                {JSON.stringify(form.getValues("condition"), null, 2)}
+                              </pre>
                             </div>
+                          ) : (
+                            <>
+                              {/* Condition Field */}
+                              <div className="space-y-2">
+                                <label className="text-sm font-medium">Trường dữ liệu</label>
+                                <Select
+                                  value={conditionField}
+                                  onValueChange={(value) => {
+                                    setConditionField(value);
+                                    updateCondition(value, conditionOperator, conditionValue);
+                                  }}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Chọn trường..." />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {selectedEventMetadata?.condition_fields?.map((cf: { path: string; description: string }) => (
+                                      <SelectItem key={cf.path} value={cf.path}>{cf.description}</SelectItem>
+                                    )) ?? (
+                                      <SelectItem value="" disabled>Chọn sự kiện trước</SelectItem>
+                                    )}
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                  💡 Chọn trường dữ liệu từ danh sách. Các trường có sẵn phụ thuộc vào sự kiện đã chọn.
+                                </p>
+                              </div>
+
+                              {/* Condition Operator */}
+                              <div className="space-y-2">
+                                <label className="text-sm font-medium">Phép so sánh</label>
+                                <Select
+                                  value={conditionOperator}
+                                  onValueChange={(value) => {
+                                    setConditionOperator(value);
+                                    updateCondition(conditionField, value, conditionValue);
+                                  }}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {(() => {
+                                      const fieldMeta = selectedEventMetadata?.condition_fields?.find(
+                                        (cf: { path: string }) => cf.path === conditionField
+                                      );
+                                      const ops = fieldMeta?.operators ?? ["eq", "ne"];
+                                      return ops.map((op: string) => (
+                                        <SelectItem key={op} value={op}>
+                                          {OPERATOR_LABELS[op] ?? op}
+                                        </SelectItem>
+                                      ));
+                                    })()}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              {/* Condition Value - Phase 2: type-aware */}
+                              <div className="space-y-2">
+                                <label className="text-sm font-medium">Giá trị</label>
+                                {(() => {
+                                  const fieldMeta = selectedEventMetadata?.condition_fields?.find(
+                                    (cf: { path: string }) => cf.path === conditionField
+                                  );
+                                  const fieldType = fieldMeta?.type ?? "string";
+
+                                  if (fieldType === "boolean") {
+                                    return (
+                                      <Select
+                                        value={conditionValue}
+                                        onValueChange={(value) => {
+                                          setConditionValue(value);
+                                          updateCondition(conditionField, conditionOperator, value);
+                                        }}
+                                      >
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Ch��n giá trị..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="true">Có (true)</SelectItem>
+                                          <SelectItem value="false">Không (false)</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    );
+                                  }
+
+                                  const isListOp = conditionOperator === "in" || conditionOperator === "not_in";
+
+                                  return (
+                                    <Input
+                                      type={!isListOp && (fieldType === "integer" || fieldType === "float") ? "number" : "text"}
+                                      placeholder={isListOp ? "Nhập danh sách phân cách bằng dấu phẩy (VD: admin, manager)" : "Nhập giá trị..."}
+                                      value={conditionValue}
+                                      onChange={(e) => {
+                                        setConditionValue(e.target.value);
+                                        updateCondition(conditionField, conditionOperator, e.target.value);
+                                      }}
+                                    />
+                                  );
+                                })()}
+                                <p className="text-xs text-muted-foreground">
+                                  💡 VD: actor.role eq &ldquo;manager&rdquo;, event.new_status_id eq &ldquo;contacted&rdquo;
+                                </p>
+                              </div>
+
+                              {/* Preview */}
+                              {conditionField && conditionValue && (
+                                <div className="bg-info-50 border-l-2 border-info-400 px-3 py-2 rounded">
+                                  <p className="text-xs font-medium text-info-900 mb-1">
+                                    📝 Điều kiện hiện tại:
+                                  </p>
+                                  <code className="text-xs text-info-700">
+                                    {conditionField} {conditionOperator} &ldquo;{conditionValue}&rdquo;
+                                  </code>
+                                </div>
+                              )}
+                            </>
                           )}
                         </CardContent>
                       </Card>

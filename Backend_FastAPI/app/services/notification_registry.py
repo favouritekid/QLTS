@@ -27,6 +27,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from app.core.events import SystemEvents
 from app.core.event_groups import NotificationEventGroup, NotificationChannel, EVENT_GROUP_MAPPING
+from app.services.notification_rule_loader import synthesize_actions_from_channels as _synthesize_actions
 from app.services.notification_resolvers import (
     BaseResolver,
     LeadOwnerResolver,
@@ -121,6 +122,11 @@ class NotificationConfig:
     def channel_values(self) -> List[str]:
         """Get channel values as list of strings (for backward compatibility)."""
         return [c.value for c in self.channels]
+
+    @property
+    def actions(self) -> list:
+        """Synthesize ActionConfig list from channels for dispatch() compatibility."""
+        return _synthesize_actions(self.channel_values)
 
 
 # =============================================================================
@@ -247,6 +253,35 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         notification_type=NT.INFO,
         link_template="/leads/${lead_id}",
         priority=150,  # Lower priority - routine updates
+    ),
+
+    SystemEvents.LEAD_RESTORED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(CompositeResolver([
+            LeadOwnerResolver(),
+            UnitManagersResolver()
+        ])),
+        template=(
+            "Lead Restored",
+            "Lead #${lead_id} (${lead_name}) has been restored."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.SUCCESS,
+        link_template="/leads/${lead_id}",
+        priority=100,
+    ),
+
+    SystemEvents.LEAD_IMPORTED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(UnitManagersResolver()),
+        template=(
+            "Leads Imported",
+            "${total_imported} leads imported from ${filename} by ${actor_name}."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.INFO,
+        link_template="/leads",
+        priority=120,
     ),
 
     # =========================================================================

@@ -204,6 +204,7 @@ def check_consultation_reminders_task(self):
         from ..core.events import SystemEvents
         from ..models.lead import Consultation, Lead
         from ..services import notification_dispatcher
+        from ..services.notification_payloads import EventPayload
 
         result = {"checked": 0, "sent": 0, "failed": 0}
         post_commit_callbacks = []
@@ -244,15 +245,9 @@ def check_consultation_reminders_task(self):
                     _, notif_cb = await notification_dispatcher.dispatch(
                         db=session,
                         event=SystemEvents.CONSULTATION_REMINDER,
-                        payload={
-                            "consultation_id": consultation.id,
-                            "lead_id": lead.id,
-                            "lead_name": lead.full_name,
-                            "lead_phone": lead.phone,
-                            "officer_id": consultation.officer_id,
-                            "scheduled_at": consultation.scheduled_at.isoformat(),
-                            "minutes_until": minutes_until,
-                        },
+                        payload=EventPayload.for_consultation_reminder(
+                            consultation, lead, minutes_until=minutes_until,
+                        ),
                     )
                     if notif_cb:
                         post_commit_callbacks.append(notif_cb)

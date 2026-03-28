@@ -435,3 +435,234 @@ def test_deprecated_entrypoints_have_no_production_callers():
         + "\n".join(f"  - {c}" for c in callers)
         + "\nMigrate all callers to dispatch() / safe_dispatch()."
     )
+
+
+# =============================================================================
+# Phase 1: LEAD_RESTORED and LEAD_IMPORTED full parity
+# =============================================================================
+
+class TestPhase1NewEvents:
+    """LEAD_RESTORED and LEAD_IMPORTED must be wired in all 4 registries."""
+
+    PHASE1_EVENTS = [
+        SystemEvents.LEAD_RESTORED,
+        SystemEvents.LEAD_IMPORTED,
+    ]
+
+    def test_events_exist(self):
+        for event in self.PHASE1_EVENTS:
+            assert hasattr(SystemEvents, event.name), f"{event.name} not in SystemEvents"
+
+    def test_events_in_group_mapping(self):
+        for event in self.PHASE1_EVENTS:
+            assert event in EVENT_GROUP_MAPPING, (
+                f"{event.value} missing from EVENT_GROUP_MAPPING"
+            )
+            assert EVENT_GROUP_MAPPING[event] == NotificationEventGroup.LEAD
+
+    def test_events_in_notification_registry(self):
+        for event in self.PHASE1_EVENTS:
+            assert event in NOTIFICATION_REGISTRY, (
+                f"{event.value} missing from NOTIFICATION_REGISTRY"
+            )
+
+    def test_events_in_metadata_registry(self):
+        for event in self.PHASE1_EVENTS:
+            assert event in EVENT_METADATA_REGISTRY, (
+                f"{event.value} missing from EVENT_METADATA_REGISTRY"
+            )
+
+
+# =============================================================================
+# Phase 2: condition_fields parity for all Phase 1 events
+# =============================================================================
+
+class TestPhase2ConditionFieldsParity:
+    """Phase 2: every Phase 1 event should have condition_fields."""
+
+    PHASE1_EVENTS = [
+        SystemEvents.LEAD_CREATED, SystemEvents.LEAD_ASSIGNED,
+        SystemEvents.LEAD_ASSIGNMENT_FAILED, SystemEvents.LEAD_REASSIGNED,
+        SystemEvents.LEAD_STATUS_CHANGED, SystemEvents.LEAD_UPDATED,
+        SystemEvents.LEAD_DELETED, SystemEvents.LEAD_RESTORED,
+        SystemEvents.LEAD_IMPORTED,
+        SystemEvents.CONSULTATION_CREATED, SystemEvents.CONSULTATION_UPDATED,
+        SystemEvents.CONSULTATION_DELETED, SystemEvents.CONSULTATION_REMINDER,
+    ]
+
+    def test_all_phase1_events_have_condition_fields(self):
+        missing = []
+        for event in self.PHASE1_EVENTS:
+            meta = EVENT_METADATA_REGISTRY.get(event)
+            if meta and not meta.condition_fields:
+                missing.append(event.value)
+        assert not missing, f"Phase 1 events without condition_fields: {missing}"
+
+    def test_no_lead_status_exposed(self):
+        """lead.status must NOT appear in any event's condition_fields (D7)."""
+        violations = []
+        for event, meta in EVENT_METADATA_REGISTRY.items():
+            if not meta.condition_fields:
+                continue
+            for cf in meta.condition_fields:
+                if cf.path == "lead.status":
+                    violations.append(event.value)
+        assert not violations, f"Events exposing lead.status: {violations}"
+
+
+# =============================================================================
+# Step 6d: Field-level payload-to-metadata parity
+# =============================================================================
+
+class TestPayloadMetadataFieldParity:
+    """
+    Blocking gate: every non-internal key emitted by EventPayload.for_xxx()
+    must have a corresponding variable in EVENT_METADATA_REGISTRY, and vice
+    versa.  Covers all 13 Phase 1 builder events (9 Lead + 4 Consultation).
+    """
+
+    # Keys that are internal routing / not meant for admin template use
+    INTERNAL_KEYS = {
+        "user_ids",           # SpecificUsersResolver routing, not template
+        "assignment_method",  # frontend badge hint, conditional
+        "is_automatic",       # frontend badge hint, conditional
+    }
+
+    @staticmethod
+    def _metadata_var_names(event: SystemEvents) -> set:
+        """Extract variable names from EVENT_METADATA_REGISTRY for an event."""
+        if event not in EVENT_METADATA_REGISTRY:
+            return set()
+        return {v.name for v in EVENT_METADATA_REGISTRY[event].variables}
+
+    @staticmethod
+    def _build_payload(builder_fn) -> dict:
+        """Call builder with minimal stubs and return the payload dict."""
+        from types import SimpleNamespace
+        lead = SimpleNamespace(
+            id=1, full_name="Test", email="t@x.com", phone="0900000000",
+            unit_id=10, assigned_officer_id=5, source="web",
+            pipeline_stage_id=3, consultation_status_id="new",
+        )
+        actor = SimpleNamespace(id=1, full_name="Admin", username="admin")
+        consultation = SimpleNamespace(
+            id=100, lead_id=1, officer_id=5,
+            consultation_status_id="contacted",
+            scheduled_at=__import__("datetime").datetime(2026, 1, 1, 10, 0),
+        )
+        name = builder_fn.__name__
+
+        if name == "for_lead_created":
+            return builder_fn(lead, actor)
+        elif name == "for_lead_assigned":
+            return builder_fn(lead, 5, actor, offering_name="N/A")
+        elif name == "for_lead_assignment_failed":
+            return builder_fn(lead, 10, "test reason")
+        elif name == "for_lead_reassigned":
+            return builder_fn(
+                1, actor, old_officer_id=5, new_officer_id=None,
+                old_unit_id=10, new_unit_id=20, reason="test",
+            )
+        elif name == "for_lead_status_changed":
+            return builder_fn(
+                lead, actor, old_status="a", new_status="b",
+                officer_name="X", old_stage=1, new_stage=2,
+                updated_fields=["f"],
+            )
+        elif name == "for_lead_updated":
+            return builder_fn(
+                lead, actor, updated_fields=["phone"],
+                status_changed=False,
+            )
+        elif name == "for_lead_deleted":
+            return builder_fn(lead, actor)
+        elif name == "for_lead_restored":
+            return builder_fn(lead, actor)
+        elif name == "for_lead_imported":
+            return builder_fn(
+                unit_id=10, actor=actor, total_imported=5,
+                filename="x.csv", created_lead_ids=[1, 2],
+            )
+        elif name == "for_consultation_created":
+            return builder_fn(consultation, lead, actor)
+        elif name == "for_consultation_updated":
+            return builder_fn(consultation, lead, actor, old_status_id="new")
+        elif name == "for_consultation_deleted":
+            return builder_fn(100, lead, actor)
+        elif name == "for_consultation_reminder":
+            return builder_fn(consultation, lead, minutes_until=10)
+        else:
+            raise ValueError(f"Unknown builder: {name}")
+
+    PARITY_MATRIX = None  # populated in setup
+
+    @pytest.fixture(autouse=True)
+    def _setup_matrix(self):
+        from app.services.notification_payloads import EventPayload
+        self.PARITY_MATRIX = {
+            # 9 Lead events
+            SystemEvents.LEAD_CREATED: EventPayload.for_lead_created,
+            SystemEvents.LEAD_ASSIGNED: EventPayload.for_lead_assigned,
+            SystemEvents.LEAD_ASSIGNMENT_FAILED: EventPayload.for_lead_assignment_failed,
+            SystemEvents.LEAD_REASSIGNED: EventPayload.for_lead_reassigned,
+            SystemEvents.LEAD_STATUS_CHANGED: EventPayload.for_lead_status_changed,
+            SystemEvents.LEAD_UPDATED: EventPayload.for_lead_updated,
+            SystemEvents.LEAD_DELETED: EventPayload.for_lead_deleted,
+            SystemEvents.LEAD_RESTORED: EventPayload.for_lead_restored,
+            SystemEvents.LEAD_IMPORTED: EventPayload.for_lead_imported,
+            # 4 Consultation events
+            SystemEvents.CONSULTATION_CREATED: EventPayload.for_consultation_created,
+            SystemEvents.CONSULTATION_UPDATED: EventPayload.for_consultation_updated,
+            SystemEvents.CONSULTATION_DELETED: EventPayload.for_consultation_deleted,
+            SystemEvents.CONSULTATION_REMINDER: EventPayload.for_consultation_reminder,
+        }
+
+    def test_payload_keys_covered_by_metadata(self):
+        """
+        Every non-internal payload key MUST exist in metadata variables.
+        Hard failure — blocks PR if drift is detected.
+        """
+        drift = []
+        for event, builder_fn in self.PARITY_MATRIX.items():
+            payload = self._build_payload(builder_fn)
+            metadata_vars = self._metadata_var_names(event)
+            payload_keys = set(payload.keys()) - self.INTERNAL_KEYS
+
+            missing = payload_keys - metadata_vars
+            if missing:
+                drift.append(
+                    f"  {event.value}: payload has {sorted(missing)} "
+                    f"not in metadata variables {sorted(metadata_vars)}"
+                )
+
+        assert not drift, (
+            "Payload-to-metadata field drift detected:\n"
+            + "\n".join(drift)
+            + "\n\nUpdate EVENT_METADATA_REGISTRY to expose these fields "
+            "to the admin rule builder UI."
+        )
+
+    def test_metadata_vars_exist_in_payload(self):
+        """
+        Every metadata variable MUST appear in the payload.
+        Catches stale metadata variables that reference removed fields.
+        Hard failure — blocks PR.
+        """
+        stale = []
+        for event, builder_fn in self.PARITY_MATRIX.items():
+            payload = self._build_payload(builder_fn)
+            metadata_vars = self._metadata_var_names(event)
+            payload_keys = set(payload.keys())
+
+            missing = metadata_vars - payload_keys
+            if missing:
+                stale.append(
+                    f"  {event.value}: metadata has {sorted(missing)} "
+                    f"not in payload keys {sorted(payload_keys)}"
+                )
+
+        assert not stale, (
+            "Metadata variables not present in payload (stale metadata):\n"
+            + "\n".join(stale)
+            + "\n\nRemove stale variables or update the EventPayload builder."
+        )

@@ -501,6 +501,13 @@ export interface NotificationConsentImportResult {
 // ✅ NOTIFICATION 2.0: METADATA FOR DYNAMIC BUILDER
 // ============================================
 
+export interface ConditionField {
+  path: string;
+  type: string;
+  description: string;
+  operators: string[];
+}
+
 export interface EventVariable {
   name: string;
   type: string; // "string" | "integer" | "datetime" | "boolean" | "float"
@@ -513,6 +520,7 @@ export interface EventMetadata {
   display_name: string;
   description: string;
   variables: EventVariable[];
+  condition_fields: ConditionField[];
   filter_fields: string[];
   default_channels: string[];
   category: string; // "lead" | "application" | "consultation" | "finance" | etc.

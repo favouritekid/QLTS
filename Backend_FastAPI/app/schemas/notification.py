@@ -274,6 +274,19 @@ class NotificationTemplatesPage(BaseModel):
 
 
 # =============================================================================
+# ✅ PHASE 2: Condition Field Schema (for metadata API response)
+# =============================================================================
+
+
+class ConditionFieldSchema(BaseModel):
+    """Schema for condition field metadata returned by metadata API."""
+    path: str
+    type: str
+    description: str
+    operators: List[str]
+
+
+# =============================================================================
 # ✅ FIX: Edge Case #4 - JSON Schema Validation (Condition Models)
 # =============================================================================
 
