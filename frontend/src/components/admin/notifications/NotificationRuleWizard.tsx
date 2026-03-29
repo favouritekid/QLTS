@@ -32,7 +32,7 @@ import {
   HelpCircle,
   Bell,
   Users,
-  Filter,
+  // Filter, — moved to TriggerSection
   MessageSquare,
   Sparkles,
   Check,
@@ -69,7 +69,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+// RadioGroup, RadioGroupItem moved to EventSelectorSection
 import { Separator } from "@/components/ui/separator";
 // Phase 3c: Command/Popover moved to recipient group cards
 // import {
@@ -94,6 +94,7 @@ import WizardStepRecipientGroups from "./WizardStepRecipientGroups";
 import type { RecipientGroup } from "./wizard-types";
 import { mapToAPI, hydrateFromAPI, validateGroups, canSave, createInternalGroup, resetGroupCounter } from "./wizard-utils";
 import NotificationRuleSidebar from "./NotificationRuleSidebar";
+import { TriggerSection } from "./TriggerSection";
 
 // ============================================
 // TYPES & INTERFACES
@@ -373,9 +374,7 @@ const CATEGORY_DISPLAY: Record<string, { label: string; icon: string; order: num
 
 const FALLBACK_CATEGORY_ORDER = 999;
 
-function getCategoryLabel(category: string): string {
-  return CATEGORY_DISPLAY[category]?.label || `Sự kiện ${category.charAt(0).toUpperCase() + category.slice(1)}`;
-}
+// getCategoryLabel — moved to EventSelectorSection
 
 function getCategoryOrder(category: string): number {
   return CATEGORY_DISPLAY[category]?.order ?? FALLBACK_CATEGORY_ORDER;
@@ -523,18 +522,7 @@ function getCategoryIcon(category: string): string {
   return CATEGORY_DISPLAY[category]?.icon || "🔔";
 }
 
-// Phase 2: Canonical operator labels
-const OPERATOR_LABELS: Record<string, string> = {
-  eq: "Bằng (=)",
-  ne: "Khác (≠)",
-  gt: "Lớn hơn (>)",
-  gte: "Lớn hơn hoặc bằng (≥)",
-  lt: "Nhỏ hơn (<)",
-  lte: "Nhỏ hơn hoặc bằng (≤)",
-  in: "Trong danh sách",
-  not_in: "Không trong danh sách",
-  contains: "Chứa",
-};
+// OPERATOR_LABELS — moved to ConditionSection
 
 // Phase 2: Legacy operator alias map
 const OPERATOR_ALIAS_MAP: Record<string, string> = {
@@ -1179,256 +1167,39 @@ export function NotificationRuleWizard({
 
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                {/* STEP 1: Event Selection */}
+                {/* STEP 1: Trigger (Event + Condition) */}
                 {currentStep === 1 && (
                   <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
-                    <div>
-                      <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                        <Bell className="h-5 w-5 text-primary" />
-                        Bước 1: Khi nào gửi thông báo?
-                        <HelpTooltip content="Chọn sự kiện hệ thống sẽ kích hoạt thông báo này. Ví dụ: khi có lead mới, khi phân công lead, v.v." />
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Chọn sự kiện hệ thống sẽ kích hoạt thông báo này
-                      </p>
-                    </div>
-
-                    <FormField
-                      control={form.control}
-                      name="event"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Chọn sự kiện</FormLabel>
-                          <FormControl>
-                            <div className="space-y-4">
-                              {sortedCategoryKeys.map((categoryKey) => {
-                                const categoryEvents = groupedEvents[categoryKey];
-                                if (!categoryEvents || categoryEvents.length === 0) return null;
-
-                                return (
-                                  <Card key={categoryKey}>
-                                    <CardHeader className="pb-3">
-                                      <CardTitle className="text-sm flex items-center gap-2">
-                                        <span className="text-lg">{getCategoryIcon(categoryKey)}</span>
-                                        {getCategoryLabel(categoryKey)}
-                                      </CardTitle>
-                                    </CardHeader>
-                                    <CardContent>
-                                      <RadioGroup
-                                        value={field.value}
-                                        onValueChange={field.onChange}
-                                      >
-                                        <div className="space-y-2">
-                                          {categoryEvents.map((event) => (
-                                            <div
-                                              key={event.value}
-                                              className={`
-                                                flex items-start space-x-3 rounded-lg border p-3 cursor-pointer transition-colors
-                                                ${field.value === event.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"}
-                                              `}
-                                              onClick={() => field.onChange(event.value)}
-                                            >
-                                              <RadioGroupItem value={event.value} id={event.value} />
-                                              <div className="flex-1">
-                                                <label
-                                                  htmlFor={event.value}
-                                                  className="text-sm font-medium cursor-pointer"
-                                                >
-                                                  {event.icon} {event.label}
-                                                </label>
-                                                <p className="text-xs text-muted-foreground mt-0.5">
-                                                  {event.description}
-                                                </p>
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </RadioGroup>
-                                    </CardContent>
-                                  </Card>
-                                );
-                              })}
-                            </div>
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+                    <TriggerSection
+                      // Event props
+                      value={form.watch("event")}
+                      onChange={(v) => form.setValue("event", v)}
+                      groupedEvents={groupedEvents}
+                      sortedCategoryKeys={sortedCategoryKeys}
+                      // Condition props
+                      conditionEnabled={conditionEnabled}
+                      onConditionEnabledChange={(checked) => {
+                        setConditionEnabled(checked);
+                        if (!checked) {
+                          form.setValue("condition", null);
+                          setConditionField("");
+                          setConditionOperator("eq");
+                          setConditionValue("");
+                          setIsCompoundCondition(false);
+                        }
+                      }}
+                      conditionField={conditionField}
+                      onConditionFieldChange={setConditionField}
+                      conditionOperator={conditionOperator}
+                      onConditionOperatorChange={setConditionOperator}
+                      conditionValue={conditionValue}
+                      onConditionValueChange={setConditionValue}
+                      isCompoundCondition={isCompoundCondition}
+                      onIsCompoundConditionChange={setIsCompoundCondition}
+                      conditionData={form.getValues("condition") as Record<string, unknown> | null}
+                      updateCondition={updateCondition}
+                      selectedEventMetadata={selectedEventMetadata}
                     />
-
-                    {/* Condition Builder (merged from old Step 3) */}
-                    <Separator />
-                    <div>
-                      <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                        <Filter className="h-5 w-5 text-primary" />
-                        Điều kiện (Tùy chọn)
-                        <HelpTooltip content="Thêm điều kiện để chỉ gửi thông báo khi thỏa mãn tiêu chí. Ví dụ: chỉ gửi khi người thực hiện là Manager. Bạn có thể bỏ qua." />
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Chỉ gửi thông báo khi đáp ứng điều kiện (có thể bỏ qua)
-                      </p>
-                    </div>
-
-                    {/* Enable/Disable Condition */}
-                    <div className="flex items-center justify-between rounded-lg border p-4">
-                      <div className="space-y-0.5">
-                        <p className="text-sm font-medium">Bật điều kiện lọc</p>
-                        <p className="text-xs text-muted-foreground">
-                          Chỉ gửi thông báo khi đáp ứng điều kiện
-                        </p>
-                      </div>
-                      <Switch
-                        checked={conditionEnabled}
-                        onCheckedChange={(checked) => {
-                          setConditionEnabled(checked);
-                          if (!checked) {
-                            form.setValue("condition", null);
-                            setConditionField("");
-                            setConditionOperator("eq");
-                            setConditionValue("");
-                            setIsCompoundCondition(false);
-                          }
-                        }}
-                      />
-                    </div>
-
-                    {/* Visual Condition Builder */}
-                    {conditionEnabled && (
-                      <Card>
-                        <CardHeader>
-                          <CardTitle className="text-sm">Thiết lập điều kiện</CardTitle>
-                          <CardDescription>
-                            Chỉ gửi thông báo khi thỏa mãn điều kiện dưới đây
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          {isCompoundCondition ? (
-                            <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 space-y-2">
-                              <p className="text-sm font-medium text-yellow-800">
-                                Điều kiện phức hợp (AND/OR)
-                              </p>
-                              <p className="text-xs text-yellow-700">
-                                Rule này có điều kiện phức hợp. Chỉnh sửa qua API.
-                                Nếu bạn tắt điều kiện, dữ liệu cũ sẽ bị mất.
-                              </p>
-                              <pre className="text-xs p-2 bg-white rounded border overflow-auto max-h-32">
-                                {JSON.stringify(form.getValues("condition"), null, 2)}
-                              </pre>
-                            </div>
-                          ) : (
-                            <>
-                              {/* Condition Field */}
-                              <div className="space-y-2">
-                                <label className="text-sm font-medium">Trường dữ liệu</label>
-                                <Select
-                                  value={conditionField}
-                                  onValueChange={(value) => {
-                                    setConditionField(value);
-                                    updateCondition(value, conditionOperator, conditionValue);
-                                  }}
-                                >
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Chọn trường..." />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {selectedEventMetadata?.condition_fields?.map((cf: { path: string; description: string }) => (
-                                      <SelectItem key={cf.path} value={cf.path}>{cf.description}</SelectItem>
-                                    )) ?? (
-                                      <SelectItem value="" disabled>Chọn sự kiện trước</SelectItem>
-                                    )}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-
-                              {/* Condition Operator */}
-                              <div className="space-y-2">
-                                <label className="text-sm font-medium">Phép so sánh</label>
-                                <Select
-                                  value={conditionOperator}
-                                  onValueChange={(value) => {
-                                    setConditionOperator(value);
-                                    updateCondition(conditionField, value, conditionValue);
-                                  }}
-                                >
-                                  <SelectTrigger>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {(() => {
-                                      const fieldMeta = selectedEventMetadata?.condition_fields?.find(
-                                        (cf: { path: string }) => cf.path === conditionField
-                                      );
-                                      const ops = fieldMeta?.operators ?? ["eq", "ne"];
-                                      return ops.map((op: string) => (
-                                        <SelectItem key={op} value={op}>
-                                          {OPERATOR_LABELS[op] ?? op}
-                                        </SelectItem>
-                                      ));
-                                    })()}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-
-                              {/* Condition Value */}
-                              <div className="space-y-2">
-                                <label className="text-sm font-medium">Giá trị</label>
-                                {(() => {
-                                  const fieldMeta = selectedEventMetadata?.condition_fields?.find(
-                                    (cf: { path: string }) => cf.path === conditionField
-                                  );
-                                  const fieldType = fieldMeta?.type ?? "string";
-
-                                  if (fieldType === "boolean") {
-                                    return (
-                                      <Select
-                                        value={conditionValue}
-                                        onValueChange={(value) => {
-                                          setConditionValue(value);
-                                          updateCondition(conditionField, conditionOperator, value);
-                                        }}
-                                      >
-                                        <SelectTrigger>
-                                          <SelectValue placeholder="Chọn giá trị..." />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          <SelectItem value="true">Có (true)</SelectItem>
-                                          <SelectItem value="false">Không (false)</SelectItem>
-                                        </SelectContent>
-                                      </Select>
-                                    );
-                                  }
-
-                                  const isListOp = conditionOperator === "in" || conditionOperator === "not_in";
-
-                                  return (
-                                    <Input
-                                      type={!isListOp && (fieldType === "integer" || fieldType === "float") ? "number" : "text"}
-                                      placeholder={isListOp ? "Nhập danh sách phân cách bằng dấu phẩy (VD: admin, manager)" : "Nhập giá trị..."}
-                                      value={conditionValue}
-                                      onChange={(e) => {
-                                        setConditionValue(e.target.value);
-                                        updateCondition(conditionField, conditionOperator, e.target.value);
-                                      }}
-                                    />
-                                  );
-                                })()}
-                              </div>
-
-                              {/* Preview */}
-                              {conditionField && conditionValue && (
-                                <div className="bg-info-50 border-l-2 border-info-400 px-3 py-2 rounded">
-                                  <p className="text-xs font-medium text-info-900 mb-1">
-                                    Điều kiện hiện tại:
-                                  </p>
-                                  <code className="text-xs text-info-700">
-                                    {conditionField} {conditionOperator} &ldquo;{conditionValue}&rdquo;
-                                  </code>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </CardContent>
-                      </Card>
-                    )}
                   </div>
                 )}
 
