@@ -1,4 +1,4 @@
-// src/components/admin/notifications/NotificationRuleWizard.tsx
+// src/components/admin/notifications/NotificationRuleEditor.tsx
 /**
  * Notification Rule Editor — full-page 4-step editor for notification rules.
  *
@@ -761,6 +761,3 @@ export function NotificationRuleEditor({
     </div>
   );
 }
-
-// Backward-compatible alias — route files can migrate to NotificationRuleEditor
-export { NotificationRuleEditor as NotificationRuleWizard };

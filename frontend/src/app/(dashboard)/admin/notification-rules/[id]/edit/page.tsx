@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { NotificationRuleEditor } from "@/components/admin/notifications/NotificationRuleWizard";
+import { NotificationRuleEditor } from "@/components/admin/notifications/NotificationRuleEditor";
 
 export default function EditNotificationRulePage() {
   const params = useParams();

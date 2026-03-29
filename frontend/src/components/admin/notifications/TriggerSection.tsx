@@ -1,7 +1,7 @@
 // src/components/admin/notifications/TriggerSection.tsx
 /**
  * Step 1 wrapper: Combines EventSelectorSection + Separator + ConditionSection.
- * Extracted from NotificationRuleWizard for modularity.
+ * Extracted from NotificationRuleEditor for modularity.
  *
  * The wizard passes all state/callbacks; this component owns no state.
  */

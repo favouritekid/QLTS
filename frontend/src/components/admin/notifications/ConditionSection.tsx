@@ -1,7 +1,7 @@
 // src/components/admin/notifications/ConditionSection.tsx
 /**
  * Step 1 sub-component: Condition builder UI (toggle + simple/compound).
- * Extracted from NotificationRuleWizard for modularity.
+ * Extracted from NotificationRuleEditor for modularity.
  *
  * Receives all condition state and callbacks as props (no react-hook-form dependency).
  */

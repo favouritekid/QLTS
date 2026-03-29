@@ -1,7 +1,7 @@
 // src/components/admin/notifications/EventSelectorSection.tsx
 /**
  * Step 1 sub-component: Event picker with category cards and radio groups.
- * Extracted from NotificationRuleWizard for modularity.
+ * Extracted from NotificationRuleEditor for modularity.
  *
  * Receives value + onChange props (no react-hook-form dependency).
  */
