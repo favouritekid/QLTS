@@ -207,7 +207,7 @@ class TestDispatcherPerChannelIntegration:
     browser-eligible users, not for all recipients.
     """
 
-    async def test_dispatch_creates_notification_for_email_only_user(
+    async def test_dispatch_email_only_user_creates_delivery_without_inbox_row(
         self,
         db: AsyncSession,
         admin_user: models.User,
@@ -216,8 +216,8 @@ class TestDispatcherPerChannelIntegration:
     ):
         """
         User with browser_enabled=False but email_enabled=True should still
-        get a Notification row (needed by EmailChannel for content matching).
-        Dispatch should succeed and email channel should have this user.
+        get an email delivery, but should NOT get an inbox Notification row.
+        Dispatch should succeed and the email channel should have this user.
         """
         pref = models.NotificationPreference(
             user_id=officer_user.id,
@@ -240,29 +240,67 @@ class TestDispatcherPerChannelIntegration:
         await db.commit()
         await db.refresh(lead)
 
-        result, callback = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload={
-                "lead_id": lead.id,
-                "lead_name": lead.full_name,
-                "officer_id": officer_user.id,
-                "actor_id": admin_user.id,
-            },
-        )
+        with (
+            patch(
+                "app.services.notification_dispatcher.safe_redis_exists",
+                AsyncMock(return_value=False),
+            ),
+            patch(
+                "app.services.notification_dispatcher.safe_redis_incr",
+                AsyncMock(return_value=1),
+            ),
+            patch(
+                "app.services.notification_dispatcher.safe_redis_set",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.services.notification_dispatcher.safe_redis_expire",
+                AsyncMock(return_value=True),
+            ),
+        ):
+            result, callback = await dispatch(
+                db=db,
+                event=SystemEvents.LEAD_ASSIGNED,
+                payload={
+                    "lead_id": lead.id,
+                    "lead_name": lead.full_name,
+                    "officer_id": officer_user.id,
+                    "actor_id": admin_user.id,
+                },
+            )
         await db.commit()
 
-        # Notification row SHOULD exist (needed by EmailChannel)
-        stmt = select(models.Notification).where(
+        # Inbox Notification rows are browser-only.
+        notif_stmt = select(models.Notification).where(
             models.Notification.user_id == officer_user.id
         )
-        query_result = await db.execute(stmt)
-        notifications = query_result.scalars().all()
+        notif_result = await db.execute(notif_stmt)
+        notifications = notif_result.scalars().all()
 
-        assert len(notifications) >= 1, (
-            "Email-only user should still get Notification row for EmailChannel"
+        email_delivery_stmt = select(models.NotificationDelivery).where(
+            models.NotificationDelivery.user_id == officer_user.id,
+            models.NotificationDelivery.channel == "email",
         )
-        assert result, "dispatch should return notification IDs"
+        email_delivery_result = await db.execute(email_delivery_stmt)
+        email_deliveries = email_delivery_result.scalars().all()
+
+        browser_delivery_stmt = select(models.NotificationDelivery).where(
+            models.NotificationDelivery.user_id == officer_user.id,
+            models.NotificationDelivery.channel == "browser",
+        )
+        browser_delivery_result = await db.execute(browser_delivery_stmt)
+        browser_deliveries = browser_delivery_result.scalars().all()
+
+        assert len(notifications) == 0, (
+            "Email-only user should not get browser inbox rows"
+        )
+        assert len(email_deliveries) >= 1, (
+            "Email-only user should still get an email delivery row"
+        )
+        assert len(browser_deliveries) == 0, (
+            "Email-only user should not get browser delivery rows"
+        )
+        assert result == [], "dispatch should return no inbox notification IDs"
 
     async def test_dispatch_no_notification_when_all_channels_disabled(
         self,
@@ -375,21 +413,20 @@ class TestMetadataCanonicalChannels:
 # =============================================================================
 
 class TestSchemaRejectSocket:
-    """Pydantic schemas must reject 'socket' on create/update."""
+    """Pydantic schemas must normalize or reject legacy 'socket' appropriately."""
 
-    def test_rule_create_rejects_socket(self):
-        """NotificationRuleCreate must reject channels containing 'socket'."""
+    def test_rule_create_accepts_deprecated_channels_field_without_validation(self):
+        """NotificationRuleCreate accepts legacy channels because write path ignores them."""
         from app.schemas.notification import NotificationRuleCreate
-        from pydantic import ValidationError
 
-        with pytest.raises(ValidationError, match="deprecated"):
-            NotificationRuleCreate(
-                event="lead_assigned",
-                title_template="Test",
-                message_template="Test",
-                channels=["socket", "email"],
-                recipient_config={"resolver_type": "lead_owner", "params": {}},
-            )
+        rule = NotificationRuleCreate(
+            event="lead_assigned",
+            title_template="Test",
+            message_template="Test",
+            channels=["socket", "email"],
+            recipient_config={"resolver_type": "lead_owner", "params": {}},
+        )
+        assert rule.channels == ["socket", "email"]
 
     def test_rule_create_accepts_browser(self):
         """NotificationRuleCreate must accept canonical channels."""

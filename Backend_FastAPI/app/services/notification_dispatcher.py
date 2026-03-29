@@ -820,10 +820,43 @@ async def dispatch(
                 continue
 
             # FP2: Collaborator fallback — if resolver returns an internal user
-            # (e.g. collaborator with linked user_id), create an internal
-            # delivery row instead of an external one.
+            # (e.g. collaborator with linked user_id), apply same filters as
+            # normal internal path before creating delivery.
             if recipient.recipient_kind == "internal" and recipient.user_id:
+                uid = recipient.user_id
                 ch = action.channel
+
+                # Phase 3b fix: apply preference/cooldown/dedup to internal fallback
+                # 1. Preference check
+                if not skip_preference_check:
+                    pref_filtered = await notification_preference_service.filter_users_by_group(
+                        db=db, user_ids=[uid], group=group.value, channel=ch,
+                    )
+                    if not pref_filtered:
+                        log.debug("Internal fallback user filtered by preference",
+                                 user_id=uid, channel=ch)
+                        continue
+
+                # 2. Cooldown check
+                cooldown_key = f"notif:cooldown:{event.value}:{uid}:{ch}:{action.step}"
+                if await safe_redis_exists(cooldown_key):
+                    log.debug("Internal fallback user in cooldown", user_id=uid)
+                    continue
+
+                # 3. Dedup check
+                _action_dk = action_dedupe_keys.get(action.step)
+                if _action_dk:
+                    if ch == "browser":
+                        deduped = await _apply_deduplication(db, [uid], _action_dk)
+                    else:
+                        deduped = await _apply_delivery_deduplication(db, [uid], _action_dk, ch)
+                    if not deduped:
+                        log.debug("Internal fallback user deduped", user_id=uid)
+                        continue
+
+                # Set cooldown after passing all checks
+                await safe_redis_set(cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS)
+
                 ch_snapshot = _build_action_snapshot(action, config, payload, _action_template_map, notification_type=notification_type)
                 delay_minutes = action.delay_minutes or 0
                 int_scheduled_for = None
@@ -833,15 +866,15 @@ async def dispatch(
                 from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
                 repo = NotificationDeliveryRepository(db)
                 fallback_ids = await repo.bulk_create_deliveries([{
-                    "notification_id": notification_id_map.get(recipient.user_id),
+                    "notification_id": notification_id_map.get(uid),
                     "event": event.value,
                     "channel": ch,
                     "recipient_kind": "internal",
-                    "user_id": recipient.user_id,
+                    "user_id": uid,
                     "source_type": recipient.source_type,
                     "source_id": recipient.source_id,
                     "status": "queued",
-                    "dedupe_key": action_dedupe_keys.get(action.step),
+                    "dedupe_key": _action_dk,
                     "payload_snapshot": ch_snapshot,
                     "rule_id": config.rule_id if hasattr(config, 'rule_id') else None,
                     "action_step": action.step,
@@ -855,7 +888,7 @@ async def dispatch(
                     "External resolver returned internal user, created internal delivery",
                     event_type=event.value,
                     channel=ch,
-                    user_id=recipient.user_id,
+                    user_id=uid,
                     resolver=ext_resolver_type,
                 )
                 continue

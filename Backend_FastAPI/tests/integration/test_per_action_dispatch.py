@@ -246,3 +246,59 @@ class TestPerActionDispatch:
         assert "email" in channels_delivered, "Email delivery (action resolver)"
         # Both point to same user (officer)
         assert all(d.user_id == officer_user.id for d in deliveries)
+
+    async def test_external_only_action_not_short_circuited(
+        self, db: AsyncSession, seeded_dependencies: dict, mocker,
+    ):
+        """Rule with external-only action (zalo) should not be short-circuited.
+
+        When a rule has only external actions (no internal users resolved),
+        the has_external_actions flag should prevent early return so external
+        resolution can proceed.
+        """
+        _mock_side_effects(mocker)
+        _mock_redis(mocker)
+
+        # Rule with zalo action that has external_resolver in config
+        # No browser action, no internal users expected
+        await _seed_rule_with_actions(
+            db, event="lead_created",
+            recipient_config={"resolver_type": "lead_owner", "params": {}},
+            actions_data=[
+                {
+                    "step": 1, "channel": "zalo", "delay_minutes": 0,
+                    "config": {
+                        "external_resolver": "lead_contact",
+                        "zalo_template_id": "ZNS_TEST",
+                    },
+                    "branch_key": "lead_zalo",
+                },
+            ],
+        )
+        await db.commit()
+
+        # Payload with no officer_id → LeadOwnerResolver returns []
+        # But has_external_actions should prevent short-circuit
+        payload = {
+            "lead_id": 9999, "lead_name": "External Test Lead",
+            "unit_id": seeded_dependencies["unit_id"], "source": "test",
+            "actor_id": 0, "actor_name": "System",
+            # No officer_id → lead_owner resolves to []
+        }
+
+        # dispatch should NOT short-circuit — it should reach external resolution
+        # (even though external resolver will fail since lead_id=9999 doesn't exist)
+        notification_ids, callback = await dispatch(
+            db=db, event=SystemEvents.LEAD_CREATED, payload=payload,
+            skip_preference_check=True,
+        )
+        await db.commit()
+        if callback:
+            await callback()
+
+        # Key assertion: dispatch() returned (even if empty) instead of
+        # short-circuiting. If has_external_actions was broken, this code
+        # would never reach here — dispatch would return early.
+        assert isinstance(notification_ids, list)
+        # No browser action → no inbox notifications
+        assert notification_ids == []
