@@ -92,7 +92,8 @@ import {
 // import { MultiStepActionEditor } from "./MultiStepActionEditor"; // Phase 3c: replaced by WizardStepRecipientGroups
 import WizardStepRecipientGroups from "./WizardStepRecipientGroups";
 import type { RecipientGroup } from "./wizard-types";
-import { mapToAPI, hydrateFromAPI, validateGroups, createInternalGroup, resetGroupCounter } from "./wizard-utils";
+import { mapToAPI, hydrateFromAPI, validateGroups, canSave, createInternalGroup, resetGroupCounter } from "./wizard-utils";
+import NotificationRuleSidebar from "./NotificationRuleSidebar";
 
 // ============================================
 // TYPES & INTERFACES
@@ -983,8 +984,12 @@ export function NotificationRuleWizard({
     setCurrentStep((prev) => Math.max(prev - 1, 1));
   };
 
+  // Sidebar validation (computed live)
+  const sidebarErrors = validateGroups(recipientGroups);
+  const sidebarCanSave = canSave(recipientGroups) && !!form.getValues("event") && !!form.getValues("title_template") && !!form.getValues("message_template");
+
   return (
-    <div className="container max-w-4xl mx-auto py-6 space-y-6">
+    <div className="container max-w-6xl mx-auto py-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -1010,6 +1015,9 @@ export function NotificationRuleWizard({
           <>
             {/* Step Indicator — Phase 3c: 4 steps */}
             <StepIndicator currentStep={currentStep} />
+
+            {/* 2-column layout: main + sidebar */}
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
 
             {/* Quick Templates */}
             {currentStep === 1 && !isEditMode && (
@@ -1780,6 +1788,31 @@ export function NotificationRuleWizard({
                 </div>
               </form>
             </Form>
+
+              {/* Sidebar — sticky on desktop */}
+              <div className="hidden lg:block">
+                <div className="sticky top-6">
+                  <NotificationRuleSidebar
+                    trigger={{
+                      event: form.getValues("event") || "",
+                      condition: form.getValues("condition"),
+                      enabled: form.getValues("enabled"),
+                    }}
+                    recipientGroups={recipientGroups}
+                    titleTemplate={form.watch("title_template") || ""}
+                    validationErrors={sidebarErrors}
+                    enabled={form.getValues("enabled")}
+                    onEnabledChange={(v) => form.setValue("enabled", v)}
+                    onSave={form.handleSubmit(onSubmit)}
+                    onCancel={() => router.back()}
+                    isSaving={createMutation.isPending || updateMutation.isPending}
+                    isEditMode={isEditMode}
+                    canSave={sidebarCanSave}
+                    selectedEventLabel={selectedEventData?.label}
+                  />
+                </div>
+              </div>
+            </div>
           </>
         )}
     </div>
