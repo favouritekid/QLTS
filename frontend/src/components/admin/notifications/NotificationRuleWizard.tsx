@@ -1055,6 +1055,12 @@ export function NotificationRuleWizard({
                         form.setValue("message_template", "Manager vừa tạo lead $lead_name ($lead_phone). Các officer cùng đơn vị vui lòng theo dõi.");
                         form.setValue("notification_type", "info");
                         form.setValue("actions", [{ step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null }]);
+                        resetGroupCounter();
+                        setRecipientGroups([{
+                          group_key: "group_1", label: "Nhân viên cùng đơn vị", recipient_kind: "internal",
+                          recipient_config: { resolver_type: "unit_staff", params: {} }, external_resolver: null,
+                          channels: [{ channel: "browser", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null }],
+                        }]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1081,6 +1087,12 @@ export function NotificationRuleWizard({
                         form.setValue("message_template", "Bạn vừa được phân công lead $lead_name ($lead_phone). Vui lòng liên hệ sớm.");
                         form.setValue("notification_type", "success");
                         form.setValue("actions", [{ step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null }]);
+                        resetGroupCounter();
+                        setRecipientGroups([{
+                          group_key: "group_1", label: "Officer phụ trách lead", recipient_kind: "internal",
+                          recipient_config: { resolver_type: "lead_owner", params: {} }, external_resolver: null,
+                          channels: [{ channel: "browser", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null }],
+                        }]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1110,6 +1122,15 @@ export function NotificationRuleWizard({
                           { step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null },
                           { step: 2, channel: "email", template_code: null, delay_minutes: 0, config: null },
                         ]);
+                        resetGroupCounter();
+                        setRecipientGroups([{
+                          group_key: "group_1", label: "Quản lý đơn vị", recipient_kind: "internal",
+                          recipient_config: { resolver_type: "unit_managers", params: {} }, external_resolver: null,
+                          channels: [
+                            { channel: "browser", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null },
+                            { channel: "email", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null },
+                          ],
+                        }]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1136,6 +1157,12 @@ export function NotificationRuleWizard({
                         form.setValue("message_template", "Bạn có lịch tư vấn với $lead_name ($lead_phone) trong $minutes_until phút nữa.");
                         form.setValue("notification_type", "info");
                         form.setValue("actions", [{ step: 1, channel: "browser", template_code: null, delay_minutes: 0, config: null }]);
+                        resetGroupCounter();
+                        setRecipientGroups([{
+                          group_key: "group_1", label: "Officer phụ trách lead", recipient_kind: "internal",
+                          recipient_config: { resolver_type: "lead_owner", params: {} }, external_resolver: null,
+                          channels: [{ channel: "browser", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null }],
+                        }]);
                         setCurrentStep(2);
                       }}
                     >
@@ -1617,7 +1644,7 @@ export function NotificationRuleWizard({
                         { value: "admission_contact", label: "Hồ sơ tuyển sinh", description: "Gửi cho ứng viên" },
                         { value: "collaborator_contact", label: "Cộng tác viên", description: "Gửi cho CTV" },
                       ]}
-                      availableChannels={dynamicChannels.map((c) => c.value)}
+                      availableChannels={dynamicChannels.filter((c) => c.status === "live").map((c) => c.value)}
                     />
                   </div>
                 )}
