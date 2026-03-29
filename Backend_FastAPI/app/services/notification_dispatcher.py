@@ -576,7 +576,18 @@ async def dispatch(
     )
 
     for action in action_configs:
-        if action.recipient_config:
+        # Phase 3c: external-only actions (have external_resolver in config but no
+        # recipient_config) should NOT resolve internal users — they're handled
+        # entirely by the external resolution path (Step 6.6).
+        is_external_only = (
+            not action.recipient_config
+            and action.config
+            and action.config.get("external_resolver")
+        )
+
+        if is_external_only:
+            resolved = []  # No internal users — external path handles delivery
+        elif action.recipient_config:
             try:
                 action_resolver = deserialize_resolver(action.recipient_config)
                 resolved = await action_resolver.resolve_users(db, payload)
