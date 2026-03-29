@@ -302,3 +302,85 @@ class TestPerActionDispatch:
         assert isinstance(notification_ids, list)
         # No browser action → no inbox notifications
         assert notification_ids == []
+
+    async def test_external_action_creates_delivery_for_real_lead(
+        self, db: AsyncSession, seeded_dependencies: dict, mocker,
+    ):
+        """External action resolves lead contact and creates external delivery row.
+
+        Seeds a real Lead with phone → external resolver returns ResolvedRecipient
+        → dispatcher creates external delivery row with destination.
+        """
+        _mock_side_effects(mocker)
+        _mock_redis(mocker)
+
+        # Seed a real lead with phone number for external resolution
+        lead = models.Lead(
+            full_name="External Lead Test",
+            phone="0901234567",
+            email="external@test.com",
+            source="test",
+            unit_id=seeded_dependencies["unit_id"],
+            status="new",
+            consultation_status_id=seeded_dependencies["initial_status_id"],
+            pipeline_stage_id=seeded_dependencies["stage_id"],
+        )
+        db.add(lead)
+        await db.flush()
+        await db.refresh(lead)
+
+        # Rule with zalo action using lead_contact external resolver
+        await _seed_rule_with_actions(
+            db, event="lead_created",
+            recipient_config={"resolver_type": "lead_owner", "params": {}},
+            actions_data=[
+                {
+                    "step": 1, "channel": "zalo", "delay_minutes": 0,
+                    "config": {
+                        "external_resolver": "lead_contact",
+                        "zalo_template_id": "ZNS_TEST",
+                        "zalo_template_data": {"customer": "$lead_name"},
+                    },
+                    "branch_key": "lead_zalo",
+                },
+            ],
+        )
+        await db.commit()
+
+        payload = {
+            "lead_id": lead.id,
+            "lead_name": lead.full_name,
+            "lead_phone": lead.phone,
+            "unit_id": seeded_dependencies["unit_id"],
+            "source": "test",
+            "actor_id": 0, "actor_name": "System",
+            # No officer_id → lead_owner resolves to [] for internal
+        }
+
+        notification_ids, callback = await dispatch(
+            db=db, event=SystemEvents.LEAD_CREATED, payload=payload,
+            skip_preference_check=True,
+        )
+        await db.commit()
+        if callback:
+            await callback()
+
+        # No inbox (no browser action)
+        assert notification_ids == []
+
+        # But external delivery row should exist
+        from app.models.notification_delivery import NotificationDelivery
+        result = await db.execute(
+            select(NotificationDelivery).where(
+                NotificationDelivery.event == "lead_created",
+                NotificationDelivery.channel == "zalo",
+                NotificationDelivery.recipient_kind == "external",
+            )
+        )
+        deliveries = result.scalars().all()
+        assert len(deliveries) >= 1, "External delivery row should be created for lead contact"
+
+        ext_delivery = deliveries[0]
+        assert ext_delivery.destination == "0901234567"
+        assert ext_delivery.source_type == "lead"
+        assert ext_delivery.source_id == lead.id
