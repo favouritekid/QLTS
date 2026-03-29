@@ -34,7 +34,7 @@ import {
   Users,
   // Filter, — moved to TriggerSection
   MessageSquare,
-  Sparkles,
+  // Sparkles, — moved to VariablePickerPanel
   Check,
   // ChevronsUpDown, // Phase 3c: user picker removed
   Zap,
@@ -43,25 +43,13 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
+  // FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage — moved to DefaultContentSection
 } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+// Input, Textarea — moved to DefaultContentSection
+// Select, SelectContent, SelectItem, SelectTrigger, SelectValue — moved to DefaultContentSection
 import { Switch } from "@/components/ui/switch";
 // import { Checkbox } from "@/components/ui/checkbox"; // Phase 3c: channels moved to recipient groups
-import { Badge } from "@/components/ui/badge";
+// Badge — moved to DefaultContentSection
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Tooltip,
@@ -70,7 +58,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 // RadioGroup, RadioGroupItem moved to EventSelectorSection
-import { Separator } from "@/components/ui/separator";
+// Separator — moved to DefaultContentSection
 // Phase 3c: Command/Popover moved to recipient group cards
 // import {
 //   Command, CommandEmpty, CommandGroup,
@@ -95,6 +83,7 @@ import type { RecipientGroup } from "./wizard-types";
 import { mapToAPI, hydrateFromAPI, validateGroups, canSave, createInternalGroup, resetGroupCounter } from "./wizard-utils";
 import NotificationRuleSidebar from "./NotificationRuleSidebar";
 import { TriggerSection } from "./TriggerSection";
+import DefaultContentSection from "./DefaultContentSection";
 
 // ============================================
 // TYPES & INTERFACES
@@ -426,35 +415,7 @@ const RECIPIENT_OPTIONS: RecipientOption[] = [
   },
 ];
 
-/**
- * Loại thông báo
- */
-const NOTIFICATION_TYPES = [
-  {
-    value: "info",
-    label: "Thông tin",
-    description: "Thông báo mang tính thông tin",
-    color: "bg-info-100 text-info-800",
-  },
-  {
-    value: "success",
-    label: "Thành công",
-    description: "Thông báo hành động thành công",
-    color: "bg-success-100 text-success-800",
-  },
-  {
-    value: "warning",
-    label: "Cảnh báo",
-    description: "Thông báo cần chú ý",
-    color: "bg-warning-100 text-warning-800",
-  },
-  {
-    value: "error",
-    label: "Lỗi",
-    description: "Thông báo lỗi hoặc thất bại",
-    color: "bg-error-100 text-error-800",
-  },
-];
+// NOTIFICATION_TYPES — moved to DefaultContentSection
 
 /**
  * Biến template theo sự kiện
@@ -1207,198 +1168,13 @@ export function NotificationRuleWizard({
                 {/* STEP 2: Content & Template (Phase 3c: was old Step 4) */}
                 {currentStep === 2 && (
                   <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
-                    <div>
-                      <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                        <MessageSquare className="h-5 w-5 text-primary" />
-                        Bước 2: Nội dung mặc định
-                        <HelpTooltip content="Nhấp vào biến phía dưới để chèn vào nội dung. Biến sẽ tự động thay thế khi gửi thông báo." />
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Soạn tiêu đề và nội dung thông báo
-                      </p>
-                    </div>
-
-                    {/* Template Variables Helper */}
-                    {availableVariables.length > 0 && (
-                      <Card className="bg-info-50 border-info-200">
-                        <CardHeader className="pb-3">
-                          <CardTitle className="text-sm flex items-center gap-2">
-                            <Sparkles className="h-4 w-4 text-info-600" />
-                            Biến tự động
-                            <HelpTooltip content="Click vào biến để chèn vào tiêu đề hoặc nội dung. Giá trị sẽ tự động thay thế khi gửi thông báo." />
-                          </CardTitle>
-                          <CardDescription className="text-xs">
-                            Click để chèn biến vào tiêu đề hoặc nội dung
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="flex flex-wrap gap-2">
-                            {availableVariables.map((v) => (
-                              <TooltipProvider key={v.variable} delayDuration={0}>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="text-xs h-7"
-                                      onClick={() => {
-                                        // Insert into the field that's currently focused, or default to message
-                                        const activeElement = document.activeElement;
-                                        if (activeElement?.id === "title_template") {
-                                          insertVariable("title_template", v.variable);
-                                        } else {
-                                          insertVariable("message_template", v.variable);
-                                        }
-                                      }}
-                                    >
-                                      {v.label}
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="text-xs">
-                                      <code className="font-mono">{v.variable}</code> - {v.description}
-                                    </p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            ))}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )}
-
-                    {/* Title Template */}
-                    <FormField
-                      control={form.control}
-                      name="title_template"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Tiêu đề thông báo</FormLabel>
-                          <FormControl>
-                            <Input
-                              id="title_template"
-                              placeholder="VD: Lead mới: $lead_name"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            Tiêu đề ngắn gọn, súc tích. Click biến phía trên để chèn tự động.
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+                    <DefaultContentSection
+                      formControl={form.control}
+                      availableVariables={availableVariables}
+                      onInsertVariable={insertVariable}
+                      titleTemplate={titleTemplate}
+                      messageTemplate={messageTemplate}
                     />
-
-                    {/* Message Template */}
-                    <FormField
-                      control={form.control}
-                      name="message_template"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Nội dung thông báo</FormLabel>
-                          <FormControl>
-                            <Textarea
-                              id="message_template"
-                              placeholder="VD: Lead $lead_name ($lead_phone) đã được phân công cho bạn."
-                              rows={4}
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            Mô tả chi tiết nội dung thông báo. Click biến phía trên để chèn tự động.
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    <Separator />
-
-                    {/* Notification Type */}
-                    <FormField
-                      control={form.control}
-                      name="notification_type"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Loại thông báo</FormLabel>
-                          <Select onValueChange={field.onChange} value={field.value}>
-                            <FormControl>
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {NOTIFICATION_TYPES.map((type) => (
-                                <SelectItem key={type.value} value={type.value}>
-                                  <div className="flex items-center gap-2">
-                                    <Badge className={type.color} variant="secondary">
-                                      {type.label}
-                                    </Badge>
-                                    <span className="text-xs text-muted-foreground">
-                                      - {type.description}
-                                    </span>
-                                  </div>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <FormDescription>
-                            Kiểu hiển thị (ảnh hưởng đến biểu tượng và màu sắc thông báo)
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* Link Template (Optional) */}
-                    <FormField
-                      control={form.control}
-                      name="link_template"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            Liên kết (Tùy chọn)
-                            <HelpTooltip content="Đường dẫn để điều hướng khi click vào thông báo. VD: /leads/$lead_id" />
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="VD: /leads/$lead_id"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            Người dùng sẽ được chuyển đến trang này khi click thông báo
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* Preview */}
-                    {(titleTemplate || messageTemplate) && (
-                      <Card className="bg-muted/50">
-                        <CardHeader className="pb-3">
-                          <CardTitle className="text-sm flex items-center gap-2">
-                            <Bell className="h-4 w-4" />
-                            Xem trước thông báo
-                          </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="bg-background rounded-lg border p-4 space-y-2">
-                            {titleTemplate && (
-                              <p className="font-semibold text-sm">{titleTemplate}</p>
-                            )}
-                            {messageTemplate && (
-                              <p className="text-sm text-muted-foreground">{messageTemplate}</p>
-                            )}
-                            <p className="text-xs text-muted-foreground/70">
-                              Vừa xong
-                            </p>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )}
                   </div>
                 )}
 
