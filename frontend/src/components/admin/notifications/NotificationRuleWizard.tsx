@@ -79,7 +79,7 @@ import {
 // import { useAdminUsersList } from "@/hooks/useAdminUsers"; // Phase 3c: user picker moved to recipient groups
 // import { MultiStepActionEditor } from "./MultiStepActionEditor"; // Phase 3c: replaced by WizardStepRecipientGroups
 import WizardStepRecipientGroups from "./WizardStepRecipientGroups";
-import type { RecipientGroup } from "./wizard-types";
+import type { RecipientGroup, ExternalResolverOption } from "./wizard-types";
 import { mapToAPI, hydrateFromAPI, validateGroups, canSave, createInternalGroup, resetGroupCounter } from "./wizard-utils";
 import NotificationRuleSidebar from "./NotificationRuleSidebar";
 import { TriggerSection } from "./TriggerSection";
@@ -413,6 +413,13 @@ const RECIPIENT_OPTIONS: RecipientOption[] = [
     label: "Nhân viên ký túc xá",
     description: "Gửi cho đội ngũ quản lý KTX",
   },
+];
+
+// Fallback when metadata.external_resolver_types is unavailable
+const EXTERNAL_RESOLVER_FALLBACK: ExternalResolverOption[] = [
+  { value: "lead_contact", label: "Lead (qua Zalo/SMS)", description: "Gửi cho lead qua SĐT" },
+  { value: "admission_contact", label: "Hồ sơ tuyển sinh", description: "Gửi cho ứng viên" },
+  { value: "collaborator_contact", label: "Cộng tác viên", description: "Gửi cho CTV" },
 ];
 
 // NOTIFICATION_TYPES — moved to DefaultContentSection
@@ -1185,11 +1192,7 @@ export function NotificationRuleWizard({
                       groups={recipientGroups}
                       onChange={setRecipientGroups}
                       resolverOptions={dynamicResolverTypes}
-                      externalResolverOptions={metadata?.external_resolver_types ?? [
-                        { value: "lead_contact", label: "Lead (qua Zalo/SMS)", description: "Gửi cho lead qua SĐT" },
-                        { value: "admission_contact", label: "Hồ sơ tuyển sinh", description: "Gửi cho ứng viên" },
-                        { value: "collaborator_contact", label: "Cộng tác viên", description: "Gửi cho CTV" },
-                      ]}
+                      externalResolverOptions={metadata?.external_resolver_types ?? EXTERNAL_RESOLVER_FALLBACK}
                       availableChannels={dynamicChannels.filter((c) => c.status === "live").map((c) => c.value)}
                     />
                   </div>

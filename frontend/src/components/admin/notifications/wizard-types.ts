@@ -3,6 +3,26 @@
 export type RecipientKind = "internal" | "external";
 
 export type ContentMode = "inherit_default" | "inline_override" | "channel_native" | "template_override";
+
+// Shared across RecipientGroupCard, ChannelBranchCard, AddChannelBar
+export const CHANNEL_LABELS: Record<string, string> = {
+  browser: "Trong ứng dụng",
+  email: "Email",
+  zalo: "Zalo",
+  sms: "SMS",
+};
+
+// Fallback channels when metadata unavailable. Only include live channels.
+export const DEFAULT_CHANNELS: Record<RecipientKind, string[]> = {
+  internal: ["browser", "email", "zalo"],
+  external: ["zalo"],
+};
+
+export interface ExternalResolverOption {
+  value: string;
+  label: string;
+  description: string;
+}
 // "template_override" is not authorable from wizard UI (needs template picker),
 // but must be preserved during hydration + save to avoid data loss.
 

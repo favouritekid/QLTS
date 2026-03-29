@@ -2,23 +2,17 @@
 
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
-import type { RecipientGroup } from "./wizard-types";
+import type { RecipientGroup, ExternalResolverOption } from "./wizard-types";
 import type { ResolverTypeOption } from "@/types/api.types";
 import RecipientGroupCard from "./RecipientGroupCard";
 import { createInternalGroup, createExternalGroup } from "./wizard-utils";
-
-interface ExternalResolverOption {
-  value: string;
-  label: string;
-  description: string;
-}
 
 interface WizardStepRecipientGroupsProps {
   groups: RecipientGroup[];
   onChange: (groups: RecipientGroup[]) => void;
   resolverOptions: ResolverTypeOption[];
   externalResolverOptions: ExternalResolverOption[];
-  availableChannels?: string[]; // from metadata
+  availableChannels?: string[];
 }
 
 export default function WizardStepRecipientGroups({

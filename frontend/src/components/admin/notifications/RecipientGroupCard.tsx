@@ -1,24 +1,14 @@
 "use client";
 
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Trash2, Plus } from "lucide-react";
-import type { RecipientGroup, ChannelBranch, RecipientKind } from "./wizard-types";
+import { Trash2 } from "lucide-react";
+import type { RecipientGroup, ChannelBranch, ExternalResolverOption } from "./wizard-types";
+import { DEFAULT_CHANNELS } from "./wizard-types";
 import ChannelBranchCard from "./ChannelBranchCard";
+import ResolverPicker from "./ResolverPicker";
+import AddChannelBar from "./AddChannelBar";
 import type { ResolverTypeOption } from "@/types/api.types";
-
-interface ExternalResolverOption {
-  value: string;
-  label: string;
-  description: string;
-}
 
 interface RecipientGroupCardProps {
   group: RecipientGroup;
@@ -28,21 +18,8 @@ interface RecipientGroupCardProps {
   resolverOptions: ResolverTypeOption[];
   externalResolverOptions: ExternalResolverOption[];
   browserUsedByOtherGroup: boolean;
-  availableChannels?: string[]; // from metadata, defaults to hardcoded
+  availableChannels?: string[];
 }
-
-// Fallback channels when metadata unavailable. Only include live channels.
-const DEFAULT_CHANNELS: Record<RecipientKind, string[]> = {
-  internal: ["browser", "email", "zalo"],
-  external: ["zalo"],
-};
-
-const CHANNEL_DISPLAY: Record<string, string> = {
-  browser: "Trong \u1ee9ng d\u1ee5ng",
-  email: "Email",
-  zalo: "Zalo",
-  sms: "SMS",
-};
 
 export default function RecipientGroupCard({
   group,
@@ -99,15 +76,19 @@ export default function RecipientGroupCard({
     onChange({ ...group, channels: group.channels.filter((_, i) => i !== idx) });
   };
 
-  const kindLabel = group.recipient_kind === "internal" ? "Nh\u00e2n vi\u00ean" : "Kh\u00e1ch h\u00e0ng/\u0110\u1ed1i t\u00e1c";
+  const kindLabel = group.recipient_kind === "internal" ? "Nhân viên" : "Khách hàng/Đối tác";
+  const resolverValue =
+    group.recipient_kind === "internal"
+      ? group.recipient_config?.resolver_type ?? ""
+      : group.external_resolver ?? "";
 
-  // Duplicate channels warning
+  // Duplicate channels: read-only card (created via API)
   if (group._hasDuplicateChannels) {
     return (
       <Card className="border-yellow-300 bg-yellow-50">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center justify-between">
-            <span>Nh\u00f3m nh\u1eadn #{index + 1} ({kindLabel})</span>
+            <span>Nhóm nhận #{index + 1} ({kindLabel})</span>
             <Button variant="ghost" size="sm" onClick={onRemove}>
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -115,7 +96,7 @@ export default function RecipientGroupCard({
         </CardHeader>
         <CardContent>
           <p className="text-sm text-yellow-800">
-            Nh\u00f3m n\u00e0y c\u00f3 c\u1ea5u h\u00ecnh ph\u1ee9c t\u1ea1p (t\u1ea1o qua API). Vui l\u00f2ng ch\u1ec9nh s\u1eeda qua API ho\u1eb7c t\u1ea1o rule m\u1edbi.
+            Nhóm này có cấu hình phức tạp (tạo qua API). Vui lòng chỉnh sửa qua API hoặc tạo rule mới.
           </p>
           <pre className="text-xs mt-2 p-2 bg-white rounded border overflow-auto max-h-32">
             {JSON.stringify(group.channels, null, 2)}
@@ -130,7 +111,7 @@ export default function RecipientGroupCard({
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center justify-between">
           <span>
-            Nh\u00f3m nh\u1eadn #{index + 1} ({kindLabel})
+            Nhóm nhận #{index + 1} ({kindLabel})
           </span>
           <Button variant="ghost" size="sm" onClick={onRemove} className="text-destructive">
             <Trash2 className="h-4 w-4" />
@@ -139,38 +120,17 @@ export default function RecipientGroupCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Resolver picker */}
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">G\u1eedi cho ai?</label>
-          <Select
-            value={
-              group.recipient_kind === "internal"
-                ? group.recipient_config?.resolver_type ?? ""
-                : group.external_resolver ?? ""
-            }
-            onValueChange={handleResolverChange}
-          >
-            <SelectTrigger className="mt-1">
-              <SelectValue placeholder="Ch\u1ecdn ng\u01b0\u1eddi nh\u1eadn..." />
-            </SelectTrigger>
-            <SelectContent>
-              {group.recipient_kind === "internal"
-                ? resolverOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))
-                : externalResolverOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <ResolverPicker
+          recipientKind={group.recipient_kind}
+          value={resolverValue}
+          onChange={handleResolverChange}
+          resolverOptions={resolverOptions}
+          externalResolverOptions={externalResolverOptions}
+        />
 
         {/* Channel list */}
         <div className="space-y-2">
-          <label className="text-xs font-medium text-muted-foreground">G\u1eedi qua k\u00eanh n\u00e0o?</label>
+          <label className="text-xs font-medium text-muted-foreground">Gửi qua kênh nào?</label>
           {group.channels.map((branch, idx) => (
             <ChannelBranchCard
               key={`${branch.channel}-${idx}`}
@@ -182,23 +142,12 @@ export default function RecipientGroupCard({
           ))}
 
           {/* Add channel buttons */}
-          <div className="flex flex-wrap gap-2 pt-1">
-            {channelList
-              .filter((ch) => !activeChannels.has(ch))
-              .filter((ch) => !(ch === "browser" && browserUsedByOtherGroup))
-              .map((ch) => (
-                <Button
-                  key={ch}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => addChannel(ch)}
-                  className="text-xs"
-                >
-                  <Plus className="h-3 w-3 mr-1" />
-                  {CHANNEL_DISPLAY[ch] ?? ch}
-                </Button>
-              ))}
-          </div>
+          <AddChannelBar
+            channelList={channelList}
+            activeChannels={activeChannels}
+            browserUsedByOtherGroup={browserUsedByOtherGroup}
+            onAddChannel={addChannel}
+          />
         </div>
       </CardContent>
     </Card>

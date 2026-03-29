@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
 import type { ChannelBranch, ContentMode, RecipientKind } from "./wizard-types";
+import { CHANNEL_LABELS } from "./wizard-types";
 
 interface ChannelBranchCardProps {
   branch: ChannelBranch;
@@ -14,11 +15,10 @@ interface ChannelBranchCardProps {
   onRemove: () => void;
 }
 
-const CHANNEL_LABELS: Record<string, string> = {
-  browser: "Trong \u1ee9ng d\u1ee5ng (th\u1eddi gian th\u1ef1c)",
-  email: "Email",
-  zalo: "Zalo",
-  sms: "SMS",
+// Extended labels for inline display (browser gets extra context)
+const CHANNEL_LABELS_EXTENDED: Record<string, string> = {
+  ...CHANNEL_LABELS,
+  browser: "Trong ứng dụng (thời gian thực)",
 };
 
 export default function ChannelBranchCard({
@@ -52,7 +52,7 @@ export default function ChannelBranchCard({
     <div className="rounded-lg border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium">
-          {CHANNEL_LABELS[branch.channel] ?? branch.channel}
+          {CHANNEL_LABELS_EXTENDED[branch.channel] ?? branch.channel}
         </span>
         <Button variant="ghost" size="sm" onClick={onRemove} className="h-6 w-6 p-0">
           <X className="h-3 w-3" />
