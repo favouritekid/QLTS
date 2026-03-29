@@ -31,9 +31,10 @@ interface RecipientGroupCardProps {
   availableChannels?: string[]; // from metadata, defaults to hardcoded
 }
 
+// Fallback channels when metadata unavailable. Only include live channels.
 const DEFAULT_CHANNELS: Record<RecipientKind, string[]> = {
-  internal: ["browser", "email", "zalo", "sms"],
-  external: ["zalo", "sms"],
+  internal: ["browser", "email", "zalo"],
+  external: ["zalo"],
 };
 
 const CHANNEL_DISPLAY: Record<string, string> = {
