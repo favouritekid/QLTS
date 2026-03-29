@@ -47,7 +47,7 @@ import {
 } from "@/components/ui/form";
 // Input, Textarea — moved to DefaultContentSection
 // Select, SelectContent, SelectItem, SelectTrigger, SelectValue — moved to DefaultContentSection
-import { Switch } from "@/components/ui/switch";
+// Switch — moved to FinalPreviewSection
 // import { Checkbox } from "@/components/ui/checkbox"; // Phase 3c: channels moved to recipient groups
 // Badge — moved to DefaultContentSection
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -84,6 +84,7 @@ import { mapToAPI, hydrateFromAPI, validateGroups, canSave, createInternalGroup,
 import NotificationRuleSidebar from "./NotificationRuleSidebar";
 import { TriggerSection } from "./TriggerSection";
 import DefaultContentSection from "./DefaultContentSection";
+import FinalPreviewSection from "./FinalPreviewSection";
 
 // ============================================
 // TYPES & INTERFACES
@@ -1200,80 +1201,20 @@ export function NotificationRuleWizard({
 
                 {/* STEP 4: Preview & Save (Phase 3c) */}
                 {currentStep === 4 && (
-                  <div className="space-y-4 animate-in fade-in-0 slide-in-from-right-4 duration-300">
-                    <div>
-                      <h3 className="text-lg font-semibold">Kiểm tra & Lưu</h3>
-                      <p className="text-sm text-muted-foreground">Xác nhận cấu hình trước khi lưu</p>
-                    </div>
-
-                    {/* Validation errors */}
-                    {previewErrors.length > 0 && (
-                      <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 space-y-1">
-                        <p className="text-sm font-medium text-destructive">Cần sửa trước khi lưu:</p>
-                        {previewErrors.map((err, i) => (
-                          <p key={i} className="text-sm text-destructive">{"\u2022"} {err}</p>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Narrative summary */}
-                    <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
-                      <p className="text-sm font-medium">Tóm tắt quy tắc:</p>
-
-                      <p className="text-sm">
-                        <span className="font-medium">Khi:</span>{" "}
-                        {selectedEventData?.label ?? form.getValues("event")}
-                        {conditionEnabled && conditionField && (
-                          <span className="text-muted-foreground">
-                            {" "}(với điều kiện {conditionField} {conditionOperator} &quot;{conditionValue}&quot;)
-                          </span>
-                        )}
-                      </p>
-
-                      <p className="text-sm">
-                        <span className="font-medium">Nội dung:</span>{" "}
-                        {form.getValues("title_template") || "(chưa soạn)"}
-                      </p>
-
-                      <div className="text-sm space-y-2">
-                        <p className="font-medium">Gửi cho:</p>
-                        {recipientGroups.map((group) => (
-                          <div key={group.group_key} className="pl-4 border-l-2 border-primary/30 space-y-0.5">
-                            <p className="font-medium">{group.label}</p>
-                            {group.channels.map((ch, j) => {
-                              const channelName = ch.channel === "browser" ? "Trong ứng dụng"
-                                : ch.channel === "email" ? "Email"
-                                : ch.channel === "zalo" ? "Zalo"
-                                : ch.channel;
-                              const modeLabel = ch.content_mode === "inherit_default" ? "nội dung mặc định"
-                                : ch.content_mode === "inline_override" ? "nội dung riêng"
-                                : ch.content_mode === "template_override" ? "template riêng"
-                                : "template kênh";
-                              return (
-                                <p key={j} className="text-muted-foreground">
-                                  {"\u2192"} Qua {channelName} ({modeLabel})
-                                  {ch.delay_minutes > 0 && `, sau ${ch.delay_minutes} phút`}
-                                </p>
-                              );
-                            })}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Enable toggle */}
-                    <div className="flex items-center gap-3 rounded-lg border p-3">
-                      <Switch
-                        checked={form.getValues("enabled")}
-                        onCheckedChange={(checked) => form.setValue("enabled", checked)}
-                      />
-                      <div>
-                        <p className="text-sm font-medium">Kích hoạt ngay</p>
-                        <p className="text-xs text-muted-foreground">
-                          Rule sẽ bắt đầu gửi thông báo khi sự kiện xảy ra. Tắt để tạo bản nháp.
-                        </p>
-                      </div>
-                    </div>
+                  <div className="animate-in fade-in-0 slide-in-from-right-4 duration-300">
+                    <FinalPreviewSection
+                      previewErrors={previewErrors}
+                      eventLabel={selectedEventData?.label ?? form.getValues("event")}
+                      titleTemplate={form.getValues("title_template") || ""}
+                      recipientGroups={recipientGroups}
+                      condition={
+                        conditionEnabled && conditionField
+                          ? { field: conditionField, operator: conditionOperator, value: conditionValue }
+                          : null
+                      }
+                      enabled={form.getValues("enabled")}
+                      onEnabledChange={(checked) => form.setValue("enabled", checked)}
+                    />
                   </div>
                 )}
 
