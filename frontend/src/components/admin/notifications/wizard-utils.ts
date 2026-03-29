@@ -34,7 +34,7 @@ export function mapToAPI(
         content_mode: branch.content_mode,
         content_override: branch.content_override,
         branch_key: `${group.group_key}_${branch.channel}`,
-        template_code: null,
+        template_code: branch.template_code ?? null,
         config: branch.config,
       };
 
@@ -132,6 +132,7 @@ export function hydrateFromAPI(rule: NotificationRule): WizardState {
       content_mode:
         (action.content_mode as ChannelBranch["content_mode"]) ??
         "inherit_default",
+      template_code: action.template_code ?? null,
       content_override: action.content_override as ChannelBranch["content_override"],
       config: action.config,
     };
@@ -154,6 +155,7 @@ export function hydrateFromAPI(rule: NotificationRule): WizardState {
               channel: a.channel,
               delay_minutes: a.delay_minutes,
               content_mode: "inherit_default" as const,
+              template_code: a.template_code ?? null,
               content_override: null,
               config: a.config,
             }))
@@ -162,6 +164,7 @@ export function hydrateFromAPI(rule: NotificationRule): WizardState {
                 channel: "browser",
                 delay_minutes: 0,
                 content_mode: "inherit_default" as const,
+                template_code: null,
                 content_override: null,
                 config: null,
               },
@@ -331,6 +334,7 @@ export function createInternalGroup(
         channel: "browser",
         delay_minutes: 0,
         content_mode: "inherit_default",
+        template_code: null,
         content_override: null,
         config: null,
       },
@@ -353,6 +357,7 @@ export function createExternalGroup(
         channel: "zalo",
         delay_minutes: 0,
         content_mode: "channel_native",
+        template_code: null,
         content_override: null,
         config: { zalo_template_id: "", zalo_template_data: {} },
       },

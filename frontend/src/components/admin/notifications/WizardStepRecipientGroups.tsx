@@ -18,6 +18,7 @@ interface WizardStepRecipientGroupsProps {
   onChange: (groups: RecipientGroup[]) => void;
   resolverOptions: ResolverTypeOption[];
   externalResolverOptions: ExternalResolverOption[];
+  availableChannels?: string[]; // from metadata
 }
 
 export default function WizardStepRecipientGroups({
@@ -25,6 +26,7 @@ export default function WizardStepRecipientGroups({
   onChange,
   resolverOptions,
   externalResolverOptions,
+  availableChannels,
 }: WizardStepRecipientGroupsProps) {
   // Check if browser is used by any group
   const browserUsedGroups = new Set<number>();
@@ -80,6 +82,7 @@ export default function WizardStepRecipientGroups({
           browserUsedByOtherGroup={
             browserUsedGroups.size > 0 && !browserUsedGroups.has(idx)
           }
+          availableChannels={availableChannels}
         />
       ))}
 

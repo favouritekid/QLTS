@@ -62,27 +62,37 @@ export default function ChannelBranchCard({
       {/* Content mode selection — only for internal groups */}
       {!isExternal && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">N\u1ed9i dung</Label>
-          <div className="flex gap-3">
-            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-              <input
-                type="radio"
-                name={`mode_${branch.channel}`}
-                checked={mode === "inherit_default"}
-                onChange={() => setMode("inherit_default")}
-              />
-              M\u1eb7c \u0111\u1ecbnh
-            </label>
-            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-              <input
-                type="radio"
-                name={`mode_${branch.channel}`}
-                checked={mode === "inline_override"}
-                onChange={() => setMode("inline_override")}
-              />
-              N\u1ed9i dung ri\u00eang
-            </label>
-          </div>
+          <Label className="text-xs text-muted-foreground">Nội dung</Label>
+
+          {/* template_override: read-only preservation (not authorable from wizard) */}
+          {mode === "template_override" ? (
+            <div className="rounded border border-yellow-200 bg-yellow-50 p-2 text-xs text-yellow-800">
+              <p className="font-medium">Template override (chỉ đọc)</p>
+              <p>Template code: <code>{branch.template_code ?? "N/A"}</code></p>
+              <p className="mt-1 text-yellow-600">Chỉnh sửa template override qua API. Nếu đổi mode, template_code sẽ bị mất.</p>
+            </div>
+          ) : (
+            <div className="flex gap-3">
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input
+                  type="radio"
+                  name={`mode_${branch.channel}`}
+                  checked={mode === "inherit_default"}
+                  onChange={() => setMode("inherit_default")}
+                />
+                Mặc định
+              </label>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input
+                  type="radio"
+                  name={`mode_${branch.channel}`}
+                  checked={mode === "inline_override"}
+                  onChange={() => setMode("inline_override")}
+                />
+                Nội dung riêng
+              </label>
+            </div>
+          )}
 
           {/* Inline override fields */}
           {mode === "inline_override" && (

@@ -2,13 +2,15 @@
 
 export type RecipientKind = "internal" | "external";
 
-export type ContentMode = "inherit_default" | "inline_override" | "channel_native";
-// "template_override" deferred to future (needs template picker UI)
+export type ContentMode = "inherit_default" | "inline_override" | "channel_native" | "template_override";
+// "template_override" is not authorable from wizard UI (needs template picker),
+// but must be preserved during hydration + save to avoid data loss.
 
 export interface ChannelBranch {
   channel: string; // "browser" | "email" | "zalo" | "sms"
   delay_minutes: number;
   content_mode: ContentMode;
+  template_code: string | null; // preserved for template_override mode
   content_override: {
     title_template?: string;
     message_template?: string;

@@ -28,9 +28,10 @@ interface RecipientGroupCardProps {
   resolverOptions: ResolverTypeOption[];
   externalResolverOptions: ExternalResolverOption[];
   browserUsedByOtherGroup: boolean;
+  availableChannels?: string[]; // from metadata, defaults to hardcoded
 }
 
-const AVAILABLE_CHANNELS: Record<RecipientKind, string[]> = {
+const DEFAULT_CHANNELS: Record<RecipientKind, string[]> = {
   internal: ["browser", "email", "zalo", "sms"],
   external: ["zalo", "sms"],
 };
@@ -43,9 +44,12 @@ export default function RecipientGroupCard({
   resolverOptions,
   externalResolverOptions,
   browserUsedByOtherGroup,
+  availableChannels: availableChannelsProp,
 }: RecipientGroupCardProps) {
   const activeChannels = new Set(group.channels.map((c) => c.channel));
-  const availableChannels = AVAILABLE_CHANNELS[group.recipient_kind];
+  const channelList = group.recipient_kind === "external"
+    ? (availableChannelsProp ?? DEFAULT_CHANNELS.external).filter((ch) => ch !== "browser")
+    : (availableChannelsProp ?? DEFAULT_CHANNELS.internal);
 
   const handleResolverChange = (value: string) => {
     if (group.recipient_kind === "internal") {
@@ -70,6 +74,7 @@ export default function RecipientGroupCard({
       channel,
       delay_minutes: 0,
       content_mode: group.recipient_kind === "external" ? "channel_native" : "inherit_default",
+      template_code: null,
       content_override: null,
       config: channel === "zalo" ? { zalo_template_id: "", zalo_template_data: {} } : null,
     };
@@ -170,7 +175,7 @@ export default function RecipientGroupCard({
 
           {/* Add channel buttons */}
           <div className="flex flex-wrap gap-2 pt-1">
-            {availableChannels
+            {channelList
               .filter((ch) => !activeChannels.has(ch))
               .filter((ch) => !(ch === "browser" && browserUsedByOtherGroup))
               .map((ch) => (

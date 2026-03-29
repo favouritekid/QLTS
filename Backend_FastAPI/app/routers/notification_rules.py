@@ -53,11 +53,19 @@ class ChannelInfo(BaseModel):
     status: str  # "live" | "planned"
 
 
+class ExternalResolverTypeOption(BaseModel):
+    """External recipient resolver option for Zalo/SMS delivery"""
+    value: str
+    label: str
+    description: str
+
+
 class MetadataResponse(BaseModel):
     """Complete metadata for building notification rules dynamically"""
-    events: List[Dict[str, Any]]  # ✅ FIX: Changed from Dict to List
+    events: List[Dict[str, Any]]
     channels: List[ChannelInfo]
     resolver_types: List[ResolverTypeOption]
+    external_resolver_types: List[ExternalResolverTypeOption]
     operators: List[OperatorOption]
 
 

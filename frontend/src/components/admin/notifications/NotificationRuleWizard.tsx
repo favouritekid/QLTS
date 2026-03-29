@@ -1617,6 +1617,7 @@ export function NotificationRuleWizard({
                         { value: "admission_contact", label: "Hồ sơ tuyển sinh", description: "Gửi cho ứng viên" },
                         { value: "collaborator_contact", label: "Cộng tác viên", description: "Gửi cho CTV" },
                       ]}
+                      availableChannels={dynamicChannels.map((c) => c.value)}
                     />
                   </div>
                 )}
