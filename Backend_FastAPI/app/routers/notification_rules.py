@@ -134,6 +134,23 @@ async def get_notification_metadata(
                 "description": "Gửi nhưng loại trừ người thực hiện hành động"
             }
         ],
+        "external_resolver_types": [
+            {
+                "value": "lead_contact",
+                "label": "Lead (qua Zalo/SMS)",
+                "description": "Gửi cho lead qua số điện thoại/Zalo"
+            },
+            {
+                "value": "admission_contact",
+                "label": "Hồ sơ tuyển sinh (qua Zalo/SMS)",
+                "description": "Gửi cho ứng viên qua số điện thoại/Zalo"
+            },
+            {
+                "value": "collaborator_contact",
+                "label": "Cộng tác viên (qua Zalo/SMS)",
+                "description": "Gửi cho cộng tác viên qua số điện thoại/Zalo"
+            }
+        ],
         "operators": [
             {"value": "eq", "label": "Equals (=)"},
             {"value": "ne", "label": "Not Equals (≠)"},

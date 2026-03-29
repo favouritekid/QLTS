@@ -2,8 +2,11 @@
 /**
  * ✅ PHASE 2.4: Notification Rule Wizard
  *
- * Simplified wizard-style interface for creating notification rules.
- * Replaces the complex NotificationRuleForm with a 4-step guided process.
+ * Phase 3c: 4-step wizard for notification rules.
+ * Step 1: Trigger (event + condition)
+ * Step 2: Default content (title/message/type/link)
+ * Step 3: Recipient groups (internal + external, each with channel branches)
+ * Step 4: Preview & Save
  *
  * Features:
  * - Auto-listing events from backend constants
@@ -32,9 +35,8 @@ import {
   MessageSquare,
   Sparkles,
   Check,
-  ChevronsUpDown,
+  // ChevronsUpDown, // Phase 3c: user picker removed
   Zap,
-  Layers, // ✅ NOTIFICATION 2.0: Step 5 icon
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -65,7 +67,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Checkbox } from "@/components/ui/checkbox";
+// import { Checkbox } from "@/components/ui/checkbox"; // Phase 3c: channels moved to recipient groups
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -76,21 +78,16 @@ import {
 } from "@/components/ui/tooltip";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+// Phase 3c: Command/Popover moved to recipient group cards
+// import {
+//   Command, CommandEmpty, CommandGroup,
+//   CommandInput, CommandItem, CommandList,
+// } from "@/components/ui/command";
+// import {
+//   Popover, PopoverContent, PopoverTrigger,
+// } from "@/components/ui/popover";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+// import { cn } from "@/lib/utils"; // Phase 3c: user picker removed
 
 import {
   useCreateNotificationRule,
@@ -98,8 +95,11 @@ import {
   useNotificationRule,
   useNotificationMetadata, // ✅ NOTIFICATION 2.0: Dynamic metadata
 } from "@/hooks/useNotificationRules";
-import { useAdminUsersList } from "@/hooks/useAdminUsers";
-import { MultiStepActionEditor } from "./MultiStepActionEditor"; // ✅ NOTIFICATION 2.0
+// import { useAdminUsersList } from "@/hooks/useAdminUsers"; // Phase 3c: user picker moved to recipient groups
+// import { MultiStepActionEditor } from "./MultiStepActionEditor"; // Phase 3c: replaced by WizardStepRecipientGroups
+import WizardStepRecipientGroups from "./WizardStepRecipientGroups";
+import type { RecipientGroup } from "./wizard-types";
+import { mapToAPI, hydrateFromAPI, validateGroups, createInternalGroup, resetGroupCounter } from "./wizard-utils";
 
 // ============================================
 // TYPES & INTERFACES
@@ -605,11 +605,10 @@ function HelpTooltip({ content }: { content: string }) {
  */
 function StepIndicator({ currentStep }: { currentStep: number }) {
   const steps = [
-    { number: 1, label: "Sự kiện", icon: Bell },
-    { number: 2, label: "Người nhận", icon: Users },
-    { number: 3, label: "Điều kiện", icon: Filter },
-    { number: 4, label: "Nội dung", icon: MessageSquare },
-    { number: 5, label: "Quy trình", icon: Layers }, // ✅ NOTIFICATION 2.0: Multi-step workflow
+    { number: 1, label: "Khi nào gửi?", icon: Bell },
+    { number: 2, label: "Nội dung mặc định", icon: MessageSquare },
+    { number: 3, label: "Nhóm nhận", icon: Users },
+    { number: 4, label: "Xem trước & Lưu", icon: Check },
   ];
 
   return (
@@ -678,9 +677,9 @@ export function NotificationRuleWizard({
   const [currentStep, setCurrentStep] = useState(1);
   const isEditMode = !!ruleId;
 
-  // User selection state (for specific_users recipient)
-  const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
-  const [userPickerOpen, setUserPickerOpen] = useState(false);
+  // User selection state — kept for potential future use in recipient group specific_users
+  // const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
+  // const [userPickerOpen, setUserPickerOpen] = useState(false);
 
   // Condition builder state
   const [conditionEnabled, setConditionEnabled] = useState(false);
@@ -690,11 +689,12 @@ export function NotificationRuleWizard({
   const [isCompoundCondition, setIsCompoundCondition] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
 
-  // Fetch users for user picker
-  const { data: usersData } = useAdminUsersList({
-    page: 1,
-    page_size: 100,
-  });
+  // Phase 3c: Recipient groups state
+  const [recipientGroups, setRecipientGroups] = useState<RecipientGroup[]>([createInternalGroup()]);
+  const [previewErrors, setPreviewErrors] = useState<string[]>([]);
+
+  // Phase 3c: User picker moved into recipient group cards
+  // const { data: usersData } = useAdminUsersList({ page: 1, page_size: 100 });
 
   // ✅ NOTIFICATION 2.0: Fetch metadata for dynamic builder
   const { data: metadata } = useNotificationMetadata();
@@ -777,11 +777,15 @@ export function NotificationRuleWizard({
       }
     }
     setIsHydrated(true);
+
+    // Phase 3c: Hydrate recipient groups from rule actions
+    const wizardState = hydrateFromAPI(existingRule);
+    setRecipientGroups(wizardState.recipientGroups);
   }, [existingRule, isEditMode, form]);
 
   // Watch form values for dynamic behavior
   const selectedEvent = form.watch("event");
-  const selectedRecipient = form.watch("recipient_config.resolver_type") as string;
+  // const selectedRecipient = form.watch("recipient_config.resolver_type") as string; // Phase 3c: moved to recipient groups
   const titleTemplate = form.watch("title_template");
   const messageTemplate = form.watch("message_template");
 
@@ -935,29 +939,49 @@ export function NotificationRuleWizard({
 
   const onSubmit = async (data: FormValues) => {
     try {
-      // Auto-derive channels from actions (backend ignores channels field)
-      const derivedChannels = [...new Set((data.actions || []).map(a => a.channel))];
-      const submitData = { ...data, channels: derivedChannels.length > 0 ? derivedChannels : ["browser"] };
+      // Phase 3c: Validate recipient groups
+      const errors = validateGroups(recipientGroups);
+      if (errors.length > 0) {
+        setPreviewErrors(errors);
+        setCurrentStep(4); // Go to preview to show errors
+        return;
+      }
+
+      const trigger = {
+        event: data.event,
+        condition: data.condition,
+        enabled: data.enabled,
+      };
+      const defaultContent = {
+        title_template: data.title_template,
+        message_template: data.message_template,
+        notification_type: data.notification_type,
+        link_template: data.link_template ?? "",
+      };
+
+      const submitData = mapToAPI(recipientGroups, defaultContent, trigger);
 
       if (isEditMode && ruleId) {
         await updateMutation.mutateAsync({
           ruleId,
           data: submitData,
         });
-        toast.success("✅ Đã cập nhật quy tắc thông báo");
+        toast.success("Đã cập nhật quy tắc thông báo");
       } else {
         await createMutation.mutateAsync(submitData);
-        toast.success("✅ Đã tạo quy tắc thông báo mới");
+        toast.success("Đã tạo quy tắc thông báo mới");
       }
       onOpenChange(false);
       form.reset();
+      setRecipientGroups([createInternalGroup()]);
+      resetGroupCounter();
       setCurrentStep(1);
       onSuccess?.();
     } catch {
       toast.error(
         isEditMode
-          ? "❌ Không thể cập nhật quy tắc"
-          : "❌ Không thể tạo quy tắc"
+          ? "Không thể cập nhật quy tắc"
+          : "Không thể tạo quy tắc"
       );
     }
   };
@@ -965,7 +989,7 @@ export function NotificationRuleWizard({
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   const nextStep = () => {
-    setCurrentStep((prev) => Math.min(prev + 1, 5)); // ✅ NOTIFICATION 2.0: Changed from 4 to 5
+    setCurrentStep((prev) => Math.min(prev + 1, 4)); // ✅ Phase 3c: 4-step wizard
   };
 
   const prevStep = () => {
@@ -993,8 +1017,7 @@ export function NotificationRuleWizard({
           </div>
         ) : (
           <>
-            {/* Step Indicator */}
-            {/* ✅ NOTIFICATION 2.0: 5 steps total */}
+            {/* Step Indicator — Phase 3c: 4 steps */}
             <StepIndicator currentStep={currentStep} />
 
             {/* Quick Templates */}
@@ -1205,192 +1228,14 @@ export function NotificationRuleWizard({
                         </FormItem>
                       )}
                     />
-                  </div>
-                )}
 
-                {/* STEP 2: Recipient Selection */}
-                {currentStep === 2 && (
-                  <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
-                    <div>
-                      <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                        <Users className="h-5 w-5 text-primary" />
-                        Bước 2: Ai sẽ nhận thông báo?
-                        <HelpTooltip content="Xác định ai sẽ nhận thông báo khi sự kiện xảy ra. Ví dụ: cán bộ phụ trách, manager đơn vị, v.v." />
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Xác định người nhận thông báo
-                      </p>
-                    </div>
-
-                    <FormField
-                      control={form.control}
-                      name="recipient_config.resolver_type"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Chọn người nhận</FormLabel>
-                          <FormControl>
-                            <RadioGroup
-                              value={field.value as string}
-                              onValueChange={(value) => {
-                                field.onChange(value);
-                                form.setValue("recipient_config", {
-                                  resolver_type: value,
-                                  params: {},
-                                });
-                              }}
-                            >
-                              <div className="space-y-3">
-                                {/* ✅ NOTIFICATION 2.0: Dynamic resolvers */}
-                                {dynamicResolverTypes.map((option) => (
-                                  <Card
-                                    key={option.value}
-                                    className={`
-                                      cursor-pointer transition-colors
-                                      ${field.value === option.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"}
-                                    `}
-                                    onClick={() => {
-                                      field.onChange(option.value);
-                                      form.setValue("recipient_config", {
-                                        resolver_type: option.value,
-                                        params: {},
-                                      });
-                                    }}
-                                  >
-                                    <CardContent className="pt-4">
-                                      <div className="flex items-start space-x-3">
-                                        <RadioGroupItem value={option.value} id={option.value} />
-                                        <div className="flex-1">
-                                          <label
-                                            htmlFor={option.value}
-                                            className="text-sm font-medium cursor-pointer block"
-                                          >
-                                            {option.label}
-                                          </label>
-                                          <p className="text-xs text-muted-foreground mt-1">
-                                            {option.description}
-                                          </p>
-                                        </div>
-                                      </div>
-                                    </CardContent>
-                                  </Card>
-                                ))}
-                              </div>
-                            </RadioGroup>
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* User Picker - Only show when specific_users is selected */}
-                    {selectedRecipient === "specific_users" && (
-                      <Card>
-                        <CardHeader>
-                          <CardTitle className="text-sm">Chọn người dùng cụ thể</CardTitle>
-                          <CardDescription>Chọn người sẽ nhận thông báo từ danh sách</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          <Popover open={userPickerOpen} onOpenChange={setUserPickerOpen}>
-                            <PopoverTrigger asChild>
-                              <Button
-                                variant="outline"
-                                role="combobox"
-                                aria-expanded={userPickerOpen}
-                                className="w-full justify-between"
-                              >
-                                {selectedUserIds.length > 0
-                                  ? `${selectedUserIds.length} người được chọn`
-                                  : "Chọn người dùng..."}
-                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-full p-0" align="start">
-                              <Command>
-                                <CommandInput placeholder="Tìm theo tên hoặc username..." />
-                                <CommandList>
-                                  <CommandEmpty>Không tìm thấy người dùng</CommandEmpty>
-                                  <CommandGroup>
-                                    {usersData?.users?.map((user) => (
-                                      <CommandItem
-                                        key={user.id}
-                                        value={`${user.username} ${user.full_name || ""}`}
-                                        onSelect={() => {
-                                          const newIds = selectedUserIds.includes(user.id)
-                                            ? selectedUserIds.filter((id) => id !== user.id)
-                                            : [...selectedUserIds, user.id];
-                                          setSelectedUserIds(newIds);
-                                          form.setValue("recipient_config", {
-                                            resolver_type: "specific_users",
-                                            params: { user_ids: newIds },
-                                          });
-                                        }}
-                                      >
-                                        <Check
-                                          className={cn(
-                                            "mr-2 h-4 w-4",
-                                            selectedUserIds.includes(user.id)
-                                              ? "opacity-100"
-                                              : "opacity-0"
-                                          )}
-                                        />
-                                        <div className="flex-1">
-                                          <div className="font-medium text-sm">
-                                            {user.full_name || user.username}
-                                          </div>
-                                          <div className="text-xs text-muted-foreground">
-                                            @{user.username} • {user.role} {/* architecture-allow presentation */}
-                                          </div>
-                                        </div>
-                                      </CommandItem>
-                                    ))}
-                                  </CommandGroup>
-                                </CommandList>
-                              </Command>
-                            </PopoverContent>
-                          </Popover>
-
-                          {/* Display selected users */}
-                          {selectedUserIds.length > 0 && (
-                            <div className="flex flex-wrap gap-2">
-                              {selectedUserIds.map((userId) => {
-                                const user = usersData?.users?.find((u) => u.id === userId);
-                                if (!user) return null;
-                                return (
-                                  <Badge key={userId} variant="secondary" className="gap-1">
-                                    {user.full_name || user.username}
-                                    <button
-                                      type="button"
-                                      className="ml-1 hover:text-destructive"
-                                      onClick={() => {
-                                        const newIds = selectedUserIds.filter((id) => id !== userId);
-                                        setSelectedUserIds(newIds);
-                                        form.setValue("recipient_config", {
-                                          resolver_type: "specific_users",
-                                          params: { user_ids: newIds },
-                                        });
-                                      }}
-                                    >
-                                      ×
-                                    </button>
-                                  </Badge>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </CardContent>
-                      </Card>
-                    )}
-                  </div>
-                )}
-
-                {/* STEP 3: Conditions (Optional) */}
-                {currentStep === 3 && (
-                  <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
+                    {/* Condition Builder (merged from old Step 3) */}
+                    <Separator />
                     <div>
                       <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
                         <Filter className="h-5 w-5 text-primary" />
-                        Bước 3: Điều kiện (Tùy chọn)
-                        <HelpTooltip content="Thêm điều kiện để chỉ gửi thông báo khi thỏa mãn tiêu chí. Ví dụ: chỉ gửi khi người thực hiện là Manager. Bạn có thể bỏ qua bước này." />
+                        Điều kiện (Tùy chọn)
+                        <HelpTooltip content="Thêm điều kiện để chỉ gửi thông báo khi thỏa mãn tiêu chí. Ví dụ: chỉ gửi khi người thực hiện là Manager. Bạn có thể bỏ qua." />
                       </h3>
                       <p className="text-sm text-muted-foreground">
                         Chỉ gửi thông báo khi đáp ứng điều kiện (có thể bỏ qua)
@@ -1466,9 +1311,6 @@ export function NotificationRuleWizard({
                                     )}
                                   </SelectContent>
                                 </Select>
-                                <p className="text-xs text-muted-foreground">
-                                  💡 Chọn trường dữ liệu từ danh sách. Các trường có sẵn phụ thuộc vào sự kiện đã chọn.
-                                </p>
                               </div>
 
                               {/* Condition Operator */}
@@ -1500,7 +1342,7 @@ export function NotificationRuleWizard({
                                 </Select>
                               </div>
 
-                              {/* Condition Value - Phase 2: type-aware */}
+                              {/* Condition Value */}
                               <div className="space-y-2">
                                 <label className="text-sm font-medium">Giá trị</label>
                                 {(() => {
@@ -1519,7 +1361,7 @@ export function NotificationRuleWizard({
                                         }}
                                       >
                                         <SelectTrigger>
-                                          <SelectValue placeholder="Ch��n giá trị..." />
+                                          <SelectValue placeholder="Chọn giá trị..." />
                                         </SelectTrigger>
                                         <SelectContent>
                                           <SelectItem value="true">Có (true)</SelectItem>
@@ -1543,16 +1385,13 @@ export function NotificationRuleWizard({
                                     />
                                   );
                                 })()}
-                                <p className="text-xs text-muted-foreground">
-                                  💡 VD: actor.role eq &ldquo;manager&rdquo;, event.new_status_id eq &ldquo;contacted&rdquo;
-                                </p>
                               </div>
 
                               {/* Preview */}
                               {conditionField && conditionValue && (
                                 <div className="bg-info-50 border-l-2 border-info-400 px-3 py-2 rounded">
                                   <p className="text-xs font-medium text-info-900 mb-1">
-                                    📝 Điều kiện hiện tại:
+                                    Điều kiện hiện tại:
                                   </p>
                                   <code className="text-xs text-info-700">
                                     {conditionField} {conditionOperator} &ldquo;{conditionValue}&rdquo;
@@ -1564,48 +1403,17 @@ export function NotificationRuleWizard({
                         </CardContent>
                       </Card>
                     )}
-
-                    {/* Example scenarios */}
-                    <Card className="bg-muted/50">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-sm">💡 Ví dụ điều kiện phổ biến</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="space-y-2 text-xs">
-                          <div className="flex items-start gap-2">
-                            <span className="text-muted-foreground">•</span>
-                            <div>
-                              <p className="font-medium">Chỉ gửi khi Manager tạo lead:</p>
-                              <code className="text-muted-foreground">actor.role eq &ldquo;manager&rdquo;</code>
-                            </div>
-                          </div>
-                          <div className="flex items-start gap-2">
-                            <span className="text-muted-foreground">•</span>
-                            <div>
-                              <p className="font-medium">Chỉ gửi khi thanh toán trên 10 triệu:</p>
-                              <code className="text-muted-foreground">amount {">"} 10000000</code>
-                            </div>
-                          </div>
-                          <div className="flex items-start gap-2">
-                            <span className="text-muted-foreground">•</span>
-                            <div>
-                              <p className="font-medium">Chỉ gửi khi hồ sơ được duyệt:</p>
-                              <code className="text-muted-foreground">event.new_status_id eq &ldquo;approved&rdquo;</code>
-                            </div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
                   </div>
                 )}
 
-                {/* STEP 4: Content & Template */}
-                {currentStep === 4 && (
+
+                {/* STEP 2: Content & Template (Phase 3c: was old Step 4) */}
+                {currentStep === 2 && (
                   <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
                     <div>
                       <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
                         <MessageSquare className="h-5 w-5 text-primary" />
-                        Bước 4: Nội dung thông báo
+                        Bước 2: Nội dung mặc định
                         <HelpTooltip content="Tạo tiêu đề và nội dung thông báo. Click vào các biến bên dưới để chèn thông tin tự động như tên lead, số điện thoại, v.v." />
                       </h3>
                       <p className="text-sm text-muted-foreground">
@@ -1770,92 +1578,6 @@ export function NotificationRuleWizard({
                       )}
                     />
 
-                    {/* Channels */}
-                    <FormField
-                      control={form.control}
-                      name="channels"
-                      render={() => (
-                        <FormItem>
-                          <FormLabel>
-                            Kênh gửi
-                            <HelpTooltip content="Chọn cách thức gửi thông báo: trong trình duyệt, qua email, hoặc SMS" />
-                          </FormLabel>
-                          <FormDescription>
-                            Chọn các kênh để gửi thông báo
-                          </FormDescription>
-                          <p className="text-xs text-muted-foreground mb-2">
-                            Kênh gửi được tự động xác định từ các bước hành động (Step 5). Cấu hình dưới đây chỉ mang tính tham khảo.
-                          </p>
-                          <div className="space-y-2">
-                            {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
-                            {dynamicChannels.map((channel) => (
-                              <FormField
-                                key={channel.value}
-                                control={form.control}
-                                name="channels"
-                                render={({ field }) => (
-                                  <FormItem className={`flex items-start space-x-3 space-y-0 rounded-lg border p-3 ${channel.status === "planned" ? "opacity-60" : ""}`}>
-                                    <FormControl>
-                                      <Checkbox
-                                        checked={field.value?.includes(channel.value)}
-                                        disabled={channel.status === "planned"}
-                                        onCheckedChange={(checked) => {
-                                          const current = field.value || [];
-                                          if (checked) {
-                                            field.onChange([...current, channel.value]);
-                                          } else {
-                                            field.onChange(
-                                              current.filter((v) => v !== channel.value)
-                                            );
-                                          }
-                                        }}
-                                      />
-                                    </FormControl>
-                                    <div className="flex-1">
-                                      <FormLabel className={`text-sm font-medium ${channel.status === "planned" ? "text-muted-foreground" : "cursor-pointer"}`}>
-                                        {channel.label}
-                                        {channel.status === "planned" && (
-                                          <span className="ml-2 inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                                            Planned
-                                          </span>
-                                        )}
-                                      </FormLabel>
-                                      <p className="text-xs text-muted-foreground">
-                                        {channel.description}
-                                      </p>
-                                    </div>
-                                  </FormItem>
-                                )}
-                              />
-                            ))}
-                          </div>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* Enabled Switch */}
-                    <FormField
-                      control={form.control}
-                      name="enabled"
-                      render={({ field }) => (
-                        <FormItem className="flex items-center justify-between rounded-lg border p-4">
-                          <div className="space-y-0.5">
-                            <FormLabel className="text-base">Kích hoạt ngay</FormLabel>
-                            <FormDescription>
-                              Bật quy tắc này ngay sau khi tạo
-                            </FormDescription>
-                          </div>
-                          <FormControl>
-                            <Switch
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                            />
-                          </FormControl>
-                        </FormItem>
-                      )}
-                    />
-
                     {/* Preview */}
                     {(titleTemplate || messageTemplate) && (
                       <Card className="bg-muted/50">
@@ -1883,37 +1605,70 @@ export function NotificationRuleWizard({
                   </div>
                 )}
 
-                {/* STEP 5: Multi-Step Workflow ✅ NOTIFICATION 2.0 */}
-                {currentStep === 5 && (
+                {/* STEP 3: Recipient Groups (Phase 3c) */}
+                {currentStep === 3 && (
                   <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
-                    <div>
-                      <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                        <Layers className="h-5 w-5 text-primary" />
-                        Bước 5: Quy trình gửi thông báo
-                        <HelpTooltip content="Cấu hình quy trình gửi thông báo qua nhiều kênh với độ trễ khác nhau. Ví dụ: Gửi Browser ngay, sau 30 phút gửi Email nhắc nhở." />
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Tạo quy trình gửi thông báo qua nhiều bước với các kênh khác nhau
+                    <WizardStepRecipientGroups
+                      groups={recipientGroups}
+                      onChange={setRecipientGroups}
+                      resolverOptions={dynamicResolverTypes}
+                      externalResolverOptions={metadata?.external_resolver_types ?? [
+                        { value: "lead_contact", label: "Lead (qua Zalo/SMS)", description: "Gửi cho lead qua SĐT" },
+                        { value: "admission_contact", label: "Hồ sơ tuyển sinh", description: "Gửi cho ứng viên" },
+                        { value: "collaborator_contact", label: "Cộng tác viên", description: "Gửi cho CTV" },
+                      ]}
+                    />
+                  </div>
+                )}
+
+                {/* STEP 4: Preview & Save (Phase 3c) */}
+                {currentStep === 4 && (
+                  <div className="space-y-4 animate-in fade-in-0 slide-in-from-right-4 duration-300">
+                    <h3 className="text-lg font-semibold">Xem trước & Lưu</h3>
+
+                    {/* Validation errors */}
+                    {previewErrors.length > 0 && (
+                      <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 space-y-1">
+                        {previewErrors.map((err, i) => (
+                          <p key={i} className="text-sm text-destructive">{err}</p>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Summary */}
+                    <div className="rounded-lg border p-4 space-y-3">
+                      <p className="text-sm">
+                        <strong>Sự kiện:</strong> {selectedEventData?.label ?? form.getValues("event")}
                       </p>
+                      {conditionEnabled && (
+                        <p className="text-sm">
+                          <strong>Điều kiện:</strong> {conditionField} {conditionOperator} {conditionValue}
+                        </p>
+                      )}
+                      <p className="text-sm">
+                        <strong>Tiêu đề:</strong> {form.getValues("title_template")}
+                      </p>
+                      <p className="text-sm font-medium mt-2">Nhóm nhận:</p>
+                      {recipientGroups.map((group) => (
+                        <div key={group.group_key} className="pl-4 border-l-2 text-sm space-y-1">
+                          <p><strong>{group.label}</strong> ({group.recipient_kind === "internal" ? "nội bộ" : "bên ngoài"})</p>
+                          {group.channels.map((ch, j) => (
+                            <p key={j} className="text-muted-foreground">
+                              {"\u2192"} {ch.channel}: {ch.content_mode === "inherit_default" ? "nội dung mặc định" : ch.content_mode === "inline_override" ? "nội dung riêng" : "template riêng"}
+                              {ch.delay_minutes > 0 ? ` (delay ${ch.delay_minutes} phút)` : ""}
+                            </p>
+                          ))}
+                        </div>
+                      ))}
                     </div>
 
-                    <FormField
-                      control={form.control}
-                      name="actions"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormControl>
-                            {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
-                            <MultiStepActionEditor
-                              actions={field.value || []}
-                              onChange={field.onChange}
-                              availableChannels={(metadata?.channels || dynamicChannels).filter((ch) => ch.status === "live").map((ch) => ch.value)}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={form.getValues("enabled")}
+                        onCheckedChange={(checked) => form.setValue("enabled", checked)}
+                      />
+                      <span className="text-sm">Kích hoạt rule ngay</span>
+                    </div>
                   </div>
                 )}
 
@@ -1944,12 +1699,16 @@ export function NotificationRuleWizard({
                     >
                       Hủy
                     </Button>
-                    {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
-                    {currentStep < 5 ? (
+                    {/* Phase 3c: 4-step wizard */}
+                    {currentStep < 4 ? (
                       <Button
                         type="button"
                         onClick={nextStep}
-                        disabled={!selectedEvent && currentStep === 1}
+                        disabled={
+                          (currentStep === 1 && !selectedEvent) ||
+                          (currentStep === 2 && (!form.getValues("title_template") || !form.getValues("message_template"))) ||
+                          (currentStep === 3 && recipientGroups.length === 0)
+                        }
                       >
                         Tiếp theo
                         <ChevronRight className="ml-2 h-4 w-4" />

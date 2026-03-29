@@ -576,10 +576,17 @@ export interface ChannelInfo {
   status: "live" | "planned";
 }
 
+export interface ExternalResolverOption {
+  value: string;
+  label: string;
+  description: string;
+}
+
 export interface NotificationMetadata {
   events: EventMetadata[];
   channels: ChannelInfo[];
   resolver_types: ResolverTypeOption[];
+  external_resolver_types: ExternalResolverOption[];
   operators: OperatorOption[];
 }
 

@@ -1,0 +1,365 @@
+// wizard-utils.ts — Phase 3c data mapping between UI state and backend API
+import type {
+  NotificationRule,
+  NotificationRuleCreate,
+  NotificationActionCreate,
+} from "@/types/api.types";
+import type {
+  RecipientGroup,
+  ChannelBranch,
+  WizardState,
+  WizardTrigger,
+  WizardDefaultContent,
+} from "./wizard-types";
+
+// ============================================================================
+// UI → API: flatten recipient groups into actions array
+// ============================================================================
+
+export function mapToAPI(
+  groups: RecipientGroup[],
+  defaultContent: WizardDefaultContent,
+  trigger: WizardTrigger,
+): NotificationRuleCreate {
+  let step = 0;
+  const actions: NotificationActionCreate[] = [];
+
+  for (const group of groups) {
+    for (const branch of group.channels) {
+      step++;
+      const action: NotificationActionCreate = {
+        step,
+        channel: branch.channel,
+        delay_minutes: branch.delay_minutes,
+        content_mode: branch.content_mode,
+        content_override: branch.content_override,
+        branch_key: `${group.group_key}_${branch.channel}`,
+        template_code: null,
+        config: branch.config,
+      };
+
+      if (group.recipient_kind === "internal") {
+        action.recipient_config = group.recipient_config;
+      } else {
+        // External: resolver goes in config, NOT recipient_config
+        action.recipient_config = null;
+        action.config = {
+          ...(branch.config || {}),
+          external_resolver: group.external_resolver,
+        };
+        action.content_mode = "channel_native";
+      }
+
+      actions.push(action);
+    }
+  }
+
+  // rule.recipient_config = first internal group (safe fallback for loader)
+  const firstInternal = groups.find((g) => g.recipient_kind === "internal");
+  const ruleRecipientConfig = firstInternal?.recipient_config ?? {
+    resolver_type: "lead_owner",
+    params: {},
+  };
+
+  return {
+    event: trigger.event,
+    condition: trigger.condition,
+    title_template: defaultContent.title_template,
+    message_template: defaultContent.message_template,
+    notification_type: defaultContent.notification_type,
+    link_template: defaultContent.link_template || undefined,
+    channels: [...new Set(actions.map((a) => a.channel))],
+    recipient_config: ruleRecipientConfig,
+    enabled: trigger.enabled,
+    actions,
+  };
+}
+
+// ============================================================================
+// API → UI: group actions into recipient groups
+// ============================================================================
+
+export function hydrateFromAPI(rule: NotificationRule): WizardState {
+  const groupMap = new Map<string, RecipientGroup>();
+
+  for (const action of rule.actions) {
+    const isExternal =
+      action.config != null &&
+      typeof action.config === "object" &&
+      "external_resolver" in action.config;
+
+    const groupKey = isExternal
+      ? `ext_${(action.config as Record<string, unknown>).external_resolver}`
+      : JSON.stringify(action.recipient_config ?? rule.recipient_config);
+
+    if (!groupMap.has(groupKey)) {
+      if (isExternal) {
+        groupMap.set(groupKey, {
+          group_key:
+            action.branch_key?.replace(/_[^_]+$/, "") ??
+            `ext_${groupMap.size + 1}`,
+          label: getExternalResolverLabel(
+            String(
+              (action.config as Record<string, unknown>).external_resolver,
+            ),
+          ),
+          recipient_kind: "external",
+          recipient_config: null,
+          external_resolver: String(
+            (action.config as Record<string, unknown>).external_resolver,
+          ),
+          channels: [],
+        });
+      } else {
+        const rc = (action.recipient_config ??
+          rule.recipient_config) as Record<string, unknown>;
+        groupMap.set(groupKey, {
+          group_key:
+            action.branch_key?.replace(/_[^_]+$/, "") ??
+            `group_${groupMap.size + 1}`,
+          label: getResolverLabel(rc),
+          recipient_kind: "internal",
+          recipient_config: rc as RecipientGroup["recipient_config"],
+          external_resolver: null,
+          channels: [],
+        });
+      }
+    }
+
+    const branch: ChannelBranch = {
+      channel: action.channel,
+      delay_minutes: action.delay_minutes,
+      content_mode:
+        (action.content_mode as ChannelBranch["content_mode"]) ??
+        "inherit_default",
+      content_override: action.content_override as ChannelBranch["content_override"],
+      config: action.config,
+    };
+
+    groupMap.get(groupKey)!.channels.push(branch);
+  }
+
+  // Legacy: no actions → 1 group from rule
+  if (groupMap.size === 0) {
+    const rc = rule.recipient_config as Record<string, unknown>;
+    groupMap.set("default", {
+      group_key: "default",
+      label: getResolverLabel(rc),
+      recipient_kind: "internal",
+      recipient_config: rc as RecipientGroup["recipient_config"],
+      external_resolver: null,
+      channels:
+        rule.actions.length > 0
+          ? rule.actions.map((a) => ({
+              channel: a.channel,
+              delay_minutes: a.delay_minutes,
+              content_mode: "inherit_default" as const,
+              content_override: null,
+              config: a.config,
+            }))
+          : [
+              {
+                channel: "browser",
+                delay_minutes: 0,
+                content_mode: "inherit_default" as const,
+                content_override: null,
+                config: null,
+              },
+            ],
+    });
+  }
+
+  // Detect unsupported: multiple actions same channel in same group
+  for (const group of groupMap.values()) {
+    const channelCounts = new Map<string, number>();
+    for (const ch of group.channels) {
+      channelCounts.set(ch.channel, (channelCounts.get(ch.channel) || 0) + 1);
+    }
+    group._hasDuplicateChannels = [...channelCounts.values()].some(
+      (c) => c > 1,
+    );
+  }
+
+  return {
+    trigger: {
+      event: rule.event,
+      condition: rule.condition,
+      enabled: rule.enabled,
+    },
+    defaultContent: {
+      title_template: rule.title_template,
+      message_template: rule.message_template,
+      notification_type: rule.notification_type,
+      link_template: rule.link_template ?? "",
+    },
+    recipientGroups: [...groupMap.values()],
+  };
+}
+
+// ============================================================================
+// Label helpers
+// ============================================================================
+
+const RESOLVER_LABELS: Record<string, string> = {
+  lead_owner: "Officer phụ trách lead",
+  unit_staff: "Nhân viên cùng đơn vị",
+  unit_managers: "Quản lý đơn vị",
+  all_admins: "Tất cả Admin",
+  all_users: "Tất cả người dùng",
+  specific_users: "Người dùng cụ thể",
+  dorm_residents: "Sinh viên ký túc",
+  dorm_staff: "Nhân viên ký túc",
+};
+
+const EXTERNAL_RESOLVER_LABELS: Record<string, string> = {
+  lead_contact: "Lead (qua Zalo/SMS)",
+  admission_contact: "Hồ sơ tuyển sinh (qua Zalo/SMS)",
+  collaborator_contact: "Cộng tác viên (qua Zalo/SMS)",
+};
+
+export function getResolverLabel(
+  rc: Record<string, unknown> | null,
+): string {
+  if (!rc) return "Không xác định";
+  const rt = String(rc.resolver_type ?? "");
+  return RESOLVER_LABELS[rt] ?? rt;
+}
+
+export function getExternalResolverLabel(resolver: string): string {
+  return EXTERNAL_RESOLVER_LABELS[resolver] ?? resolver;
+}
+
+// ============================================================================
+// Validation helpers
+// ============================================================================
+
+export function validateGroups(groups: RecipientGroup[]): string[] {
+  const errors: string[] = [];
+
+  if (groups.length === 0) {
+    errors.push("Cần ít nhất 1 nhóm nhận");
+    return errors;
+  }
+
+  // Browser count across all groups
+  let browserCount = 0;
+  const branchKeys = new Set<string>();
+
+  for (const group of groups) {
+    if (group._hasDuplicateChannels) {
+      errors.push(
+        `Nhóm "${group.label}" có kênh trùng lặp — không thể lưu từ wizard`,
+      );
+    }
+
+    if (group.channels.length === 0) {
+      errors.push(`Nhóm "${group.label}" cần ít nhất 1 kênh`);
+    }
+
+    if (group.recipient_kind === "internal" && !group.recipient_config?.resolver_type) {
+      errors.push(`Nhóm "${group.label}" cần chọn người nhận`);
+    }
+
+    if (group.recipient_kind === "external" && !group.external_resolver) {
+      errors.push(`Nhóm "${group.label}" cần chọn loại người nhận bên ngoài`);
+    }
+
+    for (const branch of group.channels) {
+      if (branch.channel === "browser") browserCount++;
+
+      const bk = `${group.group_key}_${branch.channel}`;
+      if (branchKeys.has(bk)) {
+        errors.push(`Branch key trùng: ${bk}`);
+      }
+      branchKeys.add(bk);
+
+      if (branch.content_mode === "inline_override") {
+        const co = branch.content_override;
+        if (!co?.title_template && !co?.message_template) {
+          errors.push(
+            `Kênh ${branch.channel} trong nhóm "${group.label}" cần nội dung riêng`,
+          );
+        }
+      }
+
+      if (branch.content_mode === "channel_native") {
+        if (
+          !branch.config ||
+          !(branch.config as Record<string, unknown>).zalo_template_id
+        ) {
+          errors.push(
+            `Kênh ${branch.channel} trong nhóm "${group.label}" cần Zalo Template ID`,
+          );
+        }
+      }
+    }
+  }
+
+  if (browserCount > 1) {
+    errors.push("Chỉ được phép 1 kênh Browser cho mỗi rule");
+  }
+
+  return errors;
+}
+
+export function canSave(groups: RecipientGroup[]): boolean {
+  return (
+    groups.length > 0 &&
+    !groups.some((g) => g._hasDuplicateChannels) &&
+    validateGroups(groups).length === 0
+  );
+}
+
+// ============================================================================
+// Factory helpers
+// ============================================================================
+
+let groupCounter = 0;
+
+export function createInternalGroup(
+  resolverType: string = "lead_owner",
+): RecipientGroup {
+  groupCounter++;
+  return {
+    group_key: `group_${groupCounter}`,
+    label: RESOLVER_LABELS[resolverType] ?? resolverType,
+    recipient_kind: "internal",
+    recipient_config: { resolver_type: resolverType, params: {} },
+    external_resolver: null,
+    channels: [
+      {
+        channel: "browser",
+        delay_minutes: 0,
+        content_mode: "inherit_default",
+        content_override: null,
+        config: null,
+      },
+    ],
+  };
+}
+
+export function createExternalGroup(
+  externalResolver: string = "lead_contact",
+): RecipientGroup {
+  groupCounter++;
+  return {
+    group_key: `ext_${groupCounter}`,
+    label: EXTERNAL_RESOLVER_LABELS[externalResolver] ?? externalResolver,
+    recipient_kind: "external",
+    recipient_config: null,
+    external_resolver: externalResolver,
+    channels: [
+      {
+        channel: "zalo",
+        delay_minutes: 0,
+        content_mode: "channel_native",
+        content_override: null,
+        config: { zalo_template_id: "", zalo_template_data: {} },
+      },
+    ],
+  };
+}
+
+export function resetGroupCounter(): void {
+  groupCounter = 0;
+}
