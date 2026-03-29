@@ -564,10 +564,17 @@ export function NotificationRuleWizard({
   const [highestStepVisited, setHighestStepVisited] = useState(1);
   const isEditMode = !!ruleId;
 
+  // Tracks which steps user attempted to advance from (triggers inline errors)
+  const [attemptedSteps, setAttemptedSteps] = useState<Set<number>>(new Set());
+
   const goToStep = (step: number) => {
     setCurrentStep(step);
     setHighestStepVisited((prev) => Math.max(prev, step));
   };
+
+  // Show inline errors when user has attempted this step or been past it
+  const shouldShowStepErrors = (step: number) =>
+    attemptedSteps.has(step) || highestStepVisited > step;
 
   // User selection state — kept for potential future use in recipient group specific_users
   // const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
@@ -868,6 +875,7 @@ export function NotificationRuleWizard({
       resetGroupCounter();
       setCurrentStep(1);
       setHighestStepVisited(1);
+      setAttemptedSteps(new Set());
       router.push("/admin/notification-rules");
     } catch {
       toast.error(
@@ -879,14 +887,6 @@ export function NotificationRuleWizard({
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
-
-  const nextStep = () => {
-    goToStep(Math.min(currentStep + 1, 4));
-  };
-
-  const prevStep = () => {
-    goToStep(Math.max(currentStep - 1, 1));
-  };
 
   // Unified validation — single source of truth for nav, sidebar, preview
   const stepErrors = validateAllSteps(
@@ -901,6 +901,41 @@ export function NotificationRuleWizard({
     : currentStep === 3 ? stepErrors.step3
     : [];
   const sidebarCanSave = allErrors.length === 0;
+
+  // Next button: always clickable, marks step as attempted, triggers inline errors
+  const handleNextClick = () => {
+    setAttemptedSteps((prev) => new Set(prev).add(currentStep));
+    // Trigger RHF validation for step 2 fields (populates FormMessage)
+    if (currentStep === 2) {
+      form.trigger(["title_template", "message_template"]);
+    }
+    if (currentStepErrors.length === 0) {
+      goToStep(Math.min(currentStep + 1, 4));
+    }
+  };
+
+  const prevStep = () => {
+    goToStep(Math.max(currentStep - 1, 1));
+  };
+
+  // Step click handler: backward always ok, forward requires prior steps valid
+  const handleStepClick = (targetStep: number) => {
+    if (targetStep <= currentStep) {
+      goToStep(targetStep);
+      return;
+    }
+    // Forward: check all prior steps, land on first error step
+    for (let s = 1; s < targetStep; s++) {
+      const key = `step${s}` as keyof typeof stepErrors;
+      if (stepErrors[key]?.length > 0) {
+        setAttemptedSteps((prev) => new Set(prev).add(s));
+        if (s === 2) form.trigger(["title_template", "message_template"]);
+        goToStep(s);
+        return;
+      }
+    }
+    goToStep(targetStep);
+  };
 
   return (
     <div className="container max-w-6xl mx-auto py-6 space-y-6">
@@ -930,7 +965,7 @@ export function NotificationRuleWizard({
             {/* Step Indicator — clickable with validation state */}
             <StepIndicator
               currentStep={currentStep}
-              onStepClick={goToStep}
+              onStepClick={handleStepClick}
               stepErrors={stepErrors}
               highestStepVisited={highestStepVisited}
             />
@@ -1131,9 +1166,16 @@ export function NotificationRuleWizard({
                       updateCondition={updateCondition}
                       selectedEventMetadata={selectedEventMetadata}
                     />
+                    {/* Inline validation for step 1 */}
+                    {shouldShowStepErrors(1) && stepErrors.step1.length > 0 && (
+                      <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 space-y-1">
+                        {stepErrors.step1.map((err, i) => (
+                          <p key={i} className="text-sm text-destructive">{"\u2022"} {err}</p>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
-
 
                 {/* STEP 2: Content & Template (Phase 3c: was old Step 4) */}
                 {currentStep === 2 && (
@@ -1157,7 +1199,7 @@ export function NotificationRuleWizard({
                       resolverOptions={dynamicResolverTypes}
                       externalResolverOptions={metadata?.external_resolver_types ?? EXTERNAL_RESOLVER_FALLBACK}
                       availableChannels={dynamicChannels.filter((c) => c.status === "live").map((c) => c.value)}
-                      validationErrors={highestStepVisited > 3 ? stepErrors.step3 : undefined}
+                      validationErrors={shouldShowStepErrors(3) ? stepErrors.step3 : undefined}
                     />
                   </div>
                 )}
@@ -1208,9 +1250,7 @@ export function NotificationRuleWizard({
                     {currentStep < 4 ? (
                       <Button
                         type="button"
-                        onClick={nextStep}
-                        disabled={currentStepErrors.length > 0}
-                        title={currentStepErrors.length > 0 ? currentStepErrors[0] : undefined}
+                        onClick={handleNextClick}
                       >
                         Tiếp theo
                         <ChevronRight className="ml-2 h-4 w-4" />

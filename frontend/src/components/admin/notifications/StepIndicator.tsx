@@ -22,6 +22,13 @@ function getStepErrorCount(stepNumber: number, errors: StepErrors): number {
   return errors[key]?.length ?? 0;
 }
 
+function allPriorStepsValid(target: number, errors: StepErrors): boolean {
+  for (let s = 1; s < target; s++) {
+    if (getStepErrorCount(s, errors) > 0) return false;
+  }
+  return true;
+}
+
 export default function StepIndicator({
   currentStep,
   onStepClick,
@@ -34,7 +41,10 @@ export default function StepIndicator({
         const Icon = step.icon;
         const isActive = currentStep === step.number;
         const isVisited = step.number <= highestStepVisited;
-        const isAccessible = step.number <= highestStepVisited + 1;
+
+        // Forward nav: only accessible if all prior steps are valid
+        const isAccessible = isVisited ||
+          (step.number === highestStepVisited + 1 && allPriorStepsValid(step.number, stepErrors));
         const canClick = isAccessible && !isActive;
 
         // Error state: only for visited, non-active steps with validation
