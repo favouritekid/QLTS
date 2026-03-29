@@ -12,6 +12,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   Bell,
@@ -64,7 +65,6 @@ import {
   useNotificationMetadata,
 } from "@/hooks/useNotificationRules";
 import type { NotificationRule } from "@/types/api.types";
-import { NotificationRuleWizard } from "./NotificationRuleWizard";
 
 // Event category configuration
 const EVENT_CATEGORIES = {
@@ -161,9 +161,8 @@ interface NotificationRuleListProps {
 }
 
 export function NotificationRuleList({ initialData }: NotificationRuleListProps) {
+  const router = useRouter();
   const [deleteRuleId, setDeleteRuleId] = useState<number | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingRuleId, setEditingRuleId] = useState<number | undefined>(undefined);
 
   // Filters
   const [search, setSearch] = useState("");
@@ -282,18 +281,11 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
   };
 
   const handleCreateClick = () => {
-    setEditingRuleId(undefined);
-    setFormOpen(true);
+    router.push("/admin/notification-rules/new");
   };
 
   const handleEditClick = (ruleId: number) => {
-    setEditingRuleId(ruleId);
-    setFormOpen(true);
-  };
-
-  const handleFormClose = () => {
-    setFormOpen(false);
-    setEditingRuleId(undefined);
+    router.push(`/admin/notification-rules/${ruleId}/edit`);
   };
 
   const toggleSection = (category: CategoryKey) => {
@@ -654,12 +646,6 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Create/Edit Wizard Dialog */}
-      <NotificationRuleWizard
-        ruleId={editingRuleId}
-        open={formOpen}
-        onOpenChange={handleFormClose}
-      />
     </div>
   );
 }

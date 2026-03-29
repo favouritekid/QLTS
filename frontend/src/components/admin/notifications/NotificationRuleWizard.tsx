@@ -20,6 +20,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
@@ -40,14 +41,6 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Form,
   FormControl,
@@ -663,17 +656,12 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
 
 interface NotificationRuleWizardProps {
   ruleId?: number;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSuccess?: () => void;
 }
 
 export function NotificationRuleWizard({
   ruleId,
-  open,
-  onOpenChange,
-  onSuccess,
 }: NotificationRuleWizardProps) {
+  const router = useRouter();
   const [currentStep, setCurrentStep] = useState(1);
   const isEditMode = !!ruleId;
 
@@ -971,12 +959,11 @@ export function NotificationRuleWizard({
         await createMutation.mutateAsync(submitData);
         toast.success("Đã tạo quy tắc thông báo mới");
       }
-      onOpenChange(false);
       form.reset();
       setRecipientGroups([createInternalGroup()]);
       resetGroupCounter();
       setCurrentStep(1);
-      onSuccess?.();
+      router.push("/admin/notification-rules");
     } catch {
       toast.error(
         isEditMode
@@ -997,21 +984,25 @@ export function NotificationRuleWizard({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" />
+    <div className="container max-w-4xl mx-auto py-6 space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">
             {isEditMode ? "Chỉnh sửa quy tắc thông báo" : "Tạo quy tắc thông báo mới"}
-          </DialogTitle>
-          <DialogDescription>
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
             {isEditMode
-              ? "Cập nhật cấu hình quy tắc thông báo"
-              : "Hướng dẫn từng bước để tạo quy tắc thông báo tự động"}
-          </DialogDescription>
-        </DialogHeader>
+              ? "Cập nhật cấu hình gửi thông báo"
+              : "Cấu hình khi nào, gửi cho ai, qua kênh nào"}
+          </p>
+        </div>
+        <Button variant="outline" onClick={() => router.back()}>
+          Quay lại
+        </Button>
+      </div>
 
-        {loadingRule && isEditMode ? (
+      {loadingRule && isEditMode ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
@@ -1729,7 +1720,7 @@ export function NotificationRuleWizard({
                 )}
 
                 {/* Navigation Footer */}
-                <DialogFooter className="flex items-center justify-between sm:justify-between border-t pt-4">
+                <div className="flex items-center justify-between pt-6 border-t mt-6">
                   <div>
                     {currentStep > 1 && (
                       <Button
@@ -1747,10 +1738,7 @@ export function NotificationRuleWizard({
                     <Button
                       type="button"
                       variant="ghost"
-                      onClick={() => {
-                        onOpenChange(false);
-                        setCurrentStep(1);
-                      }}
+                      onClick={() => router.back()}
                       disabled={isPending}
                     >
                       Hủy
@@ -1789,12 +1777,11 @@ export function NotificationRuleWizard({
                       </Button>
                     )}
                   </div>
-                </DialogFooter>
+                </div>
               </form>
             </Form>
           </>
         )}
-      </DialogContent>
-    </Dialog>
+    </div>
   );
 }
