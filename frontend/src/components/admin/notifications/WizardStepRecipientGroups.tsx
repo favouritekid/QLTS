@@ -57,16 +57,16 @@ export default function WizardStepRecipientGroups({
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-lg font-semibold">Nh\u00f3m nh\u1eadn</h3>
+        <h3 className="text-lg font-semibold">Ng\u01b0\u1eddi nh\u1eadn & K\u00eanh g\u1eedi</h3>
         <p className="text-sm text-muted-foreground">
-          C\u1ea5u h\u00ecnh ai s\u1ebd nh\u1eadn th\u00f4ng b\u00e1o v\u00e0 qua k\u00eanh n\u00e0o. M\u1ed7i nh\u00f3m c\u00f3 th\u1ec3 c\u00f3 ng\u01b0\u1eddi nh\u1eadn v\u00e0 n\u1ed9i dung kh\u00e1c nhau.
+          Ch\u1ecdn ai s\u1ebd nh\u1eadn th\u00f4ng b\u00e1o v\u00e0 g\u1eedi qua k\u00eanh n\u00e0o. B\u1ea1n c\u00f3 th\u1ec3 t\u1ea1o nhi\u1ec1u nh\u00f3m v\u1edbi ng\u01b0\u1eddi nh\u1eadn kh\u00e1c nhau.
         </p>
       </div>
 
       {groups.length === 0 && (
         <div className="rounded-lg border-2 border-dashed p-8 text-center text-muted-foreground">
-          <p className="text-sm">Ch\u01b0a c\u00f3 nh\u00f3m nh\u1eadn n\u00e0o.</p>
-          <p className="text-xs mt-1">Th\u00eam nh\u00f3m nh\u1eadn \u0111\u1ec3 b\u1eaft \u0111\u1ea7u c\u1ea5u h\u00ecnh.</p>
+          <p className="text-sm">Ch\u01b0a c\u00f3 nh\u00f3m ng\u01b0\u1eddi nh\u1eadn n\u00e0o.</p>
+          <p className="text-xs mt-1">B\u1ea5m n\u00fat b\u00ean d\u01b0\u1edbi \u0111\u1ec3 th\u00eam nh\u00f3m ng\u01b0\u1eddi nh\u1eadn \u0111\u1ea7u ti\u00ean.</p>
         </div>
       )}
 
@@ -89,11 +89,11 @@ export default function WizardStepRecipientGroups({
       <div className="flex gap-2">
         <Button variant="outline" size="sm" onClick={addInternalGroup}>
           <Plus className="h-4 w-4 mr-1" />
-          Th\u00eam nh\u00f3m n\u1ed9i b\u1ed9
+          Th\u00eam nh\u00f3m nh\u00e2n vi\u00ean
         </Button>
         <Button variant="outline" size="sm" onClick={addExternalGroup}>
           <Plus className="h-4 w-4 mr-1" />
-          Th\u00eam nh\u00f3m b\u00ean ngo\u00e0i
+          Th\u00eam nh\u00f3m kh\u00e1ch h\u00e0ng/\u0111\u1ed1i t\u00e1c
         </Button>
       </div>
     </div>

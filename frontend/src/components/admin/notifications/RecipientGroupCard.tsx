@@ -36,6 +36,13 @@ const DEFAULT_CHANNELS: Record<RecipientKind, string[]> = {
   external: ["zalo", "sms"],
 };
 
+const CHANNEL_DISPLAY: Record<string, string> = {
+  browser: "Trong \u1ee9ng d\u1ee5ng",
+  email: "Email",
+  zalo: "Zalo",
+  sms: "SMS",
+};
+
 export default function RecipientGroupCard({
   group,
   index,
@@ -91,7 +98,7 @@ export default function RecipientGroupCard({
     onChange({ ...group, channels: group.channels.filter((_, i) => i !== idx) });
   };
 
-  const kindLabel = group.recipient_kind === "internal" ? "N\u1ed9i b\u1ed9" : "B\u00ean ngo\u00e0i";
+  const kindLabel = group.recipient_kind === "internal" ? "Nh\u00e2n vi\u00ean" : "Kh\u00e1ch h\u00e0ng/\u0110\u1ed1i t\u00e1c";
 
   // Duplicate channels warning
   if (group._hasDuplicateChannels) {
@@ -107,7 +114,7 @@ export default function RecipientGroupCard({
         </CardHeader>
         <CardContent>
           <p className="text-sm text-yellow-800">
-            Nh\u00f3m n\u00e0y c\u00f3 k\u00eanh tr\u00f9ng l\u1eb7p (t\u1ea1o qua API). Kh\u00f4ng th\u1ec3 ch\u1ec9nh s\u1eeda t\u1eeb wizard.
+            Nh\u00f3m n\u00e0y c\u00f3 c\u1ea5u h\u00ecnh ph\u1ee9c t\u1ea1p (t\u1ea1o qua API). Vui l\u00f2ng ch\u1ec9nh s\u1eeda qua API ho\u1eb7c t\u1ea1o rule m\u1edbi.
           </p>
           <pre className="text-xs mt-2 p-2 bg-white rounded border overflow-auto max-h-32">
             {JSON.stringify(group.channels, null, 2)}
@@ -132,7 +139,7 @@ export default function RecipientGroupCard({
       <CardContent className="space-y-4">
         {/* Resolver picker */}
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Ng\u01b0\u1eddi nh\u1eadn</label>
+          <label className="text-xs font-medium text-muted-foreground">G\u1eedi cho ai?</label>
           <Select
             value={
               group.recipient_kind === "internal"
@@ -162,7 +169,7 @@ export default function RecipientGroupCard({
 
         {/* Channel list */}
         <div className="space-y-2">
-          <label className="text-xs font-medium text-muted-foreground">K\u00eanh g\u1eedi</label>
+          <label className="text-xs font-medium text-muted-foreground">G\u1eedi qua k\u00eanh n\u00e0o?</label>
           {group.channels.map((branch, idx) => (
             <ChannelBranchCard
               key={`${branch.channel}-${idx}`}
@@ -187,7 +194,7 @@ export default function RecipientGroupCard({
                   className="text-xs"
                 >
                   <Plus className="h-3 w-3 mr-1" />
-                  {ch}
+                  {CHANNEL_DISPLAY[ch] ?? ch}
                 </Button>
               ))}
           </div>

@@ -605,10 +605,10 @@ function HelpTooltip({ content }: { content: string }) {
  */
 function StepIndicator({ currentStep }: { currentStep: number }) {
   const steps = [
-    { number: 1, label: "Khi nào gửi?", icon: Bell },
-    { number: 2, label: "Nội dung mặc định", icon: MessageSquare },
-    { number: 3, label: "Nhóm nhận", icon: Users },
-    { number: 4, label: "Xem trước & Lưu", icon: Check },
+    { number: 1, label: "Sự kiện & Điều kiện", icon: Bell },
+    { number: 2, label: "Soạn nội dung", icon: MessageSquare },
+    { number: 3, label: "Người nhận & Kênh gửi", icon: Users },
+    { number: 4, label: "Kiểm tra & Lưu", icon: Check },
   ];
 
   return (
@@ -1026,11 +1026,11 @@ export function NotificationRuleWizard({
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Zap className="h-4 w-4 text-info-600" />
-                    Kịch bản mẫu - Bắt đầu nhanh
+                    Cấu hình nhanh
                     <HelpTooltip content="Click vào kịch bản mẫu để tự động điền form theo các trường hợp phổ biến" />
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    Click để áp dụng kịch bản và tùy chỉnh sau
+                    Chọn một ví dụ để bắt đầu, sau đó tùy chỉnh theo nhu cầu
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1441,7 +1441,7 @@ export function NotificationRuleWizard({
                       <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
                         <MessageSquare className="h-5 w-5 text-primary" />
                         Bước 2: Nội dung mặc định
-                        <HelpTooltip content="Tạo tiêu đề và nội dung thông báo. Click vào các biến bên dưới để chèn thông tin tự động như tên lead, số điện thoại, v.v." />
+                        <HelpTooltip content="Nhấp vào biến phía dưới để chèn vào nội dung. Biến sẽ tự động thay thế khi gửi thông báo." />
                       </h3>
                       <p className="text-sm text-muted-foreground">
                         Soạn tiêu đề và nội dung thông báo
@@ -1574,7 +1574,7 @@ export function NotificationRuleWizard({
                             </SelectContent>
                           </Select>
                           <FormDescription>
-                            Mức độ ưu tiên của thông báo
+                            Kiểu hiển thị (ảnh hưởng đến biểu tượng và màu sắc thông báo)
                           </FormDescription>
                           <FormMessage />
                         </FormItem>
@@ -1652,50 +1652,78 @@ export function NotificationRuleWizard({
                 {/* STEP 4: Preview & Save (Phase 3c) */}
                 {currentStep === 4 && (
                   <div className="space-y-4 animate-in fade-in-0 slide-in-from-right-4 duration-300">
-                    <h3 className="text-lg font-semibold">Xem trước & Lưu</h3>
+                    <div>
+                      <h3 className="text-lg font-semibold">Kiểm tra & Lưu</h3>
+                      <p className="text-sm text-muted-foreground">Xác nhận cấu hình trước khi lưu</p>
+                    </div>
 
                     {/* Validation errors */}
                     {previewErrors.length > 0 && (
                       <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 space-y-1">
+                        <p className="text-sm font-medium text-destructive">Cần sửa trước khi lưu:</p>
                         {previewErrors.map((err, i) => (
-                          <p key={i} className="text-sm text-destructive">{err}</p>
+                          <p key={i} className="text-sm text-destructive">{"\u2022"} {err}</p>
                         ))}
                       </div>
                     )}
 
-                    {/* Summary */}
-                    <div className="rounded-lg border p-4 space-y-3">
+                    {/* Narrative summary */}
+                    <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                      <p className="text-sm font-medium">Tóm tắt quy tắc:</p>
+
                       <p className="text-sm">
-                        <strong>Sự kiện:</strong> {selectedEventData?.label ?? form.getValues("event")}
+                        <span className="font-medium">Khi:</span>{" "}
+                        {selectedEventData?.label ?? form.getValues("event")}
+                        {conditionEnabled && conditionField && (
+                          <span className="text-muted-foreground">
+                            {" "}(với điều kiện {conditionField} {conditionOperator} &quot;{conditionValue}&quot;)
+                          </span>
+                        )}
                       </p>
-                      {conditionEnabled && (
-                        <p className="text-sm">
-                          <strong>Điều kiện:</strong> {conditionField} {conditionOperator} {conditionValue}
-                        </p>
-                      )}
+
                       <p className="text-sm">
-                        <strong>Tiêu đề:</strong> {form.getValues("title_template")}
+                        <span className="font-medium">Nội dung:</span>{" "}
+                        {form.getValues("title_template") || "(chưa soạn)"}
                       </p>
-                      <p className="text-sm font-medium mt-2">Nhóm nhận:</p>
-                      {recipientGroups.map((group) => (
-                        <div key={group.group_key} className="pl-4 border-l-2 text-sm space-y-1">
-                          <p><strong>{group.label}</strong> ({group.recipient_kind === "internal" ? "nội bộ" : "bên ngoài"})</p>
-                          {group.channels.map((ch, j) => (
-                            <p key={j} className="text-muted-foreground">
-                              {"\u2192"} {ch.channel}: {ch.content_mode === "inherit_default" ? "nội dung mặc định" : ch.content_mode === "inline_override" ? "nội dung riêng" : "template riêng"}
-                              {ch.delay_minutes > 0 ? ` (delay ${ch.delay_minutes} phút)` : ""}
-                            </p>
-                          ))}
-                        </div>
-                      ))}
+
+                      <div className="text-sm space-y-2">
+                        <p className="font-medium">Gửi cho:</p>
+                        {recipientGroups.map((group) => (
+                          <div key={group.group_key} className="pl-4 border-l-2 border-primary/30 space-y-0.5">
+                            <p className="font-medium">{group.label}</p>
+                            {group.channels.map((ch, j) => {
+                              const channelName = ch.channel === "browser" ? "Trong ứng dụng"
+                                : ch.channel === "email" ? "Email"
+                                : ch.channel === "zalo" ? "Zalo"
+                                : ch.channel;
+                              const modeLabel = ch.content_mode === "inherit_default" ? "nội dung mặc định"
+                                : ch.content_mode === "inline_override" ? "nội dung riêng"
+                                : ch.content_mode === "template_override" ? "template riêng"
+                                : "template kênh";
+                              return (
+                                <p key={j} className="text-muted-foreground">
+                                  {"\u2192"} Qua {channelName} ({modeLabel})
+                                  {ch.delay_minutes > 0 && `, sau ${ch.delay_minutes} phút`}
+                                </p>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    {/* Enable toggle */}
+                    <div className="flex items-center gap-3 rounded-lg border p-3">
                       <Switch
                         checked={form.getValues("enabled")}
                         onCheckedChange={(checked) => form.setValue("enabled", checked)}
                       />
-                      <span className="text-sm">Kích hoạt rule ngay</span>
+                      <div>
+                        <p className="text-sm font-medium">Kích hoạt ngay</p>
+                        <p className="text-xs text-muted-foreground">
+                          Rule sẽ bắt đầu gửi thông báo khi sự kiện xảy ra. Tắt để tạo bản nháp.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1737,6 +1765,10 @@ export function NotificationRuleWizard({
                           (currentStep === 2 && (!form.getValues("title_template") || !form.getValues("message_template"))) ||
                           (currentStep === 3 && recipientGroups.length === 0)
                         }
+                        title={currentStep === 1 && !selectedEvent ? "Vui lòng chọn sự kiện trước"
+                          : currentStep === 2 && (!form.getValues("title_template") || !form.getValues("message_template")) ? "Vui lòng nhập tiêu đề và nội dung"
+                          : currentStep === 3 && recipientGroups.length === 0 ? "Vui lòng thêm ít nhất 1 nhóm nhận"
+                          : undefined}
                       >
                         Tiếp theo
                         <ChevronRight className="ml-2 h-4 w-4" />

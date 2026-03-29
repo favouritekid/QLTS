@@ -240,7 +240,7 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
   const errors: string[] = [];
 
   if (groups.length === 0) {
-    errors.push("Cần ít nhất 1 nhóm nhận");
+    errors.push("Cần ít nhất 1 nhóm người nhận");
     return errors;
   }
 
@@ -251,12 +251,12 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
   for (const group of groups) {
     if (group._hasDuplicateChannels) {
       errors.push(
-        `Nhóm "${group.label}" có kênh trùng lặp — không thể lưu từ wizard`,
+        `Nhóm "${group.label}" có cấu hình phức tạp — vui lòng chỉnh sửa qua API`,
       );
     }
 
     if (group.channels.length === 0) {
-      errors.push(`Nhóm "${group.label}" cần ít nhất 1 kênh`);
+      errors.push(`Nhóm "${group.label}" cần chọn ít nhất 1 kênh gửi`);
     }
 
     if (group.recipient_kind === "internal" && !group.recipient_config?.resolver_type) {
@@ -264,7 +264,7 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
     }
 
     if (group.recipient_kind === "external" && !group.external_resolver) {
-      errors.push(`Nhóm "${group.label}" cần chọn loại người nhận bên ngoài`);
+      errors.push(`Nhóm "${group.label}" cần chọn đối tượng nhận bên ngoài`);
     }
 
     for (const branch of group.channels) {
@@ -272,7 +272,7 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
 
       const bk = `${group.group_key}_${branch.channel}`;
       if (branchKeys.has(bk)) {
-        errors.push(`Branch key trùng: ${bk}`);
+        errors.push(`Cấu hình kênh bị trùng trong nhóm "${group.label}"`);
       }
       branchKeys.add(bk);
 
@@ -280,7 +280,7 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
         const co = branch.content_override;
         if (!co?.title_template && !co?.message_template) {
           errors.push(
-            `Kênh ${branch.channel} trong nhóm "${group.label}" cần nội dung riêng`,
+            `Kênh ${branch.channel} trong nhóm "${group.label}" cần soạn nội dung`,
           );
         }
       }
@@ -291,7 +291,7 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
           !(branch.config as Record<string, unknown>).zalo_template_id
         ) {
           errors.push(
-            `Kênh ${branch.channel} trong nhóm "${group.label}" cần Zalo Template ID`,
+            `Kênh ${branch.channel} trong nhóm "${group.label}" cần mã template Zalo`,
           );
         }
       }
@@ -299,7 +299,7 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
   }
 
   if (browserCount > 1) {
-    errors.push("Chỉ được phép 1 kênh Browser cho mỗi rule");
+    errors.push("Chỉ được phép 1 kênh \"Trong ứng dụng\" cho mỗi rule");
   }
 
   return errors;

@@ -15,7 +15,7 @@ interface ChannelBranchCardProps {
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
-  browser: "Browser (th\u1eddi gian th\u1ef1c)",
+  browser: "Trong \u1ee9ng d\u1ee5ng (th\u1eddi gian th\u1ef1c)",
   email: "Email",
   zalo: "Zalo",
   sms: "SMS",
@@ -62,14 +62,14 @@ export default function ChannelBranchCard({
       {/* Content mode selection — only for internal groups */}
       {!isExternal && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Nội dung</Label>
+          <Label className="text-xs text-muted-foreground">Cách hiển thị nội dung</Label>
 
           {/* template_override: read-only preservation (not authorable from wizard) */}
           {mode === "template_override" ? (
             <div className="rounded border border-yellow-200 bg-yellow-50 p-2 text-xs text-yellow-800">
-              <p className="font-medium">Template override (chỉ đọc)</p>
-              <p>Template code: <code>{branch.template_code ?? "N/A"}</code></p>
-              <p className="mt-1 text-yellow-600">Chỉnh sửa template override qua API. Nếu đổi mode, template_code sẽ bị mất.</p>
+              <p className="font-medium">Đang dùng template riêng</p>
+              <p>Template: <code>{branch.template_code ?? "N/A"}</code></p>
+              <p className="mt-1">Nếu muốn đổi sang nội dung khác, template hiện tại sẽ bị xóa.</p>
             </div>
           ) : (
             <div className="flex gap-3">
@@ -80,7 +80,7 @@ export default function ChannelBranchCard({
                   checked={mode === "inherit_default"}
                   onChange={() => setMode("inherit_default")}
                 />
-                Mặc định
+                Dùng nội dung từ Bước 2
               </label>
               <label className="flex items-center gap-1.5 text-xs cursor-pointer">
                 <input
@@ -89,7 +89,7 @@ export default function ChannelBranchCard({
                   checked={mode === "inline_override"}
                   onChange={() => setMode("inline_override")}
                 />
-                Nội dung riêng
+                Soạn nội dung riêng
               </label>
             </div>
           )}
@@ -118,7 +118,7 @@ export default function ChannelBranchCard({
       {isExternal && (branch.channel === "zalo" || branch.channel === "sms") && (
         <div className="space-y-2">
           <div>
-            <Label className="text-xs">Zalo Template ID *</Label>
+            <Label className="text-xs">Mã template Zalo *</Label>
             <Input
               placeholder="VD: ZNS_LEAD_CREATED"
               value={String((branch.config as Record<string, unknown>)?.zalo_template_id ?? "")}
@@ -127,7 +127,7 @@ export default function ChannelBranchCard({
             />
           </div>
           <div>
-            <Label className="text-xs">Template Data (JSON)</Label>
+            <Label className="text-xs">Dữ liệu template (JSON)</Label>
             <Textarea
               placeholder='{"customer": "$lead_name", "phone": "$lead_phone"}'
               value={
@@ -144,6 +144,9 @@ export default function ChannelBranchCard({
               }}
               className="text-sm min-h-[60px] font-mono"
             />
+            <p className="text-xs text-muted-foreground mt-1">
+              Dùng $tên_biến để chèn dữ liệu động (VD: $lead_name)
+            </p>
           </div>
         </div>
       )}
@@ -151,7 +154,7 @@ export default function ChannelBranchCard({
       {/* Delay — for non-browser channels */}
       {branch.channel !== "browser" && (
         <div className="flex items-center gap-2">
-          <Label className="text-xs text-muted-foreground whitespace-nowrap">Delay:</Label>
+          <Label className="text-xs text-muted-foreground whitespace-nowrap">Gửi sau:</Label>
           <Input
             type="number"
             min={0}
