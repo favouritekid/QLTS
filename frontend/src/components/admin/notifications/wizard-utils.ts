@@ -314,6 +314,45 @@ export function canSave(groups: RecipientGroup[]): boolean {
 }
 
 // ============================================================================
+// Per-step validation (single source of truth for wizard nav + sidebar + preview)
+// ============================================================================
+
+export interface StepErrors {
+  step1: string[];
+  step2: string[];
+  step3: string[];
+}
+
+export function validateStep1(event: string): string[] {
+  if (!event) return ["Vui lòng chọn sự kiện"];
+  return [];
+}
+
+export function validateStep2(title: string, message: string): string[] {
+  const errors: string[] = [];
+  if (!title) errors.push("Vui lòng nhập tiêu đề thông báo");
+  if (!message) errors.push("Vui lòng nhập nội dung thông báo");
+  return errors;
+}
+
+export function validateAllSteps(
+  event: string,
+  title: string,
+  message: string,
+  groups: RecipientGroup[],
+): StepErrors {
+  return {
+    step1: validateStep1(event),
+    step2: validateStep2(title, message),
+    step3: validateGroups(groups),
+  };
+}
+
+export function flattenStepErrors(errors: StepErrors): string[] {
+  return [...errors.step1, ...errors.step2, ...errors.step3];
+}
+
+// ============================================================================
 // Factory helpers
 // ============================================================================
 

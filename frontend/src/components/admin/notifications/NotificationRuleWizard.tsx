@@ -30,13 +30,7 @@ import {
   ChevronRight,
   ChevronLeft,
   HelpCircle,
-  Bell,
-  Users,
-  // Filter, — moved to TriggerSection
-  MessageSquare,
-  // Sparkles, — moved to VariablePickerPanel
-  Check,
-  // ChevronsUpDown, // Phase 3c: user picker removed
+  // Bell, Users, MessageSquare, Check — moved to StepIndicator
   Zap,
 } from "lucide-react";
 
@@ -80,11 +74,12 @@ import {
 // import { MultiStepActionEditor } from "./MultiStepActionEditor"; // Phase 3c: replaced by WizardStepRecipientGroups
 import WizardStepRecipientGroups from "./WizardStepRecipientGroups";
 import type { RecipientGroup, ExternalResolverOption } from "./wizard-types";
-import { mapToAPI, hydrateFromAPI, validateGroups, canSave, createInternalGroup, resetGroupCounter } from "./wizard-utils";
+import { mapToAPI, hydrateFromAPI, validateAllSteps, flattenStepErrors, createInternalGroup, resetGroupCounter } from "./wizard-utils";
 import NotificationRuleSidebar from "./NotificationRuleSidebar";
 import { TriggerSection } from "./TriggerSection";
 import DefaultContentSection from "./DefaultContentSection";
 import FinalPreviewSection from "./FinalPreviewSection";
+import StepIndicator from "./StepIndicator";
 
 // ============================================
 // TYPES & INTERFACES
@@ -551,62 +546,7 @@ function HelpTooltip({ content }: { content: string }) {
   );
 }
 
-/**
- * Step indicator cho wizard
- */
-function StepIndicator({ currentStep }: { currentStep: number }) {
-  const steps = [
-    { number: 1, label: "Sự kiện & Điều kiện", icon: Bell },
-    { number: 2, label: "Soạn nội dung", icon: MessageSquare },
-    { number: 3, label: "Người nhận & Kênh gửi", icon: Users },
-    { number: 4, label: "Kiểm tra & Lưu", icon: Check },
-  ];
-
-  return (
-    <div className="flex items-center justify-between mb-8">
-      {steps.map((step, index) => {
-        const Icon = step.icon;
-        const isActive = currentStep === step.number;
-        const isCompleted = currentStep > step.number;
-
-        return (
-          <div key={step.number} className="flex items-center flex-1">
-            <div className="flex flex-col items-center flex-1">
-              <div
-                className={`
-                  flex items-center justify-center w-10 h-10 rounded-full border-2 transition-colors
-                  ${isActive ? "border-primary bg-primary text-primary-foreground" : ""}
-                  ${isCompleted ? "border-success-500 bg-success-500 text-white" : ""}
-                  ${!isActive && !isCompleted ? "border-muted-foreground/30 text-muted-foreground" : ""}
-                `}
-              >
-                <Icon className="h-5 w-5" />
-              </div>
-              <span
-                className={`
-                  text-xs mt-1 font-medium
-                  ${isActive ? "text-primary" : ""}
-                  ${isCompleted ? "text-success-600" : ""}
-                  ${!isActive && !isCompleted ? "text-muted-foreground" : ""}
-                `}
-              >
-                {step.label}
-              </span>
-            </div>
-            {index < steps.length - 1 && (
-              <div
-                className={`
-                  h-0.5 flex-1 mx-2 mb-6 transition-colors
-                  ${isCompleted ? "bg-success-500" : "bg-muted-foreground/20"}
-                `}
-              />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// StepIndicator — extracted to StepIndicator.tsx (Batch 6)
 
 // ============================================
 // MAIN COMPONENT
@@ -621,7 +561,13 @@ export function NotificationRuleWizard({
 }: NotificationRuleWizardProps) {
   const router = useRouter();
   const [currentStep, setCurrentStep] = useState(1);
+  const [highestStepVisited, setHighestStepVisited] = useState(1);
   const isEditMode = !!ruleId;
+
+  const goToStep = (step: number) => {
+    setCurrentStep(step);
+    setHighestStepVisited((prev) => Math.max(prev, step));
+  };
 
   // User selection state — kept for potential future use in recipient group specific_users
   // const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
@@ -637,7 +583,6 @@ export function NotificationRuleWizard({
 
   // Phase 3c: Recipient groups state
   const [recipientGroups, setRecipientGroups] = useState<RecipientGroup[]>([createInternalGroup()]);
-  const [previewErrors, setPreviewErrors] = useState<string[]>([]);
 
   // Phase 3c: User picker moved into recipient group cards
   // const { data: usersData } = useAdminUsersList({ page: 1, page_size: 100 });
@@ -727,6 +672,9 @@ export function NotificationRuleWizard({
     // Phase 3c: Hydrate recipient groups from rule actions
     const wizardState = hydrateFromAPI(existingRule);
     setRecipientGroups(wizardState.recipientGroups);
+
+    // Edit mode: all steps accessible since data exists
+    setHighestStepVisited(4);
   }, [existingRule, isEditMode, form]);
 
   // Watch form values for dynamic behavior
@@ -885,11 +833,9 @@ export function NotificationRuleWizard({
 
   const onSubmit = async (data: FormValues) => {
     try {
-      // Phase 3c: Validate recipient groups
-      const errors = validateGroups(recipientGroups);
-      if (errors.length > 0) {
-        setPreviewErrors(errors);
-        setCurrentStep(4); // Go to preview to show errors
+      // Unified validation: check all steps (allErrors computed in render)
+      if (allErrors.length > 0) {
+        goToStep(4); // Go to preview to show errors
         return;
       }
 
@@ -921,6 +867,7 @@ export function NotificationRuleWizard({
       setRecipientGroups([createInternalGroup()]);
       resetGroupCounter();
       setCurrentStep(1);
+      setHighestStepVisited(1);
       router.push("/admin/notification-rules");
     } catch {
       toast.error(
@@ -934,16 +881,26 @@ export function NotificationRuleWizard({
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   const nextStep = () => {
-    setCurrentStep((prev) => Math.min(prev + 1, 4)); // ✅ Phase 3c: 4-step wizard
+    goToStep(Math.min(currentStep + 1, 4));
   };
 
   const prevStep = () => {
-    setCurrentStep((prev) => Math.max(prev - 1, 1));
+    goToStep(Math.max(currentStep - 1, 1));
   };
 
-  // Sidebar validation (computed live)
-  const sidebarErrors = validateGroups(recipientGroups);
-  const sidebarCanSave = canSave(recipientGroups) && !!form.getValues("event") && !!form.getValues("title_template") && !!form.getValues("message_template");
+  // Unified validation — single source of truth for nav, sidebar, preview
+  const stepErrors = validateAllSteps(
+    selectedEvent,
+    form.getValues("title_template") || "",
+    form.getValues("message_template") || "",
+    recipientGroups,
+  );
+  const allErrors = flattenStepErrors(stepErrors);
+  const currentStepErrors = currentStep === 1 ? stepErrors.step1
+    : currentStep === 2 ? stepErrors.step2
+    : currentStep === 3 ? stepErrors.step3
+    : [];
+  const sidebarCanSave = allErrors.length === 0;
 
   return (
     <div className="container max-w-6xl mx-auto py-6 space-y-6">
@@ -970,8 +927,13 @@ export function NotificationRuleWizard({
           </div>
         ) : (
           <>
-            {/* Step Indicator — Phase 3c: 4 steps */}
-            <StepIndicator currentStep={currentStep} />
+            {/* Step Indicator — clickable with validation state */}
+            <StepIndicator
+              currentStep={currentStep}
+              onStepClick={goToStep}
+              stepErrors={stepErrors}
+              highestStepVisited={highestStepVisited}
+            />
 
             {/* 2-column layout: main + sidebar */}
             <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
@@ -1017,7 +979,7 @@ export function NotificationRuleWizard({
                           recipient_config: { resolver_type: "unit_staff", params: {} }, external_resolver: null,
                           channels: [{ channel: "browser", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null }],
                         }]);
-                        setCurrentStep(2);
+                        goToStep(2);
                       }}
                     >
                       <div className="space-y-1">
@@ -1049,7 +1011,7 @@ export function NotificationRuleWizard({
                           recipient_config: { resolver_type: "lead_owner", params: {} }, external_resolver: null,
                           channels: [{ channel: "browser", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null }],
                         }]);
-                        setCurrentStep(2);
+                        goToStep(2);
                       }}
                     >
                       <div className="space-y-1">
@@ -1087,7 +1049,7 @@ export function NotificationRuleWizard({
                             { channel: "email", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null },
                           ],
                         }]);
-                        setCurrentStep(2);
+                        goToStep(2);
                       }}
                     >
                       <div className="space-y-1">
@@ -1119,7 +1081,7 @@ export function NotificationRuleWizard({
                           recipient_config: { resolver_type: "lead_owner", params: {} }, external_resolver: null,
                           channels: [{ channel: "browser", delay_minutes: 0, content_mode: "inherit_default", template_code: null, content_override: null, config: null }],
                         }]);
-                        setCurrentStep(2);
+                        goToStep(2);
                       }}
                     >
                       <div className="space-y-1">
@@ -1195,6 +1157,7 @@ export function NotificationRuleWizard({
                       resolverOptions={dynamicResolverTypes}
                       externalResolverOptions={metadata?.external_resolver_types ?? EXTERNAL_RESOLVER_FALLBACK}
                       availableChannels={dynamicChannels.filter((c) => c.status === "live").map((c) => c.value)}
+                      validationErrors={highestStepVisited > 3 ? stepErrors.step3 : undefined}
                     />
                   </div>
                 )}
@@ -1203,7 +1166,7 @@ export function NotificationRuleWizard({
                 {currentStep === 4 && (
                   <div className="animate-in fade-in-0 slide-in-from-right-4 duration-300">
                     <FinalPreviewSection
-                      previewErrors={previewErrors}
+                      previewErrors={allErrors}
                       eventLabel={selectedEventData?.label ?? form.getValues("event")}
                       titleTemplate={form.getValues("title_template") || ""}
                       recipientGroups={recipientGroups}
@@ -1242,20 +1205,12 @@ export function NotificationRuleWizard({
                     >
                       Hủy
                     </Button>
-                    {/* Phase 3c: 4-step wizard */}
                     {currentStep < 4 ? (
                       <Button
                         type="button"
                         onClick={nextStep}
-                        disabled={
-                          (currentStep === 1 && !selectedEvent) ||
-                          (currentStep === 2 && (!form.getValues("title_template") || !form.getValues("message_template"))) ||
-                          (currentStep === 3 && recipientGroups.length === 0)
-                        }
-                        title={currentStep === 1 && !selectedEvent ? "Vui lòng chọn sự kiện trước"
-                          : currentStep === 2 && (!form.getValues("title_template") || !form.getValues("message_template")) ? "Vui lòng nhập tiêu đề và nội dung"
-                          : currentStep === 3 && recipientGroups.length === 0 ? "Vui lòng thêm ít nhất 1 nhóm nhận"
-                          : undefined}
+                        disabled={currentStepErrors.length > 0}
+                        title={currentStepErrors.length > 0 ? currentStepErrors[0] : undefined}
                       >
                         Tiếp theo
                         <ChevronRight className="ml-2 h-4 w-4" />
@@ -1291,7 +1246,7 @@ export function NotificationRuleWizard({
                     }}
                     recipientGroups={recipientGroups}
                     titleTemplate={form.watch("title_template") || ""}
-                    validationErrors={sidebarErrors}
+                    validationErrors={allErrors}
                     enabled={form.getValues("enabled")}
                     onEnabledChange={(v) => form.setValue("enabled", v)}
                     onSave={form.handleSubmit(onSubmit)}

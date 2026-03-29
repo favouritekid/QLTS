@@ -13,6 +13,7 @@ interface WizardStepRecipientGroupsProps {
   resolverOptions: ResolverTypeOption[];
   externalResolverOptions: ExternalResolverOption[];
   availableChannels?: string[];
+  validationErrors?: string[];
 }
 
 export default function WizardStepRecipientGroups({
@@ -21,6 +22,7 @@ export default function WizardStepRecipientGroups({
   resolverOptions,
   externalResolverOptions,
   availableChannels,
+  validationErrors,
 }: WizardStepRecipientGroupsProps) {
   // Check if browser is used by any group
   const browserUsedGroups = new Set<number>();
@@ -56,6 +58,14 @@ export default function WizardStepRecipientGroups({
           Ch\u1ecdn ai s\u1ebd nh\u1eadn th\u00f4ng b\u00e1o v\u00e0 g\u1eedi qua k\u00eanh n\u00e0o. B\u1ea1n c\u00f3 th\u1ec3 t\u1ea1o nhi\u1ec1u nh\u00f3m v\u1edbi ng\u01b0\u1eddi nh\u1eadn kh\u00e1c nhau.
         </p>
       </div>
+
+      {validationErrors && validationErrors.length > 0 && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 space-y-1">
+          {validationErrors.map((err, i) => (
+            <p key={i} className="text-sm text-destructive">{"\u2022"} {err}</p>
+          ))}
+        </div>
+      )}
 
       {groups.length === 0 && (
         <div className="rounded-lg border-2 border-dashed p-8 text-center text-muted-foreground">
