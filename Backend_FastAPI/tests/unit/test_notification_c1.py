@@ -139,14 +139,23 @@ class TestValidateActions:
         # Should NOT raise — template_code is now accepted (validated async in E2)
         self._validate(actions)
 
-    def test_duplicate_channel_rejected(self):
+    def test_duplicate_browser_rejected(self):
+        """Phase 3b: duplicate browser still blocked, non-browser allowed."""
         from app.utils.exceptions import BadRequest
+        actions = [
+            MagicMock(step=1, channel="browser", delay_minutes=0, template_code=None, config=None),
+            MagicMock(step=2, channel="browser", delay_minutes=0, template_code=None, config=None),
+        ]
+        with pytest.raises(BadRequest, match="browser"):
+            self._validate(actions)
+
+    def test_duplicate_non_browser_allowed(self):
+        """Phase 3b: duplicate non-browser channels allowed."""
         actions = [
             MagicMock(step=1, channel="email", delay_minutes=0, template_code=None, config=None),
             MagicMock(step=2, channel="email", delay_minutes=0, template_code=None, config=None),
         ]
-        with pytest.raises(BadRequest, match="Duplicate channel"):
-            self._validate(actions)
+        self._validate(actions)  # Should NOT raise
 
     def test_empty_actions_ok(self):
         self._validate([])  # No exception

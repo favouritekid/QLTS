@@ -397,7 +397,8 @@ class TestValidateActionsSyncNoRegression:
         with pytest.raises(BadRequest, match="Duplicate step"):
             _validate_actions(actions)
 
-    def test_duplicate_channel_rejected(self):
+    def test_duplicate_browser_rejected(self):
+        """Phase 3b: duplicate browser blocked, non-browser allowed."""
         from app.services.notification_rule_crud_service import _validate_actions
         from app.utils.exceptions import BadRequest
 
@@ -405,7 +406,7 @@ class TestValidateActionsSyncNoRegression:
             MagicMock(step=1, channel="browser", delay_minutes=0, template_code=None, config=None),
             MagicMock(step=2, channel="browser", delay_minutes=0, template_code=None, config=None),
         ]
-        with pytest.raises(BadRequest, match="Duplicate channel"):
+        with pytest.raises(BadRequest, match="browser"):
             _validate_actions(actions)
 
     def test_negative_delay_rejected(self):

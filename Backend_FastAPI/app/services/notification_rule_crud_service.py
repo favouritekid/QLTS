@@ -82,14 +82,6 @@ def _validate_actions(actions) -> None:
             raise BadRequest(f"Duplicate step number: {step}")
         steps.add(step)
 
-        # NOTE (Phase 3a): Keep duplicate-channel check until dispatcher supports
-        # multi-action-per-channel (Phase 3b). Removing now would cause dispatcher
-        # to collapse/overwrite actions sharing the same channel.
-        if channel in channels:
-            raise BadRequest(
-                f"Duplicate channel '{channel}' in rule actions. "
-                "Each channel must be unique within a rule."
-            )
         channels.add(channel)
 
         # FP3: Channel-specific config validation
@@ -101,6 +93,12 @@ def _validate_actions(actions) -> None:
             ext_resolver = config.get("external_resolver")
             if ext_resolver:
                 _validate_external_resolver(step, ext_resolver)
+
+    # Phase 3b: allow duplicate non-browser channels (different recipient branches).
+    # Browser remains single-action until Phase 3c decides multi-browser UX.
+    browser_count = sum(1 for a in actions if getattr(a, 'channel', '') == 'browser')
+    if browser_count > 1:
+        raise BadRequest("Only one browser action allowed per rule")
 
     # Phase 3a: content_mode + branch_key validation
     # Guard: only validate on objects with explicit Phase 3 fields (skip MagicMock, legacy dicts)

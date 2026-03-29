@@ -140,16 +140,26 @@ class TestPydanticSchemaNewFields:
 class TestCRUDValidationRules:
     """CRUD validation for content_mode and branch_key (via _validate_actions)."""
 
-    def test_duplicate_channel_still_rejected(self):
-        """Phase 3a: duplicate channel check still active."""
+    def test_duplicate_browser_rejected(self):
+        """Phase 3b: duplicate browser still blocked (single browser until 3c)."""
         from app.services.notification_rule_crud_service import _validate_actions
 
         actions = [
             NotificationActionCreate(step=1, channel="browser"),
-            NotificationActionCreate(step=2, channel="browser"),  # duplicate
+            NotificationActionCreate(step=2, channel="browser"),
         ]
-        with pytest.raises(Exception, match="[Dd]uplicate channel"):
+        with pytest.raises(Exception, match="browser"):
             _validate_actions(actions)
+
+    def test_duplicate_non_browser_allowed(self):
+        """Phase 3b: duplicate non-browser channels allowed."""
+        from app.services.notification_rule_crud_service import _validate_actions
+
+        actions = [
+            NotificationActionCreate(step=1, channel="email", branch_key="a"),
+            NotificationActionCreate(step=2, channel="email", branch_key="b"),
+        ]
+        _validate_actions(actions)  # should NOT raise
 
     def test_valid_content_modes_accepted(self):
         from app.services.notification_rule_crud_service import _validate_actions
