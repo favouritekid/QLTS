@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { NotificationRuleWizard } from "@/components/admin/notifications/NotificationRuleWizard";
+import { NotificationRuleEditor } from "@/components/admin/notifications/NotificationRuleWizard";
 
 export default function EditNotificationRulePage() {
   const params = useParams();
@@ -11,5 +11,5 @@ export default function EditNotificationRulePage() {
     return <div className="p-8 text-center text-destructive">Rule ID không hợp lệ</div>;
   }
 
-  return <NotificationRuleWizard ruleId={ruleId} />;
+  return <NotificationRuleEditor ruleId={ruleId} />;
 }

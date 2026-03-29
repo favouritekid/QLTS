@@ -407,3 +407,39 @@ export function createExternalGroup(
 export function resetGroupCounter(): void {
   groupCounter = 0;
 }
+
+// ============================================================================
+// Condition alias helpers (used by hydration to normalize legacy condition formats)
+// ============================================================================
+
+export const OPERATOR_ALIAS_MAP: Record<string, string> = {
+  "==": "eq", "!=": "ne",
+  ">": "gt", ">=": "gte",
+  "<": "lt", "<=": "lte",
+};
+
+const FIELD_ALIAS_MAP: Record<string, string> = {
+  new_status: "event.new_status_id",
+  old_status: "event.old_status_id",
+  old_stage: "event.old_stage_id",
+  new_stage: "event.new_stage_id",
+  lead_id: "lead.id",
+  lead_name: "lead.name",
+  officer_id: "lead.officer_id",
+  actor_id: "actor.id",
+  actor_name: "actor.name",
+  consultation_id: "consultation.id",
+  status_changed: "event.status_changed",
+  updated_fields: "event.updated_fields",
+};
+
+const FIELD_ALIAS_PER_EVENT: Record<string, Record<string, string>> = {
+  lead_imported: { unit_id: "event.unit_id" },
+};
+const FIELD_ALIAS_DEFAULT: Record<string, string> = { unit_id: "lead.unit_id" };
+
+export function resolveFieldAlias(field: string, event: string): string {
+  if (field in FIELD_ALIAS_MAP) return FIELD_ALIAS_MAP[field];
+  const perEvent = FIELD_ALIAS_PER_EVENT[event] ?? FIELD_ALIAS_DEFAULT;
+  return perEvent[field] ?? FIELD_ALIAS_DEFAULT[field] ?? field;
+}
