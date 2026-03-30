@@ -1,6 +1,6 @@
-// NotificationRuleEditor.test.tsx — Component tests for the rule editor shell
+// NotificationRuleEditor.test.tsx — Component tests for the rule editor
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@/test/utils/test-utils";
+import { render, screen, waitFor } from "@/test/utils/test-utils";
 import userEvent from "@testing-library/user-event";
 import { NotificationRuleEditor } from "./NotificationRuleEditor";
 
@@ -15,34 +15,39 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "1" }),
 }));
 
+const mockCreateMutateAsync = vi.fn().mockResolvedValue({ id: 99 });
+const mockUpdateMutateAsync = vi.fn().mockResolvedValue({ id: 1 });
+
 vi.mock("@/hooks/useNotificationRules", () => ({
-  useCreateNotificationRule: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateNotificationRule: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateNotificationRule: () => ({ mutateAsync: mockCreateMutateAsync, isPending: false }),
+  useUpdateNotificationRule: () => ({ mutateAsync: mockUpdateMutateAsync, isPending: false }),
   useNotificationRule: (id?: number) => ({
     data: id ? MOCK_EXISTING_RULE : undefined,
     isLoading: false,
   }),
   useNotificationMetadata: () => ({
-    data: {
-      events: [
-        { event: "lead_created", display_name: "Có lead mới", category: "lead", description: "Test", variables: [] },
-        { event: "lead_assigned", display_name: "Lead phân công", category: "lead", description: "Test", variables: [] },
-      ],
-      channels: [
-        { value: "browser", status: "live" },
-        { value: "email", status: "live" },
-        { value: "zalo", status: "live" },
-      ],
-      resolver_types: [
-        { value: "lead_owner", label: "Officer phụ trách", description: "Test" },
-        { value: "unit_staff", label: "Nhân viên đơn vị", description: "Test" },
-      ],
-      external_resolver_types: [
-        { value: "lead_contact", label: "Lead (Zalo)", description: "Test" },
-      ],
-    },
+    data: MOCK_METADATA,
   }),
 }));
+
+const MOCK_METADATA = {
+  events: [
+    { event: "lead_created", display_name: "Có lead mới", category: "lead", description: "Test", variables: [] },
+    { event: "lead_assigned", display_name: "Lead phân công", category: "lead", description: "Test", variables: [] },
+  ],
+  channels: [
+    { value: "browser", status: "live" },
+    { value: "email", status: "live" },
+    { value: "zalo", status: "live" },
+  ],
+  resolver_types: [
+    { value: "lead_owner", label: "Officer phụ trách", description: "Test" },
+    { value: "unit_staff", label: "Nhân viên đơn vị", description: "Test" },
+  ],
+  external_resolver_types: [
+    { value: "lead_contact", label: "Lead (Zalo)", description: "Test" },
+  ],
+};
 
 const MOCK_EXISTING_RULE = {
   id: 1,
@@ -69,7 +74,7 @@ const MOCK_EXISTING_RULE = {
 };
 
 // ============================================================================
-// Tests
+// Tests — Shell rendering
 // ============================================================================
 
 describe("NotificationRuleEditor", () => {
@@ -106,6 +111,16 @@ describe("NotificationRuleEditor", () => {
     render(<NotificationRuleEditor ruleId={1} />);
     expect(screen.getByText("Chỉnh sửa quy tắc thông báo")).toBeDefined();
   });
+});
+
+// ============================================================================
+// Tests — Step navigation + validation
+// ============================================================================
+
+describe("NotificationRuleEditor — step navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("blocks Next when no event is selected — shows inline error on click", async () => {
     const user = userEvent.setup();
@@ -114,7 +129,6 @@ describe("NotificationRuleEditor", () => {
     const nextButton = screen.getByText("Tiếp theo");
     await user.click(nextButton);
 
-    // Should still be on step 1 (no event selected)
     // Inline error banner should appear (text-destructive class)
     const errorElements = screen.getAllByText(/chọn sự kiện/i);
     const inlineError = errorElements.find(
@@ -127,11 +141,142 @@ describe("NotificationRuleEditor", () => {
     const user = userEvent.setup();
     render(<NotificationRuleEditor />);
 
-    // Click a quick template — it pre-fills event + content and navigates to step 2
-    const templateButton = screen.getByText("Lead được phân công");
-    await user.click(templateButton);
+    await user.click(screen.getByText("Lead được phân công"));
 
     // Step 2 content should render
     expect(screen.getByText(/Bước 2: Nội dung mặc định/)).toBeDefined();
+  });
+
+  it("navigates through all 4 steps using quick template", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor />);
+
+    // Quick template → step 2
+    await user.click(screen.getByText("Lead được phân công"));
+
+    // Step 2 → 3 → 4 (quick template pre-fills all fields)
+    await user.click(screen.getByText("Tiếp theo"));
+    await user.click(screen.getByText("Tiếp theo"));
+
+    // Step 4: verify preview renders with toggle
+    await waitFor(() => {
+      expect(screen.getByText("Tóm tắt quy tắc:")).toBeDefined();
+    });
+    expect(screen.getByText("Kích hoạt ngay")).toBeDefined();
+  });
+});
+
+// ============================================================================
+// Tests — Edit mode hydration
+// ============================================================================
+
+describe("NotificationRuleEditor — edit mode", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("hydrates form fields from existing rule", () => {
+    render(<NotificationRuleEditor ruleId={1} />);
+
+    // Edit mode heading
+    expect(screen.getByText("Chỉnh sửa quy tắc thông báo")).toBeDefined();
+    // Should be on step 1
+    expect(screen.getByText("Sự kiện & Điều kiện")).toBeDefined();
+  });
+
+  it("allows navigating to any step in edit mode (all steps accessible)", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor ruleId={1} />);
+
+    // In edit mode, highestStepVisited=4, so clicking step 4 indicator should work
+    // Find step 4 button by title
+    const step4Button = screen.getByTitle("Kiểm tra & Lưu");
+    await user.click(step4Button);
+
+    // Step 4 content should render
+    expect(screen.getByText("Tóm tắt quy tắc:")).toBeDefined();
+  });
+
+  it("shows Cập nhật button (not Tạo) in edit mode on step 4", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor ruleId={1} />);
+
+    // Navigate to step 4
+    const step4Button = screen.getByTitle("Kiểm tra & Lưu");
+    await user.click(step4Button);
+
+    expect(screen.getByText("Cập nhật")).toBeDefined();
+  });
+});
+
+// ============================================================================
+// Tests — Submit / Save
+// ============================================================================
+
+describe("NotificationRuleEditor — submit", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls createMutation on save in create mode", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor />);
+
+    // Use quick template to fill all steps
+    await user.click(screen.getByText("Lead được phân công"));
+    await user.click(screen.getByText("Tiếp theo")); // → step 3
+    await user.click(screen.getByText("Tiếp theo")); // → step 4
+
+    // Click save button
+    const saveButton = screen.getByText("Tạo quy tắc");
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockCreateMutateAsync).toHaveBeenCalledTimes(1);
+    });
+
+    // Verify payload structure
+    const payload = mockCreateMutateAsync.mock.calls[0][0];
+    expect(payload.event).toBe("lead_assigned");
+    expect(payload.title_template).toContain("Lead được phân công");
+    expect(payload.actions.length).toBeGreaterThan(0);
+    expect(payload.actions[0].channel).toBe("browser");
+    expect(payload.enabled).toBe(true);
+  });
+
+  it("calls updateMutation on save in edit mode", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor ruleId={1} />);
+
+    // Navigate to step 4 directly (edit mode, all steps accessible)
+    const step4Button = screen.getByTitle("Kiểm tra & Lưu");
+    await user.click(step4Button);
+
+    // Click update button
+    const updateButton = screen.getByText("Cập nhật");
+    await user.click(updateButton);
+
+    await waitFor(() => {
+      expect(mockUpdateMutateAsync).toHaveBeenCalledTimes(1);
+    });
+
+    // Verify it passes ruleId
+    const callArgs = mockUpdateMutateAsync.mock.calls[0][0];
+    expect(callArgs.ruleId).toBe(1);
+    expect(callArgs.data.event).toBe("lead_created");
+  });
+
+  it("redirects to notification-rules list after successful save", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor />);
+
+    await user.click(screen.getByText("Lead được phân công"));
+    await user.click(screen.getByText("Tiếp theo")); // → step 3
+    await user.click(screen.getByText("Tiếp theo")); // → step 4
+    await user.click(screen.getByText("Tạo quy tắc"));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/admin/notification-rules");
+    });
   });
 });

@@ -77,6 +77,17 @@ function makeExternalGroup(overrides?: Partial<RecipientGroup>): RecipientGroup 
   };
 }
 
+function makeAction(overrides?: Record<string, unknown>) {
+  return {
+    id: 1, step: 1, channel: "browser", delay_minutes: 0,
+    content_mode: "inherit_default", template_code: null,
+    content_override: null, config: null, branch_key: "group_1_browser",
+    recipient_config: { resolver_type: "lead_owner", params: {} },
+    rule_id: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  } as NotificationRule["actions"][0];
+}
+
 function makeRule(overrides?: Partial<NotificationRule>): NotificationRule {
   return {
     id: 1,
@@ -109,17 +120,17 @@ describe("mapToAPI", () => {
     expect(result.title_template).toBe("Test title: $lead_name");
     expect(result.channels).toEqual(["browser"]);
     expect(result.actions).toHaveLength(1);
-    expect(result.actions[0].channel).toBe("browser");
-    expect(result.actions[0].step).toBe(1);
-    expect(result.actions[0].recipient_config).toEqual({ resolver_type: "lead_owner", params: {} });
-    expect(result.actions[0].branch_key).toBe("group_1_browser");
+    expect(result.actions![0].channel).toBe("browser");
+    expect(result.actions![0].step).toBe(1);
+    expect(result.actions![0].recipient_config).toEqual({ resolver_type: "lead_owner", params: {} });
+    expect(result.actions![0].branch_key).toBe("group_1_browser");
   });
 
   it("maps an external group — resolver goes in config, not recipient_config", () => {
     const result = mapToAPI([makeExternalGroup()], DEFAULT_CONTENT, DEFAULT_TRIGGER);
 
     expect(result.actions).toHaveLength(1);
-    const action = result.actions[0];
+    const action = result.actions![0];
     expect(action.recipient_config).toBeNull();
     expect(action.content_mode).toBe("channel_native");
     expect(action.config).toMatchObject({ external_resolver: "lead_contact" });
@@ -138,7 +149,7 @@ describe("mapToAPI", () => {
     const result = mapToAPI(groups, DEFAULT_CONTENT, DEFAULT_TRIGGER);
 
     expect(result.actions).toHaveLength(3);
-    expect(result.actions.map((a) => a.step)).toEqual([1, 2, 3]);
+    expect(result.actions!.map((a) => a.step)).toEqual([1, 2, 3]);
     expect(result.channels).toEqual(["browser", "email", "zalo"]);
     // First internal group sets rule-level recipient_config
     expect(result.recipient_config).toEqual({ resolver_type: "lead_owner", params: {} });
@@ -157,8 +168,8 @@ describe("mapToAPI", () => {
     });
     const result = mapToAPI([group], DEFAULT_CONTENT, DEFAULT_TRIGGER);
 
-    expect(result.actions[0].content_mode).toBe("inline_override");
-    expect(result.actions[0].content_override).toEqual({
+    expect(result.actions![0].content_mode).toBe("inline_override");
+    expect(result.actions![0].content_override).toEqual({
       title_template: "Custom title",
       message_template: "Custom msg",
     });
@@ -183,15 +194,7 @@ describe("mapToAPI", () => {
 describe("hydrateFromAPI", () => {
   it("hydrates internal group from actions with branch_key", () => {
     const rule = makeRule({
-      actions: [
-        {
-          id: 1, step: 1, channel: "browser", delay_minutes: 0,
-          content_mode: "inherit_default", template_code: null,
-          content_override: null, config: null,
-          branch_key: "group_1_browser",
-          recipient_config: { resolver_type: "lead_owner", params: {} },
-        } as NotificationRule["actions"][0],
-      ],
+      actions: [makeAction()],
     });
 
     const state = hydrateFromAPI(rule);
@@ -204,16 +207,11 @@ describe("hydrateFromAPI", () => {
 
   it("hydrates external group from actions with external_resolver in config", () => {
     const rule = makeRule({
-      actions: [
-        {
-          id: 2, step: 1, channel: "zalo", delay_minutes: 0,
-          content_mode: "channel_native", template_code: null,
-          content_override: null,
-          config: { external_resolver: "lead_contact", zalo_template_id: "ZNS_001" },
-          branch_key: "ext_1_zalo",
-          recipient_config: null,
-        } as unknown as NotificationRule["actions"][0],
-      ],
+      actions: [makeAction({
+        id: 2, channel: "zalo", content_mode: "channel_native",
+        config: { external_resolver: "lead_contact", zalo_template_id: "ZNS_001" },
+        branch_key: "ext_1_zalo", recipient_config: null,
+      })],
     });
 
     const state = hydrateFromAPI(rule);
@@ -235,18 +233,8 @@ describe("hydrateFromAPI", () => {
   it("detects duplicate channels in same group", () => {
     const rule = makeRule({
       actions: [
-        {
-          id: 1, step: 1, channel: "browser", delay_minutes: 0,
-          content_mode: "inherit_default", template_code: null,
-          content_override: null, config: null, branch_key: "group_1_browser",
-          recipient_config: { resolver_type: "lead_owner", params: {} },
-        } as NotificationRule["actions"][0],
-        {
-          id: 2, step: 2, channel: "browser", delay_minutes: 5,
-          content_mode: "inherit_default", template_code: null,
-          content_override: null, config: null, branch_key: "group_1_browser2",
-          recipient_config: { resolver_type: "lead_owner", params: {} },
-        } as NotificationRule["actions"][0],
+        makeAction(),
+        makeAction({ id: 2, step: 2, delay_minutes: 5, branch_key: "group_1_browser2" }),
       ],
     });
 
