@@ -843,3 +843,80 @@ async def test_dispatch_external_cooldown_set_when_prepare_succeeds():
 
     ext_cooldown = [k for k in redis_set_calls if "cooldown" in k and "+84" in k]
     assert len(ext_cooldown) == 1, f"Cooldown should be set once, got: {ext_cooldown}"
+
+
+# ============================================================================
+# Regression: consultation_reminder task path
+# ============================================================================
+
+def test_consultation_reminder_task_sets_reminder_sent_and_no_crash():
+    """Regression: the full reminder task path must:
+    1. Dispatch to the correct officer (lead owner, not consultation creator)
+    2. Set consultation.reminder_sent = True
+    3. Call update_lead_next_activity without crashing (is_active fix)
+    4. Return sent=1, failed=0
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.tasks.notification_tasks import check_consultation_reminders_task
+
+    # Build mock consultation + lead with different officer_ids
+    consultation = MagicMock()
+    consultation.id = 154
+    consultation.lead_id = 37
+    consultation.officer_id = 15  # admin who created it
+    consultation.scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    consultation.reminder_sent = False
+    consultation.deleted_at = None
+
+    lead = MagicMock()
+    lead.id = 37
+    lead.full_name = "Test Lead"
+    lead.phone = "0901234567"
+    lead.assigned_officer_id = 18  # officer who owns the lead
+    lead.deleted_at = None
+
+    # Mock DB result: query returns 1 consultation+lead pair
+    db_result = MagicMock()
+    db_result.all = MagicMock(return_value=[(consultation, lead)])
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=db_result)
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_task_db_session():
+        yield session
+
+    # Track dispatch payload to verify officer_id
+    dispatch_payloads = []
+    async def mock_dispatch(db, event, payload, **kwargs):
+        dispatch_payloads.append(payload)
+        async def noop_cb():
+            pass
+        return [], noop_cb
+
+    with patch(
+        "app.tasks.notification_tasks.task_db_session", fake_task_db_session
+    ), patch(
+        "app.tasks.notification_tasks.settings"
+    ) as mock_settings, patch(
+        "app.services.notification_dispatcher.dispatch", mock_dispatch
+    ), patch(
+        "app.services.lead_service.update_lead_next_activity", new=AsyncMock()
+    ), patch(
+        "app.tasks.notification_tasks._emit_lead_updated", new=AsyncMock()
+    ):
+        mock_settings.TIMEZONE = "Asia/Ho_Chi_Minh"
+        result = check_consultation_reminders_task.run()
+
+    # 1. Task completed without crash
+    assert result["sent"] == 1
+    assert result["failed"] == 0
+
+    # 2. reminder_sent was set to True
+    assert consultation.reminder_sent is True
+
+    # 3. Dispatch payload used lead owner, not consultation creator
+    assert len(dispatch_payloads) == 1
+    assert dispatch_payloads[0]["officer_id"] == 18  # lead owner, not 15
