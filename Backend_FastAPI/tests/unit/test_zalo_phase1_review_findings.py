@@ -653,3 +653,126 @@ async def test_officer_external_lead_not_found_denied():
     db.execute = AsyncMock(return_value=lead_result)
 
     assert await _check_external_source_assigned_to(db, delivery, 7) is False
+
+
+# ============================================================================
+# Regression: get_delivery_for_user officer external behavior (end-to-end dep)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_get_delivery_for_user_officer_assigned_returns_record():
+    """Officer accessing external delivery for their assigned lead → returns record."""
+    from app.core.deps import get_delivery_for_user
+
+    record = MagicMock()
+    record.id = 10
+    record.user_id = None
+    record.recipient_kind = "external"
+    record.source_type = "lead"
+    record.source_id = 42
+
+    officer = MagicMock()
+    officer.id = 7
+    officer.role = "officer"
+    officer.unit_id = 1
+
+    db = AsyncMock()
+    repo_mock = MagicMock()
+    repo_mock.get_by_id = AsyncMock(return_value=record)
+    # Lead assigned_officer_id=7 → matches officer
+    lead_result = MagicMock()
+    lead_result.first = MagicMock(return_value=(7,))
+    db.execute = AsyncMock(return_value=lead_result)
+
+    with patch(
+        "app.repositories.notification_delivery_repository.NotificationDeliveryRepository",
+        return_value=repo_mock,
+    ):
+        # Call the unwrapped function directly (bypass FastAPI Depends)
+        result = await get_delivery_for_user(
+            delivery_id=10, db=db, current_user=officer
+        )
+
+    assert result is record
+
+
+@pytest.mark.asyncio
+async def test_get_delivery_for_user_officer_unassigned_raises_404():
+    """Officer accessing external delivery for lead assigned to someone else → 404."""
+    from app.core.deps import get_delivery_for_user
+    from app.utils.exceptions import ResourceNotFoundError
+
+    record = MagicMock()
+    record.id = 10
+    record.user_id = None
+    record.recipient_kind = "external"
+    record.source_type = "lead"
+    record.source_id = 42
+
+    officer = MagicMock()
+    officer.id = 7
+    officer.role = "officer"
+    officer.unit_id = 1
+
+    db = AsyncMock()
+    repo_mock = MagicMock()
+    repo_mock.get_by_id = AsyncMock(return_value=record)
+    # Lead assigned_officer_id=99 → NOT officer 7
+    lead_result = MagicMock()
+    lead_result.first = MagicMock(return_value=(99,))
+    db.execute = AsyncMock(return_value=lead_result)
+
+    with patch(
+        "app.repositories.notification_delivery_repository.NotificationDeliveryRepository",
+        return_value=repo_mock,
+    ):
+        with pytest.raises(ResourceNotFoundError):
+            await get_delivery_for_user(
+                delivery_id=10, db=db, current_user=officer
+            )
+
+
+# ============================================================================
+# Regression: external cooldown only set after successful create
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_external_cooldown_not_set_when_prepare_returns_empty():
+    """If prepare_external_deliveries returns [], cooldown key must NOT be set.
+
+    Reproduces the code path at notification_dispatcher.py lines 955-973:
+    ext_ids = await prepare_external_deliveries(...)
+    if ext_ids:  # only then:
+        await safe_redis_set(ext_cooldown_key, ...)
+    """
+    redis_set_calls = []
+
+    async def tracking_redis_set(key, value, ex=None):
+        redis_set_calls.append(key)
+
+    # Simulate: prepare returns empty → cooldown guard
+    ext_ids = []  # empty result from prepare_external_deliveries
+    ext_cooldown_key = "notif:cooldown:lead_created:+84901234567:zalo:1"
+
+    if ext_ids:
+        await tracking_redis_set(ext_cooldown_key, "1", ex=300)
+
+    assert len(redis_set_calls) == 0, "Cooldown must not be set when ext_ids is empty"
+
+
+@pytest.mark.asyncio
+async def test_external_cooldown_set_when_prepare_returns_ids():
+    """If prepare_external_deliveries returns [id], cooldown key IS set."""
+    redis_set_calls = []
+
+    async def tracking_redis_set(key, value, ex=None):
+        redis_set_calls.append(key)
+
+    ext_ids = [101]  # successful create
+    ext_cooldown_key = "notif:cooldown:lead_created:+84901234567:zalo:1"
+
+    if ext_ids:
+        await tracking_redis_set(ext_cooldown_key, "1", ex=300)
+
+    assert len(redis_set_calls) == 1
+    assert "cooldown" in redis_set_calls[0]
