@@ -79,7 +79,10 @@ async def _handle_delivery_status(db: AsyncSession, data: dict):
     """
     Update delivery status based on Zalo callback.
 
-    Looks up delivery by provider_message_id or tracking_id.
+    Lookup strategy:
+    1. If msg_id present → query by provider_message_id
+    2. If step 1 misses AND tracking_id is valid → fallback query by delivery ID
+    3. If tracking_id only (no msg_id) → query by delivery ID directly
     """
     from app.models.notification_delivery import NotificationDelivery
 
@@ -92,21 +95,34 @@ async def _handle_delivery_status(db: AsyncSession, data: dict):
         log.warning("Zalo delivery status callback without msg_id or tracking_id")
         return
 
-    # Find delivery by provider_message_id
-    query = select(NotificationDelivery)
+    delivery = None
+
+    # Step 1: try msg_id lookup
     if msg_id:
-        query = query.where(NotificationDelivery.provider_message_id == msg_id)
-    elif tracking_id and tracking_id.startswith("delivery_"):
-        # tracking_id format: "delivery_{id}"
+        result = await db.execute(
+            select(NotificationDelivery)
+            .where(NotificationDelivery.provider_message_id == msg_id)
+        )
+        delivery = result.scalar_one_or_none()
+
+    # Step 2: fallback to tracking_id if msg_id missed or absent
+    if delivery is None and tracking_id and tracking_id.startswith("delivery_"):
         try:
-            delivery_id = int(tracking_id.replace("delivery_", ""))
-            query = query.where(NotificationDelivery.id == delivery_id)
+            parsed_id = int(tracking_id.replace("delivery_", ""))
+            result = await db.execute(
+                select(NotificationDelivery)
+                .where(NotificationDelivery.id == parsed_id)
+            )
+            delivery = result.scalar_one_or_none()
+            if delivery and msg_id:
+                log.info(
+                    "Webhook fallback: msg_id lookup missed, found via tracking_id",
+                    msg_id=msg_id,
+                    tracking_id=tracking_id,
+                    delivery_id=delivery.id,
+                )
         except ValueError:
             log.warning("Invalid tracking_id format", tracking_id=tracking_id)
-            return
-
-    result = await db.execute(query)
-    delivery = result.scalar_one_or_none()
 
     if not delivery:
         log.warning(
@@ -119,12 +135,12 @@ async def _handle_delivery_status(db: AsyncSession, data: dict):
     # Update delivery status
     # C2-7: distinguish sent (API accepted) vs delivered (recipient received)
     if error_code == 0:
-        # If delivery was already "sent" (by worker), upgrade to "delivered"
         if delivery.status == "sent":
             delivery.status = "delivered"
         else:
             delivery.status = "sent"
             delivery.sent_at = datetime.now(timezone.utc)
+        # Persist msg_id (covers both direct hit and fallback paths)
         if msg_id:
             delivery.provider_message_id = msg_id
     else:

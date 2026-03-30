@@ -317,28 +317,88 @@ def test_retry_sweep_clears_next_retry_at_and_commits():
 
 
 @pytest.mark.asyncio
-async def test_webhook_does_not_fallback_to_tracking_id_when_msg_id_lookup_misses():
+async def test_webhook_msg_id_direct_hit():
+    """msg_id lookup succeeds on first query — no fallback needed."""
     from app.routers.zalo_webhooks import _handle_delivery_status
+
+    delivery = MagicMock()
+    delivery.id = 42
+    delivery.status = "sent"
 
     db = AsyncMock()
     result = MagicMock()
-    result.scalar_one_or_none = MagicMock(return_value=None)
+    result.scalar_one_or_none = MagicMock(return_value=delivery)
     db.execute = AsyncMock(return_value=result)
     db.commit = AsyncMock()
 
-    await _handle_delivery_status(
-        db,
-        {
-            "msg_id": "provider-msg-1",
-            "tracking_id": "delivery_42",
-            "status": "sent",
-            "error": 0,
-        },
-    )
+    await _handle_delivery_status(db, {
+        "msg_id": "provider-msg-1",
+        "tracking_id": "delivery_42",
+        "status": "sent",
+        "error": 0,
+    })
 
+    # Only 1 query (msg_id hit), then commit
     assert db.execute.await_count == 1
-    where_sql = str(db.execute.await_args.args[0].whereclause)
-    assert "provider_message_id" in where_sql
+    assert db.commit.await_count == 1
+    assert delivery.status == "delivered"
+
+
+@pytest.mark.asyncio
+async def test_webhook_msg_id_miss_falls_back_to_tracking_id():
+    """msg_id lookup misses → fallback to tracking_id succeeds + persists msg_id."""
+    from app.routers.zalo_webhooks import _handle_delivery_status
+
+    delivery = MagicMock()
+    delivery.id = 42
+    delivery.status = "queued"
+
+    # First query (msg_id) returns None, second (tracking_id) returns delivery
+    result_miss = MagicMock()
+    result_miss.scalar_one_or_none = MagicMock(return_value=None)
+    result_hit = MagicMock()
+    result_hit.scalar_one_or_none = MagicMock(return_value=delivery)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[result_miss, result_hit])
+    db.commit = AsyncMock()
+
+    await _handle_delivery_status(db, {
+        "msg_id": "provider-msg-1",
+        "tracking_id": "delivery_42",
+        "status": "sent",
+        "error": 0,
+    })
+
+    # Two queries: msg_id miss + tracking_id hit
+    assert db.execute.await_count == 2
+    assert db.commit.await_count == 1
+    # Delivery updated
+    assert delivery.status == "sent"
+    # msg_id persisted via fallback path
+    assert delivery.provider_message_id == "provider-msg-1"
+
+
+@pytest.mark.asyncio
+async def test_webhook_msg_id_miss_invalid_tracking_id_no_update():
+    """msg_id lookup misses + tracking_id invalid → no delivery update."""
+    from app.routers.zalo_webhooks import _handle_delivery_status
+
+    db = AsyncMock()
+    result_miss = MagicMock()
+    result_miss.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=result_miss)
+    db.commit = AsyncMock()
+
+    await _handle_delivery_status(db, {
+        "msg_id": "provider-msg-1",
+        "tracking_id": "not-a-delivery-id",
+        "status": "sent",
+        "error": 0,
+    })
+
+    # Only 1 query (msg_id), no fallback (tracking_id format invalid)
+    assert db.execute.await_count == 1
     assert db.commit.await_count == 0
 
 
