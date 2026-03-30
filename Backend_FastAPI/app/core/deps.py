@@ -1733,17 +1733,19 @@ RequireStaff = Depends(require_any_staff)
 
 class DeliveryScopeFilter:
     """Pre-resolved scope for notification delivery queries."""
-    __slots__ = ("scope_kind", "allowed_user_ids", "allowed_unit_ids")
+    __slots__ = ("scope_kind", "allowed_user_ids", "allowed_unit_ids", "officer_id")
 
     def __init__(
         self,
         scope_kind: str,
         allowed_user_ids: Optional[List[int]] = None,
         allowed_unit_ids: Optional[List[int]] = None,
+        officer_id: Optional[int] = None,
     ):
         self.scope_kind = scope_kind
         self.allowed_user_ids = allowed_user_ids
         self.allowed_unit_ids = allowed_unit_ids
+        self.officer_id = officer_id
 
 
 async def get_delivery_scope_filter(
@@ -1775,7 +1777,11 @@ async def get_delivery_scope_filter(
             allowed_unit_ids=descendant_unit_ids,
         )
 
-    return DeliveryScopeFilter(scope_kind="self", allowed_user_ids=[current_user.id])
+    return DeliveryScopeFilter(
+        scope_kind="self",
+        allowed_user_ids=[current_user.id],
+        officer_id=current_user.id,
+    )
 
 
 async def _check_external_source_in_units(
@@ -1797,6 +1803,18 @@ async def _check_external_source_in_units(
         return row is not None and row[0] in unit_ids
     # Unknown source type — deny
     return False
+
+
+async def _check_external_source_assigned_to(
+    db: AsyncSession, record, officer_id: int
+) -> bool:
+    """Check if an external delivery's source lead is assigned to the given officer."""
+    from sqlalchemy import select
+    from app.models.lead import Lead
+    q = select(Lead.assigned_officer_id).where(Lead.id == record.source_id)
+    result = await db.execute(q)
+    row = result.first()
+    return row is not None and row[0] == officer_id
 
 
 async def get_delivery_for_user(
@@ -1835,10 +1853,8 @@ async def get_delivery_for_user(
     if record.user_id == current_user.id:
         return record
     if record.user_id is None and record.recipient_kind == "external":
-        if record.source_type and record.source_id:
-            if await _check_external_source_in_units(
-                db, record, [current_user.unit_id] if current_user.unit_id else []
-            ):
+        if record.source_type == "lead" and record.source_id:
+            if await _check_external_source_assigned_to(db, record, current_user.id):
                 return record
     raise ResourceNotFoundError(detail="Delivery record not found")
 

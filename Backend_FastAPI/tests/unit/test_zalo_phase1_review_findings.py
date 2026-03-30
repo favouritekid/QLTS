@@ -541,29 +541,37 @@ async def test_stale_sent_uses_sent_at():
     assert "notification_delivery.created_at" not in where_sql
 
 
-def test_scope_condition_with_unit_ids_includes_external_subquery():
-    """Must-Fix #4: scoped condition with unit_ids includes lead-based external subquery."""
+def test_scope_manager_includes_unit_based_external_subquery():
+    """Must-Fix #4: manager scope uses lead.unit_id IN unit_ids for external."""
     from app.repositories.notification_delivery_repository import _build_scope_condition
     cond = _build_scope_condition([1, 2, 3], allowed_unit_ids=[10, 20])
     sql = str(cond)
-    # Must include external subquery with lead.unit_id check
     assert "recipient_kind" in sql
     assert "user_id IS NULL" in sql
-    assert "lead" in sql.lower()  # EXISTS subquery on lead table
+    assert "lead" in sql.lower()
+    assert "unit_id" in sql.lower()
 
 
-def test_scope_condition_without_unit_ids_no_external():
-    """Must-Fix #4: officer scope without unit_ids shows no external rows."""
+def test_scope_officer_includes_assigned_officer_external_subquery():
+    """Must-Fix #4: officer scope uses lead.assigned_officer_id = officer_id."""
     from app.repositories.notification_delivery_repository import _build_scope_condition
-    cond = _build_scope_condition([1], allowed_unit_ids=None)
+    cond = _build_scope_condition([1], officer_id=1)
     sql = str(cond)
-    # Should be simple user_id IN (ids), no external branch
+    assert "recipient_kind" in sql
+    assert "assigned_officer_id" in sql.lower()
+
+
+def test_scope_no_unit_no_officer_no_external():
+    """Must-Fix #4: no unit_ids and no officer_id → no external rows."""
+    from app.repositories.notification_delivery_repository import _build_scope_condition
+    cond = _build_scope_condition([1])
+    sql = str(cond)
     assert "user_id IN" in sql
     assert "recipient_kind" not in sql
 
 
 @pytest.mark.asyncio
-async def test_get_delivery_for_user_external_in_scope():
+async def test_manager_external_in_scope():
     """Must-Fix #4: manager can access external delivery if lead is in their unit."""
     from app.core.deps import _check_external_source_in_units
 
@@ -572,7 +580,6 @@ async def test_get_delivery_for_user_external_in_scope():
     delivery.source_id = 42
 
     db = AsyncMock()
-    # Lead query returns unit_id=10
     lead_result = MagicMock()
     lead_result.first = MagicMock(return_value=(10,))
     db.execute = AsyncMock(return_value=lead_result)
@@ -581,8 +588,8 @@ async def test_get_delivery_for_user_external_in_scope():
 
 
 @pytest.mark.asyncio
-async def test_get_delivery_for_user_external_out_of_scope():
-    """Must-Fix #4: manager cannot access external delivery if lead is outside their units."""
+async def test_manager_external_out_of_scope():
+    """Must-Fix #4: manager denied external delivery if lead outside their units."""
     from app.core.deps import _check_external_source_in_units
 
     delivery = MagicMock()
@@ -590,9 +597,59 @@ async def test_get_delivery_for_user_external_out_of_scope():
     delivery.source_id = 42
 
     db = AsyncMock()
-    # Lead query returns unit_id=99 (not in allowed)
     lead_result = MagicMock()
     lead_result.first = MagicMock(return_value=(99,))
     db.execute = AsyncMock(return_value=lead_result)
 
     assert await _check_external_source_in_units(db, delivery, [10, 20]) is False
+
+
+@pytest.mark.asyncio
+async def test_officer_external_assigned_in_scope():
+    """Must-Fix #4: officer can access external delivery for their assigned lead."""
+    from app.core.deps import _check_external_source_assigned_to
+
+    delivery = MagicMock()
+    delivery.source_type = "lead"
+    delivery.source_id = 42
+
+    db = AsyncMock()
+    lead_result = MagicMock()
+    lead_result.first = MagicMock(return_value=(7,))  # assigned_officer_id=7
+    db.execute = AsyncMock(return_value=lead_result)
+
+    assert await _check_external_source_assigned_to(db, delivery, 7) is True
+
+
+@pytest.mark.asyncio
+async def test_officer_external_not_assigned_denied():
+    """Must-Fix #4: officer denied external delivery for lead assigned to someone else."""
+    from app.core.deps import _check_external_source_assigned_to
+
+    delivery = MagicMock()
+    delivery.source_type = "lead"
+    delivery.source_id = 42
+
+    db = AsyncMock()
+    lead_result = MagicMock()
+    lead_result.first = MagicMock(return_value=(99,))  # assigned to officer 99
+    db.execute = AsyncMock(return_value=lead_result)
+
+    assert await _check_external_source_assigned_to(db, delivery, 7) is False
+
+
+@pytest.mark.asyncio
+async def test_officer_external_lead_not_found_denied():
+    """Must-Fix #4: officer denied if lead doesn't exist."""
+    from app.core.deps import _check_external_source_assigned_to
+
+    delivery = MagicMock()
+    delivery.source_type = "lead"
+    delivery.source_id = 999
+
+    db = AsyncMock()
+    lead_result = MagicMock()
+    lead_result.first = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=lead_result)
+
+    assert await _check_external_source_assigned_to(db, delivery, 7) is False

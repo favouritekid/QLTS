@@ -58,7 +58,7 @@ async def list_deliveries(
         date_to=date_to,
         skip=skip,
         limit=page_size,
-        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids,
+        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id,
     )
 
     return schemas.NotificationDeliveriesPage(
@@ -85,7 +85,7 @@ async def get_delivery_stats(
     repo = NotificationDeliveryRepository(db)
     stats = await repo.get_aggregate_stats(
         date_from=date_from, date_to=date_to, event=event, channel=channel,
-        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids,
+        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id,
     )
     return stats
 
@@ -105,7 +105,7 @@ async def get_delivery_failures(
     repo = NotificationDeliveryRepository(db)
     summary = await repo.get_failure_summary(
         date_from=date_from, date_to=date_to, channel=channel, limit=limit,
-        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids,
+        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id,
     )
     return summary
 
@@ -120,7 +120,7 @@ async def get_time_series(request: Request, interval: str = Query("hour", patter
     scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter)):
     """Time series delivery counts."""
     repo = NotificationDeliveryRepository(db)
-    buckets = await repo.get_time_series(interval=interval, date_from=date_from, date_to=date_to, channel=channel, allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids)
+    buckets = await repo.get_time_series(interval=interval, date_from=date_from, date_to=date_to, channel=channel, allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id)
     return schemas.TimeSeriesResponse(interval=interval, buckets=[schemas.TimeSeriesBucket(**b) for b in buckets])
 
 @limiter.limit(RateLimits.DATA_READ)
@@ -130,7 +130,7 @@ async def get_top_events(request: Request, limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(database.get_db), scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter)):
     """Top events by volume."""
     repo = NotificationDeliveryRepository(db)
-    events = await repo.get_top_events(limit=limit, date_from=date_from, date_to=date_to, allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids)
+    events = await repo.get_top_events(limit=limit, date_from=date_from, date_to=date_to, allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id)
     return schemas.TopEventsResponse(events=[schemas.TopEventStats(**e) for e in events])
 
 @limiter.limit(RateLimits.DATA_READ)
