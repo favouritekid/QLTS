@@ -733,46 +733,113 @@ async def test_get_delivery_for_user_officer_unassigned_raises_404():
 
 
 # ============================================================================
-# Regression: external cooldown only set after successful create
+# Regression: external cooldown via dispatch() production path
 # ============================================================================
 
-@pytest.mark.asyncio
-async def test_external_cooldown_not_set_when_prepare_returns_empty():
-    """If prepare_external_deliveries returns [], cooldown key must NOT be set.
+def _build_external_dispatch_patches():
+    """Set up patches to drive dispatch() into the external delivery path."""
 
-    Reproduces the code path at notification_dispatcher.py lines 955-973:
-    ext_ids = await prepare_external_deliveries(...)
-    if ext_ids:  # only then:
-        await safe_redis_set(ext_cooldown_key, ...)
-    """
+    action = MagicMock()
+    action.channel = "zalo"
+    action.step = 1
+    action.delay_minutes = 0
+    action.template_code = None
+    action.config = {"external_resolver": "lead_contact"}
+
+    config = MagicMock()
+    config.channel_values = ["zalo"]
+    config.channels = [MagicMock(value="zalo")]
+    config.resolver = MagicMock()
+    config.resolver.resolver_type = "lead_owner"
+    config.actions = [action]
+    config.condition = None
+    config.rule_id = 1
+    config.should_activate = MagicMock(return_value=True)
+
+    ext_recipient = MagicMock()
+    ext_recipient.recipient_kind = "external"
+    ext_recipient.user_id = None
+    ext_recipient.destination_phone = "+84901234567"
+    ext_recipient.destination_email = None
+    ext_recipient.source_type = "lead"
+    ext_recipient.source_id = 42
+
+    return config, AsyncMock(return_value=ext_recipient)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_external_cooldown_not_set_when_prepare_empty():
+    """Must-Fix #3: dispatch() real path → prepare returns [] → cooldown NOT set."""
+    from app.services.notification_dispatcher import dispatch
+    from app.core.events import SystemEvents
+
+    config, resolver_fn = _build_external_dispatch_patches()
     redis_set_calls = []
 
-    async def tracking_redis_set(key, value, ex=None):
+    async def track_set(key, value, ex=None):
         redis_set_calls.append(key)
 
-    # Simulate: prepare returns empty → cooldown guard
-    ext_ids = []  # empty result from prepare_external_deliveries
-    ext_cooldown_key = "notif:cooldown:lead_created:+84901234567:zalo:1"
+    db = AsyncMock()
+    db.flush = AsyncMock()
+    dedup_result = MagicMock()
+    dedup_result.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=dedup_result)
 
-    if ext_ids:
-        await tracking_redis_set(ext_cooldown_key, "1", ex=300)
+    with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
+         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_rule_loader.deserialize_resolver", return_value=AsyncMock(return_value=[])), \
+         patch("app.services.notification_dispatcher.notification_preference_service"), \
+         patch("app.services.notification_dispatcher.safe_redis_exists", new=AsyncMock(return_value=False)), \
+         patch("app.services.notification_dispatcher.safe_redis_set", track_set), \
+         patch("app.services.notification_dispatcher.safe_redis_incr", new=AsyncMock(return_value=1)), \
+         patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \
+         patch("app.services.notification_recipients.EXTERNAL_RESOLVER_REGISTRY", {"lead_contact": resolver_fn}), \
+         patch("app.services.notification_delivery_service.prepare_external_deliveries") as mock_prepare, \
+         patch("app.services.notification_dispatcher._build_action_snapshot", return_value={"title": "t"}), \
+         patch("app.services.notification_dispatcher._emit_domain_event", new=AsyncMock()):
+        mock_prepare.return_value = []
+        await dispatch(db=db, event=SystemEvents.LEAD_CREATED,
+                       payload={"lead_id": 42, "lead_name": "T"}, dedupe_key="t:42",
+                       skip_preference_check=True)
 
-    assert len(redis_set_calls) == 0, "Cooldown must not be set when ext_ids is empty"
+    ext_cooldown = [k for k in redis_set_calls if "cooldown" in k and "+84" in k]
+    assert len(ext_cooldown) == 0, f"Cooldown must not be set when prepare returns [], got: {ext_cooldown}"
 
 
 @pytest.mark.asyncio
-async def test_external_cooldown_set_when_prepare_returns_ids():
-    """If prepare_external_deliveries returns [id], cooldown key IS set."""
+async def test_dispatch_external_cooldown_set_when_prepare_succeeds():
+    """Must-Fix #3: dispatch() real path → prepare returns [id] → cooldown IS set."""
+    from app.services.notification_dispatcher import dispatch
+    from app.core.events import SystemEvents
+
+    config, resolver_fn = _build_external_dispatch_patches()
     redis_set_calls = []
 
-    async def tracking_redis_set(key, value, ex=None):
+    async def track_set(key, value, ex=None):
         redis_set_calls.append(key)
 
-    ext_ids = [101]  # successful create
-    ext_cooldown_key = "notif:cooldown:lead_created:+84901234567:zalo:1"
+    db = AsyncMock()
+    db.flush = AsyncMock()
+    dedup_result = MagicMock()
+    dedup_result.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=dedup_result)
 
-    if ext_ids:
-        await tracking_redis_set(ext_cooldown_key, "1", ex=300)
+    with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
+         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_rule_loader.deserialize_resolver", return_value=AsyncMock(return_value=[])), \
+         patch("app.services.notification_dispatcher.notification_preference_service"), \
+         patch("app.services.notification_dispatcher.safe_redis_exists", new=AsyncMock(return_value=False)), \
+         patch("app.services.notification_dispatcher.safe_redis_set", track_set), \
+         patch("app.services.notification_dispatcher.safe_redis_incr", new=AsyncMock(return_value=1)), \
+         patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \
+         patch("app.services.notification_recipients.EXTERNAL_RESOLVER_REGISTRY", {"lead_contact": resolver_fn}), \
+         patch("app.services.notification_delivery_service.prepare_external_deliveries") as mock_prepare, \
+         patch("app.services.notification_dispatcher._build_action_snapshot", return_value={"title": "t"}), \
+         patch("app.services.notification_dispatcher._emit_domain_event", new=AsyncMock()):
+        mock_prepare.return_value = [101]
+        await dispatch(db=db, event=SystemEvents.LEAD_CREATED,
+                       payload={"lead_id": 42, "lead_name": "T"}, dedupe_key="t:42",
+                       skip_preference_check=True)
 
-    assert len(redis_set_calls) == 1
-    assert "cooldown" in redis_set_calls[0]
+    ext_cooldown = [k for k in redis_set_calls if "cooldown" in k and "+84" in k]
+    assert len(ext_cooldown) == 1, f"Cooldown should be set once, got: {ext_cooldown}"
