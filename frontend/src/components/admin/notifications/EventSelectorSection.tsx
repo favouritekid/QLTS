@@ -103,25 +103,25 @@ export function EventSelectorSection({
                 </div>
               </AccordionTrigger>
               <AccordionContent>
-                <div className="space-y-2 pt-1">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
                   {categoryEvents.map((event) => (
                     <div
                       key={event.value}
                       className={`
-                        flex items-start space-x-3 rounded-lg border p-3 cursor-pointer transition-colors
+                        flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors
                         ${value === event.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"}
                       `}
                       onClick={() => onChange(event.value)}
                     >
-                      <RadioGroupItem value={event.value} id={event.value} />
-                      <div className="flex-1">
+                      <RadioGroupItem value={event.value} id={event.value} className="mt-0.5" />
+                      <div className="flex-1 min-w-0">
                         <label
                           htmlFor={event.value}
-                          className="text-sm font-medium cursor-pointer"
+                          className="text-sm font-medium cursor-pointer leading-tight"
                         >
                           {event.label}
                         </label>
-                        <p className="text-xs text-muted-foreground mt-0.5">
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
                           {event.description}
                         </p>
                       </div>
