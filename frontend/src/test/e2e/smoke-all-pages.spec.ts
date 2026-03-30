@@ -79,6 +79,7 @@ const ADMIN_PAGES: PageEntry[] = [
   { name: "Admin Installment Plans", path: "/admin/installment-plans" },
   // Admin - Notifications
   { name: "Admin Notification Rules", path: "/admin/notification-rules" },
+  { name: "Admin Notification Rules Create", path: "/admin/notification-rules/new" },
   { name: "Admin Notification Templates", path: "/admin/notification-templates" },
   // Admin - System
   { name: "Admin Audit Logs", path: "/admin/audit-logs" },
