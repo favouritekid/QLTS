@@ -105,24 +105,32 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         channels: list[str],
         max_age_minutes: int,
         limit: int = 100,
+        age_column: str = "created_at",
     ) -> List[NotificationDelivery]:
         """
         Find stale deliveries: status matches, channel in list, older than max_age_minutes.
 
+        Args:
+            age_column: Which timestamp column to age against.
+                - "created_at" (default): for queued deliveries stuck without execution.
+                - "sent_at": for sent deliveries awaiting webhook confirmation.
+
         Used by reconciliation sweep for:
-        - queued deliveries stuck without execution
-        - sent deliveries without webhook confirmation
+        - queued deliveries stuck without execution (age by created_at)
+        - sent deliveries without webhook confirmation (age by sent_at)
         """
         from datetime import datetime, timezone, timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        col = getattr(NotificationDelivery, age_column)
         result = await self.db.execute(
             select(NotificationDelivery)
             .where(
                 NotificationDelivery.status == status,
                 NotificationDelivery.channel.in_(channels),
-                NotificationDelivery.created_at < cutoff,
+                col.isnot(None),
+                col < cutoff,
             )
-            .order_by(NotificationDelivery.created_at.asc())
+            .order_by(col.asc())
             .limit(limit)
         )
         return list(result.scalars().all())

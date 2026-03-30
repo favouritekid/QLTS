@@ -268,15 +268,20 @@ def test_zalo_worker_passes_zalo_zns_provider_for_quota():
     mock_record_send.assert_awaited_once_with(session, "zalo", provider="zalo_zns")
 
 
-def test_retry_sweep_can_enqueue_same_delivery_twice_across_runs():
+def test_retry_sweep_clears_next_retry_at_after_enqueue():
+    """B3 fix: sweep clears next_retry_at for enqueued rows, so next sweep
+    won't re-discover them while they're still in the Celery queue."""
     from app.tasks.delivery_tasks import sweep_retry_deliveries
 
     delivery = MagicMock()
     delivery.id = 42
 
     session = AsyncMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
     repo = MagicMock()
-    repo.find_ready_for_retry = AsyncMock(return_value=[delivery])
+    # First sweep: finds delivery. Second sweep: finds nothing (cleared).
+    repo.find_ready_for_retry = AsyncMock(side_effect=[[delivery], []])
 
     @asynccontextmanager
     async def fake_lock(*args, **kwargs):
@@ -299,13 +304,17 @@ def test_retry_sweep_can_enqueue_same_delivery_twice_across_runs():
         first = sweep_retry_deliveries.run()
         second = sweep_retry_deliveries.run()
 
+    # First sweep enqueues, second sweep finds nothing
     assert first["enqueued"] == 1
-    assert second["enqueued"] == 1
-    assert mock_apply_async.call_count == 2
-    first_args = mock_apply_async.call_args_list[0].kwargs["args"]
-    second_args = mock_apply_async.call_args_list[1].kwargs["args"]
-    assert first_args == [42]
-    assert second_args == [42]
+    assert second["enqueued"] == 0
+    assert mock_apply_async.call_count == 1
+
+    # Verify session.execute was called with UPDATE to clear next_retry_at
+    update_calls = [
+        c for c in session.execute.await_args_list
+        if "UPDATE" in str(c.args[0]) or "update" in str(type(c.args[0]).__name__.lower())
+    ]
+    assert len(update_calls) >= 1
 
 
 @pytest.mark.asyncio
@@ -335,7 +344,34 @@ async def test_webhook_does_not_fallback_to_tracking_id_when_msg_id_lookup_misse
 
 
 @pytest.mark.asyncio
-async def test_stale_sent_lookup_filters_on_created_at_not_sent_at():
+async def test_stale_queued_uses_created_at():
+    """B5: queued stale path continues to age by created_at (default)."""
+    from app.repositories.notification_delivery_repository import (
+        NotificationDeliveryRepository,
+    )
+
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalars = MagicMock(
+        return_value=MagicMock(all=MagicMock(return_value=[]))
+    )
+    db.execute = AsyncMock(return_value=result)
+
+    repo = NotificationDeliveryRepository(db)
+    await repo.find_stale_deliveries(
+        status="queued",
+        channels=["email", "zalo", "sms"],
+        max_age_minutes=30,
+    )
+
+    where_sql = str(db.execute.await_args.args[0].whereclause)
+    assert "notification_delivery.created_at" in where_sql
+    assert "notification_delivery.sent_at" not in where_sql
+
+
+@pytest.mark.asyncio
+async def test_stale_sent_uses_sent_at():
+    """B5 fix: sent stale path ages by sent_at, not created_at."""
     from app.repositories.notification_delivery_repository import (
         NotificationDeliveryRepository,
     )
@@ -352,8 +388,9 @@ async def test_stale_sent_lookup_filters_on_created_at_not_sent_at():
         status="sent",
         channels=["zalo", "sms"],
         max_age_minutes=60,
+        age_column="sent_at",
     )
 
     where_sql = str(db.execute.await_args.args[0].whereclause)
-    assert "notification_delivery.created_at" in where_sql
-    assert "notification_delivery.sent_at" not in where_sql
+    assert "notification_delivery.sent_at" in where_sql
+    assert "notification_delivery.created_at" not in where_sql

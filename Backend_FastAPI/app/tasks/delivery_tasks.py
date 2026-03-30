@@ -333,13 +333,27 @@ def sweep_retry_deliveries(self):
                 if not ready:
                     return {"enqueued": 0}
 
-                enqueued = 0
+                enqueued_ids = []
                 for delivery in ready:
                     execute_notification_delivery.apply_async(args=[delivery.id])
-                    enqueued += 1
+                    enqueued_ids.append(delivery.id)
 
-                task_log.info(f"Sweep enqueued {enqueued} deliveries for retry")
-                return {"enqueued": enqueued}
+                # Mitigate duplicate re-enqueue: clear next_retry_at so the
+                # next sweep won't re-discover these rows while they're in
+                # the Celery queue. Not atomic with broker enqueue, but
+                # sufficient for the 2-minute sweep interval.
+                if enqueued_ids:
+                    from sqlalchemy import update as sa_update
+                    from app.models.notification_delivery import NotificationDelivery
+                    await session.execute(
+                        sa_update(NotificationDelivery)
+                        .where(NotificationDelivery.id.in_(enqueued_ids))
+                        .values(next_retry_at=None)
+                    )
+                    await session.flush()
+
+                task_log.info(f"Sweep enqueued {len(enqueued_ids)} deliveries for retry")
+                return {"enqueued": len(enqueued_ids)}
 
     result = run_async_task(
         async_func=_run,
@@ -405,11 +419,14 @@ def reconcile_stale_deliveries(self):
                     queued_resolved += 1
 
                 # 2. Sent stale: external channels sent >60min without webhook confirm
+                #    Age by sent_at (not created_at) — delivery may have been
+                #    created long before it was actually sent.
                 stale_sent = await repo.find_stale_deliveries(
                     status="sent",
                     channels=["zalo", "sms"],
                     max_age_minutes=60,
                     limit=50,
+                    age_column="sent_at",
                 )
                 for delivery in stale_sent:
                     # Assume delivered if no negative callback after 60min
