@@ -155,6 +155,7 @@ def execute_notification_delivery(self, delivery_id: int):
                         session, delivery_id,
                         next_retry_at=next_retry,
                         error_reason="quota_exhausted",
+                        increment_attempt=True,
                     )
                     await session.commit()
                     task_log.warning(
@@ -172,6 +173,7 @@ def execute_notification_delivery(self, delivery_id: int):
                     session, delivery_id,
                     next_retry_at=next_retry,
                     error_reason="circuit_breaker_open",
+                    increment_attempt=True,
                 )
                 await session.commit()
                 task_log.warning(

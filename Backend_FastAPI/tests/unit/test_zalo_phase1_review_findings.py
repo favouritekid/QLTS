@@ -115,6 +115,90 @@ def test_delivery_failure_increments_attempt_count_exactly_once():
     assert delivery.attempt_count == 1
 
 
+def test_quota_exhausted_deferral_increments_attempt_count():
+    """Pre-execution deferral: quota_exhausted must increment attempt_count
+    so backoff progresses and max_retries is eventually reached."""
+    from app.tasks.delivery_tasks import execute_notification_delivery
+
+    delivery = MagicMock()
+    delivery.id = 1
+    delivery.status = "queued"
+    delivery.channel = "zalo"
+    delivery.attempt_count = 0
+    delivery.max_retries = 5
+    delivery.scheduled_for = None
+    delivery.recipient_kind = "external"
+    delivery.user_id = None
+    delivery.event = "LEAD_CREATED"
+    delivery.source_type = None
+    delivery.source_id = None
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=delivery)
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_task_db_session():
+        yield session
+
+    with patch(
+        "app.tasks.delivery_tasks.task_db_session", fake_task_db_session
+    ), patch(
+        "app.services.notification_delivery_service.check_delivery_eligibility",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "app.services.notification_quota_service.check_quota",
+        new=AsyncMock(return_value=False),  # quota exhausted
+    ):
+        result = execute_notification_delivery.run(1)
+
+    assert result["status"] == "retry_scheduled"
+    assert delivery.attempt_count == 1
+
+
+def test_circuit_breaker_open_deferral_increments_attempt_count():
+    """Pre-execution deferral: circuit_breaker_open must increment attempt_count
+    so backoff progresses and max_retries is eventually reached."""
+    from app.tasks.delivery_tasks import execute_notification_delivery
+
+    delivery = MagicMock()
+    delivery.id = 1
+    delivery.status = "queued"
+    delivery.channel = "email"
+    delivery.attempt_count = 0
+    delivery.max_retries = 5
+    delivery.scheduled_for = None
+    delivery.recipient_kind = "internal"
+    delivery.user_id = 101
+    delivery.event = "LEAD_ASSIGNED"
+    delivery.source_type = None
+    delivery.source_id = None
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=delivery)
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_task_db_session():
+        yield session
+
+    with patch(
+        "app.tasks.delivery_tasks.task_db_session", fake_task_db_session
+    ), patch(
+        "app.services.notification_delivery_service.check_delivery_eligibility",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "app.services.notification_circuit_breaker.check_channel_health",
+        new=AsyncMock(return_value=False),  # breaker open
+    ):
+        result = execute_notification_delivery.run(1)
+
+    assert result["status"] == "retry_scheduled"
+    assert delivery.attempt_count == 1
+
+
 def test_zalo_worker_passes_zalo_zns_provider_for_quota():
     """B2 fix at worker level: delivery_tasks passes provider='zalo_zns' for zalo channel
     to both check_quota and record_send."""
