@@ -52,18 +52,10 @@ async function adminLogin(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
 }
 
-test.describe.configure({ mode: "serial" });
-
 test.describe("Notification Rule Create Flow", () => {
-  // Login once in the first test — serial mode shares browser context,
-  // so subsequent tests inherit the session cookies.
-  let isLoggedIn = false;
-
+  // Each test gets its own browser context/page — login per test
   test.beforeEach(async ({ page }) => {
-    if (!isLoggedIn) {
-      await adminLogin(page);
-      isLoggedIn = true;
-    }
+    await adminLogin(page);
   });
 
   test("page loads with step 1 and quick templates", async ({ page }) => {

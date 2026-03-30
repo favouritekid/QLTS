@@ -17,17 +17,13 @@ vi.mock("next/navigation", () => ({
 
 const mockCreateMutateAsync = vi.fn().mockResolvedValue({ id: 99 });
 const mockUpdateMutateAsync = vi.fn().mockResolvedValue({ id: 1 });
+const mockUseNotificationRule = vi.fn();
 
 vi.mock("@/hooks/useNotificationRules", () => ({
   useCreateNotificationRule: () => ({ mutateAsync: mockCreateMutateAsync, isPending: false }),
   useUpdateNotificationRule: () => ({ mutateAsync: mockUpdateMutateAsync, isPending: false }),
-  useNotificationRule: (id?: number) => ({
-    data: id ? MOCK_EXISTING_RULE : undefined,
-    isLoading: false,
-  }),
-  useNotificationMetadata: () => ({
-    data: MOCK_METADATA,
-  }),
+  useNotificationRule: (...args: unknown[]) => mockUseNotificationRule(...args),
+  useNotificationMetadata: () => ({ data: MOCK_METADATA }),
 }));
 
 const MOCK_METADATA = {
@@ -80,6 +76,10 @@ const MOCK_EXISTING_RULE = {
 describe("NotificationRuleEditor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseNotificationRule.mockImplementation((id?: number) => ({
+      data: id ? MOCK_EXISTING_RULE : undefined,
+      isLoading: false,
+    }));
   });
 
   it("renders create mode with step 1 heading", () => {
@@ -120,6 +120,10 @@ describe("NotificationRuleEditor", () => {
 describe("NotificationRuleEditor — step navigation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseNotificationRule.mockImplementation((id?: number) => ({
+      data: id ? MOCK_EXISTING_RULE : undefined,
+      isLoading: false,
+    }));
   });
 
   it("blocks Next when no event is selected — shows inline error on click", async () => {
@@ -173,36 +177,67 @@ describe("NotificationRuleEditor — step navigation", () => {
 describe("NotificationRuleEditor — step 3 validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseNotificationRule.mockImplementation((id?: number) => ({
+      data: id ? MOCK_EXISTING_RULE : undefined,
+      isLoading: false,
+    }));
   });
 
-  it("step 4 preview shows no errors when all data is valid", async () => {
-    const user = userEvent.setup();
-    render(<NotificationRuleEditor ruleId={1} />);
+  it("edit mode with invalid group: clicking step 4 redirects to step 3 with errors", async () => {
+    // Mock rule with empty resolver_type → validateGroups flags "cần chọn người nhận"
+    const MOCK_INVALID_RULE = {
+      ...MOCK_EXISTING_RULE,
+      id: 2,
+      actions: [{
+        ...MOCK_EXISTING_RULE.actions[0],
+        recipient_config: { resolver_type: "", params: {} },
+      }],
+    };
+    mockUseNotificationRule.mockImplementation((id?: number) => ({
+      data: id ? MOCK_INVALID_RULE : undefined,
+      isLoading: false,
+    }));
 
-    // Edit mode: all steps accessible. Navigate directly to step 4.
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor ruleId={2} />);
+
+    // In edit mode, highestStepVisited=4 so step 4 is accessible in the indicator.
+    // But handleStepClick forward-checks prior steps. Step 3 has errors → redirected there.
     await user.click(screen.getByTitle("Kiểm tra & Lưu"));
 
-    // Preview should render with valid summary (mock rule has 1 group + 1 channel)
-    await waitFor(() => {
-      expect(screen.getByText("Tóm tắt quy tắc:")).toBeDefined();
-    });
+    // Should NOT show step 4 preview (redirected to step 3)
+    expect(screen.queryByText("Tóm tắt quy tắc:")).toBeNull();
 
-    // No "Cần sửa" error block in preview (data is valid)
-    expect(screen.queryByText("Cần sửa trước khi lưu:")).toBeNull();
+    // Step 3 should now show inline validation errors (attemptedSteps includes step 3)
+    await waitFor(() => {
+      const errors = screen.getAllByText(/chọn người nhận/i);
+      expect(errors.some((el) => el.classList.contains("text-destructive"))).toBe(true);
+    });
   });
 
-  it("step 4 preview shows recipient group info from hydrated rule", async () => {
-    const user = userEvent.setup();
-    render(<NotificationRuleEditor ruleId={1} />);
+  it("edit mode with invalid group: save is never called", async () => {
+    const MOCK_INVALID_RULE = {
+      ...MOCK_EXISTING_RULE,
+      id: 2,
+      actions: [{
+        ...MOCK_EXISTING_RULE.actions[0],
+        recipient_config: { resolver_type: "", params: {} },
+      }],
+    };
+    mockUseNotificationRule.mockImplementation((id?: number) => ({
+      data: id ? MOCK_INVALID_RULE : undefined,
+      isLoading: false,
+    }));
 
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor ruleId={2} />);
+
+    // Try clicking step 4 to reach save — should be blocked at step 3
     await user.click(screen.getByTitle("Kiểm tra & Lưu"));
 
-    await waitFor(() => {
-      expect(screen.getByText("Tóm tắt quy tắc:")).toBeDefined();
-    });
-
-    // Verify the narrative summary includes channel info (appears in preview + sidebar)
-    expect(screen.getAllByText(/Trong ứng dụng/).length).toBeGreaterThan(0);
+    // Neither create nor update should have been called
+    expect(mockCreateMutateAsync).not.toHaveBeenCalled();
+    expect(mockUpdateMutateAsync).not.toHaveBeenCalled();
   });
 });
 
@@ -213,6 +248,10 @@ describe("NotificationRuleEditor — step 3 validation", () => {
 describe("NotificationRuleEditor — edit mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseNotificationRule.mockImplementation((id?: number) => ({
+      data: id ? MOCK_EXISTING_RULE : undefined,
+      isLoading: false,
+    }));
   });
 
   it("hydrates form fields from existing rule", () => {
@@ -256,6 +295,10 @@ describe("NotificationRuleEditor — edit mode", () => {
 describe("NotificationRuleEditor — submit", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseNotificationRule.mockImplementation((id?: number) => ({
+      data: id ? MOCK_EXISTING_RULE : undefined,
+      isLoading: false,
+    }));
   });
 
   it("calls createMutation on save in create mode", async () => {
