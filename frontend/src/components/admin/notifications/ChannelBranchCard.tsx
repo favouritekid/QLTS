@@ -107,13 +107,13 @@ export default function ChannelBranchCard({
           {mode === "inline_override" && (
             <div className="space-y-2 pl-4 border-l-2 border-primary/20">
               <Input
-                placeholder="Ti\u00eau \u0111\u1ec1 ri\u00eang (VD: Lead m\u1edbi c\u1ea7n x\u1eed l\u00fd)"
+                placeholder="Tiêu đề riêng (VD: Lead mới cần xử lý)"
                 value={branch.content_override?.title_template ?? ""}
                 onChange={(e) => setOverride("title_template", e.target.value)}
                 className="text-sm"
               />
               <Textarea
-                placeholder="N\u1ed9i dung ri\u00eang"
+                placeholder="Nội dung riêng"
                 value={branch.content_override?.message_template ?? ""}
                 onChange={(e) => setOverride("message_template", e.target.value)}
                 className="text-sm min-h-[60px]"
@@ -174,7 +174,7 @@ export default function ChannelBranchCard({
             onChange={(e) => onChange({ ...branch, delay_minutes: parseInt(e.target.value) || 0 })}
             className="w-20 text-sm"
           />
-          <span className="text-xs text-muted-foreground">ph\u00fat</span>
+          <span className="text-xs text-muted-foreground">phút</span>
         </div>
       )}
     </div>
