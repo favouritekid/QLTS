@@ -183,6 +183,41 @@ describe("NotificationRuleEditor — step 3 validation", () => {
     }));
   });
 
+  it("create mode: adding external group with empty zalo template blocks Next at step 3", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor />);
+
+    // Quick template → step 2 (pre-fills event + content + 1 valid group)
+    await user.click(screen.getByText("Lead được phân công"));
+
+    // Step 2 → step 3: click Next, then verify step 3 mounted via DOM check
+    await user.click(screen.getByText("Tiếp theo"));
+
+    // Step 3 should be current. Verify via step title button state.
+    await waitFor(() => {
+      const step3Btn = screen.getByTitle("Người nhận & Kênh gửi");
+      expect(step3Btn.className).toContain("border-primary");
+    });
+
+    // Add external group — button text contains Vietnamese "khách hàng"
+    // Use index-based find (button 10 in debug dump) to avoid Unicode matching issues
+    const buttons = screen.getAllByRole("button");
+    const addExtBtn = buttons.find((btn) => {
+      const t = btn.textContent || "";
+      // Match the ASCII-safe substrings around the Vietnamese text
+      return t.includes("nh") && t.includes("ng/") && btn.tagName === "BUTTON";
+    });
+    expect(addExtBtn).toBeDefined();
+    await user.click(addExtBtn!);
+
+    // Click Next — step 3 now invalid (empty zalo_template_id)
+    await user.click(screen.getByText("Tiếp theo"));
+
+    // Verify step 4 was NOT reached (preview text absent)
+    const reachedStep4 = screen.queryByText("Tóm tắt quy tắc:") !== null;
+    expect(reachedStep4).toBe(false);
+  });
+
   it("edit mode with invalid group: clicking step 4 redirects to step 3 with errors", async () => {
     // Mock rule with empty resolver_type → validateGroups flags "cần chọn người nhận"
     const MOCK_INVALID_RULE = {
