@@ -541,31 +541,58 @@ async def test_stale_sent_uses_sent_at():
     assert "notification_delivery.created_at" not in where_sql
 
 
-def test_scope_condition_includes_external_rows():
-    """Must-Fix #4: scoped queries must include external rows (user_id=NULL)."""
+def test_scope_condition_with_unit_ids_includes_external_subquery():
+    """Must-Fix #4: scoped condition with unit_ids includes lead-based external subquery."""
     from app.repositories.notification_delivery_repository import _build_scope_condition
-    cond = _build_scope_condition([1, 2, 3])
+    cond = _build_scope_condition([1, 2, 3], allowed_unit_ids=[10, 20])
     sql = str(cond)
-    # Must include OR condition for external rows (bind param, not literal)
+    # Must include external subquery with lead.unit_id check
     assert "recipient_kind" in sql
     assert "user_id IS NULL" in sql
+    assert "lead" in sql.lower()  # EXISTS subquery on lead table
+
+
+def test_scope_condition_without_unit_ids_no_external():
+    """Must-Fix #4: officer scope without unit_ids shows no external rows."""
+    from app.repositories.notification_delivery_repository import _build_scope_condition
+    cond = _build_scope_condition([1], allowed_unit_ids=None)
+    sql = str(cond)
+    # Should be simple user_id IN (ids), no external branch
+    assert "user_id IN" in sql
+    assert "recipient_kind" not in sql
 
 
 @pytest.mark.asyncio
-async def test_scoped_list_query_includes_external_condition():
-    """Must-Fix #4: list_deliveries with allowed_user_ids generates OR clause for external."""
-    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+async def test_get_delivery_for_user_external_in_scope():
+    """Must-Fix #4: manager can access external delivery if lead is in their unit."""
+    from app.core.deps import _check_external_source_in_units
+
+    delivery = MagicMock()
+    delivery.source_type = "lead"
+    delivery.source_id = 42
 
     db = AsyncMock()
-    count_result = MagicMock()
-    count_result.scalar_one = MagicMock(return_value=0)
-    list_result = MagicMock()
-    list_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-    db.execute = AsyncMock(side_effect=[count_result, list_result])
+    # Lead query returns unit_id=10
+    lead_result = MagicMock()
+    lead_result.first = MagicMock(return_value=(10,))
+    db.execute = AsyncMock(return_value=lead_result)
 
-    repo = NotificationDeliveryRepository(db)
-    await repo.list_deliveries(allowed_user_ids=[1, 2])
+    assert await _check_external_source_in_units(db, delivery, [10, 20]) is True
 
-    # Check the WHERE clause of the list query (second call)
-    where_sql = str(db.execute.await_args_list[1].args[0].whereclause)
-    assert "recipient_kind" in where_sql  # external OR branch present
+
+@pytest.mark.asyncio
+async def test_get_delivery_for_user_external_out_of_scope():
+    """Must-Fix #4: manager cannot access external delivery if lead is outside their units."""
+    from app.core.deps import _check_external_source_in_units
+
+    delivery = MagicMock()
+    delivery.source_type = "lead"
+    delivery.source_id = 42
+
+    db = AsyncMock()
+    # Lead query returns unit_id=99 (not in allowed)
+    lead_result = MagicMock()
+    lead_result.first = MagicMock(return_value=(99,))
+    db.execute = AsyncMock(return_value=lead_result)
+
+    assert await _check_external_source_in_units(db, delivery, [10, 20]) is False

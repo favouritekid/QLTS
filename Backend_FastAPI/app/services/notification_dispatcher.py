@@ -946,9 +946,6 @@ async def dispatch(
                     )
                     continue
 
-            # Set cooldown after passing checks
-            await safe_redis_set(ext_cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS)
-
             ch_snapshot = _build_action_snapshot(action, config, payload, _action_template_map, notification_type=notification_type)
             delay_minutes = action.delay_minutes or 0
             ext_scheduled_for = None
@@ -972,6 +969,8 @@ async def dispatch(
                 scheduled_for=ext_scheduled_for,
             )
             if ext_ids:
+                # Set cooldown ONLY after successful delivery row creation
+                await safe_redis_set(ext_cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS)
                 _external_delivery_ids.setdefault(action.channel, []).extend(ext_ids)
                 action_delivery_map.setdefault(action.step, []).extend(ext_ids)
                 log.info(

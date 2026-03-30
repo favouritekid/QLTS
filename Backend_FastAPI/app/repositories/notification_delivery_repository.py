@@ -5,26 +5,44 @@ Repository for NotificationDelivery — per-channel delivery tracking.
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select, func, and_, or_, update
+from sqlalchemy import select, func, and_, or_, update, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification_delivery import NotificationDelivery
 from app.repositories.base import BaseRepository
 
 
-def _build_scope_condition(allowed_user_ids: list[int]):
-    """Build scope filter that includes internal rows by user_id AND external rows (user_id IS NULL).
+def _build_scope_condition(
+    allowed_user_ids: list[int],
+    allowed_unit_ids: list[int] | None = None,
+):
+    """Build scope filter: internal rows by user_id + external rows by source ownership.
 
-    External deliveries have user_id=NULL and recipient_kind='external'.
-    Without this, scoped queries silently drop all external delivery data.
+    External deliveries (user_id=NULL, recipient_kind='external') are included
+    only if their source resource belongs to the allowed unit hierarchy.
+    Currently supports source_type='lead' (checks lead.unit_id IN unit_ids).
     """
-    return or_(
-        NotificationDelivery.user_id.in_(allowed_user_ids),
-        and_(
-            NotificationDelivery.user_id.is_(None),
-            NotificationDelivery.recipient_kind == "external",
+    internal_cond = NotificationDelivery.user_id.in_(allowed_user_ids)
+
+    if not allowed_unit_ids:
+        # Officer scope without unit info — no external rows visible
+        return internal_cond
+
+    from app.models.lead import Lead
+    external_cond = and_(
+        NotificationDelivery.user_id.is_(None),
+        NotificationDelivery.recipient_kind == "external",
+        NotificationDelivery.source_type == "lead",
+        NotificationDelivery.source_id.isnot(None),
+        exists(
+            select(Lead.id).where(
+                Lead.id == NotificationDelivery.source_id,
+                Lead.unit_id.in_(allowed_unit_ids),
+            )
         ),
     )
+
+    return or_(internal_cond, external_cond)
 
 
 class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
@@ -194,6 +212,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         skip: int = 0,
         limit: int = 50,
         allowed_user_ids: list[int] | None = None,
+        allowed_unit_ids: list[int] | None = None,
     ) -> Tuple[List[NotificationDelivery], int]:
         """List deliveries with filters. Returns (records, total_count)."""
         conditions = []
@@ -215,7 +234,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if date_to:
             conditions.append(NotificationDelivery.created_at <= date_to)
         if allowed_user_ids is not None:
-            conditions.append(_build_scope_condition(allowed_user_ids))
+            conditions.append(_build_scope_condition(allowed_user_ids, allowed_unit_ids))
 
         where = and_(*conditions) if conditions else True
 
@@ -243,6 +262,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         event: str | None = None,
         channel: str | None = None,
         allowed_user_ids: list[int] | None = None,
+        allowed_unit_ids: list[int] | None = None,
     ) -> dict:
         """
         Aggregate delivery stats: counts by status and channel.
@@ -259,7 +279,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if channel:
             conditions.append(NotificationDelivery.channel == channel)
         if allowed_user_ids is not None:
-            conditions.append(_build_scope_condition(allowed_user_ids))
+            conditions.append(_build_scope_condition(allowed_user_ids, allowed_unit_ids))
 
         where = and_(*conditions) if conditions else True
 
@@ -299,6 +319,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         channel: str | None = None,
         limit: int = 20,
         allowed_user_ids: list[int] | None = None,
+        allowed_unit_ids: list[int] | None = None,
     ) -> dict:
         """
         Failure analytics: grouped by error_reason.
@@ -315,7 +336,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if channel:
             conditions.append(NotificationDelivery.channel == channel)
         if allowed_user_ids is not None:
-            conditions.append(_build_scope_condition(allowed_user_ids))
+            conditions.append(_build_scope_condition(allowed_user_ids, allowed_unit_ids))
 
         where = and_(*conditions)
 
@@ -401,6 +422,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         date_to: "datetime | None" = None,
         channel: str | None = None,
         allowed_user_ids: list[int] | None = None,
+        allowed_unit_ids: list[int] | None = None,
     ) -> list[dict]:
         """Delivery counts bucketed by hour/day. Max 30-day range."""
         from sqlalchemy import case
@@ -422,7 +444,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if channel:
             conds.append(NotificationDelivery.channel == channel)
         if allowed_user_ids is not None:
-            conds.append(_build_scope_condition(allowed_user_ids))
+            conds.append(_build_scope_condition(allowed_user_ids, allowed_unit_ids))
 
         q = (
             select(
@@ -448,6 +470,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         date_from: "datetime | None" = None,
         date_to: "datetime | None" = None,
         allowed_user_ids: list[int] | None = None,
+        allowed_unit_ids: list[int] | None = None,
     ) -> list[dict]:
         """Top events by volume with failure rates."""
         from sqlalchemy import case
@@ -458,7 +481,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if date_to:
             conds.append(NotificationDelivery.created_at <= date_to)
         if allowed_user_ids is not None:
-            conds.append(_build_scope_condition(allowed_user_ids))
+            conds.append(_build_scope_condition(allowed_user_ids, allowed_unit_ids))
 
         q = (
             select(
