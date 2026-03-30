@@ -210,6 +210,7 @@ const RESOLVER_LABELS: Record<string, string> = {
   all_admins: "Tất cả Admin",
   all_users: "Tất cả người dùng",
   specific_users: "Người dùng cụ thể",
+  collaborator_user: "Cộng tác viên",
   dorm_residents: "Sinh viên ký túc",
   dorm_staff: "Nhân viên ký túc",
 };

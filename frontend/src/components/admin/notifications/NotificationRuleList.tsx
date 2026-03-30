@@ -166,7 +166,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
 
   // Filters
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled">("enabled");
   const [typeFilter, setTypeFilter] = useState<"all" | "success" | "warning" | "error" | "info">("all");
 
   // Collapsed sections state
@@ -307,13 +307,13 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
     // Map resolver types to Vietnamese
     const resolverMap: Record<string, string> = {
       "assigned_officer": "Cán bộ phụ trách",
-      "lead_owner": "Người sở hữu lead",
-      "specific_user": "Người dùng cụ thể",
-      "specific_role": "Vai trò cụ thể",
-      "unit_members": "Thành viên đơn vị",
+      "lead_owner": "Cán bộ phụ trách lead",
+      "unit_staff": "Nhân viên cùng đơn vị",
+      "unit_managers": "Quản lý đơn vị",
+      "specific_users": "Người dùng cụ thể",
       "all_users": "Tất cả người dùng",
-      "applicant": "Người nộp hồ sơ",
-      "consultation_officer": "Cán bộ tư vấn",
+      "all_admins": "Tất cả Admin",
+      "collaborator_user": "Cộng tác viên",
     };
 
     return resolverMap[type] || type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");

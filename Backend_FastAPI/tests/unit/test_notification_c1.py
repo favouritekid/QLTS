@@ -108,6 +108,20 @@ class TestRenderChannelConfigPlaceholders:
         assert result["zalo_template_data"]["msg"] == "C applied"
 
 
+class TestDeserializeResolver:
+    """notification_rule_loader supports wizard-safe resolver types."""
+
+    def test_collaborator_user_deserializes(self):
+        from app.services.notification_rule_loader import deserialize_resolver
+        from app.services.notification_resolvers import CollaboratorUserResolver
+
+        resolver = deserialize_resolver(
+            {"resolver_type": "collaborator_user", "params": {}}
+        )
+
+        assert isinstance(resolver, CollaboratorUserResolver)
+
+
 # ============================================================
 # CRUD validation
 # ============================================================

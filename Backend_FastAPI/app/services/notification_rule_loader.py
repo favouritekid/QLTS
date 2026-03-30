@@ -27,6 +27,7 @@ from app.services.notification_resolvers import (
     AllAdminsResolver,
     AllUsersResolver,
     BaseResolver,
+    CollaboratorUserResolver,
     CompositeResolver,
     DormResidentsResolver,
     DormStaffResolver,
@@ -170,6 +171,7 @@ def deserialize_resolver(config: Dict[str, Any]) -> BaseResolver:
         "all_admins": AllAdminsResolver,
         "all_users": AllUsersResolver,
         "specific_users": SpecificUsersResolver,
+        "collaborator_user": CollaboratorUserResolver,
         "dorm_residents": DormResidentsResolver,
         "dorm_staff": DormStaffResolver,
     }
@@ -807,3 +809,22 @@ async def get_rule_for_event(
     )
 
     return config
+
+
+async def has_rule_override_for_event(
+    db: AsyncSession,
+    event: SystemEvents,
+) -> bool:
+    """
+    Return True when any database rule row exists for the given event.
+
+    dispatch() uses this to distinguish:
+    - no DB row -> registry fallback is allowed
+    - DB row exists but is disabled/invalid -> suppress registry fallback
+    """
+    result = await db.execute(
+        select(models.NotificationRule.id).where(
+            models.NotificationRule.event == event.value
+        )
+    )
+    return result.scalar_one_or_none() is not None

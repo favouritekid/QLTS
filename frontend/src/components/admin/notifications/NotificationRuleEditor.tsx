@@ -58,6 +58,7 @@ import {
   SYSTEM_EVENTS,
   RECIPIENT_OPTIONS,
   EXTERNAL_RESOLVER_FALLBACK,
+  SUPPORTED_INTERNAL_RESOLVERS,
   TEMPLATE_VARIABLES,
   getCategoryIcon,
   getCategoryOrder,
@@ -284,11 +285,17 @@ export function NotificationRuleEditor({
 
   const dynamicResolverTypes = useMemo<RecipientOption[]>(() => {
     if (!metadata?.resolver_types) return RECIPIENT_OPTIONS;
-    return metadata.resolver_types.map((resolver) => ({
-      value: resolver.value,
-      label: resolver.label,
-      description: resolver.description,
-    }));
+    return metadata.resolver_types
+      .filter((resolver) =>
+        SUPPORTED_INTERNAL_RESOLVERS.includes(
+          resolver.value as (typeof SUPPORTED_INTERNAL_RESOLVERS)[number],
+        ),
+      )
+      .map((resolver) => ({
+        value: resolver.value,
+        label: resolver.label,
+        description: resolver.description,
+      }));
   }, [metadata]);
 
   const selectedEventData = useMemo(() => {

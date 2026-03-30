@@ -27,6 +27,16 @@ export interface TemplateVariable {
   description: string;
 }
 
+export const SUPPORTED_INTERNAL_RESOLVERS = [
+  "lead_owner",
+  "unit_staff",
+  "unit_managers",
+  "all_admins",
+  "all_users",
+  "specific_users",
+  "collaborator_user",
+] as const;
+
 // ============================================================================
 // System events — fallback when metadata.events is unavailable
 // ============================================================================
@@ -106,8 +116,7 @@ export const RECIPIENT_OPTIONS: RecipientOption[] = [
   { value: "all_admins", label: "Tất cả Admin", description: "Gửi cho tất cả người dùng có quyền Admin" },
   { value: "all_users", label: "Tất cả người dùng", description: "Gửi broadcast cho toàn bộ người dùng trong hệ thống" },
   { value: "specific_users", label: "Người dùng cụ thể", description: "Chọn danh sách người nhận theo tên" },
-  { value: "dorm_residents", label: "Sinh viên ở ký túc", description: "Gửi cho các sinh viên đang ở ký túc xá" },
-  { value: "dorm_staff", label: "Nhân viên ký túc xá", description: "Gửi cho đội ngũ quản lý KTX" },
+  { value: "collaborator_user", label: "Cộng tác viên", description: "Gửi cho user liên kết với cộng tác viên" },
 ];
 
 export const EXTERNAL_RESOLVER_FALLBACK: ExternalResolverOption[] = [

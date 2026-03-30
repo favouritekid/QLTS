@@ -8,6 +8,7 @@ Resolver -> Preference Filter -> Template Rendering -> DB Persistence -> Side Ef
 import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -167,6 +168,51 @@ class TestNotificationDispatcher:
         
         # Assert
         assert len(notification_ids) == 0
+
+    async def test_dispatch_disabled_database_rule_suppresses_registry_fallback(
+        self,
+        db: AsyncSession,
+        officer_user_in_db: dict,
+        mocker,
+    ):
+        """
+        If a DB rule exists but is disabled, dispatch() must NOT fall back to
+        the hardcoded registry config for the same event.
+        """
+        user_id = officer_user_in_db["id"]
+        event = SystemEvents.SYSTEM_ALERT
+
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Disabled",
+            message_template="Disabled",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=False,
+        )
+        db.add(rule)
+        await db.commit()
+
+        mock_domain_emit = mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+
+        notification_ids, callback = await dispatch(
+            db,
+            event,
+            {"user_id": user_id, "severity": "warning", "message": "Registry should stay suppressed"},
+        )
+        await db.commit()
+        if callback:
+            await callback()
+
+        result = await db.execute(
+            select(models.Notification).where(models.Notification.user_id == user_id)
+        )
+
+        assert notification_ids == []
+        assert result.scalars().all() == []
+        mock_domain_emit.assert_called_once()
 
     async def test_dispatch_preference_filtering(
         self, 

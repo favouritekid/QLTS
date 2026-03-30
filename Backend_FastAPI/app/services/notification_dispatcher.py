@@ -56,7 +56,10 @@ from app.services.notification_registry import get_event_config, NotificationCon
 from app.services import notification_preference_service
 from app.repositories import NotificationRepository, NotificationTemplateRepository
 # ✅ PHASE 2.3: Import database rule loader
-from app.services.notification_rule_loader import get_rule_for_event
+from app.services.notification_rule_loader import (
+    get_rule_for_event,
+    has_rule_override_for_event,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -511,8 +514,20 @@ async def dispatch(
     config = await get_rule_for_event(db, event)
     rule_source = "database" if config else None
 
-    # Fallback to hardcoded registry if no database rule
+    # If a DB rule exists but doesn't load (for example disabled on purpose),
+    # treat DB as source of truth and do NOT silently re-enable registry logic.
     if not config:
+        if await has_rule_override_for_event(db, event):
+            log.info(
+                "Database rule override suppressed registry fallback",
+                event_type=event.value,
+            )
+
+            async def _domain_only_callback():
+                await _emit_domain_event(event, payload)
+
+            return [], _domain_only_callback
+
         config = get_event_config(event)
         rule_source = "registry" if config else None
 

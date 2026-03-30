@@ -132,14 +132,9 @@ async def get_notification_metadata(
                 "description": "Gửi cho danh sách user cụ thể"
             },
             {
-                "value": "composite",
-                "label": "Composite (Multiple Resolvers)",
-                "description": "Kết hợp nhiều resolver"
-            },
-            {
-                "value": "actor_excluded",
-                "label": "Exclude Actor",
-                "description": "Gửi nhưng loại trừ người thực hiện hành động"
+                "value": "collaborator_user",
+                "label": "Collaborator User",
+                "description": "Gửi cho user liên kết với cộng tác viên"
             }
         ],
         "external_resolver_types": [
