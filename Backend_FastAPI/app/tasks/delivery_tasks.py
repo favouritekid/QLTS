@@ -144,7 +144,10 @@ def execute_notification_delivery(self, delivery_id: int):
             # 4b. Check quota (D1) — external channels, fail fast
             if delivery.channel in ("zalo", "sms"):
                 from app.services import notification_quota_service
-                quota_ok = await notification_quota_service.check_quota(session, delivery.channel)
+                quota_provider = "zalo_zns" if delivery.channel == "zalo" else "default"
+                quota_ok = await notification_quota_service.check_quota(
+                    session, delivery.channel, provider=quota_provider
+                )
                 if not quota_ok:
                     next_retry = _calculate_next_retry(delivery.attempt_count or 0)
                     from app.services import notification_delivery_service as nds
@@ -220,7 +223,10 @@ def execute_notification_delivery(self, delivery_id: int):
                 # D1: Record send for quota tracking
                 if delivery.channel in ("zalo", "sms"):
                     from app.services import notification_quota_service
-                    await notification_quota_service.record_send(session, delivery.channel)
+                    quota_provider = "zalo_zns" if delivery.channel == "zalo" else "default"
+                    await notification_quota_service.record_send(
+                        session, delivery.channel, provider=quota_provider
+                    )
 
                 # D2: Record success for circuit breaker
                 try:

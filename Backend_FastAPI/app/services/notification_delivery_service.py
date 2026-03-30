@@ -243,12 +243,19 @@ async def mark_for_retry(
     delivery_id: int,
     next_retry_at: "datetime",
     error_reason: str = "",
+    increment_attempt: bool = False,
 ) -> int:
     """
     Mark delivery as failed with a scheduled retry.
 
-    Sets status=failed, next_retry_at, increments attempt_count, sets last_attempt_at.
+    Sets status=failed, next_retry_at, sets last_attempt_at.
+    Only increments attempt_count if increment_attempt=True.
     The sweep_retry_deliveries task will pick this up when next_retry_at <= now().
+
+    Note: The worker task (execute_notification_delivery) increments attempt_count
+    before channel execution. Pre-execution deferrals (quota_exhausted,
+    circuit_breaker_open) and post-execution failures should NOT increment again.
+    Use increment_attempt=True only for callers that haven't already incremented.
     """
     from app.models.notification_delivery import NotificationDelivery
     delivery = await db.get(NotificationDelivery, delivery_id)
@@ -258,7 +265,8 @@ async def mark_for_retry(
     delivery.status = "failed"
     delivery.error_reason = error_reason
     delivery.next_retry_at = next_retry_at
-    delivery.attempt_count = (delivery.attempt_count or 0) + 1
+    if increment_attempt:
+        delivery.attempt_count = (delivery.attempt_count or 0) + 1
     delivery.last_attempt_at = datetime.now(timezone.utc)
     await db.flush()
     return 1
