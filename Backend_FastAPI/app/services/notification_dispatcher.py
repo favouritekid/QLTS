@@ -914,6 +914,41 @@ async def dispatch(
             if not destination:
                 continue
 
+            # External cooldown: skip if same destination was notified recently
+            ext_cooldown_key = f"notif:cooldown:{event.value}:{destination}:{action.channel}:{action.step}"
+            if await safe_redis_exists(ext_cooldown_key):
+                log.info(
+                    "External delivery skipped (cooldown)",
+                    event_type=event.value, channel=action.channel,
+                    destination=destination,
+                )
+                continue
+
+            # External dedup: skip if delivery row with same dedupe_key+channel+destination exists
+            ext_dedupe_key = action_dedupe_keys.get(action.step)
+            if ext_dedupe_key:
+                from sqlalchemy import select as sa_select
+                from app.models.notification_delivery import NotificationDelivery
+                existing = await db.execute(
+                    sa_select(NotificationDelivery.id)
+                    .where(
+                        NotificationDelivery.dedupe_key == ext_dedupe_key,
+                        NotificationDelivery.channel == action.channel,
+                        NotificationDelivery.destination == destination,
+                    )
+                    .limit(1)
+                )
+                if existing.scalar_one_or_none() is not None:
+                    log.info(
+                        "External delivery skipped (dedup)",
+                        event_type=event.value, channel=action.channel,
+                        destination=destination, dedupe_key=ext_dedupe_key,
+                    )
+                    continue
+
+            # Set cooldown after passing checks
+            await safe_redis_set(ext_cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS)
+
             ch_snapshot = _build_action_snapshot(action, config, payload, _action_template_map, notification_type=notification_type)
             delay_minutes = action.delay_minutes or 0
             ext_scheduled_for = None

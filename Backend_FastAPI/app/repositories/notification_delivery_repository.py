@@ -5,11 +5,26 @@ Repository for NotificationDelivery — per-channel delivery tracking.
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select, func, and_, update
+from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification_delivery import NotificationDelivery
 from app.repositories.base import BaseRepository
+
+
+def _build_scope_condition(allowed_user_ids: list[int]):
+    """Build scope filter that includes internal rows by user_id AND external rows (user_id IS NULL).
+
+    External deliveries have user_id=NULL and recipient_kind='external'.
+    Without this, scoped queries silently drop all external delivery data.
+    """
+    return or_(
+        NotificationDelivery.user_id.in_(allowed_user_ids),
+        and_(
+            NotificationDelivery.user_id.is_(None),
+            NotificationDelivery.recipient_kind == "external",
+        ),
+    )
 
 
 class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
@@ -200,7 +215,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if date_to:
             conditions.append(NotificationDelivery.created_at <= date_to)
         if allowed_user_ids is not None:
-            conditions.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+            conditions.append(_build_scope_condition(allowed_user_ids))
 
         where = and_(*conditions) if conditions else True
 
@@ -244,7 +259,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if channel:
             conditions.append(NotificationDelivery.channel == channel)
         if allowed_user_ids is not None:
-            conditions.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+            conditions.append(_build_scope_condition(allowed_user_ids))
 
         where = and_(*conditions) if conditions else True
 
@@ -300,7 +315,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if channel:
             conditions.append(NotificationDelivery.channel == channel)
         if allowed_user_ids is not None:
-            conditions.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+            conditions.append(_build_scope_condition(allowed_user_ids))
 
         where = and_(*conditions)
 
@@ -407,7 +422,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if channel:
             conds.append(NotificationDelivery.channel == channel)
         if allowed_user_ids is not None:
-            conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+            conds.append(_build_scope_condition(allowed_user_ids))
 
         q = (
             select(
@@ -443,7 +458,7 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         if date_to:
             conds.append(NotificationDelivery.created_at <= date_to)
         if allowed_user_ids is not None:
-            conds.append(NotificationDelivery.user_id.in_(allowed_user_ids))
+            conds.append(_build_scope_condition(allowed_user_ids))
 
         q = (
             select(

@@ -115,6 +115,92 @@ def test_delivery_failure_increments_attempt_count_exactly_once():
     assert delivery.attempt_count == 1
 
 
+def test_quota_exhausted_at_max_retries_dead_letters():
+    """Must-Fix #2: quota_exhausted at max_retries → dead_lettered, not retry."""
+    from app.tasks.delivery_tasks import execute_notification_delivery
+
+    delivery = MagicMock()
+    delivery.id = 1
+    delivery.status = "failed"
+    delivery.channel = "zalo"
+    delivery.attempt_count = 5  # already at max
+    delivery.max_retries = 5
+    delivery.scheduled_for = None
+    delivery.recipient_kind = "external"
+    delivery.user_id = None
+    delivery.event = "LEAD_CREATED"
+    delivery.source_type = None
+    delivery.source_id = None
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=delivery)
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_task_db_session():
+        yield session
+
+    with patch(
+        "app.tasks.delivery_tasks.task_db_session", fake_task_db_session
+    ), patch(
+        "app.services.notification_delivery_service.check_delivery_eligibility",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "app.services.notification_quota_service.check_quota",
+        new=AsyncMock(return_value=False),  # quota exhausted
+    ), patch(
+        "app.services.notification_delivery_service.mark_dead_lettered",
+        new=AsyncMock(return_value=1),
+    ) as mock_dead_letter:
+        result = execute_notification_delivery.run(1)
+
+    assert result["status"] == "dead_lettered"
+
+
+def test_circuit_breaker_open_at_max_retries_dead_letters():
+    """Must-Fix #2: circuit_breaker_open at max_retries → dead_lettered."""
+    from app.tasks.delivery_tasks import execute_notification_delivery
+
+    delivery = MagicMock()
+    delivery.id = 1
+    delivery.status = "failed"
+    delivery.channel = "email"
+    delivery.attempt_count = 5  # already at max
+    delivery.max_retries = 5
+    delivery.scheduled_for = None
+    delivery.recipient_kind = "internal"
+    delivery.user_id = 101
+    delivery.event = "LEAD_ASSIGNED"
+    delivery.source_type = None
+    delivery.source_id = None
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=delivery)
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_task_db_session():
+        yield session
+
+    with patch(
+        "app.tasks.delivery_tasks.task_db_session", fake_task_db_session
+    ), patch(
+        "app.services.notification_delivery_service.check_delivery_eligibility",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "app.services.notification_circuit_breaker.check_channel_health",
+        new=AsyncMock(return_value=False),  # breaker open
+    ), patch(
+        "app.services.notification_delivery_service.mark_dead_lettered",
+        new=AsyncMock(return_value=1),
+    ):
+        result = execute_notification_delivery.run(1)
+
+    assert result["status"] == "dead_lettered"
+
+
 def test_quota_exhausted_deferral_increments_attempt_count():
     """Pre-execution deferral: quota_exhausted must increment attempt_count
     so backoff progresses and max_retries is eventually reached."""
@@ -453,3 +539,33 @@ async def test_stale_sent_uses_sent_at():
     where_sql = str(db.execute.await_args.args[0].whereclause)
     assert "notification_delivery.sent_at" in where_sql
     assert "notification_delivery.created_at" not in where_sql
+
+
+def test_scope_condition_includes_external_rows():
+    """Must-Fix #4: scoped queries must include external rows (user_id=NULL)."""
+    from app.repositories.notification_delivery_repository import _build_scope_condition
+    cond = _build_scope_condition([1, 2, 3])
+    sql = str(cond)
+    # Must include OR condition for external rows (bind param, not literal)
+    assert "recipient_kind" in sql
+    assert "user_id IS NULL" in sql
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_query_includes_external_condition():
+    """Must-Fix #4: list_deliveries with allowed_user_ids generates OR clause for external."""
+    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+
+    db = AsyncMock()
+    count_result = MagicMock()
+    count_result.scalar_one = MagicMock(return_value=0)
+    list_result = MagicMock()
+    list_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    db.execute = AsyncMock(side_effect=[count_result, list_result])
+
+    repo = NotificationDeliveryRepository(db)
+    await repo.list_deliveries(allowed_user_ids=[1, 2])
+
+    # Check the WHERE clause of the list query (second call)
+    where_sql = str(db.execute.await_args_list[1].args[0].whereclause)
+    assert "recipient_kind" in where_sql  # external OR branch present

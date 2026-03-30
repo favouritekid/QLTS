@@ -149,6 +149,18 @@ def execute_notification_delivery(self, delivery_id: int):
                     session, delivery.channel, provider=quota_provider
                 )
                 if not quota_ok:
+                    max_retries = delivery.max_retries or 5
+                    next_count = (delivery.attempt_count or 0) + 1
+                    if next_count >= max_retries:
+                        await notification_delivery_service.mark_dead_lettered(
+                            session, [delivery_id],
+                            error_reason=f"quota_exhausted_max_retries ({max_retries})",
+                        )
+                        await session.commit()
+                        task_log.warning(
+                            f"Delivery {delivery_id} dead-lettered — quota exhausted after {next_count} deferrals"
+                        )
+                        return {"status": "dead_lettered", "delivery_id": delivery_id}
                     next_retry = _calculate_next_retry(delivery.attempt_count or 0)
                     from app.services import notification_delivery_service as nds
                     await nds.mark_for_retry(
@@ -167,6 +179,18 @@ def execute_notification_delivery(self, delivery_id: int):
             from app.services import notification_circuit_breaker
             breaker_ok = await notification_circuit_breaker.check_channel_health(delivery.channel)
             if not breaker_ok:
+                max_retries = delivery.max_retries or 5
+                next_count = (delivery.attempt_count or 0) + 1
+                if next_count >= max_retries:
+                    await notification_delivery_service.mark_dead_lettered(
+                        session, [delivery_id],
+                        error_reason=f"circuit_breaker_open_max_retries ({max_retries})",
+                    )
+                    await session.commit()
+                    task_log.warning(
+                        f"Delivery {delivery_id} dead-lettered — breaker open after {next_count} deferrals"
+                    )
+                    return {"status": "dead_lettered", "delivery_id": delivery_id}
                 next_retry = _calculate_next_retry(delivery.attempt_count or 0)
                 from app.services import notification_delivery_service as nds2
                 await nds2.mark_for_retry(

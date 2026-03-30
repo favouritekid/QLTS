@@ -1794,9 +1794,16 @@ async def get_delivery_for_user(
             row = result.first()
             if row and row[0] in descendant_unit_ids:
                 return record
+        elif record.recipient_kind == "external":
+            # External deliveries (user_id=NULL): visible to manager scope
+            return record
         raise ResourceNotFoundError(detail="Delivery record not found")
 
+    # Officer scope
     if record.user_id == current_user.id:
+        return record
+    if record.user_id is None and record.recipient_kind == "external":
+        # External deliveries: visible to any authenticated user (officer+)
         return record
     raise ResourceNotFoundError(detail="Delivery record not found")
 
