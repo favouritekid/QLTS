@@ -425,8 +425,7 @@ async def bulk_reject_admissions(
                     payload={
                         "lead_id": profile.lead_id,
                         "lead_name": f"Profile #{profile.id}",
-                        "officer_id": current_user.id,
-                        "old_status": "submitted",
+                            "old_status": "submitted",
                         "new_status": "sts16",
                         "actor_id": current_user.id,
                         "actor_name": current_user.full_name or current_user.username,
@@ -734,8 +733,9 @@ async def submit_admission_profile(
         # Transaction commit
         await db.commit()
 
-        # Dispatch status change notification for both approved and rejected
-        if result["status"] in ("approved", "rejected"):
+        # Dispatch APPLICATION_STATUS_CHANGED for the draft → submitted transition.
+        # Service returns status="submitted" on success (not "approved"/"rejected").
+        if result["status"] == "submitted":
             profile_row = await db.get(models.AdmissionProfile, profile_id)
             await safe_dispatch(
                 db=db,
@@ -743,12 +743,12 @@ async def submit_admission_profile(
                 payload={
                     "application_id": profile_id,
                     "lead_id": profile_row.lead_id if profile_row else None,
-                    "old_status": "submitted",
-                    "new_status": result["status"],
+                    "old_status": "draft",
+                    "new_status": "submitted",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
                 },
-                dedupe_key=f"admission_profile_{result['status']}:{profile_id}"
+                dedupe_key=f"admission_profile_submitted:{profile_id}"
             )
 
         return result
@@ -1066,6 +1066,10 @@ async def enroll_student(
     - 429: Rate limit exceeded
     """
     try:
+        # Capture pre-enroll status for accurate notification payload
+        pre_enroll_profile = await db.get(models.AdmissionProfile, profile_id)
+        pre_enroll_status = pre_enroll_profile.status if pre_enroll_profile else "confirmed"
+
         result = await admission_service.enroll_student(
             db=db,
             profile_id=profile_id,
@@ -1076,14 +1080,14 @@ async def enroll_student(
         await db.commit()
 
         # Dispatch enrollment status change notification
-        enroll_profile = await db.get(models.AdmissionProfile, profile_id)
+        await db.refresh(pre_enroll_profile)
         await safe_dispatch(
             db=db,
             event=SystemEvents.APPLICATION_STATUS_CHANGED,
             payload={
                 "application_id": profile_id,
-                "lead_id": enroll_profile.lead_id if enroll_profile else None,
-                "old_status": "approved",
+                "lead_id": pre_enroll_profile.lead_id if pre_enroll_profile else None,
+                "old_status": pre_enroll_status,
                 "new_status": "enrolled",
                 "student_id": result["student_id"],
                 "student_code": result["student_code"],
@@ -1103,7 +1107,6 @@ async def enroll_student(
                 payload={
                     "lead_id": profile.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "officer_id": current_user.id,
                     "old_status": "confirmed",
                     "new_status": "sts11",
                     "actor_id": current_user.id,
@@ -1443,15 +1446,29 @@ async def approve_admission(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. Dispatch LEAD_STATUS_CHANGED for commission trigger (Path 4 - approve)
+        # 4a. Dispatch APPLICATION_STATUS_CHANGED for admission notification
         if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": result.lead_id,
+                    "old_status": "submitted",
+                    "new_status": "approved",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_approved:{profile_id}",
+            )
+
+            # 4b. Dispatch LEAD_STATUS_CHANGED for pipeline + commission
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.LEAD_STATUS_CHANGED,
                 payload={
                     "lead_id": result.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "officer_id": current_user.id,
                     "old_status": "submitted",
                     "new_status": "sts09",
                     "actor_id": current_user.id,
@@ -1535,7 +1552,6 @@ async def reject_admission(
                 payload={
                     "lead_id": result.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "officer_id": current_user.id,
                     "old_status": "submitted",
                     "new_status": "sts16",
                     "actor_id": current_user.id,
@@ -1607,7 +1623,6 @@ async def request_revision(
                 payload={
                     "lead_id": result.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "officer_id": current_user.id,
                     "old_status": "submitted",
                     "new_status": "sts17",
                     "actor_id": current_user.id,
@@ -2058,7 +2073,6 @@ async def drop_student(
                 payload={
                     "lead_id": result.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "officer_id": current_user.id,
                     "old_status": "sts11",
                     "new_status": "sts12",
                     "actor_id": current_user.id,
