@@ -268,9 +268,9 @@ def test_zalo_worker_passes_zalo_zns_provider_for_quota():
     mock_record_send.assert_awaited_once_with(session, "zalo", provider="zalo_zns")
 
 
-def test_retry_sweep_clears_next_retry_at_after_enqueue():
-    """B3 fix: sweep clears next_retry_at for enqueued rows, so next sweep
-    won't re-discover them while they're still in the Celery queue."""
+def test_retry_sweep_clears_next_retry_at_and_commits():
+    """B3 fix: sweep clears next_retry_at for enqueued rows AND commits the
+    transaction, so the change persists and next sweep won't re-discover them."""
     from app.tasks.delivery_tasks import sweep_retry_deliveries
 
     delivery = MagicMock()
@@ -278,10 +278,9 @@ def test_retry_sweep_clears_next_retry_at_after_enqueue():
 
     session = AsyncMock()
     session.execute = AsyncMock()
-    session.flush = AsyncMock()
+    session.commit = AsyncMock()
     repo = MagicMock()
-    # First sweep: finds delivery. Second sweep: finds nothing (cleared).
-    repo.find_ready_for_retry = AsyncMock(side_effect=[[delivery], []])
+    repo.find_ready_for_retry = AsyncMock(return_value=[delivery])
 
     @asynccontextmanager
     async def fake_lock(*args, **kwargs):
@@ -301,20 +300,20 @@ def test_retry_sweep_clears_next_retry_at_after_enqueue():
     ), patch(
         "app.tasks.delivery_tasks.execute_notification_delivery.apply_async"
     ) as mock_apply_async:
-        first = sweep_retry_deliveries.run()
-        second = sweep_retry_deliveries.run()
+        result = sweep_retry_deliveries.run()
 
-    # First sweep enqueues, second sweep finds nothing
-    assert first["enqueued"] == 1
-    assert second["enqueued"] == 0
+    assert result["enqueued"] == 1
     assert mock_apply_async.call_count == 1
 
-    # Verify session.execute was called with UPDATE to clear next_retry_at
+    # Verify UPDATE was issued to clear next_retry_at
     update_calls = [
         c for c in session.execute.await_args_list
         if "UPDATE" in str(c.args[0]) or "update" in str(type(c.args[0]).__name__.lower())
     ]
     assert len(update_calls) >= 1
+
+    # Critical: commit() must be called to persist the change
+    assert session.commit.await_count == 1
 
 
 @pytest.mark.asyncio

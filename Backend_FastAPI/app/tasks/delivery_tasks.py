@@ -350,7 +350,7 @@ def sweep_retry_deliveries(self):
                         .where(NotificationDelivery.id.in_(enqueued_ids))
                         .values(next_retry_at=None)
                     )
-                    await session.flush()
+                    await session.commit()
 
                 task_log.info(f"Sweep enqueued {len(enqueued_ids)} deliveries for retry")
                 return {"enqueued": len(enqueued_ids)}
