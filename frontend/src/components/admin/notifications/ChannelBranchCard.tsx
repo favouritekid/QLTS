@@ -30,6 +30,13 @@ export default function ChannelBranchCard({
 }: ChannelBranchCardProps) {
   const isExternal = recipientKind === "external";
   const mode = branch.content_mode;
+  // Raw text buffer for JSON textarea — allows typing partial/invalid JSON
+  // without snapping back to last valid parse.
+  const initialJson =
+    typeof (branch.config as Record<string, unknown>)?.zalo_template_data === "object"
+      ? JSON.stringify((branch.config as Record<string, unknown>)?.zalo_template_data, null, 2)
+      : "";
+  const [jsonText, setJsonText] = useState(initialJson);
   const [jsonError, setJsonError] = useState("");
 
   const setMode = (m: ContentMode) => {
@@ -132,17 +139,15 @@ export default function ChannelBranchCard({
             <Label className="text-xs">Dữ liệu template (JSON)</Label>
             <Textarea
               placeholder='{"customer": "$lead_name", "phone": "$lead_phone"}'
-              value={
-                typeof (branch.config as Record<string, unknown>)?.zalo_template_data === "object"
-                  ? JSON.stringify((branch.config as Record<string, unknown>)?.zalo_template_data, null, 2)
-                  : ""
-              }
+              value={jsonText}
               onChange={(e) => {
+                const raw = e.target.value;
+                setJsonText(raw);
                 try {
-                  setConfig("zalo_template_data", JSON.parse(e.target.value));
+                  setConfig("zalo_template_data", JSON.parse(raw));
                   setJsonError("");
                 } catch {
-                  setJsonError("JSON không hợp lệ");
+                  setJsonError(raw.trim() ? "JSON không hợp lệ" : "");
                 }
               }}
               className={`text-sm min-h-[60px] font-mono ${jsonError ? "border-destructive" : ""}`}
