@@ -146,13 +146,13 @@ describe("DeliveryOpsTable", () => {
 
     render(<DeliveryOpsTable />, { wrapper: createWrapper() });
 
-    // Check events rendered
-    expect(screen.getByText("lead_assigned")).toBeDefined();
+    // Check events rendered (lead_assigned appears in 2 rows)
+    expect(screen.getAllByText("lead_assigned")).toHaveLength(2);
     expect(screen.getByText("profile_submitted")).toBeDefined();
 
-    // Check status badges
+    // Check status badges exist (use getAllBy for labels that also appear in stats cards)
     expect(screen.getByText("Đã gửi")).toBeDefined();
-    expect(screen.getByText("Thất bại")).toBeDefined();
+    expect(screen.getAllByText("Thất bại").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Đang chờ")).toBeDefined();
 
     // Check channels
