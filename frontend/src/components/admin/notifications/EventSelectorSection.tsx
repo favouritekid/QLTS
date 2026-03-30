@@ -1,14 +1,22 @@
 // src/components/admin/notifications/EventSelectorSection.tsx
 /**
- * Step 1 sub-component: Event picker with category cards and radio groups.
+ * Step 1 sub-component: Event picker with collapsible category groups.
  * Extracted from NotificationRuleEditor for modularity.
  *
- * Receives value + onChange props (no react-hook-form dependency).
+ * Uses Accordion to keep the long event list compact — only the category
+ * containing the selected event (or clicked by user) is expanded.
  */
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo } from "react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
 import { CATEGORY_DISPLAY, getCategoryIcon } from "./wizard-constants";
 
 // ============================================
@@ -48,26 +56,54 @@ export function EventSelectorSection({
   groupedEvents,
   sortedCategoryKeys,
 }: EventSelectorSectionProps) {
-  return (
-    <div className="space-y-4">
-      {sortedCategoryKeys.map((categoryKey) => {
-        const categoryEvents = groupedEvents[categoryKey];
-        if (!categoryEvents || categoryEvents.length === 0) return null;
+  // Find which category the currently selected event belongs to
+  const selectedCategory = useMemo(() => {
+    if (!value) return undefined;
+    for (const [cat, events] of Object.entries(groupedEvents)) {
+      if (events.some((e) => e.value === value)) return cat;
+    }
+    return undefined;
+  }, [value, groupedEvents]);
 
-        return (
-          <Card key={categoryKey}>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <span className="text-lg">{getCategoryIcon(categoryKey)}</span>
-                {getCategoryLabel(categoryKey)}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <RadioGroup
-                value={value}
-                onValueChange={onChange}
-              >
-                <div className="space-y-2">
+  // Default open: category of selected event, or first category
+  const defaultOpen = selectedCategory || sortedCategoryKeys[0] || "";
+
+  return (
+    <RadioGroup value={value} onValueChange={onChange}>
+      <Accordion
+        type="single"
+        collapsible
+        defaultValue={defaultOpen}
+        className="space-y-2"
+      >
+        {sortedCategoryKeys.map((categoryKey) => {
+          const categoryEvents = groupedEvents[categoryKey];
+          if (!categoryEvents || categoryEvents.length === 0) return null;
+
+          const isSelectedCategory = categoryKey === selectedCategory;
+
+          return (
+            <AccordionItem
+              key={categoryKey}
+              value={categoryKey}
+              className="border rounded-lg px-4"
+            >
+              <AccordionTrigger className="py-3 hover:no-underline">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{getCategoryIcon(categoryKey)}</span>
+                  <span className="text-sm font-medium">{getCategoryLabel(categoryKey)}</span>
+                  <Badge variant="secondary" className="text-xs ml-1">
+                    {categoryEvents.length}
+                  </Badge>
+                  {isSelectedCategory && (
+                    <Badge variant="default" className="text-xs">
+                      Đã chọn
+                    </Badge>
+                  )}
+                </div>
+              </AccordionTrigger>
+              <AccordionContent>
+                <div className="space-y-2 pt-1">
                   {categoryEvents.map((event) => (
                     <div
                       key={event.value}
@@ -83,7 +119,7 @@ export function EventSelectorSection({
                           htmlFor={event.value}
                           className="text-sm font-medium cursor-pointer"
                         >
-                          {event.icon} {event.label}
+                          {event.label}
                         </label>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {event.description}
@@ -92,12 +128,12 @@ export function EventSelectorSection({
                     </div>
                   ))}
                 </div>
-              </RadioGroup>
-            </CardContent>
-          </Card>
-        );
-      })}
-    </div>
+              </AccordionContent>
+            </AccordionItem>
+          );
+        })}
+      </Accordion>
+    </RadioGroup>
   );
 }
 
