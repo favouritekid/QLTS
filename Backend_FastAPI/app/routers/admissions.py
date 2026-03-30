@@ -416,16 +416,29 @@ async def bulk_reject_admissions(
 
         await db.commit()
 
-        # POST-COMMIT: Dispatch LEAD_STATUS_CHANGED + commission for each rejected profile
+        # POST-COMMIT: Dispatch notifications + commission for each rejected profile
         for profile in rejected_profiles:
             if profile.lead_id:
+                await safe_dispatch(
+                    db=db,
+                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                    payload={
+                        "application_id": profile.id,
+                        "lead_id": profile.lead_id,
+                        "old_status": "submitted",
+                        "new_status": "rejected",
+                        "actor_id": current_user.id,
+                        "actor_name": current_user.full_name or current_user.username,
+                    },
+                    dedupe_key=f"admission_profile_rejected:{profile.id}",
+                )
                 await safe_dispatch(
                     db=db,
                     event=SystemEvents.LEAD_STATUS_CHANGED,
                     payload={
                         "lead_id": profile.lead_id,
                         "lead_name": f"Profile #{profile.id}",
-                            "old_status": "submitted",
+                        "old_status": "submitted",
                         "new_status": "sts16",
                         "actor_id": current_user.id,
                         "actor_name": current_user.full_name or current_user.username,
@@ -1544,8 +1557,23 @@ async def reject_admission(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. Dispatch LEAD_STATUS_CHANGED for commission trigger (Path 4 - reject)
+        # 4a. APPLICATION_STATUS_CHANGED for admission notification
         if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": result.lead_id,
+                    "old_status": "submitted",
+                    "new_status": "rejected",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_rejected:{profile_id}",
+            )
+
+            # 4b. LEAD_STATUS_CHANGED for pipeline + commission
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -1615,8 +1643,23 @@ async def request_revision(
 
         await callback()
 
-        # Dispatch LEAD_STATUS_CHANGED for commission trigger
+        # Dispatch APPLICATION_STATUS_CHANGED for admission notification
         if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": result.lead_id,
+                    "old_status": "submitted",
+                    "new_status": "revision_requested",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_revision:{profile_id}",
+            )
+
+            # LEAD_STATUS_CHANGED for pipeline + commission
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -1696,7 +1739,23 @@ async def resubmit_admission(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. RETURN Pydantic Model
+        # 4. Dispatch APPLICATION_STATUS_CHANGED for resubmission notification
+        if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": result.lead_id,
+                    "old_status": "rejected",
+                    "new_status": "resubmitted",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_resubmitted:{profile_id}",
+            )
+
+        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
