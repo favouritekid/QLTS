@@ -1111,26 +1111,24 @@ async def enroll_student(
         )
 
         # Dispatch LEAD_STATUS_CHANGED for commission trigger (Path 4)
-        # Query lead_id from the profile
-        profile = await db.get(models.AdmissionProfile, profile_id)
-        if profile and profile.lead_id:
+        if pre_enroll_profile and pre_enroll_profile.lead_id:
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.LEAD_STATUS_CHANGED,
                 payload={
-                    "lead_id": profile.lead_id,
+                    "lead_id": pre_enroll_profile.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "old_status": "confirmed",
+                    "old_status": pre_enroll_status,
                     "new_status": "sts11",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
                 },
-                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts11",
+                dedupe_key=f"lead_status_changed:{pre_enroll_profile.lead_id}:sts11",
             )
 
             # Commission check (Path 4 - enrollment)
             await safe_check_commission_on_status_change(
-                db, profile.lead_id, "confirmed", "sts11", current_user.id,
+                db, pre_enroll_profile.lead_id, pre_enroll_status, "sts11", current_user.id,
             )
 
         return result
@@ -1444,6 +1442,10 @@ async def approve_admission(
          raise PermissionDeniedError("Only Managers or Admins can approve profiles")
 
     try:
+        # Capture pre-transition status for accurate notification payload
+        pre_profile = await db.get(models.AdmissionProfile, profile_id)
+        pre_status = pre_profile.status if pre_profile else "submitted"
+
         # 1. DELEGATE to Service (Service handles Locking + IDOR)
         result, callback = await admission_service.approve_profile(
             db=db,
@@ -1467,7 +1469,7 @@ async def approve_admission(
                 payload={
                     "application_id": profile_id,
                     "lead_id": result.lead_id,
-                    "old_status": "submitted",
+                    "old_status": pre_status,
                     "new_status": "approved",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
@@ -1482,7 +1484,7 @@ async def approve_admission(
                 payload={
                     "lead_id": result.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "old_status": "submitted",
+                    "old_status": pre_status,
                     "new_status": "sts09",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
@@ -1492,7 +1494,7 @@ async def approve_admission(
 
             # Commission check (Path 4 - approve)
             await safe_check_commission_on_status_change(
-                db, result.lead_id, "submitted", "sts09", current_user.id,
+                db, result.lead_id, pre_status, "sts09", current_user.id,
             )
 
         # 5. RETURN Pydantic Model
@@ -1542,6 +1544,10 @@ async def reject_admission(
          raise PermissionDeniedError("Only Managers or Admins can reject profiles")
 
     try:
+        # Capture pre-transition status
+        pre_profile = await db.get(models.AdmissionProfile, profile_id)
+        pre_status = pre_profile.status if pre_profile else "submitted"
+
         # 1. DELEGATE to Service (Service handles Locking + IDOR)
         result, callback = await admission_service.reject_profile(
             db=db,
@@ -1565,7 +1571,7 @@ async def reject_admission(
                 payload={
                     "application_id": profile_id,
                     "lead_id": result.lead_id,
-                    "old_status": "submitted",
+                    "old_status": pre_status,
                     "new_status": "rejected",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
@@ -1580,7 +1586,7 @@ async def reject_admission(
                 payload={
                     "lead_id": result.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "old_status": "submitted",
+                    "old_status": pre_status,
                     "new_status": "sts16",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
@@ -1590,7 +1596,7 @@ async def reject_admission(
 
             # Commission check (Path 4 - reject)
             await safe_check_commission_on_status_change(
-                db, result.lead_id, "submitted", "sts16", current_user.id,
+                db, result.lead_id, pre_status, "sts16", current_user.id,
             )
 
         # 5. RETURN Pydantic Model
@@ -1631,6 +1637,10 @@ async def request_revision(
         raise PermissionDeniedError("Only Managers or Admins can request revision")
 
     try:
+        # Capture pre-transition status
+        pre_profile = await db.get(models.AdmissionProfile, profile_id)
+        pre_status = pre_profile.status if pre_profile else "submitted"
+
         result, callback = await admission_service.request_revision(
             db=db,
             profile_id=profile_id,
@@ -1651,7 +1661,7 @@ async def request_revision(
                 payload={
                     "application_id": profile_id,
                     "lead_id": result.lead_id,
-                    "old_status": "submitted",
+                    "old_status": pre_status,
                     "new_status": "revision_requested",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
@@ -1666,7 +1676,7 @@ async def request_revision(
                 payload={
                     "lead_id": result.lead_id,
                     "lead_name": f"Profile #{profile_id}",
-                    "old_status": "submitted",
+                    "old_status": pre_status,
                     "new_status": "sts17",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
@@ -1675,7 +1685,7 @@ async def request_revision(
             )
 
             await safe_check_commission_on_status_change(
-                db, result.lead_id, "submitted", "sts17", current_user.id,
+                db, result.lead_id, pre_status, "sts17", current_user.id,
             )
 
         return result
@@ -1724,6 +1734,10 @@ async def resubmit_admission(
          raise PermissionDeniedError("Only staff can resubmit profiles")
 
     try:
+        # Capture pre-transition status
+        pre_profile = await db.get(models.AdmissionProfile, profile_id)
+        pre_status = pre_profile.status if pre_profile else "rejected"
+
         # 1. DELEGATE to Service
         result, callback = await admission_service.resubmit_profile(
             db=db,
@@ -1747,7 +1761,7 @@ async def resubmit_admission(
                 payload={
                     "application_id": profile_id,
                     "lead_id": result.lead_id,
-                    "old_status": "rejected",
+                    "old_status": pre_status,
                     "new_status": "resubmitted",
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
@@ -1894,6 +1908,9 @@ async def finalize_enrollment(
     - 404: Profile not found (or IDOR protection)
     """
     try:
+        # Capture pre-finalize status for accurate notification payload
+        pre_status = profile.status
+
         # 1. DELEGATE to Service
         result, callback = await admission_service.finalize_profile(
             db=db,
@@ -1909,7 +1926,23 @@ async def finalize_enrollment(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. RETURN Pydantic Model
+        # 4. Dispatch APPLICATION_STATUS_CHANGED for finalize notification
+        if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": result.lead_id,
+                    "old_status": pre_status,
+                    "new_status": "enrolled",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_finalized:{profile_id}",
+            )
+
+        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
