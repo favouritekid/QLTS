@@ -261,15 +261,18 @@ async def create_admission_profile(
         await db.refresh(profile)
 
         # Dispatch notification (non-blocking)
+        # NOTE: Do NOT pass officer_id — let LeadOwnerResolver look up the
+        # actual lead owner from lead_id. Passing current_user.id would send
+        # the notification to the actor instead of the lead's assigned officer.
         await safe_dispatch(
             db=db,
             event=SystemEvents.APPLICATION_CREATED,
             payload={
                 "application_id": profile.id,
                 "lead_id": profile.lead_id,
-                "officer_id": current_user.id,
                 "major_program_name": None,
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,
             },
             dedupe_key=f"admission_profile_created:{profile.id}"
         )
@@ -336,16 +339,30 @@ async def bulk_approve_admissions(
 
         await db.commit()
 
-        # POST-COMMIT: Dispatch LEAD_STATUS_CHANGED + commission for each approved profile
+        # POST-COMMIT: Dispatch notifications + commission for each approved profile
         for profile in approved_profiles:
             if profile.lead_id:
+                # APPLICATION_STATUS_CHANGED for admission notification
+                await safe_dispatch(
+                    db=db,
+                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                    payload={
+                        "application_id": profile.id,
+                        "lead_id": profile.lead_id,
+                        "old_status": "submitted",
+                        "new_status": "approved",
+                        "actor_id": current_user.id,
+                        "actor_name": current_user.full_name or current_user.username,
+                    },
+                    dedupe_key=f"admission_profile_approved:{profile.id}",
+                )
+                # LEAD_STATUS_CHANGED for pipeline + commission
                 await safe_dispatch(
                     db=db,
                     event=SystemEvents.LEAD_STATUS_CHANGED,
                     payload={
                         "lead_id": profile.lead_id,
                         "lead_name": f"Profile #{profile.id}",
-                        "officer_id": current_user.id,
                         "old_status": "submitted",
                         "new_status": "sts09",
                         "actor_id": current_user.id,
@@ -717,20 +734,21 @@ async def submit_admission_profile(
         # Transaction commit
         await db.commit()
 
-        # If approved, dispatch status change notification
-        # NOTE: APPLICATION_* events are legacy aliases for AdmissionProfile operations
-        if result["status"] == "approved":
+        # Dispatch status change notification for both approved and rejected
+        if result["status"] in ("approved", "rejected"):
+            profile_row = await db.get(models.AdmissionProfile, profile_id)
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.APPLICATION_STATUS_CHANGED,
                 payload={
                     "application_id": profile_id,
+                    "lead_id": profile_row.lead_id if profile_row else None,
                     "old_status": "submitted",
-                    "new_status": "approved",
-                    "officer_id": current_user.id,
+                    "new_status": result["status"],
                     "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
                 },
-                dedupe_key=f"admission_profile_approved:{profile_id}"
+                dedupe_key=f"admission_profile_{result['status']}:{profile_id}"
             )
 
         return result
@@ -1058,18 +1076,19 @@ async def enroll_student(
         await db.commit()
 
         # Dispatch enrollment status change notification
-        # NOTE: APPLICATION_* events are legacy aliases for AdmissionProfile operations
+        enroll_profile = await db.get(models.AdmissionProfile, profile_id)
         await safe_dispatch(
             db=db,
             event=SystemEvents.APPLICATION_STATUS_CHANGED,
             payload={
                 "application_id": profile_id,
+                "lead_id": enroll_profile.lead_id if enroll_profile else None,
                 "old_status": "approved",
                 "new_status": "enrolled",
                 "student_id": result["student_id"],
                 "student_code": result["student_code"],
-                "officer_id": current_user.id,
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,
             },
             dedupe_key=f"student_enrolled:{result['student_id']}"
         )

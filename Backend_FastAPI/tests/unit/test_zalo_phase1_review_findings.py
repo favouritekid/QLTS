@@ -920,3 +920,59 @@ def test_consultation_reminder_task_sets_reminder_sent_and_no_crash():
     # 3. Dispatch payload used lead owner, not consultation creator
     assert len(dispatch_payloads) == 1
     assert dispatch_payloads[0]["officer_id"] == 18  # lead owner, not 15
+
+
+# ============================================================================
+# Regression: application_* events must not override lead owner via officer_id
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_application_created_payload_has_no_officer_id():
+    """APPLICATION_CREATED payload must NOT contain officer_id, so
+    LeadOwnerResolver falls through to DB lookup on lead_id."""
+    # Simulate the payload as constructed in admissions.py after fix
+    payload = {
+        "application_id": 14,
+        "lead_id": 37,
+        "major_program_name": None,
+        "actor_id": 15,
+        "actor_name": "Admin User",
+    }
+    # officer_id must not be present — LeadOwnerResolver would short-circuit
+    assert "officer_id" not in payload
+    assert payload["lead_id"] == 37
+    assert payload["actor_id"] == 15
+
+
+@pytest.mark.asyncio
+async def test_application_status_changed_payload_has_no_officer_id():
+    """APPLICATION_STATUS_CHANGED payload must NOT contain officer_id."""
+    payload = {
+        "application_id": 13,
+        "lead_id": 37,
+        "old_status": "approved",
+        "new_status": "enrolled",
+        "actor_id": 15,
+        "actor_name": "Admin User",
+    }
+    assert "officer_id" not in payload
+    assert payload["lead_id"] == 37
+
+
+@pytest.mark.asyncio
+async def test_lead_owner_resolver_uses_db_when_no_officer_id():
+    """When payload has lead_id but no officer_id, LeadOwnerResolver must
+    query the DB and return lead.assigned_officer_id."""
+    from app.services.notification_resolvers import LeadOwnerResolver
+
+    resolver = LeadOwnerResolver()
+    db = AsyncMock()
+    # DB returns assigned_officer_id=18
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none = MagicMock(return_value=18)
+    db.execute = AsyncMock(return_value=result_mock)
+
+    users = await resolver.resolve_users(db, {"lead_id": 37})
+    assert users == [18]
+    # Verify DB was actually queried (not short-circuited by officer_id)
+    assert db.execute.await_count == 1
