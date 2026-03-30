@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,6 +30,7 @@ export default function ChannelBranchCard({
 }: ChannelBranchCardProps) {
   const isExternal = recipientKind === "external";
   const mode = branch.content_mode;
+  const [jsonError, setJsonError] = useState("");
 
   const setMode = (m: ContentMode) => {
     onChange({ ...branch, content_mode: m, content_override: m === "inline_override" ? { title_template: "", message_template: "" } : null });
@@ -138,15 +140,20 @@ export default function ChannelBranchCard({
               onChange={(e) => {
                 try {
                   setConfig("zalo_template_data", JSON.parse(e.target.value));
+                  setJsonError("");
                 } catch {
-                  // Keep as-is while typing
+                  setJsonError("JSON không hợp lệ");
                 }
               }}
-              className="text-sm min-h-[60px] font-mono"
+              className={`text-sm min-h-[60px] font-mono ${jsonError ? "border-destructive" : ""}`}
             />
-            <p className="text-xs text-muted-foreground mt-1">
-              Dùng $tên_biến để chèn dữ liệu động (VD: $lead_name)
-            </p>
+            {jsonError ? (
+              <p className="text-xs text-destructive mt-1">{jsonError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-1">
+                Dùng $tên_biến để chèn dữ liệu động (VD: $lead_name)
+              </p>
+            )}
           </div>
         </div>
       )}

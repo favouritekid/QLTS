@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import type { RecipientGroup, WizardTrigger } from "./wizard-types";
+import { CHANNEL_LABELS } from "./wizard-types";
 
 interface NotificationRuleSidebarProps {
   trigger: WizardTrigger;
@@ -20,13 +21,6 @@ interface NotificationRuleSidebarProps {
   canSave: boolean;
   selectedEventLabel?: string;
 }
-
-const CHANNEL_LABELS: Record<string, string> = {
-  browser: "Trong ứng dụng",
-  email: "Email",
-  zalo: "Zalo",
-  sms: "SMS",
-};
 
 export default function NotificationRuleSidebar({
   trigger,

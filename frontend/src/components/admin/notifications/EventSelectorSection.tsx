@@ -9,6 +9,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { CATEGORY_DISPLAY, getCategoryIcon } from "./wizard-constants";
 
 // ============================================
 // TYPES
@@ -30,33 +31,8 @@ export interface EventSelectorSectionProps {
 }
 
 // ============================================
-// CONSTANTS
-// ============================================
-
-/**
- * Category display config — UI only (label, icon).
- * Duplicated from wizard; kept local to avoid cross-file coupling.
- */
-const CATEGORY_DISPLAY: Record<string, { label: string; icon: string }> = {
-  lead:         { label: "Sự kiện Lead",       icon: "👤" },
-  consultation: { label: "Sự kiện Tư vấn",    icon: "💬" },
-  application:  { label: "Sự kiện Hồ sơ",     icon: "📝" },
-  finance:      { label: "Sự kiện Tài chính",  icon: "💰" },
-  dorm:         { label: "Sự kiện Ký túc",     icon: "🏠" },
-  asset:        { label: "Sự kiện Tài sản",    icon: "🔧" },
-  pipeline:     { label: "Sự kiện Pipeline",   icon: "📊" },
-  operational:  { label: "Sự kiện Vận hành",   icon: "⚙️" },
-  security:     { label: "Sự kiện Bảo mật",    icon: "🔒" },
-  system:       { label: "Sự kiện Hệ thống",   icon: "🔔" },
-};
-
-// ============================================
 // HELPERS
 // ============================================
-
-function getCategoryIcon(category: string): string {
-  return CATEGORY_DISPLAY[category]?.icon || "🔔";
-}
 
 function getCategoryLabel(category: string): string {
   return CATEGORY_DISPLAY[category]?.label || `Sự kiện ${category.charAt(0).toUpperCase() + category.slice(1)}`;

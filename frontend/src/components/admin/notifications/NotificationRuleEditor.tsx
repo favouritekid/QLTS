@@ -397,8 +397,11 @@ export function NotificationRuleEditor({
       setHighestStepVisited(1);
       setAttemptedSteps(new Set());
       router.push("/admin/notification-rules");
-    } catch {
-      toast.error(isEditMode ? "Không thể cập nhật quy tắc" : "Không thể tạo quy tắc");
+    } catch (error: unknown) {
+      const detail =
+        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      const fallback = isEditMode ? "Không thể cập nhật quy tắc" : "Không thể tạo quy tắc";
+      toast.error(typeof detail === "string" ? detail : fallback);
     }
   };
 
