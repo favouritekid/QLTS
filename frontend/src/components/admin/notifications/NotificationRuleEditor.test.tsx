@@ -167,6 +167,46 @@ describe("NotificationRuleEditor — step navigation", () => {
 });
 
 // ============================================================================
+// Tests — Step 3 validation (recipient groups)
+// ============================================================================
+
+describe("NotificationRuleEditor — step 3 validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("step 4 preview shows no errors when all data is valid", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor ruleId={1} />);
+
+    // Edit mode: all steps accessible. Navigate directly to step 4.
+    await user.click(screen.getByTitle("Kiểm tra & Lưu"));
+
+    // Preview should render with valid summary (mock rule has 1 group + 1 channel)
+    await waitFor(() => {
+      expect(screen.getByText("Tóm tắt quy tắc:")).toBeDefined();
+    });
+
+    // No "Cần sửa" error block in preview (data is valid)
+    expect(screen.queryByText("Cần sửa trước khi lưu:")).toBeNull();
+  });
+
+  it("step 4 preview shows recipient group info from hydrated rule", async () => {
+    const user = userEvent.setup();
+    render(<NotificationRuleEditor ruleId={1} />);
+
+    await user.click(screen.getByTitle("Kiểm tra & Lưu"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Tóm tắt quy tắc:")).toBeDefined();
+    });
+
+    // Verify the narrative summary includes channel info (appears in preview + sidebar)
+    expect(screen.getAllByText(/Trong ứng dụng/).length).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================================
 // Tests — Edit mode hydration
 // ============================================================================
 

@@ -5,6 +5,7 @@
  * Uses admin login with TOTP for admin-only page access.
  *
  * Run:
+ *   npx playwright test notification-rule-create --project=e2e-workflow --reporter=list
  *   npx playwright test notification-rule-create --project=e2e-workflow --headed
  */
 import { test, expect, type Page } from "@playwright/test";
@@ -54,16 +55,16 @@ async function adminLogin(page: Page): Promise<void> {
 test.describe.configure({ mode: "serial" });
 
 test.describe("Notification Rule Create Flow", () => {
-  test.beforeAll(async ({ browser }) => {
-    const page = await browser.newPage();
-    await adminLogin(page);
-    // Store cookies for reuse
-    const context = page.context();
-    await context.storageState({ path: "src/test/.auth/admin-notif.json" });
-    await page.close();
-  });
+  // Login once in the first test — serial mode shares browser context,
+  // so subsequent tests inherit the session cookies.
+  let isLoggedIn = false;
 
-  test.use({ storageState: "src/test/.auth/admin-notif.json" });
+  test.beforeEach(async ({ page }) => {
+    if (!isLoggedIn) {
+      await adminLogin(page);
+      isLoggedIn = true;
+    }
+  });
 
   test("page loads with step 1 and quick templates", async ({ page }) => {
     await page.goto("/admin/notification-rules/new");
@@ -102,8 +103,7 @@ test.describe("Notification Rule Create Flow", () => {
     // Click Next without selecting an event
     await page.getByText("Tiếp theo").click();
 
-    // Should still be on step 1 (no navigation)
-    // Inline error should appear
+    // Should still be on step 1 — inline error should appear
     await expect(page.locator(".text-destructive").first()).toBeVisible();
   });
 
