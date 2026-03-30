@@ -248,7 +248,9 @@ class EventPayload:
             "lead_id": lead.id,
             "lead_name": lead.full_name or "Unknown",
             "lead_phone": lead.phone or "",
-            "officer_id": consultation.officer_id,
+            # Use lead owner (not consultation creator) so LeadOwnerResolver
+            # sends to the officer currently responsible for the lead.
+            "officer_id": lead.assigned_officer_id or consultation.officer_id,
             "scheduled_at": consultation.scheduled_at.isoformat(),
             "minutes_until": minutes_until,
         }

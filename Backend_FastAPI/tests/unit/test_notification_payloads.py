@@ -464,10 +464,24 @@ class TestConsultationReminder:
             "lead_id": 42,
             "lead_name": "Nguyen Van A",
             "lead_phone": "0901234567",
-            "officer_id": 5,
+            "officer_id": 5,  # lead.assigned_officer_id
             "scheduled_at": "2026-04-01T10:00:00",
             "minutes_until": 10,
         }
+
+    def test_uses_lead_owner_not_consultation_creator(self):
+        """Reminder must target lead owner, not the user who created the consultation."""
+        consultation = _make_consultation(officer_id=15)  # admin created it
+        lead = _make_lead(assigned_officer_id=18)  # officer owns the lead
+        payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
+        assert payload["officer_id"] == 18  # lead owner wins
+
+    def test_falls_back_to_consultation_officer_when_lead_unassigned(self):
+        """If lead has no assigned_officer_id, fall back to consultation.officer_id."""
+        consultation = _make_consultation(officer_id=15)
+        lead = _make_lead(assigned_officer_id=None)
+        payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
+        assert payload["officer_id"] == 15  # fallback
 
     def test_fallbacks(self):
         consultation = _make_consultation()
