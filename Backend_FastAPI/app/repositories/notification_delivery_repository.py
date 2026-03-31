@@ -69,13 +69,25 @@ def _build_scope_condition(
             ),
         )
 
+    def _collaborator_scope_officer(oid):
+        return and_(
+            external_base,
+            NotificationDelivery.source_type == "collaborator",
+            exists(
+                select(Collaborator.id).where(
+                    Collaborator.id == NotificationDelivery.source_id,
+                    Collaborator.managed_by_officer_id == oid,
+                )
+            ),
+        )
+
     if officer_id is not None:
         officer_filter = Lead.assigned_officer_id == officer_id
-        # Officer cannot scope collaborators (no assigned_officer on Collaborator)
         return or_(
             internal_cond,
             _lead_scope(officer_filter),
             _admission_scope(officer_filter),
+            _collaborator_scope_officer(officer_id),
         )
 
     if allowed_unit_ids:

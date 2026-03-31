@@ -1543,3 +1543,36 @@ def test_application_created_payload_must_include_lead_name_and_program():
     assert required_keys.issubset(payload.keys())
     assert payload["lead_name"] != "$lead_name"
     assert payload["major_program_name"] is not None
+
+
+# ============================================================================
+# Officer collaborator scope: list + IDOR
+# ============================================================================
+
+def test_scope_condition_officer_includes_collaborator():
+    """Officer scope includes external rows with source_type='collaborator'
+    via Collaborator.managed_by_officer_id."""
+    from app.repositories.notification_delivery_repository import _build_scope_condition
+    cond = _build_scope_condition([7], officer_id=7)
+    sql = str(cond).lower()
+    assert "collaborator" in sql
+    assert "managed_by_officer_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_officer_idor_collaborator_managed():
+    """Officer can access external delivery with source_type='collaborator'
+    if managed_by_officer_id matches."""
+    from app.core.deps import _check_external_source_assigned_to
+
+    record = MagicMock()
+    record.source_type = "collaborator"
+    record.source_id = 5
+
+    db = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.first = MagicMock(return_value=(7,))  # managed_by_officer_id=7
+    db.execute = AsyncMock(return_value=result_mock)
+
+    assert await _check_external_source_assigned_to(db, record, 7) is True
+    assert await _check_external_source_assigned_to(db, record, 99) is False

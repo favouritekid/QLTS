@@ -1824,9 +1824,12 @@ async def _check_external_source_in_units(
 async def _check_external_source_assigned_to(
     db: AsyncSession, record, officer_id: int
 ) -> bool:
-    """Check if an external delivery's source lead is assigned to the given officer.
+    """Check if an external delivery's source is assigned to the given officer.
 
-    Supports source_type='lead' (direct) and 'admission_profile' (via lead_id).
+    Supports:
+    - source_type='lead': Lead.assigned_officer_id
+    - source_type='admission_profile': AdmissionProfile → Lead.assigned_officer_id
+    - source_type='collaborator': Collaborator.managed_by_officer_id
     """
     from sqlalchemy import select
     from app.models.lead import Lead
@@ -1839,6 +1842,9 @@ async def _check_external_source_assigned_to(
             .join(AdmissionProfile, AdmissionProfile.lead_id == Lead.id)
             .where(AdmissionProfile.id == record.source_id)
         )
+    elif record.source_type == "collaborator":
+        from app.models.collaborator import Collaborator
+        q = select(Collaborator.managed_by_officer_id).where(Collaborator.id == record.source_id)
     else:
         return False
     result = await db.execute(q)
@@ -1882,7 +1888,7 @@ async def get_delivery_for_user(
     if record.user_id == current_user.id:
         return record
     if record.user_id is None and record.recipient_kind == "external":
-        if record.source_type in ("lead", "admission_profile") and record.source_id:
+        if record.source_type in ("lead", "admission_profile", "collaborator") and record.source_id:
             if await _check_external_source_assigned_to(db, record, current_user.id):
                 return record
     raise ResourceNotFoundError(detail="Delivery record not found")
