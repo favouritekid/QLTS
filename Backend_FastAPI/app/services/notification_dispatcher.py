@@ -193,9 +193,12 @@ def _render_template_snapshot(
 
 # Payload key -> source_type mapping.  Order matters: first match wins.
 _SOURCE_KEYS = [
-    ("lead_id", "lead"),
+    # admission_profile keys first — more specific than lead_id
+    ("application_id", "admission_profile"),
     ("profile_id", "admission_profile"),
     ("admission_profile_id", "admission_profile"),
+    # general keys
+    ("lead_id", "lead"),
     ("collaborator_id", "collaborator"),
     ("user_id", "user"),
 ]

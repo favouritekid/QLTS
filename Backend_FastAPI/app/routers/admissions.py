@@ -261,16 +261,21 @@ async def create_admission_profile(
         await db.refresh(profile)
 
         # Dispatch notification (non-blocking)
-        # NOTE: Do NOT pass officer_id — let LeadOwnerResolver look up the
-        # actual lead owner from lead_id. Passing current_user.id would send
-        # the notification to the actor instead of the lead's assigned officer.
+        # Enrich payload with lead name and program name for template rendering
+        _lead_name = profile.lead.full_name if profile.lead else "Unknown"
+        _prog_name = None
+        if profile.lead and profile.lead.offering_id:
+            _po = await db.get(models.ProgramOffering, profile.lead.offering_id)
+            if _po:
+                _prog_name = _po.name
         await safe_dispatch(
             db=db,
             event=SystemEvents.APPLICATION_CREATED,
             payload={
                 "application_id": profile.id,
                 "lead_id": profile.lead_id,
-                "major_program_name": None,
+                "lead_name": _lead_name,
+                "major_program_name": _prog_name or "Chưa xác định",
                 "actor_id": current_user.id,
                 "actor_name": current_user.full_name or current_user.username,
             },
