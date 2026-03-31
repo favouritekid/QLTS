@@ -20,47 +20,59 @@ def _build_scope_condition(
     """Build scope filter: internal rows by user_id + external rows by source ownership.
 
     External deliveries (user_id=NULL, recipient_kind='external') are included
-    based on source ownership:
-    - Manager scope (allowed_unit_ids): lead.unit_id IN unit_ids
-    - Officer scope (officer_id): lead.assigned_officer_id = officer_id
+    based on source ownership. Supported source_types:
+    - 'lead': scope via Lead.unit_id / Lead.assigned_officer_id
+    - 'admission_profile': scope via AdmissionProfile.lead_id → Lead ownership
+    Unknown source_types are denied (not included in results).
     """
     internal_cond = NotificationDelivery.user_id.in_(allowed_user_ids)
 
     from app.models.lead import Lead
+    from app.models.admission import AdmissionProfile
+
     external_base = and_(
         NotificationDelivery.user_id.is_(None),
         NotificationDelivery.recipient_kind == "external",
-        NotificationDelivery.source_type == "lead",
         NotificationDelivery.source_id.isnot(None),
     )
 
-    if officer_id is not None:
-        # Officer: external rows only for leads assigned to this officer
-        external_cond = and_(
+    def _lead_scope(scope_filter):
+        """External rows where source IS the lead."""
+        return and_(
             external_base,
+            NotificationDelivery.source_type == "lead",
+            exists(select(Lead.id).where(Lead.id == NotificationDelivery.source_id, scope_filter)),
+        )
+
+    def _admission_scope(scope_filter):
+        """External rows where source is admission_profile → lead ownership."""
+        return and_(
+            external_base,
+            NotificationDelivery.source_type == "admission_profile",
             exists(
-                select(Lead.id).where(
-                    Lead.id == NotificationDelivery.source_id,
-                    Lead.assigned_officer_id == officer_id,
+                select(AdmissionProfile.id).where(
+                    AdmissionProfile.id == NotificationDelivery.source_id,
+                    exists(select(Lead.id).where(Lead.id == AdmissionProfile.lead_id, scope_filter)),
                 )
             ),
         )
-        return or_(internal_cond, external_cond)
+
+    if officer_id is not None:
+        officer_filter = Lead.assigned_officer_id == officer_id
+        return or_(
+            internal_cond,
+            _lead_scope(officer_filter),
+            _admission_scope(officer_filter),
+        )
 
     if allowed_unit_ids:
-        # Manager: external rows for leads in unit hierarchy
-        external_cond = and_(
-            external_base,
-            exists(
-                select(Lead.id).where(
-                    Lead.id == NotificationDelivery.source_id,
-                    Lead.unit_id.in_(allowed_unit_ids),
-                )
-            ),
+        unit_filter = Lead.unit_id.in_(allowed_unit_ids)
+        return or_(
+            internal_cond,
+            _lead_scope(unit_filter),
+            _admission_scope(unit_filter),
         )
-        return or_(internal_cond, external_cond)
 
-    # No external scope available
     return internal_cond
 
 

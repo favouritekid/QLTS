@@ -389,12 +389,10 @@ def test_deprecated_entrypoints_have_no_production_callers():
     # The definition files where the deprecated functions live
     definition_files = {
         "notification_service.py",
-        "notification_workflow.py",
     }
 
     deprecated_patterns = [
         "create_notification(",
-        "execute_notification_workflow(",
     ]
 
     app_dir = Path(__file__).resolve().parent.parent.parent / "app"

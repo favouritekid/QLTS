@@ -1195,3 +1195,82 @@ async def test_bulk_approve_uses_pre_status_from_service():
     assert app_dispatch["payload"]["old_status"] == "resubmitted"
     assert lead_dispatch["payload"]["old_status"] == "resubmitted"
     assert commission_calls == [{"old": "resubmitted", "new": "sts09"}]
+
+
+# ============================================================================
+# Scoped ops: admission_profile external visibility
+# ============================================================================
+
+def test_scope_condition_includes_admission_profile_for_manager():
+    """Manager scope includes external rows with source_type='admission_profile'
+    via AdmissionProfile → Lead.unit_id subquery."""
+    from app.repositories.notification_delivery_repository import _build_scope_condition
+    cond = _build_scope_condition([1, 2], allowed_unit_ids=[10, 20])
+    sql = str(cond).lower()
+    assert "admission_profile" in sql
+    assert "lead" in sql
+
+
+def test_scope_condition_includes_admission_profile_for_officer():
+    """Officer scope includes external rows with source_type='admission_profile'
+    via AdmissionProfile → Lead.assigned_officer_id subquery."""
+    from app.repositories.notification_delivery_repository import _build_scope_condition
+    cond = _build_scope_condition([7], officer_id=7)
+    sql = str(cond).lower()
+    assert "admission_profile" in sql
+    assert "assigned_officer_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_officer_idor_admission_profile_assigned():
+    """Officer can access external delivery with source_type='admission_profile'
+    if the linked lead is assigned to them."""
+    from app.core.deps import _check_external_source_assigned_to
+
+    record = MagicMock()
+    record.source_type = "admission_profile"
+    record.source_id = 14
+
+    db = AsyncMock()
+    # JOIN AdmissionProfile→Lead returns assigned_officer_id=18
+    result_mock = MagicMock()
+    result_mock.first = MagicMock(return_value=(18,))
+    db.execute = AsyncMock(return_value=result_mock)
+
+    assert await _check_external_source_assigned_to(db, record, 18) is True
+    assert await _check_external_source_assigned_to(db, record, 99) is False
+
+
+@pytest.mark.asyncio
+async def test_manager_idor_admission_profile_in_unit():
+    """Manager can access external delivery with source_type='admission_profile'
+    if the linked lead is in their unit hierarchy."""
+    from app.core.deps import _check_external_source_in_units
+
+    record = MagicMock()
+    record.source_type = "admission_profile"
+    record.source_id = 14
+
+    db = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.first = MagicMock(return_value=(10,))  # unit_id=10
+    db.execute = AsyncMock(return_value=result_mock)
+
+    assert await _check_external_source_in_units(db, record, [10, 20]) is True
+
+
+@pytest.mark.asyncio
+async def test_manager_idor_admission_profile_out_of_unit():
+    """Manager denied external delivery if admission_profile's lead is outside units."""
+    from app.core.deps import _check_external_source_in_units
+
+    record = MagicMock()
+    record.source_type = "admission_profile"
+    record.source_id = 14
+
+    db = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.first = MagicMock(return_value=(99,))  # unit_id=99
+    db.execute = AsyncMock(return_value=result_mock)
+
+    assert await _check_external_source_in_units(db, record, [10, 20]) is False
