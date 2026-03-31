@@ -40,7 +40,7 @@ async def check_quota(
         redis = await database.get_redis()
         cached = await redis.get(cache_key)
         if cached is not None:
-            return cached != b"blocked"
+            return cached != "blocked"
     except Exception as e:
         log.warning("Redis quota cache read failed, falling through to DB", error=str(e))
 

@@ -52,6 +52,17 @@ AsyncSessionLocal = sessionmaker(
 # === KHỞI TẠO REDIS CLIENT GỐC ===
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
+
+async def get_redis():
+    """Return the shared Redis client for direct operations.
+
+    Use safe_redis_* for simple get/set with circuit breaker protection.
+    Use get_redis() when you need SET NX, pipelines, or other advanced
+    operations not covered by safe_redis_* wrappers.
+    """
+    return redis_client
+
+
 # ===============================================================
 # === 🔧 CIRCUIT BREAKER PATTERN VỚI AIOBREAKER (SỬA LẠI) 🔧 ===
 # ===============================================================
