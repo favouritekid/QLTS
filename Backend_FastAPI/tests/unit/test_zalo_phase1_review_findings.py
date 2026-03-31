@@ -1274,3 +1274,58 @@ async def test_manager_idor_admission_profile_out_of_unit():
     db.execute = AsyncMock(return_value=result_mock)
 
     assert await _check_external_source_in_units(db, record, [10, 20]) is False
+
+
+# ============================================================================
+# Repository query paths: admission_profile scope wired through
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_list_deliveries_query_includes_admission_profile_scope():
+    """list_deliveries with manager scope generates SQL that includes
+    admission_profile source type in the scope condition."""
+    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+
+    db = AsyncMock()
+    count_result = MagicMock()
+    count_result.scalar = MagicMock(return_value=0)
+    list_result = MagicMock()
+    list_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    db.execute = AsyncMock(side_effect=[count_result, list_result])
+
+    repo = NotificationDeliveryRepository(db)
+    await repo.list_deliveries(allowed_user_ids=[1, 2], allowed_unit_ids=[10, 20])
+
+    # Both count and list queries should include admission_profile scope
+    for call in db.execute.await_args_list:
+        sql = str(call.args[0]).lower()
+        if "notification_delivery" in sql:
+            assert "admission_profile" in sql, \
+                f"Query missing admission_profile scope: {sql[:200]}"
+
+
+@pytest.mark.asyncio
+async def test_get_aggregate_stats_query_includes_admission_profile_scope():
+    """get_aggregate_stats with officer scope generates SQL that includes
+    admission_profile source type in the scope condition."""
+    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+
+    db = AsyncMock()
+    # Stats returns grouped rows
+    status_result = MagicMock()
+    status_result.all = MagicMock(return_value=[])
+    channel_result = MagicMock()
+    channel_result.all = MagicMock(return_value=[])
+    db.execute = AsyncMock(side_effect=[status_result, channel_result])
+
+    repo = NotificationDeliveryRepository(db)
+    await repo.get_aggregate_stats(allowed_user_ids=[7], officer_id=7)
+
+    # Both status and channel queries should include admission_profile + assigned_officer
+    for call in db.execute.await_args_list:
+        sql = str(call.args[0]).lower()
+        if "notification_delivery" in sql:
+            assert "admission_profile" in sql, \
+                f"Query missing admission_profile scope: {sql[:200]}"
+            assert "assigned_officer_id" in sql, \
+                f"Query missing officer scope: {sql[:200]}"
