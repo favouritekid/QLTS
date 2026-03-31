@@ -261,15 +261,21 @@ async def create_admission_profile(
         await db.refresh(profile)
 
         # Dispatch notification (non-blocking, defensive — must not crash after commit)
+        # NOTE: Use explicit db.get() by FK column, NOT relationship access.
+        # After commit+refresh, relationship attrs (profile.lead, po.program)
+        # trigger lazy loading which raises MissingGreenlet in async context.
         try:
-            _lead_name = profile.lead.full_name if profile.lead else "Unknown"
+            _lead = await db.get(models.Lead, profile.lead_id)
+            _lead_name = _lead.full_name if _lead else "Unknown"
             _prog_name = None
-            if profile.lead and profile.lead.offering_id:
-                _po = await db.get(models.ProgramOffering, profile.lead.offering_id)
-                if _po and _po.program:
-                    _prog_name = f"{_po.program.name} - {_po.offering_type}"
-                elif _po:
-                    _prog_name = _po.offering_type
+            if _lead and _lead.offering_id:
+                _po = await db.get(models.ProgramOffering, _lead.offering_id)
+                if _po:
+                    _mp = await db.get(models.MajorProgram, _po.program_id)
+                    if _mp:
+                        _prog_name = f"{_mp.name} - {_po.offering_type}"
+                    else:
+                        _prog_name = _po.offering_type
         except Exception:
             _lead_name = "Unknown"
             _prog_name = None
@@ -1188,6 +1194,15 @@ async def delete_admission_profile(
     - 400: Profile is not in draft status
     """
     try:
+        # Snapshot lead data before delete (profile will be gone after service call)
+        _pre_profile = await db.get(models.AdmissionProfile, profile_id)
+        _snapshot_lead_id = _pre_profile.lead_id if _pre_profile else None
+        _snapshot_lead_name = "Unknown"
+        if _snapshot_lead_id:
+            _lead = await db.get(models.Lead, _snapshot_lead_id)
+            if _lead:
+                _snapshot_lead_name = _lead.full_name
+
         await admission_service.delete_profile(
             db=db,
             profile_id=profile_id,
@@ -1196,6 +1211,21 @@ async def delete_admission_profile(
 
         # Transaction commit
         await db.commit()
+
+        # Dispatch APPLICATION_DELETED (profile is gone, use snapshot)
+        if _snapshot_lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_DELETED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": _snapshot_lead_id,
+                    "lead_name": _snapshot_lead_name,
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_deleted:{profile_id}",
+            )
 
         log.info(
             "Admission profile deleted via API",

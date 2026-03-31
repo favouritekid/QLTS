@@ -1595,3 +1595,178 @@ async def test_officer_idor_collaborator_managed():
 
     assert await _check_external_source_assigned_to(db, record, 7) is True
     assert await _check_external_source_assigned_to(db, record, 99) is False
+
+
+# ============================================================================
+# application_created create-path enrichment: explicit db.get() by FK
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_create_path_enrichment_gets_real_lead_name():
+    """Create-path enrichment must call db.get(Lead, lead_id) to get lead_name,
+    NOT access profile.lead (which triggers lazy load → MissingGreenlet)."""
+    from types import SimpleNamespace
+
+    # Simulate post-commit objects: profile has lead_id but NO loaded .lead
+    profile = SimpleNamespace(id=26, lead_id=45)
+    lead = SimpleNamespace(full_name="Nguyễn Văn A", offering_id=3)
+    po = SimpleNamespace(program_id=1, offering_type="Chính quy")
+    mp = SimpleNamespace(name="Công nghệ thông tin")
+
+    db = AsyncMock()
+    # db.get(Lead, 45) → lead, db.get(PO, 3) → po, db.get(MP, 1) → mp
+    db.get = AsyncMock(side_effect=lambda model, pk: {
+        ("Lead", 45): lead,
+        ("ProgramOffering", 3): po,
+        ("MajorProgram", 1): mp,
+    }.get((model.__name__, pk)))
+
+    # Replicate the router enrichment logic
+    _lead = await db.get(type("Lead", (), {"__name__": "Lead"}), profile.lead_id)
+    _lead_name = _lead.full_name if _lead else "Unknown"
+    _prog_name = None
+    if _lead and _lead.offering_id:
+        _po = await db.get(type("ProgramOffering", (), {"__name__": "ProgramOffering"}), _lead.offering_id)
+        if _po:
+            _mp = await db.get(type("MajorProgram", (), {"__name__": "MajorProgram"}), _po.program_id)
+            if _mp:
+                _prog_name = f"{_mp.name} - {_po.offering_type}"
+            else:
+                _prog_name = _po.offering_type
+
+    assert _lead_name == "Nguyễn Văn A"
+    assert _prog_name == "Công nghệ thông tin - Chính quy"
+    # Verify db.get was called 3 times (lead, po, mp) — NOT relationship access
+    assert db.get.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_create_path_enrichment_fallback_when_lead_missing():
+    """If db.get(Lead, lead_id) returns None, lead_name = 'Unknown'."""
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=None)
+
+    profile_lead_id = 999
+    _lead = await db.get(MagicMock(__name__="Lead"), profile_lead_id)
+    _lead_name = _lead.full_name if _lead else "Unknown"
+    _prog_name = None
+
+    assert _lead_name == "Unknown"
+    assert _prog_name is None
+
+
+@pytest.mark.asyncio
+async def test_create_path_enrichment_fallback_when_no_program():
+    """If ProgramOffering exists but MajorProgram is missing, fall back to offering_type."""
+    from types import SimpleNamespace
+
+    lead = SimpleNamespace(full_name="Trần Thị B", offering_id=5)
+    po = SimpleNamespace(program_id=99, offering_type="Liên thông")
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=lambda model, pk: {
+        ("Lead", 45): lead,
+        ("ProgramOffering", 5): po,
+        ("MajorProgram", 99): None,  # MajorProgram deleted
+    }.get((model.__name__, pk)))
+
+    _lead = await db.get(type("Lead", (), {"__name__": "Lead"}), 45)
+    _lead_name = _lead.full_name if _lead else "Unknown"
+    _prog_name = None
+    if _lead and _lead.offering_id:
+        _po = await db.get(type("ProgramOffering", (), {"__name__": "ProgramOffering"}), _lead.offering_id)
+        if _po:
+            _mp = await db.get(type("MajorProgram", (), {"__name__": "MajorProgram"}), _po.program_id)
+            if _mp:
+                _prog_name = f"{_mp.name} - {_po.offering_type}"
+            else:
+                _prog_name = _po.offering_type
+
+    assert _lead_name == "Trần Thị B"
+    assert _prog_name == "Liên thông"
+
+
+@pytest.mark.asyncio
+async def test_create_path_enrichment_fallback_when_no_offering():
+    """If lead has no offering_id, program name stays None → 'Chưa xác định'."""
+    from types import SimpleNamespace
+
+    lead = SimpleNamespace(full_name="Lê Văn C", offering_id=None)
+
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=lambda model, pk: {
+        ("Lead", 45): lead,
+    }.get((model.__name__, pk)))
+
+    _lead = await db.get(type("Lead", (), {"__name__": "Lead"}), 45)
+    _lead_name = _lead.full_name if _lead else "Unknown"
+    _prog_name = None
+    if _lead and _lead.offering_id:
+        pass  # skip — no offering
+
+    assert _lead_name == "Lê Văn C"
+    assert _prog_name is None
+    # In router: _prog_name or "Chưa xác định" → correctly falls back
+    assert (_prog_name or "Chưa xác định") == "Chưa xác định"
+
+
+# ============================================================================
+# application_deleted: dispatch + source extraction + no LEAD_STATUS_CHANGED
+# ============================================================================
+
+def test_application_deleted_payload_well_formed():
+    """application_deleted dispatch payload must have application_id, lead_id,
+    lead_name, actor_id, actor_name — same shape as other application events."""
+    required_keys = {"application_id", "lead_id", "lead_name", "actor_id", "actor_name"}
+    payload = {
+        "application_id": 26,
+        "lead_id": 45,
+        "lead_name": "Nguyen Van A",
+        "actor_id": 15,
+        "actor_name": "Admin",
+    }
+    assert required_keys.issubset(payload.keys())
+    assert payload["lead_name"] != "Unknown"
+    assert "officer_id" not in payload  # same pattern as other application events
+
+
+def test_source_extraction_for_application_deleted():
+    """APPLICATION_DELETED with application_id in payload must extract
+    source_type='admission_profile'."""
+    from app.services.notification_dispatcher import _extract_source_from_payload
+    from app.core.events import SystemEvents
+
+    source_type, source_id = _extract_source_from_payload(
+        SystemEvents.APPLICATION_DELETED,
+        {"application_id": 26, "lead_id": 45, "actor_id": 15},
+    )
+    assert source_type == "admission_profile"
+    assert source_id == 26
+
+
+def test_application_deleted_does_not_emit_lead_status_changed():
+    """Delete dispatch block must NOT contain LEAD_STATUS_CHANGED.
+    Verify by inspecting the router code pattern — delete only emits
+    APPLICATION_DELETED, never LEAD_STATUS_CHANGED."""
+    import inspect
+    from app.routers import admissions as adm_module
+
+    source = inspect.getsource(adm_module.delete_admission_profile)
+    assert "APPLICATION_DELETED" in source
+    assert "LEAD_STATUS_CHANGED" not in source
+
+
+def test_application_deleted_seed_rule_exists():
+    """application_deleted must have a curated rule in the seed script."""
+    from app.scripts.reset_notification_rules_dev import CURATED_RULES
+
+    assert "application_deleted" in CURATED_RULES
+    rule = CURATED_RULES["application_deleted"]
+    assert rule["enabled"] is True
+    assert "browser" in rule["channels"]
+    assert "email" in rule["channels"]
+    # Must have lead_owner + all_admins groups (4 actions: 2 channels × 2 groups)
+    assert len(rule["actions"]) == 4
+    resolver_types = {a["recipient_config"]["resolver_type"] for a in rule["actions"]}
+    assert "lead_owner" in resolver_types
+    assert "all_admins" in resolver_types

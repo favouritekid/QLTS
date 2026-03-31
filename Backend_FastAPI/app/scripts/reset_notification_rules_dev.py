@@ -158,6 +158,17 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
             _internal_group("all_admins", ["browser", "email"]),
         ],
     ),
+    "application_deleted": _build_rule(
+        event="application_deleted",
+        title_template="Hồ sơ đã bị xóa: #$application_id",
+        message_template="Hồ sơ #$application_id của $lead_name đã bị xóa.",
+        notification_type="warning",
+        link_template="/leads/$lead_id",
+        groups=[
+            _internal_group("lead_owner", ["browser", "email"]),
+            _internal_group("all_admins", ["browser", "email"]),
+        ],
+    ),
     "application_status_changed": _build_rule(
         event="application_status_changed",
         title_template="Hồ sơ cập nhật trạng thái: #$application_id",

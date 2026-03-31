@@ -10,6 +10,7 @@
  * - application_status_changed: draft -> submitted
  * - application_status_changed: submitted -> approved
  * - application_status_changed: approved -> confirmed (public confirm flow)
+ * - application_deleted (verifies both lead_owner and all_admins fan-out)
  */
 
 import {
@@ -79,6 +80,7 @@ let officerAuth: AuthResult;
 
 let discovery: DiscoveryConfig;
 let tempOfficer: TempOfficer | null = null;
+let tempAdmin: TempOfficer | null = null; // reuse type — fresh admin for all_admins fan-out proof
 
 function generatePhone(): string {
   const prefixes = ["091", "093", "097", "098", "035", "036", "085", "086"];
@@ -332,6 +334,57 @@ async function createTempOfficerUser(
     fullName,
     email,
     unitId,
+  };
+}
+
+async function createTempAdminUser(page: Page): Promise<TempOfficer> {
+  const suffix = `${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  const username = `e2e_adm_obs_${suffix}`;
+  const email = `${username}@example.com`;
+  const password = "Admin@12345!";
+  const fullName = `E2E Admin Observer ${suffix}`;
+
+  // Business rule: admin can't create another admin via POST.
+  // Workaround: create as manager, then promote via PUT role update.
+  const createResp = await page.request.post(`${API_URL}/api/admin/users`, {
+    headers: adminAuth.headers,
+    form: {
+      username,
+      email,
+      password,
+      full_name: fullName,
+      role: "manager",
+      status: "active",
+    },
+  });
+  if (!createResp.ok() && createResp.status() !== 201) {
+    throw new Error(
+      `Failed to create temp admin (step 1 - manager): ${createResp.status()} ${(await createResp.text()).slice(0, 500)}`,
+    );
+  }
+  const created = await createResp.json();
+
+  // Promote to admin role
+  const promoteResp = await page.request.put(
+    `${API_URL}/api/admin/users/${created.id}`,
+    {
+      headers: adminAuth.headers,
+      form: { role: "admin" },
+    },
+  );
+  if (!promoteResp.ok()) {
+    throw new Error(
+      `Failed to promote temp admin (step 2): ${promoteResp.status()} ${(await promoteResp.text()).slice(0, 500)}`,
+    );
+  }
+
+  return {
+    id: created.id,
+    username,
+    password,
+    fullName,
+    email,
+    unitId: 0,
   };
 }
 
@@ -660,6 +713,7 @@ test.describe("Admissions Notification Runtime Workflow", () => {
 
     discovery = await discoverAdmissionsConfig(adminPage);
     tempOfficer = await createTempOfficerUser(adminPage, discovery.unitId);
+    tempAdmin = await createTempAdminUser(adminPage);
 
     officerContext = await browser.newContext();
     officerPage = await officerContext.newPage();
@@ -673,6 +727,9 @@ test.describe("Admissions Notification Runtime Workflow", () => {
   test.afterAll(async () => {
     if (adminPage && tempOfficer) {
       await deactivateTempOfficer(adminPage, tempOfficer);
+    }
+    if (adminPage && tempAdmin) {
+      await deactivateTempOfficer(adminPage, tempAdmin);
     }
 
     await officerContext?.close();
@@ -747,7 +804,7 @@ test("application_created notifies assigned officer and records browser delivery
     });
   });
 
-  test.fixme("submitted -> approved should notify assigned officer", async () => {
+  test("submitted -> approved should notify assigned officer", async () => {
     if (!tempOfficer) throw new Error("Temp officer was not created");
 
     const draft = await createMinimalDraftAdmission(officerPage, officerAuth.headers, discovery);
@@ -800,7 +857,7 @@ test("application_created notifies assigned officer and records browser delivery
     });
   });
 
-  test.fixme("approved -> confirmed via public flow notifies assigned officer and does not emit new lead_status_changed delivery", async ({ browser }) => {
+  test("approved -> confirmed via public flow notifies assigned officer and does not emit new lead_status_changed delivery", async ({ browser }) => {
     if (!tempOfficer) throw new Error("Temp officer was not created");
 
     const draft = await createMinimalDraftAdmission(officerPage, officerAuth.headers, discovery);
@@ -891,5 +948,46 @@ test("application_created notifies assigned officer and records browser delivery
       sourceId: draft.leadId,
     });
     expect(leadStatusAfter).toBe(leadStatusBefore);
+  });
+
+  test("delete draft admission notifies assigned officer AND admin (all_admins fan-out)", async () => {
+    if (!tempOfficer) throw new Error("Temp officer was not created");
+    if (!tempAdmin) throw new Error("Temp admin observer was not created");
+
+    const draft = await createMinimalDraftAdmission(officerPage, officerAuth.headers, discovery);
+
+    // Delete draft via API (admin has full permission; officer may lack Casbin policy)
+    const deleteResp = await adminPage.request.delete(
+      `${API_URL}/api/admissions/${draft.profileId}`,
+      { headers: adminAuth.headers },
+    );
+    if (!deleteResp.ok() && deleteResp.status() !== 204) {
+      throw new Error(
+        `Delete failed: ${deleteResp.status()} ${(await deleteResp.text()).slice(0, 500)}`,
+      );
+    }
+
+    // Officer should receive application_deleted notification (lead_owner branch)
+    const deletedTitle = `Hồ sơ đã bị xóa: #${draft.profileId}`;
+    const deletedMessage = `Hồ sơ #${draft.profileId}`;
+
+    await waitForNotification(officerPage, {
+      title: deletedTitle,
+      messageIncludes: deletedMessage,
+    });
+
+    // Delivery ops must have rows for BOTH officer (lead_owner) AND temp admin (all_admins)
+    await waitForDeliveryUsers(adminPage, {
+      event: "application_deleted",
+      sourceType: "admission_profile",
+      sourceId: draft.profileId,
+      expectedUserIds: [tempOfficer.id, tempAdmin.id],
+    });
+
+    // Verify notification visible in officer inbox
+    await assertNotificationVisibleInInbox(officerPage, {
+      title: deletedTitle,
+      messageIncludes: deletedMessage,
+    });
   });
 });
