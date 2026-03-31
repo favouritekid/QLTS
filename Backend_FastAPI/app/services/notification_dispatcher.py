@@ -658,13 +658,17 @@ async def dispatch(
         channel_recipient_map[action.channel] = sorted(set(existing + users))
 
     # Step 3.5: Phase 3b — action-scoped cooldown + rate limit
+    # Cooldown key includes dedupe_key when available so that different
+    # transitions of the same event (e.g., draft→submitted vs submitted→approved
+    # both using APPLICATION_STATUS_CHANGED) don't block each other.
     from app.config import settings as _settings
 
     for action in action_configs:
         users = action_filtered_map.get(action.step, [])
         cooled = []
+        _cd_suffix = f":{dedupe_key}:step{action.step}" if dedupe_key else f":{action.step}"
         for uid in users:
-            cooldown_key = f"notif:cooldown:{event.value}:{uid}:{action.channel}:{action.step}"
+            cooldown_key = f"notif:cooldown:{event.value}:{uid}:{action.channel}{_cd_suffix}"
             if await safe_redis_exists(cooldown_key):
                 continue
             rate_key = f"notif:rate:{uid}"
@@ -863,8 +867,9 @@ async def dispatch(
                                  user_id=uid, channel=ch)
                         continue
 
-                # 2. Cooldown check
-                cooldown_key = f"notif:cooldown:{event.value}:{uid}:{ch}:{action.step}"
+                # 2. Cooldown check (dedupe-aware key to avoid cross-transition collision)
+                _fb_cd_suffix = f":{dedupe_key}:step{action.step}" if dedupe_key else f":{action.step}"
+                cooldown_key = f"notif:cooldown:{event.value}:{uid}:{ch}{_fb_cd_suffix}"
                 if await safe_redis_exists(cooldown_key):
                     log.debug("Internal fallback user in cooldown", user_id=uid)
                     continue
@@ -929,8 +934,9 @@ async def dispatch(
             if not destination:
                 continue
 
-            # External cooldown: skip if same destination was notified recently
-            ext_cooldown_key = f"notif:cooldown:{event.value}:{destination}:{action.channel}:{action.step}"
+            # External cooldown (dedupe-aware key to avoid cross-transition collision)
+            _ext_cd_suffix = f":{dedupe_key}:step{action.step}" if dedupe_key else f":{action.step}"
+            ext_cooldown_key = f"notif:cooldown:{event.value}:{destination}:{action.channel}{_ext_cd_suffix}"
             if await safe_redis_exists(ext_cooldown_key):
                 log.info(
                     "External delivery skipped (cooldown)",

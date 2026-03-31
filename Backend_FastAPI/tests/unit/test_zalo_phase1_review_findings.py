@@ -1329,3 +1329,163 @@ async def test_get_aggregate_stats_query_includes_admission_profile_scope():
                 f"Query missing admission_profile scope: {sql[:200]}"
             assert "assigned_officer_id" in sql, \
                 f"Query missing officer scope: {sql[:200]}"
+
+
+# ============================================================================
+# Cooldown collision fix: dedupe-aware cooldown keys
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_different_dedupe_keys_do_not_cooldown_block_each_other():
+    """Two dispatches of APPLICATION_STATUS_CHANGED with different dedupe_keys
+    (e.g., submitted:18 vs approved:18) must NOT block each other via cooldown."""
+    from app.services.notification_dispatcher import dispatch
+    from app.core.events import SystemEvents
+
+    config, resolver_fn = _build_external_dispatch_patches()
+    # Override to internal-only config (lead_owner, browser)
+    action = MagicMock()
+    action.channel = "browser"
+    action.step = 1
+    action.delay_minutes = 0
+    action.template_code = None
+    action.config = None  # no external resolver
+    action.recipient_config = {"resolver_type": "lead_owner", "params": {}}
+
+    config.actions = [action]
+    config.channel_values = ["browser"]
+
+    redis_data = {}
+
+    async def tracking_redis_exists(key):
+        return key in redis_data
+
+    async def tracking_redis_set(key, value, ex=None):
+        redis_data[key] = value
+
+    async def no_redis_incr(key):
+        return 1
+
+    db = AsyncMock()
+    db.flush = AsyncMock()
+    dedup_result = MagicMock()
+    dedup_result.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=dedup_result)
+
+    # Resolver returns user 18
+    internal_resolver = MagicMock()
+    internal_resolver.resolve_users = AsyncMock(return_value=[18])
+
+    notif_ids_per_dispatch = []
+
+    with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
+         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_rule_loader.deserialize_resolver", return_value=internal_resolver), \
+         patch("app.services.notification_dispatcher.notification_preference_service") as mock_pref, \
+         patch("app.services.notification_dispatcher.safe_redis_exists", tracking_redis_exists), \
+         patch("app.services.notification_dispatcher.safe_redis_set", tracking_redis_set), \
+         patch("app.services.notification_dispatcher.safe_redis_incr", no_redis_incr), \
+         patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \
+         patch("app.services.notification_dispatcher._bulk_create_notifications", new=AsyncMock(return_value={18: 1})), \
+         patch("app.services.notification_dispatcher._create_deliveries_for_action", new=AsyncMock(return_value=[1])), \
+         patch("app.services.notification_dispatcher._emit_domain_event", new=AsyncMock()):
+        # Preference filter: pass through
+        mock_pref.filter_users_by_group = AsyncMock(return_value=[18])
+
+        # Dispatch 1: draft→submitted
+        ids1, cb1 = await dispatch(
+            db=db, event=SystemEvents.APPLICATION_STATUS_CHANGED,
+            payload={"application_id": 18, "lead_id": 45, "old_status": "draft", "new_status": "submitted"},
+            dedupe_key="admission_profile_submitted:18",
+            skip_preference_check=True,
+        )
+        notif_ids_per_dispatch.append(ids1)
+
+        # Dispatch 2: submitted→approved (different dedupe_key, same event+user+channel)
+        ids2, cb2 = await dispatch(
+            db=db, event=SystemEvents.APPLICATION_STATUS_CHANGED,
+            payload={"application_id": 18, "lead_id": 45, "old_status": "submitted", "new_status": "approved"},
+            dedupe_key="admission_profile_approved:18",
+            skip_preference_check=True,
+        )
+        notif_ids_per_dispatch.append(ids2)
+
+    # Both dispatches must create notifications (not blocked by cooldown)
+    assert len(notif_ids_per_dispatch[0]) > 0, "First dispatch should create notifications"
+    assert len(notif_ids_per_dispatch[1]) > 0, "Second dispatch should NOT be blocked by cooldown"
+
+
+@pytest.mark.asyncio
+async def test_same_dedupe_key_is_cooldown_blocked():
+    """Two identical dispatches with same dedupe_key must be blocked by cooldown."""
+    from app.services.notification_dispatcher import dispatch
+    from app.core.events import SystemEvents
+
+    config, resolver_fn = _build_external_dispatch_patches()
+    action = MagicMock()
+    action.channel = "browser"
+    action.step = 1
+    action.delay_minutes = 0
+    action.template_code = None
+    action.config = None
+
+    config.actions = [action]
+    config.channel_values = ["browser"]
+
+    redis_data = {}
+
+    async def tracking_redis_exists(key):
+        return key in redis_data
+
+    async def tracking_redis_set(key, value, ex=None):
+        redis_data[key] = value
+
+    async def no_redis_incr(key):
+        return 1
+
+    db = AsyncMock()
+    db.flush = AsyncMock()
+    dedup_result = MagicMock()
+    dedup_result.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=dedup_result)
+
+    internal_resolver = MagicMock()
+    internal_resolver.resolve_users = AsyncMock(return_value=[18])
+
+    create_call_count = 0
+    async def counting_bulk_create(*args, **kwargs):
+        nonlocal create_call_count
+        create_call_count += 1
+        return {18: create_call_count}
+
+    with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
+         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_rule_loader.deserialize_resolver", return_value=internal_resolver), \
+         patch("app.services.notification_dispatcher.notification_preference_service") as mock_pref, \
+         patch("app.services.notification_dispatcher.safe_redis_exists", tracking_redis_exists), \
+         patch("app.services.notification_dispatcher.safe_redis_set", tracking_redis_set), \
+         patch("app.services.notification_dispatcher.safe_redis_incr", no_redis_incr), \
+         patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \
+         patch("app.services.notification_dispatcher._bulk_create_notifications", counting_bulk_create), \
+         patch("app.services.notification_dispatcher._create_deliveries_for_action", new=AsyncMock(return_value=[1])), \
+         patch("app.services.notification_dispatcher._emit_domain_event", new=AsyncMock()):
+        mock_pref.filter_users_by_group = AsyncMock(return_value=[18])
+
+        # Dispatch 1
+        await dispatch(
+            db=db, event=SystemEvents.APPLICATION_STATUS_CHANGED,
+            payload={"application_id": 18, "lead_id": 45, "old_status": "draft", "new_status": "submitted"},
+            dedupe_key="admission_profile_submitted:18",
+            skip_preference_check=True,
+        )
+
+        # Dispatch 2: SAME dedupe_key
+        await dispatch(
+            db=db, event=SystemEvents.APPLICATION_STATUS_CHANGED,
+            payload={"application_id": 18, "lead_id": 45, "old_status": "draft", "new_status": "submitted"},
+            dedupe_key="admission_profile_submitted:18",
+            skip_preference_check=True,
+        )
+
+    # Only first dispatch should create notifications; second blocked by cooldown
+    assert create_call_count == 1, f"Expected 1 bulk create (second blocked by cooldown), got {create_call_count}"
