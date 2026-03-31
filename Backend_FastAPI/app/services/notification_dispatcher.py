@@ -433,18 +433,9 @@ async def _apply_delivery_deduplication(
     if not user_ids or not dedupe_key:
         return user_ids
     try:
-        from sqlalchemy import select, and_
-        from app.models.notification_delivery import NotificationDelivery
-        result = await db.execute(
-            select(NotificationDelivery.user_id).where(
-                and_(
-                    NotificationDelivery.user_id.in_(user_ids),
-                    NotificationDelivery.dedupe_key == dedupe_key,
-                    NotificationDelivery.channel == channel,
-                )
-            )
-        )
-        existing = {row[0] for row in result.fetchall()}
+        from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+        repo = NotificationDeliveryRepository(db)
+        existing = await repo.find_existing_user_ids_by_dedupe(user_ids, dedupe_key, channel)
         return [uid for uid in user_ids if uid not in existing]
     except Exception as e:
         log.warning("Delivery dedup failed, proceeding without dedup", error=str(e))
@@ -459,13 +450,18 @@ async def dispatch(
     skip_preference_check: bool = False,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
-    Dispatch a notification event.
+    Dispatch a notification event — caller-controlled transaction.
 
-    This is the main entry point for the event-driven notification system.
-    It handles the complete flow from event to notification delivery.
+    USE THIS when the caller owns the DB transaction and needs to commit
+    business data together with notification records atomically, OR when
+    the caller needs the post-commit callback (e.g., service returning
+    ``(result, callback)`` per architecture V3).
+
+    DO NOT USE for fire-and-forget notifications after main business commit.
+    Use ``safe_dispatch()`` for that pattern instead.
 
     Args:
-        db: Async database session
+        db: Async database session (caller owns transaction)
         event: The system event to dispatch
         payload: Event payload with data for resolution and templates.
                  Caller is responsible for sanitizing user-facing values.
@@ -478,32 +474,21 @@ async def dispatch(
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
-        Caller is responsible for calling db.commit() then callback().
+        Caller MUST call ``await db.commit()`` then ``await callback()``.
 
-    Flow:
-        1. Lookup event config from registry
-        2. Resolve recipients using configured resolver
-        3. Filter recipients by preferences (unless skipped)
-        4. Apply deduplication logic
-        5. Bulk insert notifications
-        6. Flush (caller commits)
-        7. Return post-commit callback for channel delivery
+    Contract:
+        - Caller owns transaction: service flushes, caller commits
+        - Caller runs callback AFTER commit (socket.io, email, worker enqueue)
+        - On exception: caller handles rollback
 
-    Example:
-        notification_ids, callback = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload={
-                "lead_id": 123,
-                "officer_id": 456,
-                "lead_name": "John Doe",
-                "actor_id": 789
-            },
-            dedupe_key="lead_assigned:123:456"
-        )
+    Example (service pattern)::
+
+        notification_ids, callback = await dispatch(db=db, event=..., payload=...)
         await db.commit()
         if callback:
             await callback()
+
+    See also: ``safe_dispatch()`` for the convenience wrapper.
     """
     log.info(
         "Dispatching notification event",
@@ -951,18 +936,9 @@ async def dispatch(
             # External dedup: skip if delivery row with same dedupe_key+channel+destination exists
             ext_dedupe_key = action_dedupe_keys.get(action.step)
             if ext_dedupe_key:
-                from sqlalchemy import select as sa_select
-                from app.models.notification_delivery import NotificationDelivery
-                existing = await db.execute(
-                    sa_select(NotificationDelivery.id)
-                    .where(
-                        NotificationDelivery.dedupe_key == ext_dedupe_key,
-                        NotificationDelivery.channel == action.channel,
-                        NotificationDelivery.destination == destination,
-                    )
-                    .limit(1)
-                )
-                if existing.scalar_one_or_none() is not None:
+                from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+                _dedup_repo = NotificationDeliveryRepository(db)
+                if await _dedup_repo.exists_external_delivery(ext_dedupe_key, action.channel, destination):
                     log.info(
                         "External delivery skipped (dedup)",
                         event_type=event.value, channel=action.channel,
@@ -1597,15 +1573,28 @@ async def safe_dispatch(
     skip_preference_check: bool = False,
 ) -> List[int]:
     """
-    Dispatch + commit + callback in one call. Use in router layer only.
+    Fire-and-forget dispatch — commits + runs callback + swallows errors.
 
-    Wraps the full dispatch pattern: tuple unpacking, db.commit() for
-    notification records, and callback execution (socket.io/email delivery).
-    Errors are logged but never raised — notifications are non-critical.
+    USE THIS in **router after-commit blocks** for non-critical notifications
+    that must never crash the main request flow. The caller's business data
+    must already be committed before calling this.
+
+    DO NOT USE when notification records must be part of the same transaction
+    as business data. Use ``dispatch()`` for that pattern instead.
+
+    Contract:
+        - Owns its own commit: flushes + commits notification records
+        - Runs callback (socket.io, email, worker enqueue)
+        - Logs and swallows ALL exceptions — never raises
+        - On failure: rolls back to keep session usable for subsequent ops
+
+    Typical usage (router after business commit)::
+
+        await db.commit()                    # business data committed
+        await safe_dispatch(db=db, ...)      # notification — best effort
 
     Args:
-        db: Async database session (transaction should already be committed
-            for main business data before calling this)
+        db: Async database session (business data already committed)
         event: The system event to dispatch
         payload: Event payload with data for resolution and templates
         dedupe_key: Optional deduplication key
@@ -1613,6 +1602,8 @@ async def safe_dispatch(
 
     Returns:
         List of created notification IDs (empty on failure)
+
+    See also: ``dispatch()`` for the caller-controlled transaction variant.
     """
     try:
         notif_ids, notif_cb = await dispatch(

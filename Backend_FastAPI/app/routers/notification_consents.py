@@ -7,9 +7,6 @@ Endpoints:
   POST /api/notification-consents/bulk-import — CSV bulk import
   GET  /api/notification-consents          — list with filters
 """
-import csv
-import io
-from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -19,17 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import database, models, schemas
 from app.core.deps import RequireAdmin
 from app.core.rate_limits import limiter, RateLimits
-from app.repositories.notification_consent_repository import NotificationConsentRepository
-from app.repositories.notification_consent_history_repository import NotificationConsentHistoryRepository
+from app.services import notification_consent_service
 
 log = structlog.get_logger(__name__)
 router = APIRouter(
     prefix="/notification-consents",
     tags=["Notification Consents (Admin)"],
 )
-
-# Required CSV columns for bulk import
-_REQUIRED_CSV_COLS = {"channel", "source_type", "source_id", "consent_status"}
 
 
 @limiter.limit(RateLimits.DATA_READ)
@@ -45,10 +38,10 @@ async def list_consents(
     current_admin: models.User = RequireAdmin,
 ):
     """List consent records with optional filters. Admin-only."""
-    repo = NotificationConsentRepository(db)
     skip = (page - 1) * page_size
 
-    records, total = await repo.list_consents(
+    records, total = await notification_consent_service.list_consents(
+        db,
         channel=channel,
         source_type=source_type,
         consent_status=consent_status,
@@ -79,19 +72,11 @@ async def upsert_consent(
     If a consent for (channel, source_type, source_id) already exists,
     it is updated. Otherwise a new record is created.
     """
-    repo = NotificationConsentRepository(db)
-
-    now = datetime.now(timezone.utc)
-    data = body.model_dump()
-    data["granted_by"] = current_user.id
-
-    if body.consent_status == "granted":
-        data["granted_at"] = now
-        data["revoked_at"] = None
-    elif body.consent_status == "revoked":
-        data["revoked_at"] = now
-
-    result = await repo.upsert_latest(data)
+    result = await notification_consent_service.upsert_consent(
+        db,
+        data=body.model_dump(),
+        actor_id=current_user.id,
+    )
     await db.commit()
 
     log.info(
@@ -120,89 +105,31 @@ async def bulk_import_consents(
     Required columns: channel, source_type, source_id, consent_status
     Optional columns: normalized_phone, normalized_email, consent_source, notes
     """
-    # Read and decode CSV
     content = await file.read()
-    try:
-        text = content.decode("utf-8-sig")  # Handle BOM
-    except UnicodeDecodeError:
-        text = content.decode("latin-1")
 
-    reader = csv.DictReader(io.StringIO(text))
-
-    # Validate headers
-    if not reader.fieldnames:
-        return schemas.NotificationConsentImportResult(
-            processed=0, granted=0, revoked=0, skipped=0,
-            errors=[{"line": 0, "message": "Empty CSV or missing headers"}],
-        )
-
-    missing = _REQUIRED_CSV_COLS - set(reader.fieldnames)
-    if missing:
-        return schemas.NotificationConsentImportResult(
-            processed=0, granted=0, revoked=0, skipped=0,
-            errors=[{"line": 0, "message": f"Missing required columns: {', '.join(sorted(missing))}"}],
-        )
-
-    # Build rows
-    now = datetime.now(timezone.utc)
-    rows = []
-    parse_errors = []
-
-    for i, row in enumerate(reader, start=2):  # line 1 = header
-        try:
-            source_id = int(row["source_id"])
-        except (ValueError, TypeError):
-            parse_errors.append({"line": i, "message": f"Invalid source_id: {row.get('source_id')}"})
-            continue
-
-        consent_status = row.get("consent_status", "granted").strip().lower()
-        if consent_status not in ("granted", "revoked"):
-            parse_errors.append({"line": i, "message": f"Invalid consent_status: {consent_status}"})
-            continue
-
-        data = {
-            "channel": row["channel"].strip(),
-            "source_type": row["source_type"].strip(),
-            "source_id": source_id,
-            "consent_status": consent_status,
-            "consent_source": row.get("consent_source", "csv_import").strip() or "csv_import",
-            "granted_by": current_user.id,
-            "notes": row.get("notes", "").strip() or None,
-            "normalized_phone": row.get("normalized_phone", "").strip() or None,
-            "normalized_email": row.get("normalized_email", "").strip() or None,
-        }
-
-        if consent_status == "granted":
-            data["granted_at"] = now
-        elif consent_status == "revoked":
-            data["revoked_at"] = now
-
-        rows.append(data)
-
-    # Bulk upsert
-    repo = NotificationConsentRepository(db)
-    summary = await repo.bulk_upsert(rows)
+    result = await notification_consent_service.bulk_import_consents(
+        db,
+        file_content=content,
+        actor_id=current_user.id,
+    )
     await db.commit()
-
-    # Merge parse errors into summary
-    all_errors = parse_errors + summary.get("errors", [])
 
     log.info(
         "Consent bulk import completed",
-        processed=summary["processed"],
-        granted=summary["granted"],
-        revoked=summary["revoked"],
-        skipped=summary["skipped"] + len(parse_errors),
-        error_count=len(all_errors),
+        processed=result["processed"],
+        granted=result["granted"],
+        revoked=result["revoked"],
+        skipped=result["skipped"],
+        error_count=len(result["errors"]),
         actor_id=current_user.id,
     )
 
     return schemas.NotificationConsentImportResult(
-        processed=summary["processed"],
-        granted=summary["granted"],
-        revoked=summary["revoked"],
-        skipped=summary["skipped"] + len(parse_errors),
-        errors=all_errors,
+        processed=result["processed"],
+        granted=result["granted"],
+        revoked=result["revoked"],
+        skipped=result["skipped"],
+        errors=result["errors"],
     )
 
 
@@ -223,10 +150,10 @@ async def list_entity_consent_history(
     current_admin: models.User = RequireAdmin,
 ):
     """List consent history for an entity (source_type + source_id). Admin-only."""
-    repo = NotificationConsentHistoryRepository(db)
     skip = (page - 1) * page_size
 
-    records, total = await repo.list_for_entity(
+    records, total = await notification_consent_service.list_entity_consent_history(
+        db,
         source_type=source_type,
         source_id=source_id,
         skip=skip,
@@ -253,10 +180,10 @@ async def list_consent_history(
     current_admin: models.User = RequireAdmin,
 ):
     """List history for a specific consent record. Admin-only."""
-    repo = NotificationConsentHistoryRepository(db)
     skip = (page - 1) * page_size
 
-    records, total = await repo.list_for_consent(
+    records, total = await notification_consent_service.list_consent_history(
+        db,
         consent_id=consent_id,
         skip=skip,
         limit=page_size,

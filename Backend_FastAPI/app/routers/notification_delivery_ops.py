@@ -8,14 +8,13 @@ from datetime import datetime
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
 from app.core.deps import RequireAdmin, get_delivery_scope_filter, get_delivery_for_user, DeliveryScopeFilter
 from app.core.rate_limits import limiter, RateLimits
-from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
-
+from app.services import notification_delivery_ops_service
 log = structlog.get_logger(__name__)
 router = APIRouter(
     prefix="/notification-deliveries",
@@ -44,21 +43,17 @@ async def list_deliveries(
     List notification delivery records with filters.
     D4: Scoped by user role (admin=all, manager=unit, officer=self).
     """
-    repo = NotificationDeliveryRepository(db)
     skip = (page - 1) * page_size
 
-    records, total = await repo.list_deliveries(
-        event=event,
-        channel=channel,
-        status=status,
-        user_id=user_id,
-        source_type=source_type,
-        source_id=source_id,
-        date_from=date_from,
-        date_to=date_to,
-        skip=skip,
-        limit=page_size,
-        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id,
+    records, total = await notification_delivery_ops_service.list_deliveries(
+        db,
+        event=event, channel=channel, status=status,
+        user_id=user_id, source_type=source_type, source_id=source_id,
+        date_from=date_from, date_to=date_to,
+        skip=skip, limit=page_size,
+        allowed_user_ids=scope.allowed_user_ids,
+        allowed_unit_ids=scope.allowed_unit_ids,
+        officer_id=scope.officer_id,
     )
 
     return schemas.NotificationDeliveriesPage(
@@ -82,10 +77,12 @@ async def get_delivery_stats(
     scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter),
 ):
     """Aggregate delivery stats. D4: scoped by role."""
-    repo = NotificationDeliveryRepository(db)
-    stats = await repo.get_aggregate_stats(
+    stats = await notification_delivery_ops_service.get_aggregate_stats(
+        db,
         date_from=date_from, date_to=date_to, event=event, channel=channel,
-        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id,
+        allowed_user_ids=scope.allowed_user_ids,
+        allowed_unit_ids=scope.allowed_unit_ids,
+        officer_id=scope.officer_id,
     )
     return stats
 
@@ -102,10 +99,12 @@ async def get_delivery_failures(
     scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter),
 ):
     """Failure analytics. D4: scoped by role."""
-    repo = NotificationDeliveryRepository(db)
-    summary = await repo.get_failure_summary(
+    summary = await notification_delivery_ops_service.get_failure_summary(
+        db,
         date_from=date_from, date_to=date_to, channel=channel, limit=limit,
-        allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id,
+        allowed_user_ids=scope.allowed_user_ids,
+        allowed_unit_ids=scope.allowed_unit_ids,
+        officer_id=scope.officer_id,
     )
     return summary
 
@@ -114,42 +113,77 @@ async def get_delivery_failures(
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/stats/time-series", response_model=schemas.TimeSeriesResponse)
-async def get_time_series(request: Request, interval: str = Query("hour", pattern="^(hour|day)$"),
-    date_from: Optional[datetime] = Query(None), date_to: Optional[datetime] = Query(None),
-    channel: Optional[str] = Query(None), db: AsyncSession = Depends(database.get_db),
-    scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter)):
+async def get_time_series(
+    request: Request,
+    interval: str = Query("hour", pattern="^(hour|day)$"),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    channel: Optional[str] = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter),
+):
     """Time series delivery counts."""
-    repo = NotificationDeliveryRepository(db)
-    buckets = await repo.get_time_series(interval=interval, date_from=date_from, date_to=date_to, channel=channel, allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id)
-    return schemas.TimeSeriesResponse(interval=interval, buckets=[schemas.TimeSeriesBucket(**b) for b in buckets])
+    buckets = await notification_delivery_ops_service.get_time_series(
+        db,
+        interval=interval, date_from=date_from, date_to=date_to, channel=channel,
+        allowed_user_ids=scope.allowed_user_ids,
+        allowed_unit_ids=scope.allowed_unit_ids,
+        officer_id=scope.officer_id,
+    )
+    return schemas.TimeSeriesResponse(
+        interval=interval,
+        buckets=[schemas.TimeSeriesBucket(**b) for b in buckets],
+    )
+
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/stats/top-events", response_model=schemas.TopEventsResponse)
-async def get_top_events(request: Request, limit: int = Query(10, ge=1, le=50),
-    date_from: Optional[datetime] = Query(None), date_to: Optional[datetime] = Query(None),
-    db: AsyncSession = Depends(database.get_db), scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter)):
+async def get_top_events(
+    request: Request,
+    limit: int = Query(10, ge=1, le=50),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    scope: DeliveryScopeFilter = Depends(get_delivery_scope_filter),
+):
     """Top events by volume."""
-    repo = NotificationDeliveryRepository(db)
-    events = await repo.get_top_events(limit=limit, date_from=date_from, date_to=date_to, allowed_user_ids=scope.allowed_user_ids, allowed_unit_ids=scope.allowed_unit_ids, officer_id=scope.officer_id)
-    return schemas.TopEventsResponse(events=[schemas.TopEventStats(**e) for e in events])
+    events = await notification_delivery_ops_service.get_top_events(
+        db,
+        limit=limit, date_from=date_from, date_to=date_to,
+        allowed_user_ids=scope.allowed_user_ids,
+        allowed_unit_ids=scope.allowed_unit_ids,
+        officer_id=scope.officer_id,
+    )
+    return schemas.TopEventsResponse(
+        events=[schemas.TopEventStats(**e) for e in events],
+    )
+
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/stats/latency", response_model=schemas.LatencyStats)
-async def get_latency_stats(request: Request, date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None), db: AsyncSession = Depends(database.get_db),
-    _: models.User = RequireAdmin):
+async def get_latency_stats(
+    request: Request,
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    _: models.User = RequireAdmin,
+):
     """Processing latency P50/P95. Admin-only."""
-    repo = NotificationDeliveryRepository(db)
-    return await repo.get_processing_latency_stats(date_from=date_from, date_to=date_to)
+    return await notification_delivery_ops_service.get_latency_stats(
+        db, date_from=date_from, date_to=date_to,
+    )
+
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/health", response_model=schemas.HealthSummaryResponse)
-async def get_health_summary(request: Request, db: AsyncSession = Depends(database.get_db),
-    _: models.User = RequireAdmin):
+async def get_health_summary(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    _: models.User = RequireAdmin,
+):
     """Combined health: quota + breaker + backlog + failure rate. Admin-only."""
     from app.services import notification_quota_service
 
-    # H1: Business logic extracted to service layer
     summary = await notification_quota_service.get_health_summary(db)
     return schemas.HealthSummaryResponse(
         channels=[schemas.ChannelHealthItem(**c) for c in summary["channels"]],
@@ -157,6 +191,7 @@ async def get_health_summary(request: Request, db: AsyncSession = Depends(databa
         failure_rate_30m=summary["failure_rate_30m"],
         alerts_active=summary["alerts_active"],
     )
+
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get("/quotas", response_model=schemas.QuotaListResponse)
@@ -226,23 +261,10 @@ async def replay_delivery(
     Replay a failed/dead-lettered/skipped delivery.
     D4: IDOR-scoped — user can only replay deliveries they can see.
     """
-    from app.services import notification_delivery_service
-    from app.tasks.delivery_tasks import execute_notification_delivery
-
     # H2: Use IDOR-validated record.id instead of raw delivery_id
-    success, message = await notification_delivery_service.replay_delivery(db, record.id)
-
-    if not success:
-        raise HTTPException(status_code=400, detail=message)
-
+    await notification_delivery_ops_service.replay_and_enqueue(db, record.id)
     await db.commit()
-
-    # Enqueue to worker (wrap in try-except per M4)
-    try:
-        execute_notification_delivery.apply_async(args=[record.id])
-    except Exception as e:
-        log.error("Failed to enqueue replay task", delivery_id=record.id, error=str(e))
-        raise HTTPException(status_code=500, detail="Delivery replayed but failed to enqueue")
+    notification_delivery_ops_service.enqueue_delivery_task(record.id)
 
     log.info("Delivery replayed", delivery_id=delivery_id)
     return schemas.ReplayResponse(

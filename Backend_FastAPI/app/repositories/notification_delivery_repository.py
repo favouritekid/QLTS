@@ -600,3 +600,45 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
             "p95_seconds": round(float(r[1]), 2) if r[1] else None,
             "sample_count": r[2],
         }
+
+    # -----------------------------------------------------------------
+    # Dedup helpers (used by dispatcher to avoid inline SQL)
+    # -----------------------------------------------------------------
+
+    async def find_existing_user_ids_by_dedupe(
+        self,
+        user_ids: List[int],
+        dedupe_key: str,
+        channel: str,
+    ) -> set:
+        """Return set of user_ids that already have a delivery with same dedupe_key+channel."""
+        if not user_ids or not dedupe_key:
+            return set()
+        result = await self.db.execute(
+            select(NotificationDelivery.user_id).where(
+                and_(
+                    NotificationDelivery.user_id.in_(user_ids),
+                    NotificationDelivery.dedupe_key == dedupe_key,
+                    NotificationDelivery.channel == channel,
+                )
+            )
+        )
+        return {row[0] for row in result.fetchall()}
+
+    async def exists_external_delivery(
+        self,
+        dedupe_key: str,
+        channel: str,
+        destination: str,
+    ) -> bool:
+        """Check if an external delivery with same dedupe_key+channel+destination exists."""
+        result = await self.db.execute(
+            select(NotificationDelivery.id)
+            .where(
+                NotificationDelivery.dedupe_key == dedupe_key,
+                NotificationDelivery.channel == channel,
+                NotificationDelivery.destination == destination,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
