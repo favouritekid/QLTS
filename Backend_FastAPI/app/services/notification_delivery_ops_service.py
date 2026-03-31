@@ -158,11 +158,11 @@ async def replay_and_enqueue(
     delivery_id: int,
 ) -> Tuple[bool, str]:
     """
-    Replay a failed/dead-lettered/skipped delivery and enqueue to worker.
+    Reset a failed/dead-lettered/skipped delivery for re-execution.
 
-    Returns (success, message). Caller must call db.commit() on success.
+    Returns (success, message). Caller must call db.commit() on success,
+    then call enqueue_delivery_task() as best-effort post-commit.
     Raises BusinessRuleViolation if delivery is not eligible for replay.
-    Raises BusinessRuleViolation if Celery enqueue fails.
     """
     from app.services import notification_delivery_service
 
@@ -173,17 +173,20 @@ async def replay_and_enqueue(
     return success, message
 
 
-def enqueue_delivery_task(delivery_id: int) -> None:
+def enqueue_delivery_task(delivery_id: int) -> bool:
     """
-    Enqueue delivery to Celery worker.
+    Enqueue delivery to Celery worker. Returns True on success.
 
-    Raises BusinessRuleViolation if enqueue fails so the router can handle
-    it as a domain error rather than raising HTTPException directly.
+    This is a best-effort post-commit operation. If Celery is down, the
+    delivery state has already been reset to 'queued' — the sweep task
+    will pick it up on its next run. Callers should NOT treat enqueue
+    failure as a request error (data is already committed).
     """
     from app.tasks.delivery_tasks import execute_notification_delivery
 
     try:
         execute_notification_delivery.apply_async(args=[delivery_id])
+        return True
     except Exception as e:
         log.error("Failed to enqueue replay task", delivery_id=delivery_id, error=str(e))
-        raise BusinessRuleViolation(f"Delivery replayed but failed to enqueue: {e}")
+        return False

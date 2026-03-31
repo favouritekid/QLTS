@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone, timedelta
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 from app import models
 from app.database import AsyncSessionLocal
@@ -269,10 +269,24 @@ async def test_reset_breaker_returns_closed(client: AsyncClient, seeded):
 async def test_replay_failed_delivery(client: AsyncClient, seeded):
     failed_id = seeded["failed_id"]
     with patch("app.tasks.delivery_tasks.execute_notification_delivery") as mock_task:
-        mock_task.apply_async = AsyncMock()
+        mock_task.apply_async = MagicMock()
         resp = await client.post(f"{URL}/{failed_id}/replay", headers=seeded["headers"])
     assert resp.status_code == 200
     assert resp.json()["replayed"] is True
+
+
+@pytest.mark.asyncio
+async def test_replay_enqueue_failure_still_returns_200(client: AsyncClient, seeded):
+    """Enqueue failure after commit is best-effort — NOT a 400/500 error.
+    Delivery state is already reset to queued; sweep will pick it up."""
+    failed_id = seeded["failed_id"]
+    with patch("app.tasks.delivery_tasks.execute_notification_delivery") as mock_task:
+        mock_task.apply_async = MagicMock(side_effect=ConnectionError("Celery down"))
+        resp = await client.post(f"{URL}/{failed_id}/replay", headers=seeded["headers"])
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["replayed"] is True
+    assert "deferred" in body["message"].lower() or "sweep" in body["message"].lower()
 
 
 @pytest.mark.asyncio

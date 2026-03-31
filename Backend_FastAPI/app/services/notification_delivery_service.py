@@ -279,7 +279,8 @@ async def replay_delivery(
     """
     Replay a failed/dead-lettered/skipped delivery.
 
-    Resets status to queued, clears retry/dead-letter state, enqueues to worker.
+    Resets status to queued and clears retry/dead-letter state.
+    Caller is responsible for db.commit() then best-effort enqueue.
     Returns (success: bool, message: str).
     """
     from app.models.notification_delivery import NotificationDelivery

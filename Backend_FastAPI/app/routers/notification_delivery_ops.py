@@ -264,11 +264,13 @@ async def replay_delivery(
     # H2: Use IDOR-validated record.id instead of raw delivery_id
     await notification_delivery_ops_service.replay_and_enqueue(db, record.id)
     await db.commit()
-    notification_delivery_ops_service.enqueue_delivery_task(record.id)
 
-    log.info("Delivery replayed", delivery_id=delivery_id)
+    # Best-effort enqueue — if Celery is down, sweep task will pick it up
+    enqueued = notification_delivery_ops_service.enqueue_delivery_task(record.id)
+
+    log.info("Delivery replayed", delivery_id=delivery_id, enqueued=enqueued)
     return schemas.ReplayResponse(
         replayed=True,
         delivery_id=delivery_id,
-        message="Delivery replayed and enqueued",
+        message="Delivery replayed and enqueued" if enqueued else "Delivery replayed but enqueue deferred to sweep",
     )

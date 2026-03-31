@@ -80,7 +80,7 @@ class TestQuotaCheck:
             "app.services.notification_quota_service.database"
         ) as mock_database:
             mock_redis = AsyncMock()
-            mock_redis.get = AsyncMock(return_value=b"ok")
+            mock_redis.get = AsyncMock(return_value="ok")
             mock_database.get_redis = AsyncMock(return_value=mock_redis)
 
             result = await check_quota(mock_db, "zalo")
@@ -101,7 +101,7 @@ class TestQuotaCheck:
             "app.services.notification_quota_service.database"
         ) as mock_database:
             mock_redis = AsyncMock()
-            mock_redis.get = AsyncMock(return_value=b"blocked")
+            mock_redis.get = AsyncMock(return_value="blocked")
             mock_database.get_redis = AsyncMock(return_value=mock_redis)
 
             result = await check_quota(mock_db, "zalo")
