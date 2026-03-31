@@ -180,6 +180,14 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
             _internal_group("all_admins", ["browser", "email"]),
         ],
     ),
+    "payment_received": _build_rule(
+        event="payment_received",
+        title_template="Thanh toán mới được ghi nhận",
+        message_template="Khoản thanh toán $amount ($payment_type) đã được ghi nhận, đang chờ xác nhận.",
+        notification_type="info",
+        link_template="/finance/payments/$payment_id",
+        groups=[_internal_group("specific_users", ["browser", "email"])],
+    ),
     "payment_verified": _build_rule(
         event="payment_verified",
         title_template="Thanh toán đã được xác nhận",

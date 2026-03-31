@@ -396,6 +396,54 @@ test.describe("Finance Notification Runtime Workflow", () => {
     await adminContext?.close();
   });
 
+  test("payment_received notifies assigned officer when payment is recorded", async () => {
+    if (!tempOfficer || !tempManager) throw new Error("Temp users not created");
+
+    const finance = await setupApprovedProfileWithFee(
+      adminPage, adminAuth.headers,
+      officerPage, officerAuth.headers,
+      discovery,
+    );
+
+    const methodsResp = await adminPage.request.get(`${API_URL}/api/payments/methods`, { headers: adminAuth.headers });
+    expect(methodsResp.ok()).toBeTruthy();
+    const methods = await methodsResp.json();
+    const paymentMethodId = (methods.methods || methods)[0]?.id;
+    expect(paymentMethodId).toBeTruthy();
+
+    // Admin records payment → triggers payment_received
+    const payResp = await adminPage.request.post(`${API_URL}/api/payments`, {
+      headers: adminAuth.headers,
+      data: {
+        invoice_id: finance.invoiceId,
+        method_id: paymentMethodId,
+        amount: finance.feeAmount,
+        reference_code: `E2E_FINNOTIF_RCV_${Date.now()}`,
+        payer_name: "PW Finance Received Test",
+      },
+    });
+    if (!payResp.ok()) {
+      throw new Error(`Payment creation failed: ${payResp.status()} ${(await payResp.text()).slice(0, 500)}`);
+    }
+    const payment = await payResp.json();
+    expect(payment.status).toBe("pending");
+
+    // Officer should receive payment_received notification
+    const title = "Thanh toán mới được ghi nhận";
+    await waitForNotification(officerPage, { title, messageIncludes: "chờ xác nhận" });
+
+    // Delivery ops: verify row with admission_profile traceability
+    await waitForDeliveryUsers(adminPage, {
+      event: "payment_received",
+      sourceType: "admission_profile",
+      sourceId: finance.profileId,
+      expectedUserIds: [tempOfficer.id],
+    });
+
+    // Inbox UI verification
+    await assertNotificationVisibleInInbox(officerPage, { title });
+  });
+
   test("payment_verified notifies assigned officer and records delivery", async () => {
     if (!tempOfficer || !tempManager) throw new Error("Temp users not created");
 

@@ -178,10 +178,41 @@ class PaymentService:
             created_by=user_id,
         )
 
-        # Post-commit: notify for verification
+        # Resolve data for notification while session is active
+        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        _profile_id = fee.admission_profile_id if fee else None
+        _lead_id = None
+        _officer_id = None
+        if fee:
+            profile = await self._get_profile_for_fee(fee)
+            if profile:
+                _lead_id = profile.lead_id
+                if hasattr(profile, 'lead') and profile.lead:
+                    _officer_id = profile.lead.assigned_officer_id
+
+        _notify_payload = {
+            "payment_id": payment.id,
+            "invoice_id": invoice_id,
+            "fee_id": fee.id if fee else None,
+            "amount": str(amount),
+            "payment_type": fee.fee_type if fee else "unknown",
+            "admission_profile_id": _profile_id,
+            "lead_id": _lead_id,
+            "unit_id": unit_id,
+            "user_id": _officer_id or user_id,
+            "actor_id": user_id,
+        }
+        _db = self.db
+
         async def post_commit():
-            # TODO: Emit PaymentRecorded event for verification queue
-            pass
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.PAYMENT_RECEIVED,
+                payload=_notify_payload,
+            )
 
         return payment, post_commit
 
