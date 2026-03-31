@@ -1718,7 +1718,7 @@ async def resubmit_admission(
     - Layer 4: Service layer handles business logic
 
     **State Transition:**
-    - From: REJECTED
+    - From: REJECTED or REVISION_REQUESTED
     - To: RESUBMITTED
 
     **Validation:**
@@ -2072,7 +2072,11 @@ async def confirm_admission_by_token(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. Dispatch notifications (public flow — actor is "system")
+        # 4. Dispatch APPLICATION_STATUS_CHANGED only (public flow)
+        # NOTE: No LEAD_STATUS_CHANGED here — both "approved" and "confirmed"
+        # map to sts09 in ADMISSION_TO_LEAD_STATUS_MAP, so the lead status
+        # does not actually change. sync_lead_from_admission() already skips
+        # when lead is already at target status.
         if profile.lead_id:
             await safe_dispatch(
                 db=db,
@@ -2086,19 +2090,6 @@ async def confirm_admission_by_token(
                     "actor_name": "Ứng viên xác nhận",
                 },
                 dedupe_key=f"admission_profile_confirmed:{profile.id}",
-            )
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": profile.lead_id,
-                    "lead_name": f"Profile #{profile.id}",
-                    "old_status": "approved",
-                    "new_status": "sts09",
-                    "actor_id": 0,
-                    "actor_name": "Ứng viên xác nhận",
-                },
-                dedupe_key=f"lead_status_changed:{profile.lead_id}:confirmed",
             )
 
         # 5. RETURN Response

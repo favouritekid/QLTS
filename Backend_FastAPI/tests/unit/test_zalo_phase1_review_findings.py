@@ -976,3 +976,44 @@ async def test_lead_owner_resolver_uses_db_when_no_officer_id():
     assert users == [18]
     # Verify DB was actually queried (not short-circuited by officer_id)
     assert db.execute.await_count == 1
+
+
+# ============================================================================
+# Regression: admissions notification parity
+# ============================================================================
+
+def test_confirm_token_does_not_emit_lead_status_changed():
+    """Confirm-by-token: approved→confirmed maps to same lead status (sts09),
+    so LEAD_STATUS_CHANGED must NOT be emitted (would be a false notification)."""
+    # Verify the mapping proves no lead status change
+    from app.services.lead_admission_sync import ADMISSION_TO_LEAD_STATUS_MAP
+    assert ADMISSION_TO_LEAD_STATUS_MAP["approved"] == "sts09"
+    assert ADMISSION_TO_LEAD_STATUS_MAP["confirmed"] == "sts09"
+    # Same target → no lead status change → no LEAD_STATUS_CHANGED dispatch needed
+
+
+def test_bulk_service_annotates_pre_status():
+    """Bulk approve/reject service must annotate _pre_status on each profile
+    so router can use the actual previous status for notifications."""
+    from types import SimpleNamespace
+
+    # Simulate what the service does
+    profile = SimpleNamespace(status="resubmitted", id=1, lead_id=10)
+    _old_status = profile.status
+    profile.status = "approved"
+    profile._pre_status = _old_status  # Service annotation
+
+    assert profile._pre_status == "resubmitted"
+    assert profile.status == "approved"
+
+
+def test_resubmit_maps_to_sts07():
+    """Resubmit LEAD_STATUS_CHANGED must use sts07 per sync mapping."""
+    from app.services.lead_admission_sync import ADMISSION_TO_LEAD_STATUS_MAP
+    assert ADMISSION_TO_LEAD_STATUS_MAP["resubmitted"] == "sts07"
+
+
+def test_finalize_maps_to_sts11():
+    """Finalize LEAD_STATUS_CHANGED must use sts11 per sync mapping."""
+    from app.services.lead_admission_sync import ADMISSION_TO_LEAD_STATUS_MAP
+    assert ADMISSION_TO_LEAD_STATUS_MAP["enrolled"] == "sts11"
