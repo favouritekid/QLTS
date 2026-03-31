@@ -23,12 +23,14 @@ def _build_scope_condition(
     based on source ownership. Supported source_types:
     - 'lead': scope via Lead.unit_id / Lead.assigned_officer_id
     - 'admission_profile': scope via AdmissionProfile.lead_id → Lead ownership
+    - 'collaborator': scope via Collaborator.unit_id
     Unknown source_types are denied (not included in results).
     """
     internal_cond = NotificationDelivery.user_id.in_(allowed_user_ids)
 
     from app.models.lead import Lead
     from app.models.admission import AdmissionProfile
+    from app.models.collaborator import Collaborator
 
     external_base = and_(
         NotificationDelivery.user_id.is_(None),
@@ -37,7 +39,6 @@ def _build_scope_condition(
     )
 
     def _lead_scope(scope_filter):
-        """External rows where source IS the lead."""
         return and_(
             external_base,
             NotificationDelivery.source_type == "lead",
@@ -45,7 +46,6 @@ def _build_scope_condition(
         )
 
     def _admission_scope(scope_filter):
-        """External rows where source is admission_profile → lead ownership."""
         return and_(
             external_base,
             NotificationDelivery.source_type == "admission_profile",
@@ -57,8 +57,21 @@ def _build_scope_condition(
             ),
         )
 
+    def _collaborator_scope_unit(unit_ids):
+        return and_(
+            external_base,
+            NotificationDelivery.source_type == "collaborator",
+            exists(
+                select(Collaborator.id).where(
+                    Collaborator.id == NotificationDelivery.source_id,
+                    Collaborator.unit_id.in_(unit_ids),
+                )
+            ),
+        )
+
     if officer_id is not None:
         officer_filter = Lead.assigned_officer_id == officer_id
+        # Officer cannot scope collaborators (no assigned_officer on Collaborator)
         return or_(
             internal_cond,
             _lead_scope(officer_filter),
@@ -71,6 +84,7 @@ def _build_scope_condition(
             internal_cond,
             _lead_scope(unit_filter),
             _admission_scope(unit_filter),
+            _collaborator_scope_unit(allowed_unit_ids),
         )
 
     return internal_cond

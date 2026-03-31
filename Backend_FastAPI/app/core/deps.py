@@ -1789,7 +1789,7 @@ async def _check_external_source_in_units(
 ) -> bool:
     """Check if an external delivery's source resource belongs to given units.
 
-    Supports source_type='lead' and 'admission_profile' (via lead ownership).
+    Supports source_type='lead', 'admission_profile', and 'collaborator'.
     Unknown source types return False (deny by default).
     """
     if not unit_ids:
@@ -1809,6 +1809,12 @@ async def _check_external_source_in_units(
             .join(AdmissionProfile, AdmissionProfile.lead_id == Lead.id)
             .where(AdmissionProfile.id == record.source_id)
         )
+        result = await db.execute(q)
+        row = result.first()
+        return row is not None and row[0] in unit_ids
+    if record.source_type == "collaborator":
+        from app.models.collaborator import Collaborator
+        q = select(Collaborator.unit_id).where(Collaborator.id == record.source_id)
         result = await db.execute(q)
         row = result.first()
         return row is not None and row[0] in unit_ids
