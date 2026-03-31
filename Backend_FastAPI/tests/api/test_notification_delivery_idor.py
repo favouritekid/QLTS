@@ -4,6 +4,7 @@ E2E Phase 2: IDOR scope enforcement for notification delivery ops.
 
 Tests: admin=all, manager=unit scope, officer=self scope.
 Admin-only endpoints: latency, health, quotas, breakers return 403 for non-admin.
+d_other is officer's zalo delivery (not external) to avoid FK issues with non-existent user IDs.
 """
 import pytest
 import pytest_asyncio
@@ -40,8 +41,8 @@ async def idor_data(
             user_id=officer_id, status="failed", error_reason="test",
         )
         d_other = models.NotificationDelivery(
-            event="lead_assigned", channel="browser", recipient_kind="internal",
-            user_id=999999, status="queued",
+            event="lead_assigned", channel="zalo", recipient_kind="internal",
+            user_id=officer_id, status="queued",
         )
         db.add_all([d_admin, d_manager, d_officer, d_other])
         await db.commit()
