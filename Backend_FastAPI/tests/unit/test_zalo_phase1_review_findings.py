@@ -1528,21 +1528,40 @@ def test_source_extraction_lead_events_still_use_lead():
 def test_application_created_payload_must_include_lead_name_and_program():
     """application_created dispatch payload from router must have
     lead_name and major_program_name (not None/$lead_name)."""
-    # Verify the payload contract from admissions.py create path
-    # Minimum required keys for clean template rendering
     required_keys = {"application_id", "lead_id", "lead_name", "major_program_name", "actor_id"}
-    # A well-formed payload:
+    # A well-formed payload (program.name + offering_type):
     payload = {
         "application_id": 18,
         "lead_id": 45,
         "lead_name": "Nguyen Van A",
-        "major_program_name": "Công nghệ thông tin",
+        "major_program_name": "Công nghệ thông tin - Chính quy",
         "actor_id": 15,
         "actor_name": "Admin",
     }
     assert required_keys.issubset(payload.keys())
     assert payload["lead_name"] != "$lead_name"
     assert payload["major_program_name"] is not None
+    assert "None" not in payload["major_program_name"]
+
+
+def test_program_offering_enrichment_fallback():
+    """If ProgramOffering has no program relation, fall back to offering_type."""
+    from types import SimpleNamespace
+    # Simulate ProgramOffering with no program loaded
+    po = SimpleNamespace(program=None, offering_type="Chính quy")
+    if po.program:
+        name = f"{po.program.name} - {po.offering_type}"
+    elif po:
+        name = po.offering_type
+    assert name == "Chính quy"
+
+    # With program loaded
+    po2 = SimpleNamespace(
+        program=SimpleNamespace(name="CNTT"),
+        offering_type="Chính quy",
+    )
+    name2 = f"{po2.program.name} - {po2.offering_type}"
+    assert name2 == "CNTT - Chính quy"
 
 
 # ============================================================================

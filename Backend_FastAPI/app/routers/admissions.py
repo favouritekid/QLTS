@@ -260,14 +260,19 @@ async def create_admission_profile(
         await db.commit()
         await db.refresh(profile)
 
-        # Dispatch notification (non-blocking)
-        # Enrich payload with lead name and program name for template rendering
-        _lead_name = profile.lead.full_name if profile.lead else "Unknown"
-        _prog_name = None
-        if profile.lead and profile.lead.offering_id:
-            _po = await db.get(models.ProgramOffering, profile.lead.offering_id)
-            if _po:
-                _prog_name = _po.name
+        # Dispatch notification (non-blocking, defensive — must not crash after commit)
+        try:
+            _lead_name = profile.lead.full_name if profile.lead else "Unknown"
+            _prog_name = None
+            if profile.lead and profile.lead.offering_id:
+                _po = await db.get(models.ProgramOffering, profile.lead.offering_id)
+                if _po and _po.program:
+                    _prog_name = f"{_po.program.name} - {_po.offering_type}"
+                elif _po:
+                    _prog_name = _po.offering_type
+        except Exception:
+            _lead_name = "Unknown"
+            _prog_name = None
         await safe_dispatch(
             db=db,
             event=SystemEvents.APPLICATION_CREATED,
