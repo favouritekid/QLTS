@@ -342,28 +342,27 @@ async def bulk_approve_admissions(
         # POST-COMMIT: Dispatch notifications + commission for each approved profile
         for profile in approved_profiles:
             if profile.lead_id:
-                # APPLICATION_STATUS_CHANGED for admission notification
+                _old = getattr(profile, "_pre_status", "submitted")
                 await safe_dispatch(
                     db=db,
                     event=SystemEvents.APPLICATION_STATUS_CHANGED,
                     payload={
                         "application_id": profile.id,
                         "lead_id": profile.lead_id,
-                        "old_status": "submitted",
+                        "old_status": _old,
                         "new_status": "approved",
                         "actor_id": current_user.id,
                         "actor_name": current_user.full_name or current_user.username,
                     },
                     dedupe_key=f"admission_profile_approved:{profile.id}",
                 )
-                # LEAD_STATUS_CHANGED for pipeline + commission
                 await safe_dispatch(
                     db=db,
                     event=SystemEvents.LEAD_STATUS_CHANGED,
                     payload={
                         "lead_id": profile.lead_id,
                         "lead_name": f"Profile #{profile.id}",
-                        "old_status": "submitted",
+                        "old_status": _old,
                         "new_status": "sts09",
                         "actor_id": current_user.id,
                         "actor_name": current_user.full_name or current_user.username,
@@ -371,7 +370,7 @@ async def bulk_approve_admissions(
                     dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
                 )
                 await safe_check_commission_on_status_change(
-                    db, profile.lead_id, "submitted", "sts09", current_user.id,
+                    db, profile.lead_id, _old, "sts09", current_user.id,
                 )
 
         return schemas.BulkActionResponse(**result)
@@ -419,13 +418,14 @@ async def bulk_reject_admissions(
         # POST-COMMIT: Dispatch notifications + commission for each rejected profile
         for profile in rejected_profiles:
             if profile.lead_id:
+                _old = getattr(profile, "_pre_status", "submitted")
                 await safe_dispatch(
                     db=db,
                     event=SystemEvents.APPLICATION_STATUS_CHANGED,
                     payload={
                         "application_id": profile.id,
                         "lead_id": profile.lead_id,
-                        "old_status": "submitted",
+                        "old_status": _old,
                         "new_status": "rejected",
                         "actor_id": current_user.id,
                         "actor_name": current_user.full_name or current_user.username,
@@ -438,7 +438,7 @@ async def bulk_reject_admissions(
                     payload={
                         "lead_id": profile.lead_id,
                         "lead_name": f"Profile #{profile.id}",
-                        "old_status": "submitted",
+                        "old_status": _old,
                         "new_status": "sts16",
                         "actor_id": current_user.id,
                         "actor_name": current_user.full_name or current_user.username,
@@ -446,7 +446,7 @@ async def bulk_reject_admissions(
                     dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
                 )
                 await safe_check_commission_on_status_change(
-                    db, profile.lead_id, "submitted", "sts16", current_user.id,
+                    db, profile.lead_id, _old, "sts16", current_user.id,
                 )
 
         return schemas.BulkActionResponse(**result)
@@ -713,20 +713,18 @@ async def submit_admission_profile(
     current_user: models.User = CasbinAuth,
 ):
     """
-    Submit AdmissionProfile for auto-evaluation.
+    Submit AdmissionProfile for review.
 
-    **Validation Rules (against snapshot applied_rules):**
-    1. admission_scores.gpa >= applied_rules.min_gpa
-    2. All mandatory_docs have status='uploaded' and file_path not null
-    3. citizen_id is unique across admission_profile and student tables
+    Transitions profile from draft → submitted. Validation checks
+    document completeness and data integrity against snapshot rules.
 
     **On Success:**
-    - Profile.status = 'approved'
-    - Returns: { status: "approved", message: "..." }
+    - Profile.status = 'submitted'
+    - Returns: { status: "submitted", message: "..." }
 
-    **On Failure:**
-    - Profile.status = 'rejected'
-    - Returns: { status: "rejected", errors: ["...", "..."] }
+    **On Validation Failure:**
+    - Profile stays in 'draft'
+    - Returns: { status: "draft", validation_errors: ["...", "..."] }
 
     **Security:**
     - IDOR: Only accessible to users in same unit
@@ -1769,6 +1767,24 @@ async def resubmit_admission(
                 dedupe_key=f"admission_profile_resubmitted:{profile_id}",
             )
 
+            # LEAD_STATUS_CHANGED for pipeline (resubmitted → sts07)
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": result.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": pre_status,
+                    "new_status": "sts07",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{result.lead_id}:sts07",
+            )
+            await safe_check_commission_on_status_change(
+                db, result.lead_id, pre_status, "sts07", current_user.id,
+            )
+
         # 5. RETURN Pydantic Model
         return result
 
@@ -1942,6 +1958,24 @@ async def finalize_enrollment(
                 dedupe_key=f"admission_profile_finalized:{profile_id}",
             )
 
+            # LEAD_STATUS_CHANGED for pipeline + commission (parity with enroll)
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": result.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": pre_status,
+                    "new_status": "sts11",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{result.lead_id}:sts11",
+            )
+            await safe_check_commission_on_status_change(
+                db, result.lead_id, pre_status, "sts11", current_user.id,
+            )
+
         # 5. RETURN Pydantic Model
         return result
 
@@ -2030,15 +2064,44 @@ async def confirm_admission_by_token(
             token_value=token,
             last_digits=verify_data.last_digits_citizen_id,
         )
-        
+
         # 2. COMMIT Transaction
         await db.commit()
         await db.refresh(profile)
-        
+
         # 3. POST-COMMIT Side Effects
         await callback()
-        
-        # 4. RETURN Response
+
+        # 4. Dispatch notifications (public flow — actor is "system")
+        if profile.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile.id,
+                    "lead_id": profile.lead_id,
+                    "old_status": "approved",
+                    "new_status": "confirmed",
+                    "actor_id": 0,
+                    "actor_name": "Ứng viên xác nhận",
+                },
+                dedupe_key=f"admission_profile_confirmed:{profile.id}",
+            )
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile.id}",
+                    "old_status": "approved",
+                    "new_status": "sts09",
+                    "actor_id": 0,
+                    "actor_name": "Ứng viên xác nhận",
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:confirmed",
+            )
+
+        # 5. RETURN Response
         return schemas.ConfirmTokenResponse(
             message="Xác nhận nhập học thành công!",
             profile_id=profile.id,
