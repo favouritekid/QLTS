@@ -934,14 +934,16 @@ async def test_application_created_payload_has_no_officer_id():
     payload = {
         "application_id": 14,
         "lead_id": 37,
-        "major_program_name": None,
+        "lead_name": "Nguyen Van A",
+        "major_program_name": "Công nghệ thông tin",
         "actor_id": 15,
         "actor_name": "Admin User",
     }
     # officer_id must not be present — LeadOwnerResolver would short-circuit
     assert "officer_id" not in payload
     assert payload["lead_id"] == 37
-    assert payload["actor_id"] == 15
+    assert payload["lead_name"] != "$lead_name"
+    assert payload["major_program_name"] is not None
 
 
 @pytest.mark.asyncio

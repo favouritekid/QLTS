@@ -693,8 +693,8 @@ test("application_created notifies assigned officer and records browser delivery
 
     await waitForDeliveryUsers(adminPage, {
       event: "application_created",
-      sourceType: "lead",
-      sourceId: draft.leadId,
+      sourceType: "admission_profile",
+      sourceId: draft.profileId,
       expectedUserIds: [tempOfficer.id],
     });
 
@@ -736,8 +736,8 @@ test("application_created notifies assigned officer and records browser delivery
 
     await waitForDeliveryUsers(adminPage, {
       event: "application_status_changed",
-      sourceType: "lead",
-      sourceId: draft.leadId,
+      sourceType: "admission_profile",
+      sourceId: draft.profileId,
       expectedUserIds: [tempOfficer.id],
     });
 
