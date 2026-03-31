@@ -979,41 +979,219 @@ async def test_lead_owner_resolver_uses_db_when_no_officer_id():
 
 
 # ============================================================================
-# Regression: admissions notification parity
+# Regression: admissions notification dispatch behavior (router-level)
 # ============================================================================
 
-def test_confirm_token_does_not_emit_lead_status_changed():
-    """Confirm-by-token: approved→confirmed maps to same lead status (sts09),
-    so LEAD_STATUS_CHANGED must NOT be emitted (would be a false notification)."""
-    # Verify the mapping proves no lead status change
-    from app.services.lead_admission_sync import ADMISSION_TO_LEAD_STATUS_MAP
-    assert ADMISSION_TO_LEAD_STATUS_MAP["approved"] == "sts09"
-    assert ADMISSION_TO_LEAD_STATUS_MAP["confirmed"] == "sts09"
-    # Same target → no lead status change → no LEAD_STATUS_CHANGED dispatch needed
+def _make_profile_mock(**overrides):
+    """Create a mock AdmissionProfile with common defaults."""
+    defaults = dict(id=5, lead_id=37, status="submitted", lead=MagicMock(id=37))
+    defaults.update(overrides)
+    m = MagicMock()
+    for k, v in defaults.items():
+        setattr(m, k, v)
+    return m
 
 
-def test_bulk_service_annotates_pre_status():
-    """Bulk approve/reject service must annotate _pre_status on each profile
-    so router can use the actual previous status for notifications."""
-    from types import SimpleNamespace
-
-    # Simulate what the service does
-    profile = SimpleNamespace(status="resubmitted", id=1, lead_id=10)
-    _old_status = profile.status
-    profile.status = "approved"
-    profile._pre_status = _old_status  # Service annotation
-
-    assert profile._pre_status == "resubmitted"
-    assert profile.status == "approved"
+def _fake_request():
+    """Create a minimal Starlette Request that satisfies rate limiter type checks."""
+    from starlette.requests import Request
+    scope = {"type": "http", "method": "POST", "path": "/test", "headers": [], "query_string": b""}
+    return Request(scope)
 
 
-def test_resubmit_maps_to_sts07():
-    """Resubmit LEAD_STATUS_CHANGED must use sts07 per sync mapping."""
-    from app.services.lead_admission_sync import ADMISSION_TO_LEAD_STATUS_MAP
-    assert ADMISSION_TO_LEAD_STATUS_MAP["resubmitted"] == "sts07"
+@pytest.mark.asyncio
+async def test_confirm_token_dispatches_only_application_status_changed():
+    """Confirm-by-token router dispatches APPLICATION_STATUS_CHANGED only,
+    NOT LEAD_STATUS_CHANGED (approved→confirmed = same lead sts09)."""
+    from app.routers.admissions import confirm_admission_by_token
+
+    profile = _make_profile_mock(id=10, status="confirmed", lead_id=37)
+    profile.confirmed_at = "2026-03-31T00:00:00Z"
+
+    dispatch_calls = []
+
+    async def tracking_dispatch(db, event, payload, dedupe_key=None):
+        dispatch_calls.append({"event": event.value, "payload": payload})
+
+    with patch(
+        "app.routers.admissions.admission_service.verify_and_confirm",
+        new=AsyncMock(return_value=(profile, AsyncMock())),
+    ), patch(
+        "app.routers.admissions.safe_dispatch", tracking_dispatch,
+    ):
+        db = AsyncMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+
+        from app import schemas
+        verify_data = MagicMock()
+        verify_data.last_digits_citizen_id = "1234"
+
+        await confirm_admission_by_token(
+            request=_fake_request(), token="abc", verify_data=verify_data, db=db,
+        )
+
+    events = [c["event"] for c in dispatch_calls]
+    assert "application_status_changed" in events
+    assert "lead_status_changed" not in events
+    assert dispatch_calls[0]["payload"]["old_status"] == "approved"
+    assert dispatch_calls[0]["payload"]["new_status"] == "confirmed"
 
 
-def test_finalize_maps_to_sts11():
-    """Finalize LEAD_STATUS_CHANGED must use sts11 per sync mapping."""
-    from app.services.lead_admission_sync import ADMISSION_TO_LEAD_STATUS_MAP
-    assert ADMISSION_TO_LEAD_STATUS_MAP["enrolled"] == "sts11"
+@pytest.mark.asyncio
+async def test_finalize_dispatches_app_and_lead_and_commission():
+    """Finalize router dispatches APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED
+    + calls commission check with pre_status."""
+    from app.routers.admissions import finalize_enrollment
+
+    profile = _make_profile_mock(id=5, status="confirmed", lead_id=37)
+    result = _make_profile_mock(id=5, status="enrolled", lead_id=37)
+
+    dispatch_calls = []
+    commission_calls = []
+
+    async def tracking_dispatch(db, event, payload, dedupe_key=None):
+        dispatch_calls.append({"event": event.value, "payload": payload})
+
+    async def tracking_commission(db, lead_id, old_status, new_status, actor_id):
+        commission_calls.append({"old": old_status, "new": new_status})
+
+    admin = MagicMock(id=15, role="admin", full_name="Admin", username="admin")
+
+    with patch(
+        "app.routers.admissions.admission_service.finalize_profile",
+        new=AsyncMock(return_value=(result, AsyncMock())),
+    ), patch(
+        "app.routers.admissions.safe_dispatch", tracking_dispatch,
+    ), patch(
+        "app.routers.admissions.safe_check_commission_on_status_change",
+        tracking_commission,
+    ):
+        db = AsyncMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+
+        await finalize_enrollment(
+            request=_fake_request(), profile_id=5,
+            data=MagicMock(model_dump=lambda: {}),
+            current_user=admin, profile=profile, db=db,
+        )
+
+    events = [c["event"] for c in dispatch_calls]
+    assert events == ["application_status_changed", "lead_status_changed"]
+    # APPLICATION_STATUS_CHANGED uses pre_status
+    assert dispatch_calls[0]["payload"]["old_status"] == "confirmed"
+    assert dispatch_calls[0]["payload"]["new_status"] == "enrolled"
+    # LEAD_STATUS_CHANGED uses pre_status → sts11
+    assert dispatch_calls[1]["payload"]["old_status"] == "confirmed"
+    assert dispatch_calls[1]["payload"]["new_status"] == "sts11"
+    # Commission uses pre_status
+    assert commission_calls == [{"old": "confirmed", "new": "sts11"}]
+
+
+@pytest.mark.asyncio
+async def test_resubmit_dispatches_app_and_lead_and_commission():
+    """Resubmit router dispatches APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED
+    + commission with pre_status (covers revision_requested source)."""
+    from app.routers.admissions import resubmit_admission
+
+    pre_profile = _make_profile_mock(id=5, status="revision_requested", lead_id=37)
+    result = _make_profile_mock(id=5, status="resubmitted", lead_id=37)
+
+    dispatch_calls = []
+    commission_calls = []
+
+    async def tracking_dispatch(db, event, payload, dedupe_key=None):
+        dispatch_calls.append({"event": event.value, "payload": payload})
+
+    async def tracking_commission(db, lead_id, old_status, new_status, actor_id):
+        commission_calls.append({"old": old_status, "new": new_status})
+
+    officer = MagicMock(id=18, role="officer", full_name="Officer", username="officer")
+
+    with patch(
+        "app.routers.admissions.admission_service.resubmit_profile",
+        new=AsyncMock(return_value=(result, AsyncMock())),
+    ), patch(
+        "app.routers.admissions.safe_dispatch", tracking_dispatch,
+    ), patch(
+        "app.routers.admissions.safe_check_commission_on_status_change",
+        tracking_commission,
+    ):
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=pre_profile)
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+
+        await resubmit_admission(
+            request=_fake_request(), profile_id=5,
+            data=MagicMock(model_dump=lambda: {}),
+            current_user=officer, db=db,
+        )
+
+    events = [c["event"] for c in dispatch_calls]
+    assert events == ["application_status_changed", "lead_status_changed"]
+    # Uses actual pre_status, not hardcoded "rejected"
+    assert dispatch_calls[0]["payload"]["old_status"] == "revision_requested"
+    assert dispatch_calls[1]["payload"]["old_status"] == "revision_requested"
+    assert dispatch_calls[1]["payload"]["new_status"] == "sts07"
+    assert commission_calls == [{"old": "revision_requested", "new": "sts07"}]
+
+
+@pytest.mark.asyncio
+async def test_bulk_approve_uses_pre_status_from_service():
+    """Bulk approve router reads _pre_status annotated by service,
+    not hardcoded 'submitted'."""
+    from app.routers.admissions import bulk_approve_admissions
+    from app import schemas
+
+    # Profile that was resubmitted before approval
+    profile = _make_profile_mock(id=5, status="approved", lead_id=37)
+    profile._pre_status = "resubmitted"
+
+    dispatch_calls = []
+    commission_calls = []
+
+    async def tracking_dispatch(db, event, payload, dedupe_key=None):
+        dispatch_calls.append({"event": event.value, "payload": payload})
+
+    async def tracking_commission(db, lead_id, old_status, new_status, actor_id):
+        commission_calls.append({"old": old_status, "new": new_status})
+
+    admin = MagicMock(id=15, role="admin", full_name="Admin", username="admin")
+
+    service_result = {
+        "success_count": 1,
+        "failed_count": 0,
+        "failed_ids": [],
+        "errors": None,
+        "message": "Approved 1 of 1 profiles",
+        "_approved_profiles": [profile],
+    }
+
+    with patch(
+        "app.routers.admissions.admission_service.bulk_approve",
+        new=AsyncMock(return_value=service_result),
+    ), patch(
+        "app.routers.admissions.safe_dispatch", tracking_dispatch,
+    ), patch(
+        "app.routers.admissions.safe_check_commission_on_status_change",
+        tracking_commission,
+    ):
+        db = AsyncMock()
+        db.commit = AsyncMock()
+
+        body = MagicMock()
+        body.items = [MagicMock(model_dump=lambda: {"profile_id": 5})]
+        body.notes = "test"
+
+        await bulk_approve_admissions(
+            request=_fake_request(), body=body, current_user=admin, db=db,
+        )
+
+    # Both dispatches must use "resubmitted", not "submitted"
+    app_dispatch = next(c for c in dispatch_calls if c["event"] == "application_status_changed")
+    lead_dispatch = next(c for c in dispatch_calls if c["event"] == "lead_status_changed")
+    assert app_dispatch["payload"]["old_status"] == "resubmitted"
+    assert lead_dispatch["payload"]["old_status"] == "resubmitted"
+    assert commission_calls == [{"old": "resubmitted", "new": "sts09"}]
