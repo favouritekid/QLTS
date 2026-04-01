@@ -39,8 +39,7 @@ from .routers import (
     administrative,  # ✅ PHASE 4: Administrative Nodes (Province/District/Ward)
     admission_config,  # ✅ PHASE 3: Admission Config + Scoring API
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
-    admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
-    applications,
+    admissions,  # ✅ NEW: Admission Profile workflow
     auth,
     collaborators,  # ✅ CTV SYSTEM: Collaborator management + CTV self-service
     commissions,  # ✅ CTV PHASE 2: Commission management
@@ -713,8 +712,7 @@ fastapi_app.include_router(collaborators.public_router, prefix="/api")  # ✅ CT
 fastapi_app.include_router(commissions.policy_router, prefix="/api")  # ✅ CTV P2: Commission policies (Admin)
 fastapi_app.include_router(commissions.record_router, prefix="/api")  # ✅ CTV P2: Commission records (Admin)
 fastapi_app.include_router(commissions.ctv_commission_router, prefix="/api")  # ✅ CTV P2: CTV commission view
-fastapi_app.include_router(applications.router, prefix="/api")
-fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ NEW: Admission Profile workflow
+fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ Admission Profile workflow
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
 fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD

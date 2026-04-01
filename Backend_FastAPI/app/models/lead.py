@@ -249,13 +249,6 @@ class Lead(Base):
     consultations = relationship(
         "Consultation", back_populates="lead", cascade="all, delete-orphan"
     )
-    application = relationship(
-        "Application",
-        back_populates="lead",
-        uselist=False,
-        cascade="all, delete-orphan",
-    )
-    # NEW: AdmissionProfile (Replacement for Application)
     admission_profile = relationship(
         "AdmissionProfile",
         back_populates="lead",
@@ -324,59 +317,6 @@ class Consultation(Base):
         "User", back_populates="consultations_handled", foreign_keys=[officer_id]
     )
     lead = relationship("Lead", back_populates="consultations")
-
-
-class Application(Base):
-    """
-    DEPRECATED: Legacy admission model — do NOT use for new code.
-    Use AdmissionProfile (app/models/admission.py) instead.
-    This model maps to the 'application' table which may be dropped in a future migration.
-    """
-
-    __tablename__ = "application"
-
-    id = Column(Integer, primary_key=True, index=True)
-    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, unique=True, index=True)
-
-    # Foreign Keys liên kết đến 3-Tier Architecture
-    major_program_id = Column(Integer, ForeignKey("major_program.id", ondelete="SET NULL"), nullable=True, index=True)
-    program_offering_id = Column(Integer, ForeignKey("program_offering.id", ondelete="SET NULL"), nullable=True, index=True)
-    criterion_id = Column(String(100), nullable=True, index=True)  # AdmissionCriterion.id (stored in JSON)
-
-    # Trường JSON để lưu dữ liệu động
-    # Structure: {"scores": {"Toan": 8.5, "Van": 7.0}, "checklist": [{code, label, status, submission_type, notes}]}
-    documents = Column(JSON, nullable=True)
-
-    # Trạng thái hồ sơ
-    # Allowed values: pending, missing_documents, completed, passed, failed
-    status = Column(String(50), nullable=False, default="pending", index=True)
-
-    # Legacy field
-    officer_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)  # ✅ FIX: Added index
-
-    # Timestamps
-    created_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-    )
-    updated_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    # Soft delete support
-    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
-
-    # Relationships
-    officer = relationship(
-        "User", back_populates="applications_handled", foreign_keys=[officer_id]
-    )
-    lead = relationship("Lead", back_populates="application")
-    major_program = relationship("MajorProgram")
-    program_offering = relationship("ProgramOffering")
 
 
 class CRMInteraction(Base):

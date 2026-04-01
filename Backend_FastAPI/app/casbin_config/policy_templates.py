@@ -274,8 +274,6 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads/{id}", "action": "PUT"},
         {"subject": "{role}", "object": "/api/leads/{id}/assign", "action": "POST"},
-        {"subject": "{role}", "object": "/api/leads/{id}/applications", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/{id}/applications", "action": "POST"},
         {"subject": "{role}", "object": "/api/leads/export/csv", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads/export/excel", "action": "GET"},
         # Bulk operations (manager-specific)

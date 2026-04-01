@@ -130,13 +130,6 @@ from .lead import (
     BulkStageSkippedItem,
     BulkUpdateStageResult,
     TimelineItem,
-    # Application schemas (Hồ sơ Tuyển sinh - Legacy)
-    Application,
-    ApplicationBase,
-    ApplicationCreate,
-    ApplicationUpdate,
-    ApplicationDocuments,
-    ChecklistItem,
     # ✅ Phase-Based Workflow schemas
     WorkflowContext,
     WorkflowAllowedStatus,

@@ -120,9 +120,6 @@ class User(Base):
     consultations_handled = relationship(
         "Consultation", back_populates="officer", foreign_keys="Consultation.officer_id"
     )
-    applications_handled = relationship(
-        "Application", back_populates="officer", foreign_keys="Application.officer_id"
-    )
     assignment_logs_involved = relationship(
         "AssignmentLog",
         back_populates="officer",

@@ -29,7 +29,7 @@ from .collaborator import Collaborator, LeadClaim
 from .commission import CommissionPolicy, CommissionRecord
 
 # Lead management models
-from .lead import Application, AssignmentDecisionLog, AssignmentLog, Consultation, CRMInteraction, Lead
+from .lead import AssignmentDecisionLog, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 from .lead_phone import LeadPhoneIdentity
 
@@ -143,7 +143,6 @@ __all__ = [
     "CommissionPolicy",
     "CommissionRecord",
     # Lead
-    "Application",
     "AssignmentDecisionLog",  # A1: KPI Planning instrumentation
     "AssignmentLog",
     "Consultation",
