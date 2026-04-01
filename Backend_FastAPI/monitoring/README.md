@@ -188,7 +188,6 @@ The following event types are tracked:
 **Week 2: Application Status**
 - `application_created` - New application created
 - `application_status_changed` - Application status updated
-- `application_documents_updated` - Application documents updated
 
 **Week 3: Pipeline Configuration**
 - `pipeline_config_updated` - Pipeline stage/status/transition changed

@@ -113,8 +113,6 @@ export interface Lead {
   consultation_status?: ConsultationStatus | null;
   pipeline_stage?: PipelineStage | null;
   consultations?: Consultation[];
-  application?: Application | null;
-  // NEW: AdmissionProfile (replacement for Application in admission module)
   admission_profile?: AdmissionProfileShallow | null;
 
   // Collaborator (CTV) fields
@@ -309,90 +307,7 @@ export interface ConsultationUpdate {
 }
 
 // ============================================
-// APPLICATION TYPES
-// ============================================
-
-/**
- * Application Status Enum
- */
-export type ApplicationStatus =
-  | "draft" // Nháp
-  | "pending" // Chờ xử lý (mặc định)
-  | "missing_documents" // Chờ bổ sung (do thiếu/lỗi checklist)
-  | "completed" // Đã đủ hồ sơ
-  | "passed" // Đạt
-  | "failed" // Trượt
-  | "submitted" // Đã nộp
-  | "approved" // Đã duyệt
-  | "rejected" // Từ chối
-  | "resubmitted" // Nộp lại
-  | "confirmed" // Đã xác nhận nhập học
-  | "overridden" // Ngoại lệ
-  | "enrolled"; // Đã nhập học
-
-/**
- * Checklist Item for Application Documents
- */
-export interface ChecklistItem {
-  code: string; // mã hồ sơ (vd: "hoc_ba_thpt")
-  label: string; // tên hồ sơ (vd: "Học bạ THPT")
-  status: "missing" | "submitted" | "verified" | "rejected";
-  submission_type: "N/A" | "photocopy" | "notarized" | "original" | "incomplete";
-  notes: string;
-}
-
-/**
- * Application Documents Structure
- */
-export interface ApplicationDocuments {
-  scores?: Record<string, number | null> | null; // vd: {"Toan": 8.5, "Van": 7.0}
-  checklist?: ChecklistItem[] | null;
-}
-
-/**
- * Application object (Hồ sơ Tuyển sinh)
- */
-export interface Application {
-  id: number;
-  lead_id: number;
-  status: ApplicationStatus;
-
-  // Foreign Keys liên kết đến 3-Tier
-  major_program_id: number | null;
-  program_offering_id: number | null;
-  criterion_id: string | null; // AdmissionCriterion.id là string
-
-  // Trường JSON để lưu dữ liệu động
-  documents: ApplicationDocuments | null;
-
-  // Legacy field (for backward compatibility)
-  officer_id?: number;
-
-  // Relationships
-  officer?: User | null;
-  lead?: Lead | null;
-}
-
-/**
- * Application creation payload
- */
-export interface ApplicationCreate {
-  lead_id: number;
-}
-
-/**
- * Application update payload
- */
-export interface ApplicationUpdate {
-  status?: ApplicationStatus;
-  major_program_id?: number | null;
-  program_offering_id?: number | null;
-  criterion_id?: string | null;
-  documents?: ApplicationDocuments | null;
-}
-
-// ============================================
-// ADMISSION PROFILE TYPES (NEW)
+// ADMISSION PROFILE TYPES
 // ============================================
 
 /**

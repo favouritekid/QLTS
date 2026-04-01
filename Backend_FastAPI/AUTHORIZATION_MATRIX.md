@@ -107,12 +107,8 @@
 
 ## 6️⃣ APPLICATIONS
 
-| Endpoint | Method | User | Officer | Manager | Admin | Checks | Ghi chú |
-|----------|--------|------|---------|---------|-------|--------|---------|
-| `/api/leads/{id}/applications` | POST | ❌ | ⚠️ | ⚠️ | ✅ | IDOR(lead) | Create for lead |
-| `/api/applications/{id}` | GET | ❌ | ⚠️ | ⚠️ | ✅ | IDOR | |
-| `/api/applications/{id}` | PUT | ❌ | ⚠️ | ⚠️ | ✅ | IDOR | |
-| `/api/applications/{id}` | DELETE | ❌ | ❌ | ❌ | 🔒 | IDOR+AUDIT | |
+> **REMOVED** — Legacy Application stack retired. See `APPLICATION_LEGACY_CLEANUP.md`.
+> All admission workflows now use Section 7 (ADMISSIONS).
 
 ---
 
@@ -327,7 +323,6 @@
 ```
 DELETE /api/leads/{id}        → Admin only, soft delete, audit
 DELETE /api/admin/users/{id}  → Admin only, soft delete, audit
-DELETE /api/applications/{id} → Admin only, audit
 ```
 
 ### 2. State Transitions

@@ -306,6 +306,9 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
 
     # =========================================================================
     # 📋 APPLICATION EVENTS
+    # NOTE: APPLICATION_* is a legacy notification namespace.
+    # "application_id" in payloads = AdmissionProfile.id (NOT legacy Application.id).
+    # See APPLICATION_LEGACY_CLEANUP.md — DO NOT RENAME payload keys.
     # =========================================================================
 
     SystemEvents.APPLICATION_CREATED: NotificationConfig(
@@ -339,22 +342,6 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         link_template="/admissions/${application_id}",
         priority=80,
         dedup_key_template="app:${application_id}:status:${new_status}"
-    ),
-
-    SystemEvents.APPLICATION_DOCUMENTS_UPDATED: NotificationConfig(
-        group=NotificationEventGroup.APPLICATION,
-        resolver=ActorExcludedResolver(CompositeResolver([
-            LeadOwnerResolver(),
-            AllAdminsResolver()
-        ])),
-        template=(
-            "Application Documents Updated",
-            "Documents for Application #${application_id} have been updated: ${document_summary}."
-        ),
-        channels=(CH.BROWSER,),
-        notification_type=NT.INFO,
-        link_template="/admissions/${application_id}",
-        priority=120,
     ),
 
     SystemEvents.APPLICATION_DELETED: NotificationConfig(

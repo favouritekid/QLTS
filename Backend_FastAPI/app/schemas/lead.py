@@ -533,4 +533,3 @@ class WorkflowContext(BaseModel):
 
 # Rebuild models to resolve forward references
 Lead.model_rebuild()
-Application.model_rebuild()

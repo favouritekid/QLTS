@@ -274,22 +274,6 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         category="application"
     ),
 
-    SystemEvents.APPLICATION_DOCUMENTS_UPDATED: EventMetadata(
-        event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
-        display_name="Cập nhật tài liệu hồ sơ",
-        description="Khi tài liệu hồ sơ được cập nhật",
-        variables=[
-            EventVariable("application_id", "integer", "ID hồ sơ"),
-            EventVariable("lead_id", "integer", "ID của lead"),
-            EventVariable("officer_id", "integer", "ID officer xử lý"),
-            EventVariable("document_summary", "string", "Tóm tắt thay đổi", required=False),
-            EventVariable("actor_id", "integer", "ID người cập nhật"),
-        ],
-        filter_fields=["application_id", "lead_id", "officer_id"],
-        default_channels=["socket"],
-        category="application"
-    ),
-
     SystemEvents.APPLICATION_DELETED: EventMetadata(
         event=SystemEvents.APPLICATION_DELETED,
         display_name="Hồ sơ bị xóa",

@@ -95,7 +95,7 @@ Use for: Simple internal APIs, KPI config, system settings.
 ```python
 # Dependency fetches + validates ownership
 lead: models.Lead = Depends(get_lead_for_user)
-application: models.Application = Depends(get_application_for_user)
+profile: models.AdmissionProfile = Depends(get_admission_for_manager)
 ```
 
 ### 4.2 Rules
@@ -215,7 +215,6 @@ from app.core.deps import (
 # ============ RESOURCE ACCESS ============
 from app.core.deps import (
     get_lead_for_user,
-    get_application_for_user,
     get_notification_template_for_admin,
     get_notification_rule_for_admin,
     get_officer_dashboard_scope,

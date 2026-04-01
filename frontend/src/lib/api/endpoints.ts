@@ -182,13 +182,6 @@ export const API_ENDPOINTS = {
     UPDATE: (id: number) => `/api/notification-templates/${id}`,
     DELETE: (id: number) => `/api/notification-templates/${id}`,
   },
-  // Applications (Hồ sơ Tuyển sinh)
-  APPLICATIONS: {
-    CREATE: (leadId: number) => `/api/leads/${leadId}/applications`,
-    UPDATE: (applicationId: number) => `/api/admissions/${applicationId}`,
-    GET: (applicationId: number) => `/api/admissions/${applicationId}`,
-    DELETE: (applicationId: number) => `/api/admissions/${applicationId}`,
-  },
   // ✅ LOGIN SECURITY: Phase 5 - User Response Flow
   SECURITY: {
     LOGIN_HISTORY: "/api/security/login-history",
