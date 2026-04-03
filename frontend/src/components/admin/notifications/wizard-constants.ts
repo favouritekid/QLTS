@@ -57,7 +57,6 @@ export const SYSTEM_EVENTS: EventOption[] = [
   // Application Events
   { value: "application_created", label: "Có hồ sơ mới được tạo", category: "application", description: "Khi lead nộp hồ sơ ứng tuyển", icon: "📝" },
   { value: "application_status_changed", label: "Trạng thái hồ sơ thay đổi", category: "application", description: "Khi trạng thái xử lý hồ sơ thay đổi", icon: "📝" },
-  { value: "application_documents_updated", label: "Tài liệu hồ sơ được cập nhật", category: "application", description: "Khi có tài liệu mới được upload hoặc sửa đổi", icon: "📝" },
   { value: "application_deleted", label: "Hồ sơ bị xóa", category: "application", description: "Khi hồ sơ bị xóa khỏi hệ thống", icon: "📝" },
   // Finance Events
   { value: "dorm_fee_created", label: "Có phí ký túc mới", category: "finance", description: "Khi tạo khoản phí ký túc cho sinh viên", icon: "💰" },
