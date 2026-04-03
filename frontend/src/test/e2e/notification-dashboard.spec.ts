@@ -127,7 +127,7 @@ test.describe("Notification Dashboard", () => {
 
   test("Overview tab shows summary metrics", async ({ page }) => {
     // Overview is default — check for metric cards (Queued, Fail Rate, Active Alerts)
-    await expect(page.getByText("Queued")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".text-muted-foreground", { hasText: "Queued" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Active Alerts")).toBeVisible();
   });
 
@@ -149,7 +149,7 @@ test.describe("Notification Dashboard", () => {
     await page.getByRole("tab", { name: "Deliveries" }).click();
     await page.waitForTimeout(500);
     await page.getByRole("tab", { name: "Overview" }).click();
-    await expect(page.getByText("Queued")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".text-muted-foreground", { hasText: "Queued" })).toBeVisible({ timeout: 10_000 });
   });
 
   test("page handles loading states gracefully", async ({ page }) => {

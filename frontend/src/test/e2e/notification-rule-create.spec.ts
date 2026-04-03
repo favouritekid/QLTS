@@ -134,9 +134,11 @@ test.describe("Notification Rule Create Flow", () => {
   });
 
   test("Next button blocks when step 1 is empty", async ({ page }) => {
-    // Button is disabled when no event selected — verify it stays disabled
+    // Validate-on-click: button is enabled but navigation is blocked
     const nextBtn = page.getByRole("button", { name: "Tiếp theo" });
-    await expect(nextBtn).toBeDisabled();
+    await nextBtn.click();
+    await expect(page.getByText("Vui lòng chọn sự kiện").first()).toBeVisible();
+    await expect(page.getByText("Bước 2: Nội dung mặc định")).not.toBeVisible();
   });
 
   test("can navigate step 2 → 3 → 4 via quick template", async ({ page }) => {

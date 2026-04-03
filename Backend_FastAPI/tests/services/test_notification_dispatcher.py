@@ -128,7 +128,7 @@ class TestNotificationDispatcher:
             user_id=user_id,
             title="Earlier",
             message="Earlier",
-            data={"dedupe_key": dedupe_key}
+            data={"dedupe_key": f"{dedupe_key}:step1"}
         )
         db.add(existing_notif)
         await db.commit()
