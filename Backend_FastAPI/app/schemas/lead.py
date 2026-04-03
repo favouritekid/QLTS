@@ -407,9 +407,6 @@ class Lead(LeadBase):
     assigned_officer: Optional[User] = None
     pipeline_stage: Optional[PipelineStage] = None
     consultation_status: Optional[ConsultationStatus] = None
-    # Sử dụng ApplicationShallow để tránh cyclic reference (Lead -> Application -> Lead)
-    application: Optional["ApplicationShallow"] = None
-    # NEW: AdmissionProfile (replacement for Application in admission module)
     admission_profile: Optional[AdmissionProfileShallow] = None
     # Collaborator referrer (nested)
     referrer: Optional[CollaboratorShallow] = None
@@ -483,89 +480,6 @@ class LeadImportResult(BaseModel):
 
 
 # -----------------
-# APPLICATION SCHEMAS (HỒ SƠ TUYỂN SINH)
-# -----------------
-
-
-class ChecklistItem(BaseModel):
-    """Item trong checklist hồ sơ tuyển sinh."""
-
-    code: str = Field(..., min_length=1, max_length=100)
-    label: str = Field(..., min_length=1, max_length=255)
-    status: Literal["missing", "submitted", "verified", "rejected"]
-    submission_type: Literal["N/A", "photocopy", "notarized", "original", "incomplete"]
-    notes: str = Field(default="", max_length=500)
-
-
-class ApplicationDocuments(BaseModel):
-    """Cấu trúc JSON documents trong Application."""
-
-    scores: Optional[Dict[str, Optional[float]]] = None  # vd: {"Toan": 8.5, "Van": 7.0}
-    checklist: Optional[List[ChecklistItem]] = None
-
-
-class ApplicationBase(BaseModel):
-    """Base schema cho Application."""
-
-    status: Literal["pending", "missing_documents", "completed", "passed", "failed"] = "pending"
-    major_program_id: Optional[int] = None
-    program_offering_id: Optional[int] = None
-    criterion_id: Optional[str] = Field(None, max_length=100)
-    documents: Optional[ApplicationDocuments] = None
-
-
-class ApplicationShallow(ApplicationBase):
-    """Schema response cho Application khi được nested trong Lead (không có lead relationship để tránh vòng lặp)."""
-
-    id: int
-    lead_id: int
-    created_at: datetime
-    updated_at: datetime
-
-    # Legacy field
-    officer_id: Optional[int] = None
-
-    # Relationships (không có lead để tránh cyclic reference)
-    officer: Optional[User] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class ApplicationCreate(BaseModel):
-    """Schema để tạo Application mới (chỉ cần lead_id)."""
-
-    lead_id: int
-
-
-class ApplicationUpdate(BaseModel):
-    """Schema để cập nhật Application."""
-
-    status: Optional[Literal["pending", "missing_documents", "completed", "passed", "failed"]] = None
-    major_program_id: Optional[int] = None
-    program_offering_id: Optional[int] = None
-    criterion_id: Optional[str] = Field(None, max_length=100)
-    documents: Optional[ApplicationDocuments] = None
-
-
-class Application(ApplicationBase):
-    """Schema response cho Application."""
-
-    id: int
-    lead_id: int
-    created_at: datetime
-    updated_at: datetime
-
-    # Legacy field
-    officer_id: Optional[int] = None
-
-    # Relationships (optional)
-    officer: Optional[User] = None
-    lead: Optional["Lead"] = None  # Forward reference
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-# -----------------
 # WORKFLOW CONTEXT SCHEMA (Phase-Based Workflow)
 # -----------------
 
@@ -619,4 +533,3 @@ class WorkflowContext(BaseModel):
 
 # Rebuild models to resolve forward references
 Lead.model_rebuild()
-Application.model_rebuild()

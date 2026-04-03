@@ -81,7 +81,6 @@ class SystemEvents(str, Enum):
     # Application events
     APPLICATION_CREATED = "application_created"
     APPLICATION_STATUS_CHANGED = "application_status_changed"
-    APPLICATION_DOCUMENTS_UPDATED = "application_documents_updated"
     APPLICATION_DELETED = "application_deleted"
     
     # System events

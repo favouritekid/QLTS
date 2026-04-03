@@ -253,13 +253,6 @@ const SYSTEM_EVENTS: EventOption[] = [
     icon: "📝",
   },
   {
-    value: "application_documents_updated",
-    label: "Tài liệu hồ sơ được cập nhật",
-    category: "application",
-    description: "Khi có tài liệu mới được upload hoặc sửa đổi",
-    icon: "📝",
-  },
-  {
     value: "application_deleted",
     label: "Hồ sơ bị xóa",
     category: "application",

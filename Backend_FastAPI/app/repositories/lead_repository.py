@@ -84,10 +84,6 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.pipeline_stage),
                 selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
-                selectinload(models.Lead.application).options(
-                    selectinload(models.Application.officer)
-                ),
-                # NEW: AdmissionProfile for admission module
                 selectinload(models.Lead.admission_profile),
                 # Collaborator referrer
                 selectinload(models.Lead.referrer),
@@ -149,10 +145,6 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.pipeline_stage),
                 selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
-                selectinload(models.Lead.application).options(
-                    selectinload(models.Application.officer)
-                ),
-                # NEW: AdmissionProfile for admission module
                 selectinload(models.Lead.admission_profile),
                 # Collaborator referrer
                 selectinload(models.Lead.referrer),
@@ -459,9 +451,6 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.unit),
                 selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 selectinload(models.Lead.pipeline_stage),
-                # ✅ FIX: Add missing eager load for application to prevent MissingGreenlet error
-                selectinload(models.Lead.application),
-                # NEW: AdmissionProfile for admission module
                 selectinload(models.Lead.admission_profile),
                 # Collaborator referrer
                 selectinload(models.Lead.referrer),

@@ -251,22 +251,6 @@ class SystemEvents(str, Enum):
     Recipients: The officer, admins
     """
 
-    APPLICATION_DOCUMENTS_UPDATED = "application_documents_updated"
-    """
-    Triggered when application documents are updated.
-
-    Payload Schema:
-        {
-            "application_id": int,        # Required: ID of the application
-            "lead_id": int,               # Required: ID of the lead
-            "officer_id": int,            # Required: Officer handling the application
-            "document_summary": Optional[str],  # Brief summary of changes
-            "actor_id": int               # User who updated documents
-        }
-
-    Recipients: The officer, admins
-    """
-
     APPLICATION_DELETED = "application_deleted"
     """
     Triggered when an application is deleted.

@@ -547,29 +547,6 @@ export function SocketHandler() {
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
-    // ✅ REAL-TIME APPLICATION EVENTS (Week 2): Lắng nghe sự kiện application_documents_updated
-    const handleApplicationDocumentsUpdated = (data: {
-      application_id: number;
-      lead_id: number;
-      updated_by: string;
-      updated_at: string;
-      documents_summary: string;
-      message: string;
-    }) => {
-      console.log("[SocketHandler] Received application_documents_updated event:", data);
-
-      // Invalidate application-related queries
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.invalidateQueries({ queryKey: ["application", data.application_id] });
-      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
-
-      // Show subtle toast notification
-      toast.info(data.message, {
-        description: `${data.documents_summary} by ${data.updated_by}`,
-        duration: 4000,
-      });
-    };
-
     // ✅ REAL-TIME PIPELINE CONFIG (Week 3): Lắng nghe sự kiện pipeline_config_updated
     const handlePipelineConfigUpdated = (data: {
       config_type: "pipeline_stage" | "consultation_status" | "allowed_transition";
@@ -1050,7 +1027,6 @@ export function SocketHandler() {
     socket.on("lead_status_changed", handleLeadStatusChanged);
     socket.on("application_created", handleApplicationCreated);
     socket.on("application_status_changed", handleApplicationStatusChanged);
-    socket.on("application_documents_updated", handleApplicationDocumentsUpdated);
     socket.on("pipeline_config_updated", handlePipelineConfigUpdated);
     socket.on("consultation_created", handleConsultationCreated);
     socket.on("consultation_deleted", handleConsultationDeleted);
@@ -1096,7 +1072,6 @@ export function SocketHandler() {
       socket.off("lead_status_changed", handleLeadStatusChanged);
       socket.off("application_created", handleApplicationCreated);
       socket.off("application_status_changed", handleApplicationStatusChanged);
-      socket.off("application_documents_updated", handleApplicationDocumentsUpdated);
       socket.off("pipeline_config_updated", handlePipelineConfigUpdated);
       socket.off("consultation_created", handleConsultationCreated);
       socket.off("consultation_deleted", handleConsultationDeleted);

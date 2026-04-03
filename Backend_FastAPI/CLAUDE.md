@@ -127,6 +127,22 @@ docker compose exec backend pytest tests/api/test_leads.py::test_create_lead -v
 
 ---
 
+## Admission Workflows (Source of Truth)
+
+`AdmissionProfile` is the **sole source of truth** for admission/enrollment workflows.
+The legacy `Application` model, router, service, and repository have been removed.
+
+For admission tasks, ONLY use:
+- `app/routers/admissions.py`
+- `app/services/admission_service.py`
+- `app/models/admission.py` (`AdmissionProfile`)
+
+Event namespace `APPLICATION_*` and payload key `application_id` are retained
+for backward compatibility — they refer to `AdmissionProfile.id`, not the removed model.
+Do NOT rename these. See `APPLICATION_LEGACY_CLEANUP.md` for full context.
+
+---
+
 ## Common Commands
 
 ```bash

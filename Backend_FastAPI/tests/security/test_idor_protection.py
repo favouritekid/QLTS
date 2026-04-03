@@ -4,7 +4,6 @@ IDOR (Insecure Direct Object Reference) Protection Tests.
 
 Tests for Phase 2 IDOR dependencies:
 - get_notification_for_user
-- get_application_for_user
 - get_lead_for_user
 
 These tests verify that users cannot access resources they don't own,

@@ -100,7 +100,6 @@ const SYSTEM_EVENTS = [
   // Application Events
   { value: "application_created", label: "Application Created" },
   { value: "application_status_changed", label: "Application Status Changed" },
-  { value: "application_documents_updated", label: "Application Documents Updated" },
   { value: "application_deleted", label: "Application Deleted" },
 
   // Finance Events

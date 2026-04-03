@@ -11,7 +11,6 @@ Export all repositories for easy import:
 from app.repositories.base import BaseRepository
 from app.repositories.activity_repository import ActivityRepository
 from app.repositories.admission_repository import AdmissionRepository
-from app.repositories.application_repository import ApplicationRepository
 from app.repositories.config_repository import (
     AssignmentConfigRepository,
     DegreeLevelRepository,
@@ -40,7 +39,6 @@ __all__ = [
     "BaseRepository",
     "ActivityRepository",
     "AdmissionRepository",
-    "ApplicationRepository",
     "AssignmentConfigRepository",
     "DegreeLevelRepository",
     "DocumentTypeRepository",
