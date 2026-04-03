@@ -164,6 +164,7 @@ class UsersPage(BaseModel):
 
 class User(UserBase):
     id: int
+    email: str  # Override EmailStr: response serialization must not reject DB values (e.g. placeholder emails)
     avatar_url: Optional[str] = None
     phone_number: Optional[str] = None
     unit_id: Optional[int] = None

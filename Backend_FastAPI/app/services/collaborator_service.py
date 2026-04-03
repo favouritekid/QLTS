@@ -291,7 +291,7 @@ async def approve_collaborator(
         hashed_password = get_password_hash(temp_password)
 
         # Email fallback for CTV without email
-        email = collaborator.email or f"ctv_{collaborator.code}@placeholder.local"
+        email = collaborator.email or f"ctv.{collaborator.code.lower()}@noemail.tnpc.edu.vn"
 
         new_user = models.User(
             username=collaborator.phone,
