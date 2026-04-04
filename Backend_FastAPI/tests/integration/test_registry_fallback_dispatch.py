@@ -1,11 +1,14 @@
 # tests/integration/test_registry_fallback_dispatch.py
 """
-Integration test: force dispatch() through the registry fallback path.
+PR3: No-fallback / fail-closed dispatcher integration tests.
 
-Step 0 hotfix verification — mock get_rule_for_event() → None so the
-dispatcher MUST use in-memory NotificationConfig from NOTIFICATION_REGISTRY.
-This is where the original bug (missing .actions) would crash with
-AttributeError.
+Replaces the old registry-fallback tests. PR1 removed the registry fallback
+path entirely — the dispatcher now uses catalog + DB rule only.
+
+These tests verify:
+1. Missing DB rule → fail-closed (no notification, domain event only)
+2. Disabled DB rule → same fail-closed behavior
+3. User event WITH DB rule → notification created successfully
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -20,9 +23,9 @@ from app.services.notification_dispatcher import dispatch
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-class TestRegistryFallbackDispatch:
+class TestNoFallbackDispatch:
 
-    async def test_dispatch_via_registry_fallback_creates_notification(
+    async def test_missing_rule_fails_closed(
         self,
         db: AsyncSession,
         officer_user: models.User,
@@ -30,18 +33,89 @@ class TestRegistryFallbackDispatch:
         mocker,
     ):
         """
-        Dispatch LEAD_ASSIGNED with DB rule returning None.
-        Verifies registry path reaches config.actions without AttributeError
-        and creates a notification for the resolved recipients.
+        User event with no enabled DB rule → fail-closed.
+        Dispatcher must NOT create notifications (no registry fallback).
+        Domain event must still be emitted.
         """
-        # ---- Force registry fallback ----
+        mock_domain = mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+
+        # Force no DB rule
         mocker.patch(
             "app.services.notification_dispatcher.get_rule_for_event",
             new_callable=AsyncMock,
             return_value=None,
         )
 
-        # ---- Mock side-effects so test doesn't need Redis/Socket.IO ----
+        payload = {
+            "lead_id": 9999,
+            "lead_name": "No Fallback Test",
+            "officer_id": officer_user.id,
+            "unit_id": seeded_dependencies["unit_id"],
+            "actor_id": 0,
+        }
+
+        notification_ids, callback = await dispatch(
+            db=db, event=SystemEvents.LEAD_ASSIGNED, payload=payload,
+        )
+        await db.commit()
+        if callback:
+            await callback()
+
+        # Fail-closed: no notifications created
+        assert notification_ids == [], (
+            "Missing rule must not create notifications (no registry fallback)"
+        )
+        # Domain event still emitted
+        mock_domain.assert_called_once()
+
+    async def test_disabled_rule_fails_closed(
+        self,
+        db: AsyncSession,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+        mocker,
+    ):
+        """
+        Disabled DB rule → fail-closed (same as missing).
+        get_rule_for_event returns None for disabled rules.
+        """
+        mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+        mocker.patch(
+            "app.services.notification_dispatcher.get_rule_for_event",
+            new_callable=AsyncMock,
+            return_value=None,
+        )
+
+        payload = {
+            "lead_id": 1, "lead_name": "Test",
+            "unit_id": seeded_dependencies["unit_id"],
+            "source": "test", "actor_id": 0,
+        }
+
+        notification_ids, callback = await dispatch(
+            db=db, event=SystemEvents.LEAD_CREATED, payload=payload,
+        )
+
+        assert notification_ids == []
+        assert isinstance(callback, type(callback))  # callable
+
+    async def test_user_event_with_db_rule_creates_notification(
+        self,
+        db: AsyncSession,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+        mocker,
+    ):
+        """
+        User event with enabled DB rule → notification created via single path.
+        Uses sync-seeded rule (from conftest sync_notification_rules).
+        """
         mocker.patch(
             "app.services.notification_dispatcher._emit_domain_event",
             new_callable=AsyncMock,
@@ -53,85 +127,33 @@ class TestRegistryFallbackDispatch:
             return_value=("browser", mock_result, None),
         )
 
-        # LEAD_ASSIGNED uses LeadOwnerResolver → resolves officer_id from payload
+        # Invalidate cache to pick up fresh DB rule
+        from app.services.notification_rule_loader import invalidate_rule_cache
+        await invalidate_rule_cache("lead_assigned")
+
         payload = {
             "lead_id": 9999,
-            "lead_name": "Registry Fallback Test Lead",
-            "lead_phone": "0900000000",
+            "lead_name": "DB Rule Test",
+            "lead_phone": "0909000000",
             "officer_id": officer_user.id,
             "unit_id": seeded_dependencies["unit_id"],
             "actor_id": 0,
             "actor_name": "System",
-            "offering_name": "N/A",
         }
 
-        # ---- Act ----
         notification_ids, callback = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload=payload,
+            db=db, event=SystemEvents.LEAD_ASSIGNED, payload=payload,
         )
         await db.commit()
         if callback:
             await callback()
 
-        # ---- Assert ----
-        # If we reached here, dispatch() did NOT raise AttributeError
-        # on config.actions for the registry NotificationConfig.
-
-        # Verify notification was actually created for the officer
-        assert notification_ids, (
-            "dispatch() returned empty list — registry fallback path "
-            "did not create a notification for the resolved recipient"
-        )
+        # Single path: DB rule → notification created
+        assert notification_ids, "DB rule present → notification should be created"
         stmt = select(models.Notification).where(
             models.Notification.id.in_(notification_ids)
         )
         result = await db.execute(stmt)
         notifications = result.scalars().all()
         assert len(notifications) >= 1
-        notif = notifications[0]
-        assert "Lead" in notif.title or "Assigned" in notif.title
-        assert notif.user_id == officer_user.id
-
-    async def test_dispatch_via_registry_fallback_no_attribute_error(
-        self,
-        db: AsyncSession,
-        mocker,
-    ):
-        """
-        Minimal test: dispatch an event with no recipients to confirm
-        config.actions is accessed without error on the registry path.
-        Even if no notification is created, the absence of AttributeError
-        proves the hotfix.
-        """
-        # Force registry fallback
-        mocker.patch(
-            "app.services.notification_dispatcher.get_rule_for_event",
-            new_callable=AsyncMock,
-            return_value=None,
-        )
-        mocker.patch(
-            "app.services.notification_dispatcher._emit_domain_event",
-            new_callable=AsyncMock,
-        )
-
-        # UnitManagersResolver with unit_id=0 → empty list → no crash
-        payload = {
-            "lead_id": 1,
-            "unit_id": 0,
-            "lead_name": "Test",
-            "source": "test",
-            "actor_id": 0,
-            "actor_name": "System",
-        }
-
-        # MUST NOT raise AttributeError: 'NotificationConfig' has no attribute 'actions'
-        notification_ids, callback = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_CREATED,
-            payload=payload,
-        )
-
-        # No recipients → empty result, but NO crash
-        assert isinstance(notification_ids, list)
+        assert notifications[0].user_id == officer_user.id

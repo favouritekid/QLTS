@@ -96,11 +96,11 @@ export default function WizardStepRecipientGroups({
       ))}
 
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={addInternalGroup}>
+        <Button variant="outline" size="sm" onClick={addInternalGroup} data-testid="add-internal-group">
           <Plus className="h-4 w-4 mr-1" />
           Thêm nhóm nhân viên
         </Button>
-        <Button variant="outline" size="sm" onClick={addExternalGroup}>
+        <Button variant="outline" size="sm" onClick={addExternalGroup} data-testid="add-external-group">
           <Plus className="h-4 w-4 mr-1" />
           Thêm nhóm khách hàng/đối tác
         </Button>

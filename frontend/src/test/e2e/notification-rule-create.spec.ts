@@ -117,11 +117,12 @@ test.describe("Notification Rule Create Flow", () => {
   });
 
   test("page loads with step 1 and quick templates", async ({ page }) => {
-    await expect(page.getByText("Sự kiện & Điều kiện")).toBeVisible();
-    await expect(page.getByText("Soạn nội dung")).toBeVisible();
-    await expect(page.getByText("Người nhận & Kênh gửi")).toBeVisible();
-    await expect(page.getByText("Kiểm tra & Lưu")).toBeVisible();
-    await expect(page.getByText("Cấu hình nhanh")).toBeVisible();
+    // PR3: prefer data-testid for step indicators, keep text for quick template content
+    await expect(page.getByTestId("step-1")).toBeVisible();
+    await expect(page.getByTestId("step-2")).toBeVisible();
+    await expect(page.getByTestId("step-3")).toBeVisible();
+    await expect(page.getByTestId("step-4")).toBeVisible();
+    await expect(page.getByTestId("quick-templates")).toBeVisible();
     await expect(page.getByText("Manager tạo lead → Gửi cho Officers")).toBeVisible();
   });
 
@@ -144,7 +145,7 @@ test.describe("Notification Rule Create Flow", () => {
   test("can navigate step 2 → 3 → 4 via quick template", async ({ page }) => {
     await page.getByRole("button", { name: /Lead được phân công/ }).click();
     await page.getByRole("button", { name: "Tiếp theo" }).click();
-    await expect(page.getByText("Thêm nhóm nhân viên")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("add-internal-group")).toBeVisible({ timeout: 5000 });
     await page.getByRole("button", { name: "Tiếp theo" }).click();
     await expect(page.getByText("Tóm tắt quy tắc:")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Kích hoạt ngay")).toBeVisible();

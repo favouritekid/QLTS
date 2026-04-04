@@ -793,13 +793,16 @@ class TestPaymentVerifiedNotificationBridge:
         Only PAYMENT_VERIFIED should be used for external ZNS.
         """
         from app.core.events import SystemEvents
-        from app.services.notification_registry import NOTIFICATION_REGISTRY
+        from app.core.event_catalog import get_event
 
-        # PAYMENT_RECEIVED exists in registry
-        assert SystemEvents.PAYMENT_RECEIVED in NOTIFICATION_REGISTRY
+        # PR3: Validate against catalog (runtime source of truth), not deprecated registry
+        pr_defn = get_event(SystemEvents.PAYMENT_RECEIVED)
+        assert pr_defn is not None, "PAYMENT_RECEIVED must exist in catalog"
+        assert pr_defn.notification_class == "user"
 
-        # PAYMENT_VERIFIED exists in registry
-        assert SystemEvents.PAYMENT_VERIFIED in NOTIFICATION_REGISTRY
+        pv_defn = get_event(SystemEvents.PAYMENT_VERIFIED)
+        assert pv_defn is not None, "PAYMENT_VERIFIED must exist in catalog"
+        assert pv_defn.notification_class == "user"
 
         # Both should exist as separate events
         assert (

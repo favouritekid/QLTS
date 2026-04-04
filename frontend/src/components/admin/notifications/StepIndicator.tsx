@@ -73,6 +73,7 @@ export default function StepIndicator({
             <div className="flex flex-col items-center flex-1">
               <button
                 type="button"
+                data-testid={`step-${step.number}`}
                 onClick={() => canClick && onStepClick(step.number)}
                 disabled={!isAccessible}
                 className={`

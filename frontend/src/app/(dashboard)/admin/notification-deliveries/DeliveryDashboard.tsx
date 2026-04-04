@@ -20,7 +20,7 @@ export default function DeliveryDashboard() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Delivery Monitoring</h1>
+        <h1 className="text-2xl font-bold tracking-tight" data-testid="dashboard-heading">Delivery Monitoring</h1>
         <p className="text-muted-foreground">
           Theo dõi sức khỏe hệ thống thông báo
         </p>

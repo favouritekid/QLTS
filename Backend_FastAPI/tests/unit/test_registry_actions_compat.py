@@ -65,7 +65,12 @@ class TestNotificationConfigActions:
 
 
 class TestAllRegistryEntriesHaveActions:
-    """Every entry in NOTIFICATION_REGISTRY must have accessible .actions."""
+    """Legacy: Every entry in NOTIFICATION_REGISTRY must have accessible .actions.
+
+    NOTE: Dispatcher no longer reads from NOTIFICATION_REGISTRY (PR1).
+    These tests guard the deprecated module until full removal.
+    See TestCatalogParity in test_notification_parity.py for runtime source of truth.
+    """
 
     def test_every_registry_entry_actions_accessible(self):
         """Verifies dispatch() will not AttributeError on config.actions."""

@@ -102,8 +102,8 @@ export default function ChannelHealthPanel() {
   return (
     <div className="space-y-4">
       {/* Summary row */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
+      <div className="grid gap-4 md:grid-cols-3" data-testid="status-cards">
+        <Card data-testid="card-queued">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm text-muted-foreground">Queued</CardTitle>
           </CardHeader>
@@ -111,7 +111,7 @@ export default function ChannelHealthPanel() {
             <p className="text-2xl font-bold">{data?.total_queued ?? 0}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card data-testid="card-fail-rate">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm text-muted-foreground">Fail Rate (30m)</CardTitle>
           </CardHeader>
@@ -121,7 +121,7 @@ export default function ChannelHealthPanel() {
             </p>
           </CardContent>
         </Card>
-        <Card>
+        <Card data-testid="card-active-alerts">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm text-muted-foreground">Active Alerts</CardTitle>
           </CardHeader>

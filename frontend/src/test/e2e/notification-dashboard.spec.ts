@@ -122,13 +122,14 @@ test.describe("Notification Dashboard", () => {
   });
 
   test("page loads with correct heading", async ({ page }) => {
-    await expect(page.locator("h1")).toContainText("Delivery Monitoring");
+    // PR3: prefer data-testid over raw tag selector
+    await expect(page.getByTestId("dashboard-heading")).toContainText("Delivery Monitoring");
   });
 
   test("Overview tab shows summary metrics", async ({ page }) => {
-    // Overview is default — check for metric cards (Queued, Fail Rate, Active Alerts)
-    await expect(page.locator(".text-muted-foreground", { hasText: "Queued" })).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("Active Alerts")).toBeVisible();
+    // PR3: use data-testid for status cards instead of CSS class selectors
+    await expect(page.getByTestId("card-queued")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("card-active-alerts")).toBeVisible();
   });
 
   test("Deliveries tab is clickable", async ({ page }) => {
@@ -149,11 +150,12 @@ test.describe("Notification Dashboard", () => {
     await page.getByRole("tab", { name: "Deliveries" }).click();
     await page.waitForTimeout(500);
     await page.getByRole("tab", { name: "Overview" }).click();
-    await expect(page.locator(".text-muted-foreground", { hasText: "Queued" })).toBeVisible({ timeout: 10_000 });
+    // PR3: data-testid instead of CSS class selector
+    await expect(page.getByTestId("card-queued")).toBeVisible({ timeout: 10_000 });
   });
 
   test("page handles loading states gracefully", async ({ page }) => {
-    await expect(page.locator("h1")).toContainText("Delivery Monitoring");
+    await expect(page.getByTestId("dashboard-heading")).toContainText("Delivery Monitoring");
     const errors: string[] = [];
     page.on("pageerror", (err) => errors.push(err.message));
     await page.waitForTimeout(2000);

@@ -20,6 +20,8 @@ from app.core.events import SystemEvents
 from app.core.event_groups import EVENT_GROUP_MAPPING, NotificationEventGroup
 from app.core.event_metadata import EVENT_METADATA_REGISTRY
 from app.services.notification_registry import NOTIFICATION_REGISTRY
+# PR3: Catalog is the primary source of truth (PR1)
+from app.core.event_catalog import EVENT_CATALOG, get_event, get_notifiable_events
 
 
 # =============================================================================
@@ -195,8 +197,10 @@ class TestEventMetadataParity:
     CTV events are temporarily exempted pending metadata backfill.
     """
 
-    # CTV events pending metadata backfill — remove from this list as they get metadata
-    CTV_EVENTS_PENDING_METADATA = {
+    # CTV events have full metadata in event_catalog.py (PR1) but NOT in the
+    # deprecated EVENT_METADATA_REGISTRY. Keep exemption for this legacy parity test.
+    # See TestCatalogParity below for the actual runtime source-of-truth validation.
+    CTV_EVENTS_IN_CATALOG_ONLY = {
         "ctv_claim_submitted", "ctv_claim_approved", "ctv_claim_rejected",
         "ctv_approved", "ctv_suspended", "ctv_lead_converted",
         "ctv_attribution_expiring", "ctv_attribution_expired",
@@ -204,17 +208,16 @@ class TestEventMetadataParity:
     }
 
     def test_registry_events_have_metadata(self):
-        """Non-exempted events with runtime config MUST have metadata."""
+        """Events with runtime config MUST have metadata (legacy check)."""
         missing = []
         for event in NOTIFICATION_REGISTRY:
-            if event.value in self.CTV_EVENTS_PENDING_METADATA:
+            if event.value in self.CTV_EVENTS_IN_CATALOG_ONLY:
                 continue
             if event not in EVENT_METADATA_REGISTRY:
                 missing.append(event.value)
 
         assert not missing, (
-            f"Events in NOTIFICATION_REGISTRY but missing from EVENT_METADATA_REGISTRY: {missing}. "
-            "Add metadata entry or add to CTV_EVENTS_PENDING_METADATA exemption list."
+            f"Events in NOTIFICATION_REGISTRY but missing from EVENT_METADATA_REGISTRY: {missing}."
         )
 
 
@@ -321,8 +324,8 @@ def test_admin_events_have_metadata():
 
     CTV events are temporarily exempted pending metadata backfill.
     """
-    # CTV events pending metadata backfill
-    CTV_EVENTS_PENDING = {
+    # CTV events have metadata in catalog only, not deprecated EVENT_METADATA_REGISTRY
+    CTV_EVENTS_IN_CATALOG_ONLY = {
         "ctv_claim_submitted", "ctv_claim_approved", "ctv_claim_rejected",
         "ctv_approved", "ctv_suspended", "ctv_lead_converted",
         "ctv_attribution_expiring", "ctv_attribution_expired",
@@ -331,17 +334,14 @@ def test_admin_events_have_metadata():
 
     missing = []
     for event in NOTIFICATION_REGISTRY:
-        if event.value in CTV_EVENTS_PENDING:
+        if event.value in CTV_EVENTS_IN_CATALOG_ONLY:
             continue
         if event not in EVENT_METADATA_REGISTRY:
             missing.append(event.value)
 
     assert not missing, (
         f"Events in NOTIFICATION_REGISTRY but missing from "
-        f"EVENT_METADATA_REGISTRY: {sorted(missing)}. "
-        "Admin UI cannot build rules for these events. "
-        "Add metadata in app/core/event_metadata.py or add to "
-        "CTV_EVENTS_PENDING exemption if backfill is planned."
+        f"EVENT_METADATA_REGISTRY: {sorted(missing)}."
     )
 
 
@@ -664,3 +664,72 @@ class TestPayloadMetadataFieldParity:
             + "\n".join(stale)
             + "\n\nRemove stale variables or update the EventPayload builder."
         )
+
+
+# =============================================================================
+# PR3: Catalog-based parity — validates the ACTUAL runtime source of truth
+# =============================================================================
+
+
+class TestCatalogParity:
+    """
+    PR3: Every user event in catalog must have complete metadata
+    and be consistent with what the metadata API serves.
+    """
+
+    def test_all_user_events_have_display_metadata(self):
+        """Every notification_class=user event must have display_name and variables."""
+        missing = []
+        for defn in get_notifiable_events():
+            if not defn.display_name:
+                missing.append(f"{defn.event.value}: no display_name")
+            if not defn.variables:
+                missing.append(f"{defn.event.value}: no variables")
+        assert not missing, f"User events with missing catalog metadata:\n" + "\n".join(missing)
+
+    def test_all_user_events_have_resolver_config(self):
+        """Every user event must have default_resolver and allowed_resolvers."""
+        issues = []
+        for defn in get_notifiable_events():
+            if not defn.default_resolver:
+                issues.append(f"{defn.event.value}: no default_resolver")
+            if not defn.allowed_resolvers:
+                issues.append(f"{defn.event.value}: no allowed_resolvers")
+            elif defn.default_resolver not in defn.allowed_resolvers:
+                issues.append(
+                    f"{defn.event.value}: default_resolver '{defn.default_resolver}' "
+                    f"not in allowed_resolvers {defn.allowed_resolvers}"
+                )
+        assert not issues, f"Resolver config issues:\n" + "\n".join(issues)
+
+    def test_catalog_channels_are_canonical(self):
+        """Catalog default_channels must only use canonical values."""
+        CANONICAL = {"browser", "email", "zalo", "sms"}
+        issues = []
+        for defn in EVENT_CATALOG.values():
+            for ch in defn.default_channels:
+                if ch not in CANONICAL:
+                    issues.append(f"{defn.event.value}: non-canonical channel '{ch}'")
+        assert not issues, "\n".join(issues)
+
+    def test_org_events_are_broadcast_only_in_catalog(self):
+        """Organization events must be broadcast_only in catalog."""
+        org_events = [
+            "unit_created", "unit_updated", "unit_deleted",
+            "program_created", "program_updated", "program_deleted",
+            "offering_created", "offering_updated", "offering_deleted",
+        ]
+        for key in org_events:
+            defn = get_event(SystemEvents(key))
+            assert defn is not None, f"{key} not in catalog"
+            assert defn.notification_class == "broadcast_only", (
+                f"{key} should be broadcast_only, got {defn.notification_class}"
+            )
+
+    def test_catalog_user_count_matches_notifiable(self):
+        """Sanity: catalog user events count == get_notifiable_events length."""
+        user_count = sum(
+            1 for d in EVENT_CATALOG.values()
+            if d.notification_class == "user" and not d.retired
+        )
+        assert user_count == len(get_notifiable_events())

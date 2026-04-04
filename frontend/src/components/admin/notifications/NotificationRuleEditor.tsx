@@ -502,7 +502,7 @@ export function NotificationRuleEditor({
 
             {/* Quick Templates */}
             {currentStep === 1 && !isEditMode && (
-              <Card className="bg-gradient-to-r from-info-50 to-indigo-50 border-info-200">
+              <Card className="bg-gradient-to-r from-info-50 to-indigo-50 border-info-200" data-testid="quick-templates">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Zap className="h-4 w-4 text-info-600" />
@@ -776,7 +776,7 @@ export function NotificationRuleEditor({
                         <ChevronRight className="ml-2 h-4 w-4" />
                       </Button>
                     ) : (
-                      <Button type="submit" disabled={isPending}>
+                      <Button type="submit" disabled={isPending} data-testid="submit-rule">
                         {isPending ? (
                           <>
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
