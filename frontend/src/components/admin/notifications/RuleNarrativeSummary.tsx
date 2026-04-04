@@ -58,7 +58,7 @@ export default function RuleNarrativeSummary({
             <p className="font-medium">{group.label}</p>
             {group.channels.map((ch, j) => (
               <p key={j} className="text-muted-foreground">
-                {"\u2192"} Qua {CHANNEL_LABELS[ch.channel] ?? ch.channel} (
+                {"→"} Qua {CHANNEL_LABELS[ch.channel] ?? ch.channel} (
                 {CONTENT_MODE_LABELS[ch.content_mode] ?? ch.content_mode})
                 {ch.delay_minutes > 0 && `, sau ${ch.delay_minutes} phút`}
               </p>

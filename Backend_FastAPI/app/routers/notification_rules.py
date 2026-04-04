@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from .. import database, models, schemas
 from ..config import settings
 from app.core.deps import CasbinAuth, get_notification_rule_for_admin  # Phase 2.2
-from ..core.event_metadata import get_all_events_metadata
+from ..core.event_catalog import get_notifiable_events
 from ..services import notification_rule_crud_service
 from ..utils.exceptions import BadRequest
 
@@ -88,9 +88,29 @@ async def get_notification_metadata(
     """
     log.info("Fetching notification metadata", admin_id=current_admin.id)
 
-    # ✅ FIX: Convert events dict to list for frontend compatibility
-    events_dict = get_all_events_metadata()
-    events_list = list(events_dict.values())
+    # PR1: Serve from event_catalog — only "user" classification events
+    notifiable = get_notifiable_events()
+    events_list = [
+        {
+            "event": d.event.value,
+            "display_name": d.display_name,
+            "description": d.description,
+            "variables": [
+                {"name": v.name, "type": v.type, "description": v.description, "required": v.required}
+                for v in d.variables
+            ],
+            "filter_fields": [v.name for v in d.variables if v.required],
+            "default_channels": list(d.default_channels),
+            "category": d.category,
+            "condition_fields": [
+                {"path": cf.path, "type": cf.type, "description": cf.description, "operators": list(cf.operators)}
+                for cf in d.condition_fields
+            ],
+            "allowed_resolvers": list(d.allowed_resolvers),
+            "link_strategy": d.link_strategy,
+        }
+        for d in notifiable
+    ]
 
     return {
         "events": events_list,
@@ -165,6 +185,84 @@ async def get_notification_metadata(
             {"value": "not_in", "label": "Not In List"},
             {"value": "contains", "label": "Contains"},
         ]
+    }
+
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.post("/preview", response_model=schemas.NotificationRulePreviewResponse)
+async def preview_notification_rule(
+    request: Request,
+    rule_data: schemas.NotificationRulePreview,
+    current_admin: models.User = CasbinAuth,
+):
+    """
+    PR2: Render preview of notification content for each action/branch.
+
+    Frontend sends sample_payload with concrete values for template variables.
+    Backend renders templates and returns per-action previews with code-owned link.
+    Preview output is plain text — no HTML rendering.
+    """
+    from string import Template
+    from app.core.event_catalog import get_event_by_key, render_link
+
+    definition = get_event_by_key(rule_data.event)
+    if not definition:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown event: {rule_data.event}",
+        )
+    if definition.notification_class != "user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Event '{rule_data.event}' is not a configurable user event.",
+        )
+
+    payload = rule_data.sample_payload
+    link = render_link(definition.event, payload)
+
+    previews = []
+    for action in rule_data.actions or []:
+        mode = action.content_mode or "inherit_default"
+
+        if mode == "inline_override" and action.content_override:
+            title = Template(action.content_override.get("title_template", "")).safe_substitute(payload)
+            message = Template(action.content_override.get("message_template", "")).safe_substitute(payload)
+        elif mode == "template_override" and action.template_code:
+            title = f"[Template: {action.template_code}]"
+            message = "(Xem tr\u01b0\u1edbc template ch\u01b0a kh\u1ea3 d\u1ee5ng \u2014 n\u1ed9i dung s\u1ebd \u0111\u01b0\u1ee3c render t\u1eeb template khi g\u1eedi th\u1eadt)"
+        else:
+            title = Template(rule_data.title_template).safe_substitute(payload)
+            message = Template(rule_data.message_template).safe_substitute(payload)
+
+        previews.append({
+            "step": action.step,
+            "channel": action.channel,
+            "branch_key": action.branch_key,
+            "rendered_title": title,
+            "rendered_message": message,
+            "rendered_link": link,
+            "content_mode": mode,
+            "delay_minutes": action.delay_minutes or 0,
+        })
+
+    # If no actions provided, render a single default preview
+    if not previews:
+        previews.append({
+            "step": 1,
+            "channel": "browser",
+            "branch_key": None,
+            "rendered_title": Template(rule_data.title_template).safe_substitute(payload),
+            "rendered_message": Template(rule_data.message_template).safe_substitute(payload),
+            "rendered_link": link,
+            "content_mode": "inherit_default",
+            "delay_minutes": 0,
+        })
+
+    return {
+        "event": rule_data.event,
+        "link_strategy": definition.link_strategy,
+        "rendered_link": link,
+        "actions": previews,
     }
 
 

@@ -652,27 +652,45 @@ async def get_rule_for_event(
 
     # ✅ Query database for enabled rule (cache miss or error)
     # Phase C0: eager-load actions for action-based execution
+    # 1.9d: eager-load template to avoid N+1 query
     result = await db.execute(
         select(models.NotificationRule)
-        .options(selectinload(models.NotificationRule.actions))
+        .options(
+            selectinload(models.NotificationRule.actions),
+            selectinload(models.NotificationRule.template),
+        )
         .where(
             models.NotificationRule.event == event_name,
             models.NotificationRule.enabled == True
         )
     )
-    rule = result.scalar_one_or_none()
-
-    if not rule:
+    # PR1: fail-fast on duplicate enabled rules — config error, not silent pick
+    rules = result.scalars().all()
+    if not rules:
         log.debug(
             "No enabled rule found for event",
             event_type=event_name
         )
         return None
+    if len(rules) > 1:
+        from app.utils.exceptions import NotificationConfigError
+        rule_ids = [r.id for r in rules]
+        log.error(
+            "Multiple enabled rules for same event — config error",
+            event_type=event_name,
+            rule_ids=rule_ids,
+        )
+        raise NotificationConfigError(
+            f"Event '{event_name}' has {len(rules)} enabled rules (IDs: {rule_ids}). "
+            f"Expected exactly 1. Disable or delete duplicate rules."
+        )
+    rule = rules[0]
 
-    # Deserialize resolver
+    # Deserialize resolver — explicit error, no silent None (1.9f)
     try:
         resolver = deserialize_resolver(rule.recipient_config)
     except Exception as e:
+        from app.utils.exceptions import NotificationConfigError
         log.error(
             "Failed to deserialize resolver for rule",
             rule_id=rule.id,
@@ -680,47 +698,31 @@ async def get_rule_for_event(
             error=str(e),
             recipient_config=rule.recipient_config
         )
-        return None
+        raise NotificationConfigError(
+            f"Rule {rule.id} ({event_name}) has invalid recipient_config: {e}"
+        )
 
-    # ✅ FIX: Load template if rule references one
+    # 1.9d: Use eager-loaded template relationship (no N+1)
     title_template = rule.title_template
     message_template = rule.message_template
     link_template = rule.link_template
 
-    if rule.template_id:
-        try:
-            template_result = await db.execute(
-                select(models.NotificationTemplate)
-                .where(models.NotificationTemplate.id == rule.template_id)
-            )
-            template = template_result.scalar_one_or_none()
-
-            if template:
-                # Use template content (template takes precedence)
-                title_template = template.title_template
-                message_template = template.message_template
-                # Link can be overridden by rule, fallback to template if rule's is empty
-                link_template = template.link_template if not rule.link_template else rule.link_template
-
-                log.info(
-                    "Loaded template for notification rule",
-                    rule_id=rule.id,
-                    template_id=template.id,
-                    template_name=template.name
-                )
-            else:
-                log.warning(
-                    "Template not found for rule, using rule templates",
-                    rule_id=rule.id,
-                    template_id=rule.template_id
-                )
-        except Exception as e:
-            log.error(
-                "Failed to load template for rule, using rule templates",
-                rule_id=rule.id,
-                template_id=rule.template_id,
-                error=str(e)
-            )
+    if rule.template_id and rule.template:
+        template = rule.template
+        title_template = template.title_template
+        message_template = template.message_template
+        link_template = template.link_template if not rule.link_template else rule.link_template
+        log.debug(
+            "Using eager-loaded template for rule",
+            rule_id=rule.id,
+            template_id=template.id,
+        )
+    elif rule.template_id:
+        log.warning(
+            "Template not found for rule (eager-load returned None), using rule templates",
+            rule_id=rule.id,
+            template_id=rule.template_id,
+        )
 
     # Phase C0: Build ActionConfig list from DB actions (or synthesize from channels)
     db_actions = sorted(rule.actions, key=lambda a: a.step) if rule.actions else []
@@ -811,20 +813,5 @@ async def get_rule_for_event(
     return config
 
 
-async def has_rule_override_for_event(
-    db: AsyncSession,
-    event: SystemEvents,
-) -> bool:
-    """
-    Return True when any database rule row exists for the given event.
-
-    dispatch() uses this to distinguish:
-    - no DB row -> registry fallback is allowed
-    - DB row exists but is disabled/invalid -> suppress registry fallback
-    """
-    result = await db.execute(
-        select(models.NotificationRule.id).where(
-            models.NotificationRule.event == event.value
-        )
-    )
-    return result.scalar_one_or_none() is not None
+    # has_rule_override_for_event() — REMOVED in PR1 (notification refactor).
+    # Dispatcher no longer uses registry fallback; single-path via catalog + DB rule.

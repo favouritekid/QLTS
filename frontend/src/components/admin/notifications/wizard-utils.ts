@@ -67,7 +67,7 @@ export function mapToAPI(
     title_template: defaultContent.title_template,
     message_template: defaultContent.message_template,
     notification_type: defaultContent.notification_type,
-    link_template: defaultContent.link_template || undefined,
+    // PR2: link_template removed — link is code-owned (catalog)
     channels: [...new Set(actions.map((a) => a.channel))],
     recipient_config: ruleRecipientConfig,
     enabled: trigger.enabled,
@@ -193,7 +193,7 @@ export function hydrateFromAPI(rule: NotificationRule): WizardState {
       title_template: rule.title_template,
       message_template: rule.message_template,
       notification_type: rule.notification_type,
-      link_template: rule.link_template ?? "",
+      // PR2: link_template removed from form — code-owned
     },
     recipientGroups: [...groupMap.values()],
   };
@@ -299,9 +299,8 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
     }
   }
 
-  if (browserCount > 1) {
-    errors.push("Chỉ được phép 1 kênh \"Trong ứng dụng\" cho mỗi rule");
-  }
+  // PR2: Multi-browser allowed — cross-action dedup in dispatcher handles precedence
+  // (lower step order wins when same user appears in multiple browser groups)
 
   return errors;
 }

@@ -278,6 +278,9 @@ from .notification import (
     NotificationRuleCreate,
     NotificationRuleUpdate,
     NotificationRulesPage,
+    NotificationRulePreview,
+    NotificationRulePreviewResponse,
+    ActionPreviewItem,
     RecipientConfig,
     # ✅ PHASE 3.1: Notification Template schemas
     NotificationTemplate,

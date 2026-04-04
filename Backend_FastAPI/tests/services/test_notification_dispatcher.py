@@ -143,16 +143,16 @@ class TestNotificationDispatcher:
         assert len(notification_ids) == 0
 
     async def test_dispatch_disabled_rule(
-        self, 
-        db: AsyncSession, 
+        self,
+        db: AsyncSession,
         officer_user_in_db: dict
     ):
-        """Should skip processing if rule is disabled."""
+        """Should skip processing if rule is disabled (user-class event)."""
         # Arrange
         user_id = officer_user_in_db["id"]
-        # Use UNIT_DELETED for disabled rule test
-        event = SystemEvents.UNIT_DELETED
-        
+        # PR1: Use a user-class event (not broadcast_only) to actually test disabled behavior
+        event = SystemEvents.SYSTEM_ALERT
+
         rule = models.NotificationRule(
             event=event.value,
             title_template="Title",
@@ -162,11 +162,11 @@ class TestNotificationDispatcher:
         )
         db.add(rule)
         await db.commit()
-        
+
         # Act
         notification_ids, _ = await dispatch(db, event, {"user_id": user_id})
-        
-        # Assert
+
+        # Assert — disabled rule means no DB rule loaded → fail-closed → empty
         assert len(notification_ids) == 0
 
     async def test_dispatch_disabled_database_rule_suppresses_registry_fallback(
@@ -176,21 +176,41 @@ class TestNotificationDispatcher:
         mocker,
     ):
         """
-        If a DB rule exists but is disabled, dispatch() must NOT fall back to
-        the hardcoded registry config for the same event.
+        If a DB rule exists but is disabled, dispatch() must NOT create
+        notifications — fail-closed behavior (no fallback, no registry).
         """
         user_id = officer_user_in_db["id"]
         event = SystemEvents.SYSTEM_ALERT
 
-        rule = models.NotificationRule(
-            event=event.value,
-            title_template="Disabled",
-            message_template="Disabled",
-            recipient_config={"resolver_type": "specific_users", "params": {}},
-            enabled=False,
+        # PR1: Disable any pre-existing enabled rules for this event (from sync/seed)
+        from sqlalchemy import update
+        await db.execute(
+            update(models.NotificationRule)
+            .where(models.NotificationRule.event == event.value)
+            .values(enabled=False)
         )
-        db.add(rule)
         await db.commit()
+
+        # Ensure a disabled rule exists
+        from sqlalchemy import select as sa_select
+        existing = await db.execute(
+            sa_select(models.NotificationRule)
+            .where(models.NotificationRule.event == event.value)
+        )
+        if not existing.scalar_one_or_none():
+            rule = models.NotificationRule(
+                event=event.value,
+                title_template="Disabled",
+                message_template="Disabled",
+                recipient_config={"resolver_type": "specific_users", "params": {}},
+                enabled=False,
+            )
+            db.add(rule)
+            await db.commit()
+
+        # Invalidate rule cache so disabled state is seen
+        from app.services.notification_rule_loader import invalidate_rule_cache
+        await invalidate_rule_cache(event.value)
 
         mock_domain_emit = mocker.patch(
             "app.services.notification_dispatcher._emit_domain_event",
@@ -200,7 +220,7 @@ class TestNotificationDispatcher:
         notification_ids, callback = await dispatch(
             db,
             event,
-            {"user_id": user_id, "severity": "warning", "message": "Registry should stay suppressed"},
+            {"user_id": user_id, "severity": "warning", "message": "Disabled rule should not dispatch"},
         )
         await db.commit()
         if callback:

@@ -362,6 +362,24 @@ class LockContentionError(TransientError):
 
 
 # ============================================================================
+# NOTIFICATION EXCEPTIONS
+# ============================================================================
+
+
+class NotificationConfigError(ServiceError):
+    """
+    Raised when notification rule configuration is invalid at runtime.
+
+    Examples: resolver deserialization failure, missing required fields.
+    Dispatcher catches this to log and skip (fail-closed, no fallback).
+    """
+
+    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    detail = "Notification configuration error."
+    error_code = "NOTIFICATION_CONFIG_ERROR"
+
+
+# ============================================================================
 # LEGACY SUPPORT (Deprecated)
 # ============================================================================
 

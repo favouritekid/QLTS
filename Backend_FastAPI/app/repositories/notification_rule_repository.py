@@ -99,7 +99,7 @@ class NotificationRuleRepository(BaseRepository[models.NotificationRule]):
             title_template=rule_data.title_template,
             message_template=rule_data.message_template,
             notification_type=rule_data.notification_type,
-            link_template=rule_data.link_template,
+            link_template=None,  # PR1: link is code-owned (catalog), not DB-stored
             channels=rule_data.channels,
             recipient_config=recipient_config_dict,
             condition=rule_data.condition,

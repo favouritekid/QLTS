@@ -26,7 +26,6 @@ const DEFAULT_CONTENT: WizardDefaultContent = {
   title_template: "Test title: $lead_name",
   message_template: "Test message body",
   notification_type: "info",
-  link_template: "/leads/$lead_id",
 };
 
 const DEFAULT_TRIGGER: WizardTrigger = {

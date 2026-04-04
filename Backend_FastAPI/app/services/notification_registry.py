@@ -1,5 +1,19 @@
 # app/services/notification_registry.py
 """
+⚠️ DEPRECATED (PR1 — notification refactor)
+
+This module is superseded by ``app.core.event_catalog`` which is now the
+single source of truth for event semantics.  The dispatcher no longer
+reads from this registry at runtime.
+
+Kept temporarily for:
+- ``NotificationType`` enum (still imported by other modules)
+- ``NotificationConfig`` dataclass (referenced in type hints)
+- ``validate_registry()`` / ``initialize_registry()`` (startup validation)
+
+Will be fully removed in a follow-up cleanup PR.
+
+--- Original docstring ---
 Notification Registry - Central configuration for all notification events.
 
 The registry maps each SystemEvent to its:

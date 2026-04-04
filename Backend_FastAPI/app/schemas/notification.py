@@ -217,6 +217,40 @@ class NotificationRulesPage(BaseModel):
 
 
 # =============================================================================
+# PR2: Preview API Schemas
+# =============================================================================
+
+
+class NotificationRulePreview(BaseModel):
+    """Request schema for previewing notification rule content."""
+    event: str
+    title_template: str
+    message_template: str
+    sample_payload: Dict[str, str] = {}
+    actions: Optional[List[NotificationActionCreate]] = []
+
+
+class ActionPreviewItem(BaseModel):
+    """Single action preview in response."""
+    step: int
+    channel: str
+    branch_key: Optional[str] = None
+    rendered_title: str
+    rendered_message: str
+    rendered_link: Optional[str] = None
+    content_mode: Optional[str] = None
+    delay_minutes: int = 0
+
+
+class NotificationRulePreviewResponse(BaseModel):
+    """Response schema for rule preview."""
+    event: str
+    link_strategy: Optional[str] = None
+    rendered_link: Optional[str] = None
+    actions: List[ActionPreviewItem] = []
+
+
+# =============================================================================
 # ✅ PHASE 3.1: Notification Template Schemas
 # =============================================================================
 

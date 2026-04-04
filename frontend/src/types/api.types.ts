@@ -558,6 +558,9 @@ export interface EventMetadata {
   filter_fields: string[];
   default_channels: string[];
   category: string; // "lead" | "application" | "consultation" | "finance" | etc.
+  // PR2: New fields from catalog
+  allowed_resolvers?: string[];  // e.g. ["lead_owner", "unit_managers", ...]
+  link_strategy?: string | null;  // e.g. "/leads/${lead_id}" — read-only display
 }
 
 export interface ResolverTypeOption {

@@ -10,11 +10,11 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
-from app.utils.exceptions import BadRequest
+from app.utils.exceptions import BadRequest, BusinessRuleViolation
 from app.repositories import NotificationRuleRepository, NotificationTemplateRepository
 from .notification_rule_loader import invalidate_rule_cache, derive_channels_from_actions, ActionConfig
 from app.services.notification_rule_loader import OPERATOR_ALIASES, FIELD_ALIASES_GLOBAL, FIELD_ALIASES_PER_EVENT, _resolve_field_alias
-from app.core.event_metadata import EVENT_METADATA_REGISTRY
+from app.core.event_catalog import get_event
 from app.core.events import SystemEvents
 
 log = structlog.get_logger(__name__)
@@ -94,11 +94,8 @@ def _validate_actions(actions) -> None:
             if ext_resolver:
                 _validate_external_resolver(step, ext_resolver)
 
-    # Phase 3b: allow duplicate non-browser channels (different recipient branches).
-    # Browser remains single-action until Phase 3c decides multi-browser UX.
-    browser_count = sum(1 for a in actions if getattr(a, 'channel', '') == 'browser')
-    if browser_count > 1:
-        raise BadRequest("Only one browser action allowed per rule")
+    # PR1: "max one browser" constraint removed — cross-action dedup in dispatcher
+    # handles multi-group browser precedence (lower step wins).
 
     # Phase 3a: content_mode + branch_key validation
     # Guard: only validate on objects with explicit Phase 3 fields (skip MagicMock, legacy dicts)
@@ -193,11 +190,30 @@ async def get_rules(
     return await repo.list_rules(skip, limit, event, enabled)
 
 
-    # Events that are broadcast-only and must NOT have user notification rules
+def _get_non_user_events() -> frozenset:
+    """Build set of events that must NOT have user notification rules (from catalog)."""
+    from app.core.event_catalog import EVENT_CATALOG
+    return frozenset(
+        defn.event.value for defn in EVENT_CATALOG.values()
+        if defn.notification_class != "user"
+    )
+
+# Lazy-initialized; populated on first create_rule call
+_NON_USER_EVENTS_CACHE: frozenset | None = None
+
+def _is_non_user_event(event_key: str) -> bool:
+    """Check if event is broadcast_only or internal_future (not configurable)."""
+    global _NON_USER_EVENTS_CACHE
+    if _NON_USER_EVENTS_CACHE is None:
+        _NON_USER_EVENTS_CACHE = _get_non_user_events()
+    return event_key in _NON_USER_EVENTS_CACHE
+
+# Legacy alias — kept for backward compat in tests
 BROADCAST_ONLY_EVENTS = frozenset({
     "unit_created", "unit_updated", "unit_deleted",
     "program_created", "program_updated", "program_deleted",
     "offering_created", "offering_updated", "offering_deleted",
+    "lead_updated",  # PR1: D1 decision
 })
 
 
@@ -259,11 +275,10 @@ async def create_rule(
     """
     Create a new notification rule.
     """
-    # Reject broadcast-only events — these are domain events, not user notifications
-    if rule_data.event in BROADCAST_ONLY_EVENTS:
+    # Reject non-user events (broadcast_only + internal_future) — from catalog
+    if _is_non_user_event(rule_data.event):
         raise BadRequest(
-            f"Event '{rule_data.event}' is broadcast-only and cannot have notification rules. "
-            "Organization events are domain broadcasts, not user notifications."
+            f"Event '{rule_data.event}' is not a configurable user event and cannot have notification rules."
         )
 
     # Phase 2: Canonicalize condition (normalize operators + field paths)
@@ -273,7 +288,7 @@ async def create_rule(
     if rule_data.condition:
         try:
             event_enum = SystemEvents(rule_data.event)
-            event_meta = EVENT_METADATA_REGISTRY.get(event_enum)
+            event_meta = get_event(event_enum)
             if event_meta and event_meta.condition_fields:
                 allowed_paths = {cf.path for cf in event_meta.condition_fields}
                 field_errors = _validate_condition_fields(rule_data.condition, allowed_paths)
@@ -347,8 +362,9 @@ async def update_rule(
     old_template_id = rule.template_id
     updated_fields = []
 
-    # Update basic fields (exclude actions + channels — channels is derived from actions)
-    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions", "channels"})
+    # Update basic fields (exclude actions + channels + link_template)
+    # PR1: link_template is code-owned (catalog), not DB-writable
+    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions", "channels", "link_template"})
 
     # Phase 2: If condition is being updated, canonicalize and validate
     if 'condition' in update_data and update_data['condition'] is not None:
@@ -357,7 +373,7 @@ async def update_rule(
 
         try:
             event_enum = SystemEvents(event_name)
-            event_meta = EVENT_METADATA_REGISTRY.get(event_enum)
+            event_meta = get_event(event_enum)
             if event_meta and event_meta.condition_fields:
                 allowed_paths = {cf.path for cf in event_meta.condition_fields}
                 field_errors = _validate_condition_fields(update_data['condition'], allowed_paths)
@@ -469,7 +485,19 @@ async def delete_rule(
 ) -> Tuple[None, Callable]:
     """
     Delete a notification rule.
+
+    PR1: Active catalog events cannot be deleted (use disable/toggle instead).
+    Only orphan or retired events can be hard-deleted.
     """
+    # PR1: Delete guard — prevent deleting rules for active catalog events
+    from app.core.event_catalog import get_event_by_key
+    defn = get_event_by_key(rule.event)
+    if defn and not defn.retired:
+        raise BusinessRuleViolation(
+            f"Cannot delete rule for active event '{rule.event}'. "
+            f"Use disable (toggle) instead. Delete is only allowed for retired/orphan events."
+        )
+
     repo = NotificationRuleRepository(db)
     rule_id = rule.id
     event_type = rule.event

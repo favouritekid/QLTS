@@ -34,7 +34,7 @@ export interface ChannelBranch {
   content_override: {
     title_template?: string;
     message_template?: string;
-    link_template?: string;
+    // PR2: link_template removed — link is code-owned
   } | null;
   config: Record<string, unknown> | null; // zalo_template_id, zalo_template_data, etc.
 }
@@ -65,7 +65,7 @@ export interface WizardDefaultContent {
   title_template: string;
   message_template: string;
   notification_type: string;
-  link_template: string;
+  // PR2: link_template removed — link is code-owned (catalog)
 }
 
 export interface WizardState {

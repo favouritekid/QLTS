@@ -158,7 +158,7 @@ class TestOrganizationEventsPolicy:
                 channels=["browser"],
                 recipient_config={"resolver_type": "all_admins", "params": {}},
             )
-            with pytest.raises(BadRequest, match="broadcast-only"):
+            with pytest.raises(BadRequest, match="not a configurable user event"):
                 await create_rule(mock_db, rule_data)
 
 

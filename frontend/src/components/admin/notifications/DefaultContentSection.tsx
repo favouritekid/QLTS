@@ -54,6 +54,7 @@ interface DefaultContentSectionProps {
   onInsertVariable: (field: "title_template" | "message_template", variable: string) => void;
   titleTemplate: string;
   messageTemplate: string;
+  linkStrategy?: string | null; // PR2: code-owned link pattern from catalog
 }
 
 export default function DefaultContentSection({
@@ -62,6 +63,7 @@ export default function DefaultContentSection({
   onInsertVariable,
   titleTemplate,
   messageTemplate,
+  linkStrategy,
 }: DefaultContentSectionProps) {
   return (
     <div className="space-y-6">
@@ -166,29 +168,24 @@ export default function DefaultContentSection({
         )}
       />
 
-      {/* Link Template */}
-      <FormField
-        control={formControl}
-        name="link_template"
-        render={({ field }) => (
-          <FormItem>
-            <FormLabel>
-              Liên kết (Tùy chọn)
-              <HelpTooltip content="Đường dẫn khi click thông báo. VD: /leads/$lead_id" />
-            </FormLabel>
-            <FormControl>
-              <Input
-                placeholder="VD: /leads/$lead_id"
-                {...field}
-              />
-            </FormControl>
-            <FormDescription>
-              Người dùng sẽ được chuyển đến trang này khi click thông báo
-            </FormDescription>
-            <FormMessage />
-          </FormItem>
+      {/* Link Strategy — read-only, code-owned (PR2) */}
+      <div className="space-y-1.5">
+        <p className="text-sm font-medium">Liên kết thông báo</p>
+        {linkStrategy ? (
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="font-mono text-xs">
+              {linkStrategy}
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              (tự động theo sự kiện)
+            </span>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Sự kiện này không có liên kết đi kèm.
+          </p>
         )}
-      />
+      </div>
 
       {/* Preview */}
       {(titleTemplate || messageTemplate) && (

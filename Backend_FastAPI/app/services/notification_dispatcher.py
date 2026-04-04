@@ -52,14 +52,11 @@ from app.database import (
     safe_redis_lpush, safe_redis_ltrim, safe_redis_expire,
     safe_redis_exists, safe_redis_set, safe_redis_incr,
 )
-from app.services.notification_registry import get_event_config, NotificationConfig
+from app.core.event_catalog import get_event, render_dedup_key, render_link
 from app.services import notification_preference_service
 from app.repositories import NotificationRepository, NotificationTemplateRepository
-# ✅ PHASE 2.3: Import database rule loader
-from app.services.notification_rule_loader import (
-    get_rule_for_event,
-    has_rule_override_for_event,
-)
+# ✅ PR1: Single-path — catalog + DB rule only, no registry fallback
+from app.services.notification_rule_loader import get_rule_for_event
 
 log = structlog.get_logger(__name__)
 
@@ -177,7 +174,8 @@ def _render_template_snapshot(
 
     title = Template(template.title_template).safe_substitute(payload) if template.title_template else fallback_snapshot.get("title", "")
     message = Template(template.message_template).safe_substitute(payload) if template.message_template else fallback_snapshot.get("message", "")
-    link = Template(template.link_template).safe_substitute(payload) if template.link_template else fallback_snapshot.get("link")
+    # PR1: link is code-owned — always use catalog link from fallback, ignore template.link_template
+    link = fallback_snapshot.get("link")
 
     return {
         "title": title,
@@ -334,14 +332,18 @@ def _build_action_snapshot(
     payload: dict,
     template_map: Dict[str, Any],
     notification_type: str = "info",
+    catalog_link: str | None = None,
 ) -> dict:
-    """Build content snapshot for a single action based on content_mode."""
+    """Build content snapshot for a single action based on content_mode.
+
+    PR1: link is always code-owned (catalog_link), never from DB/template/override.
+    """
     mode = getattr(action, 'content_mode', None) or "inherit_default"
 
     base_snapshot = {
         "title": config.render_title(payload),
         "message": config.render_message(payload),
-        "link": config.render_link(payload),
+        "link": catalog_link,  # PR1: code-owned, not config.render_link
         "type": notification_type,
     }
 
@@ -365,7 +367,7 @@ def _build_action_snapshot(
         return {
             "title": Template(override.get("title_template", "")).safe_substitute(payload) or base_snapshot["title"],
             "message": Template(override.get("message_template", "")).safe_substitute(payload) or base_snapshot["message"],
-            "link": Template(override.get("link_template", "")).safe_substitute(payload) if override.get("link_template") else base_snapshot.get("link"),
+            "link": base_snapshot.get("link"),  # PR1: code-owned, ignore inline link_template
             "type": notification_type,
         }
 
@@ -497,41 +499,44 @@ async def dispatch(
         payload_keys=list(payload.keys())
     )
 
-    # Step 1: ✅ PHASE 2.3: Load rule from database (or fallback to hardcoded registry)
-    # Try database first for visual management
-    config = await get_rule_for_event(db, event)
-    rule_source = "database" if config else None
+    # Step 1: PR1 single-path — catalog + DB rule, no registry fallback
+    from app.utils.exceptions import NotificationConfigError
 
-    # If a DB rule exists but doesn't load (for example disabled on purpose),
-    # treat DB as source of truth and do NOT silently re-enable registry logic.
-    if not config:
-        if await has_rule_override_for_event(db, event):
-            log.info(
-                "Database rule override suppressed registry fallback",
-                event_type=event.value,
-            )
-
-            async def _domain_only_callback():
-                await _emit_domain_event(event, payload)
-
-            return [], _domain_only_callback
-
-        config = get_event_config(event)
-        rule_source = "registry" if config else None
-
-    if not config:
-        log.warning(
-            "No notification rule found for event (still emitting domain event for UI sync)",
-            event_type=event.value,
-            checked_sources=["database", "registry"]
-        )
-        # ✅ IMPORTANT: Still emit domain event for real-time UI refresh
-        # Notification rules are for per-user notifications
-        # Domain events are for broadcasting data changes to ALL clients
+    definition = get_event(event)
+    if not definition or definition.retired:
+        log.warning("Unknown or retired event, skip dispatch", event_type=event.value)
         async def _domain_only_callback():
             await _emit_domain_event(event, payload)
-
         return [], _domain_only_callback
+
+    if definition.notification_class != "user":
+        # broadcast_only / internal_future — domain event only, no user notification
+        log.debug("Non-user event, domain-only dispatch",
+                  event_type=event.value, cls=definition.notification_class)
+        async def _domain_only_callback():
+            await _emit_domain_event(event, payload)
+        return [], _domain_only_callback
+
+    # Load DB rule (single source for user events)
+    try:
+        config = await get_rule_for_event(db, event)
+    except NotificationConfigError as e:
+        log.error("Config error loading rule, skip dispatch",
+                  event_type=event.value, error=str(e))
+        async def _domain_only_callback():
+            await _emit_domain_event(event, payload)
+        return [], _domain_only_callback
+
+    if not config:
+        log.error(
+            "No enabled DB rule for active user event (fail-closed)",
+            event_type=event.value,
+        )
+        async def _domain_only_callback():
+            await _emit_domain_event(event, payload)
+        return [], _domain_only_callback
+
+    rule_source = "database"
 
     log.info(
         "Loaded notification rule",
@@ -595,9 +600,10 @@ async def dispatch(
                 action_resolver = deserialize_resolver(action.recipient_config)
                 resolved = await action_resolver.resolve_users(db, payload)
             except Exception as e:
-                log.warning("Action resolver failed, falling back to rule resolver",
-                           step=action.step, channel=action.channel, error=str(e))
-                resolved = await rule_resolver.resolve_users(db, payload)
+                # PR1: fail branch — do NOT fallback to rule_resolver
+                log.error("Action resolver failed, skipping branch (no fallback)",
+                          step=action.step, channel=action.channel, error=str(e))
+                resolved = []
         else:
             try:
                 resolved = await rule_resolver.resolve_users(db, payload)
@@ -638,6 +644,22 @@ async def dispatch(
             else:
                 action_filtered_map[action.step] = []
 
+    # Step 3.2: PR1 — cross-action user dedup (step order = precedence)
+    from collections import defaultdict
+    seen_by_channel: Dict[str, set] = defaultdict(set)
+    for action in sorted(action_configs, key=lambda a: a.step):
+        users = action_filtered_map.get(action.step, [])
+        deduped = [uid for uid in users if uid not in seen_by_channel[action.channel]]
+        if len(users) != len(deduped):
+            log.info("Cross-action dedup", step=action.step, channel=action.channel,
+                     original=len(users), after=len(deduped))
+        seen_by_channel[action.channel].update(deduped)
+        action_filtered_map[action.step] = deduped
+
+    # PR1: Fall back to catalog dedup_key if caller didn't supply one
+    if not dedupe_key:
+        dedupe_key = render_dedup_key(event, payload)
+
     # Union by channel for inbox + short-circuit
     channel_recipient_map: Dict[str, List[int]] = {}
     for action in action_configs:
@@ -657,8 +679,12 @@ async def dispatch(
         _cd_suffix = f":{dedupe_key}:step{action.step}" if dedupe_key else f":{action.step}"
         for uid in users:
             cooldown_key = f"notif:cooldown:{event.value}:{uid}:{action.channel}{_cd_suffix}"
-            if await safe_redis_exists(cooldown_key):
-                continue
+            # 1.9c: Atomic SET NX — eliminates race window between EXISTS + SET
+            acquired = await safe_redis_set(
+                cooldown_key, "1", nx=True, ex=_settings.NOTIFICATION_COOLDOWN_SECONDS
+            )
+            if not acquired:
+                continue  # user already in cooldown
             rate_key = f"notif:rate:{uid}"
             count = await safe_redis_incr(rate_key)
             if count == 1:
@@ -666,7 +692,6 @@ async def dispatch(
             if count and count > _settings.NOTIFICATION_RATE_LIMIT_PER_HOUR:
                 continue
             cooled.append(uid)
-            await safe_redis_set(cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS)
         action_filtered_map[action.step] = cooled
 
     # Step 4: Phase 3b — action-scoped dedup
@@ -713,9 +738,10 @@ async def dispatch(
     )
 
     # Step 5: Render notification content
+    # PR1: title/message from DB rule, link from catalog (code-owned)
     title = config.render_title(payload)
     message = config.render_message(payload)
-    link = config.render_link(payload)
+    link = render_link(event, payload)  # code-owned, ignore DB link_template
 
     # Determine notification type (can be overridden by payload for alerts)
     notification_type = payload.get("severity", config.notification_type)
@@ -774,6 +800,7 @@ async def dispatch(
         snapshot = _build_action_snapshot(
             action, config, payload, _action_template_map,
             notification_type=notification_type,
+            catalog_link=link,
         )
 
         try:
@@ -855,10 +882,13 @@ async def dispatch(
                                  user_id=uid, channel=ch)
                         continue
 
-                # 2. Cooldown check (dedupe-aware key to avoid cross-transition collision)
+                # 2. Cooldown check — atomic SET NX (1.9c)
                 _fb_cd_suffix = f":{dedupe_key}:step{action.step}" if dedupe_key else f":{action.step}"
                 cooldown_key = f"notif:cooldown:{event.value}:{uid}:{ch}{_fb_cd_suffix}"
-                if await safe_redis_exists(cooldown_key):
+                fb_acquired = await safe_redis_set(
+                    cooldown_key, "1", nx=True, ex=_settings.NOTIFICATION_COOLDOWN_SECONDS
+                )
+                if not fb_acquired:
                     log.debug("Internal fallback user in cooldown", user_id=uid)
                     continue
 
@@ -873,10 +903,9 @@ async def dispatch(
                         log.debug("Internal fallback user deduped", user_id=uid)
                         continue
 
-                # Set cooldown after passing all checks
-                await safe_redis_set(cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS)
+                # Cooldown already set atomically via SET NX above
 
-                ch_snapshot = _build_action_snapshot(action, config, payload, _action_template_map, notification_type=notification_type)
+                ch_snapshot = _build_action_snapshot(action, config, payload, _action_template_map, notification_type=notification_type, catalog_link=link)
                 delay_minutes = action.delay_minutes or 0
                 int_scheduled_for = None
                 if delay_minutes > 0:
@@ -922,7 +951,7 @@ async def dispatch(
             if not destination:
                 continue
 
-            # External cooldown (dedupe-aware key to avoid cross-transition collision)
+            # External cooldown — check-then-set (no race concern for external)
             _ext_cd_suffix = f":{dedupe_key}:step{action.step}" if dedupe_key else f":{action.step}"
             ext_cooldown_key = f"notif:cooldown:{event.value}:{destination}:{action.channel}{_ext_cd_suffix}"
             if await safe_redis_exists(ext_cooldown_key):
@@ -969,7 +998,7 @@ async def dispatch(
                 scheduled_for=ext_scheduled_for,
             )
             if ext_ids:
-                # Set cooldown ONLY after successful delivery row creation
+                # Set cooldown only after successful delivery
                 await safe_redis_set(ext_cooldown_key, "1", ex=_settings.NOTIFICATION_COOLDOWN_SECONDS)
                 _external_delivery_ids.setdefault(action.channel, []).extend(ext_ids)
                 action_delivery_map.setdefault(action.step, []).extend(ext_ids)
@@ -1045,40 +1074,41 @@ async def dispatch(
                     event=event.value,
                 )
 
-                # Update browser delivery statuses
-                if browser_del_ids:
-                    if ch_result is None and error_msg is None:
-                        await notification_delivery_service.mark_delivery_ids_skipped(
-                            db, browser_del_ids,
-                            error_reason="channel_not_implemented",
-                        )
-                    elif error_msg:
-                        await notification_delivery_service.mark_delivery_ids_failed(
-                            db, browser_del_ids, error_reason=error_msg,
-                        )
-                    elif ch_result:
-                        uid_to_did = dict(zip(browser_recipients, browser_del_ids))
-                        sent_ids = [
-                            uid_to_did[uid]
-                            for uid in browser_recipients
-                            if uid not in ch_result.failed_ids and uid in uid_to_did
-                        ]
-                        if sent_ids:
-                            await notification_delivery_service.mark_delivery_ids_sent(
-                                db, sent_ids,
+                # 1.9b: Use separate session for delivery status updates
+                # to avoid nested commit on caller's session
+                uid_to_did = dict(zip(browser_recipients, browser_del_ids))
+                from app.database import AsyncSessionLocal
+                async with AsyncSessionLocal() as _delivery_db:
+                    if browser_del_ids:
+                        from app.services import notification_delivery_service as _nds
+                        if ch_result is None and error_msg is None:
+                            await _nds.mark_delivery_ids_skipped(
+                                _delivery_db, browser_del_ids,
+                                error_reason="channel_not_implemented",
                             )
-                        failed_ids = [
-                            uid_to_did[uid]
-                            for uid in ch_result.failed_ids
-                            if uid in uid_to_did
-                        ]
-                        if failed_ids:
-                            await notification_delivery_service.mark_delivery_ids_failed(
-                                db, failed_ids,
-                                error_reason=ch_result.error_message or "delivery_failed",
+                        elif error_msg:
+                            await _nds.mark_delivery_ids_failed(
+                                _delivery_db, browser_del_ids, error_reason=error_msg,
                             )
-
-                await db.commit()
+                        elif ch_result:
+                            sent_ids_2 = [
+                                uid_to_did[uid]
+                                for uid in browser_recipients
+                                if uid not in ch_result.failed_ids and uid in uid_to_did
+                            ]
+                            if sent_ids_2:
+                                await _nds.mark_delivery_ids_sent(_delivery_db, sent_ids_2)
+                            failed_ids_2 = [
+                                uid_to_did[uid]
+                                for uid in ch_result.failed_ids
+                                if uid in uid_to_did
+                            ]
+                            if failed_ids_2:
+                                await _nds.mark_delivery_ids_failed(
+                                    _delivery_db, failed_ids_2,
+                                    error_reason=ch_result.error_message or "delivery_failed",
+                                )
+                    await _delivery_db.commit()
 
         except Exception as e:
             log.error(

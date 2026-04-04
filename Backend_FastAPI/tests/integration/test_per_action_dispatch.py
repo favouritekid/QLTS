@@ -65,7 +65,23 @@ async def _seed_rule_with_actions(
     db: AsyncSession, *, event: str, actions_data: list, condition=None,
     recipient_config=None,
 ) -> models.NotificationRule:
-    """Seed a DB rule with multiple actions."""
+    """Seed a DB rule with multiple actions.
+
+    PR1: Enforce one-rule-per-event invariant.
+    1. Invalidate rule cache FIRST (clear any stale cached rule)
+    2. Delete existing rules for this event (sync seeds defaults)
+    3. Commit delete so new rule gets a clean slate
+    """
+    from app.services.notification_rule_loader import invalidate_rule_cache
+    await invalidate_rule_cache(event)
+
+    from sqlalchemy import delete as sa_delete
+    await db.execute(
+        sa_delete(models.NotificationRule)
+        .where(models.NotificationRule.event == event)
+    )
+    await db.flush()
+
     template = models.NotificationTemplate(
         template_code=f"TPL_3B_{event}_{id(actions_data) % 10000}",
         name=f"Phase 3b Test {event}",

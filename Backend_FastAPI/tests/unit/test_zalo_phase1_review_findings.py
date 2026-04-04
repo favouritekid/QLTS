@@ -776,8 +776,15 @@ async def test_dispatch_external_cooldown_not_set_when_prepare_empty():
     config, resolver_fn = _build_external_dispatch_patches()
     redis_set_calls = []
 
-    async def track_set(key, value, ex=None):
+    # PR1: safe_redis_set now handles nx=True (atomic cooldown)
+    async def track_set(key, value, ex=None, nx=False):
         redis_set_calls.append(key)
+        return True  # simulate successful SET
+
+    # PR1: mock catalog get_event → return user-class EventDefinition
+    mock_defn = MagicMock()
+    mock_defn.notification_class = "user"
+    mock_defn.retired = False
 
     db = AsyncMock()
     db.flush = AsyncMock()
@@ -786,7 +793,7 @@ async def test_dispatch_external_cooldown_not_set_when_prepare_empty():
     db.execute = AsyncMock(return_value=dedup_result)
 
     with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
-         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_dispatcher.get_event", return_value=mock_defn), \
          patch("app.services.notification_rule_loader.deserialize_resolver", return_value=AsyncMock(return_value=[])), \
          patch("app.services.notification_dispatcher.notification_preference_service"), \
          patch("app.services.notification_dispatcher.safe_redis_exists", new=AsyncMock(return_value=False)), \
@@ -815,8 +822,15 @@ async def test_dispatch_external_cooldown_set_when_prepare_succeeds():
     config, resolver_fn = _build_external_dispatch_patches()
     redis_set_calls = []
 
-    async def track_set(key, value, ex=None):
+    # PR1: safe_redis_set now handles nx=True (atomic cooldown for internal path)
+    async def track_set(key, value, ex=None, nx=False):
         redis_set_calls.append(key)
+        return True
+
+    # PR1: mock catalog get_event → return user-class EventDefinition
+    mock_defn = MagicMock()
+    mock_defn.notification_class = "user"
+    mock_defn.retired = False
 
     db = AsyncMock()
     db.flush = AsyncMock()
@@ -825,7 +839,7 @@ async def test_dispatch_external_cooldown_set_when_prepare_succeeds():
     db.execute = AsyncMock(return_value=dedup_result)
 
     with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
-         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_dispatcher.get_event", return_value=mock_defn), \
          patch("app.services.notification_rule_loader.deserialize_resolver", return_value=AsyncMock(return_value=[])), \
          patch("app.services.notification_dispatcher.notification_preference_service"), \
          patch("app.services.notification_dispatcher.safe_redis_exists", new=AsyncMock(return_value=False)), \
@@ -1359,14 +1373,23 @@ async def test_different_dedupe_keys_do_not_cooldown_block_each_other():
 
     redis_data = {}
 
-    async def tracking_redis_exists(key):
-        return key in redis_data
-
-    async def tracking_redis_set(key, value, ex=None):
+    # PR1: atomic SET NX — replaces separate EXISTS + SET
+    async def tracking_redis_set(key, value, ex=None, nx=False):
+        if nx:
+            if key in redis_data:
+                return None  # key exists → NX fails
+            redis_data[key] = value
+            return True  # key set successfully
         redis_data[key] = value
+        return True
 
     async def no_redis_incr(key):
         return 1
+
+    # PR1: mock catalog get_event → return user-class EventDefinition
+    mock_defn = MagicMock()
+    mock_defn.notification_class = "user"
+    mock_defn.retired = False
 
     db = AsyncMock()
     db.flush = AsyncMock()
@@ -1381,10 +1404,9 @@ async def test_different_dedupe_keys_do_not_cooldown_block_each_other():
     notif_ids_per_dispatch = []
 
     with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
-         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_dispatcher.get_event", return_value=mock_defn), \
          patch("app.services.notification_rule_loader.deserialize_resolver", return_value=internal_resolver), \
          patch("app.services.notification_dispatcher.notification_preference_service") as mock_pref, \
-         patch("app.services.notification_dispatcher.safe_redis_exists", tracking_redis_exists), \
          patch("app.services.notification_dispatcher.safe_redis_set", tracking_redis_set), \
          patch("app.services.notification_dispatcher.safe_redis_incr", no_redis_incr), \
          patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \
@@ -1436,14 +1458,23 @@ async def test_same_dedupe_key_is_cooldown_blocked():
 
     redis_data = {}
 
-    async def tracking_redis_exists(key):
-        return key in redis_data
-
-    async def tracking_redis_set(key, value, ex=None):
+    # PR1: atomic SET NX — replaces separate EXISTS + SET
+    async def tracking_redis_set(key, value, ex=None, nx=False):
+        if nx:
+            if key in redis_data:
+                return None  # key exists → NX fails (cooldown blocks)
+            redis_data[key] = value
+            return True
         redis_data[key] = value
+        return True
 
     async def no_redis_incr(key):
         return 1
+
+    # PR1: mock catalog get_event → return user-class EventDefinition
+    mock_defn = MagicMock()
+    mock_defn.notification_class = "user"
+    mock_defn.retired = False
 
     db = AsyncMock()
     db.flush = AsyncMock()
@@ -1461,10 +1492,9 @@ async def test_same_dedupe_key_is_cooldown_blocked():
         return {18: create_call_count}
 
     with patch("app.services.notification_dispatcher.get_rule_for_event", new=AsyncMock(return_value=config)), \
-         patch("app.services.notification_dispatcher.get_event_config", return_value=None), \
+         patch("app.services.notification_dispatcher.get_event", return_value=mock_defn), \
          patch("app.services.notification_rule_loader.deserialize_resolver", return_value=internal_resolver), \
          patch("app.services.notification_dispatcher.notification_preference_service") as mock_pref, \
-         patch("app.services.notification_dispatcher.safe_redis_exists", tracking_redis_exists), \
          patch("app.services.notification_dispatcher.safe_redis_set", tracking_redis_set), \
          patch("app.services.notification_dispatcher.safe_redis_incr", no_redis_incr), \
          patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \

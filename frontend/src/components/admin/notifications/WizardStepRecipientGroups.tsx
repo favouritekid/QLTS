@@ -57,12 +57,17 @@ export default function WizardStepRecipientGroups({
         <p className="text-sm text-muted-foreground">
           Chọn ai sẽ nhận thông báo và gửi qua kênh nào. Bạn có thể tạo nhiều nhóm với người nhận khác nhau.
         </p>
+        {groups.length > 1 && (
+          <p className="text-xs text-muted-foreground mt-1">
+            Nếu cùng một người thuộc nhiều nhóm, họ sẽ nhận thông báo từ nhóm có thứ tự thấp nhất cho mỗi kênh.
+          </p>
+        )}
       </div>
 
       {validationErrors && validationErrors.length > 0 && (
         <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 space-y-1">
           {validationErrors.map((err, i) => (
-            <p key={i} className="text-sm text-destructive">{"\u2022"} {err}</p>
+            <p key={i} className="text-sm text-destructive">{"•"} {err}</p>
           ))}
         </div>
       )}

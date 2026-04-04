@@ -105,10 +105,20 @@ async def safe_redis_exists(key: str) -> bool:
         return False
 
 
-async def safe_redis_set(key: str, value: str, ex: int):
-    """Set key trong Redis (an toàn qua circuit breaker)."""
+async def safe_redis_set(key: str, value: str, ex: int = None, nx: bool = False):
+    """Set key trong Redis (an toàn qua circuit breaker).
+
+    Args:
+        nx: If True, use SET NX (only set if key doesn't exist).
+            Returns True if key was set, False if already exists.
+    """
     try:
-        return await redis_breaker.call_async(redis_client.set, key, value, ex=ex)
+        kwargs = {}
+        if ex is not None:
+            kwargs["ex"] = ex
+        if nx:
+            kwargs["nx"] = True
+        return await redis_breaker.call_async(redis_client.set, key, value, **kwargs)
     except REDIS_BREAKER_EXCEPTIONS:
         log.error("Redis SET failed", key=key, exc_info=True)
         raise

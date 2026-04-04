@@ -1,6 +1,6 @@
 # Notification Module Refactor Blueprint
 
-> **Status:** Draft v3 — rollout safety + preview API fixed
+> **Status:** v7 — round 3 review complete, Zalo pre-merge + frontend follow-up tracked
 > **Last updated:** 2026-04-03
 
 ## Mục tiêu
@@ -17,13 +17,13 @@ Loại bỏ "dual source of truth" giữa registry code và DB rules. Thiết l�
 
 3 nguồn cùng quyết định behavior:
 
-| Nguồn | File | Vai trò | Số events |
-|-------|------|---------|-----------|
-| SystemEvents enum | `app/core/events.py` | Event existence + payload docs | 51+ |
-| Event metadata | `app/core/event_metadata.py` | Display name, variables, conditions (cho frontend) | 43+ |
-| Notification registry | `app/services/notification_registry.py` | Resolver, dedup, priority, link, template (runtime fallback) | 42 |
-| DB rules (seeded) | `notification_rule` table | Admin-configurable: enabled, title/message, channels | 26 |
-| Frontend constants | `wizard-constants.ts` | Hardcoded event list (fallback) | 25 |
+| Nguồn | File | Vai trò | Số events (approx.) |
+|-------|------|---------|---------------------|
+| SystemEvents enum | `app/core/events.py` | Event existence + payload docs | ~50 |
+| Event metadata | `app/core/event_metadata.py` | Display name, variables, conditions (cho frontend) | ~27 |
+| Notification registry | `app/services/notification_registry.py` | Resolver, dedup, priority, link, template (runtime fallback) | ~42 |
+| DB rules (seeded) | `notification_rule` table | Admin-configurable: enabled, title/message, channels | ~26 |
+| Frontend constants | `wizard-constants.ts` | Hardcoded event list (fallback) | ~25 |
 
 ### Dispatcher decision flow (3 đường — vấn đề)
 
@@ -58,17 +58,61 @@ Loại bỏ "dual source of truth" giữa registry code và DB rules. Thiết l�
 
 ## Thiết kế đích
 
-### Event classification
+### Event classification (3-tier)
 
-Không phải mọi `SystemEvents` đều là notification events. Phân loại:
+Không phải mọi `SystemEvents` đều là notification events. Catalog phân 3 lớp:
 
-| Classification | Events | Có DB rule? |
-|----------------|--------|-------------|
-| **User-notification events** | lead_assigned, payment_received, suspicious_login, ... (~42) | Bắt buộc |
-| **Broadcast-only events** | unit_created, program_updated, offering_deleted, ... (9) | Cấm tạo rule |
-| **Internal/future events** | Chưa có notification logic | Không bắt buộc |
+| Classification | Mô tả | DB rule | Metadata API | Admin UI | Invariant test | Ví dụ |
+|---|---|---|---|---|---|---|
+| **`user`** | Event có dispatch thật + admin cần config notification | Bắt buộc (sync tạo) | Có | Có | `all_notifiable_events_have_db_rule` | `lead_assigned`, `payment_received`, `suspicious_login` |
+| **`broadcast_only`** | Socket.IO real-time UI refresh, không phải user notification | Cấm tạo | Không | Không | Excluded | `unit_created`, `lead_updated`, `program_updated` |
+| **`internal_future`** | Business intent ghi nhận, chưa có dispatch/module thật | Không sync | Không | Không | Excluded | `dorm_room_assigned`, `ctv_lead_converted`, `fee_fully_paid` (future) |
 
-`BROADCAST_ONLY_EVENTS` đã tồn tại trong `notification_rule_crud_service.py:197-201`. Catalog sẽ tôn trọng classification này.
+**Promotion rule:** Event chỉ được promote từ `internal_future` → `user` khi:
+- có dispatch implementation thật
+- có payload contract rõ
+- có resolver semantics rõ
+- có lý do nghiệp vụ để admin cấu hình notification
+
+**Existing code reference:** `BROADCAST_ONLY_EVENTS` frozenset đã tồn tại trong `notification_rule_crud_service.py:197-201` (9 org events). Catalog mở rộng thêm `lead_updated` vào broadcast_only (decision D1).
+
+### EVENT_AUDIT_MATRIX classification mapping
+
+Source: `Backend_FastAPI/EVENT_AUDIT_MATRIX.md` (2026-04-03)
+
+**`user` events (~33 events có dispatch thật):**
+
+| Phase | Events | Notes |
+|---|---|---|
+| Lead | `lead_created`, `lead_assigned`, `lead_assignment_failed`, `lead_reassigned`, `lead_status_changed`, `lead_deleted`, `lead_restored`, `lead_imported`, `officer_availability_changed` | L9 `lead_updated` excluded → broadcast_only |
+| Consultation | `consultation_created`, `consultation_updated`, `consultation_deleted`, `consultation_reminder` | |
+| Admission | `application_created`, `application_status_changed`, `application_deleted` | A12/E3 dedupe cần chuẩn hóa |
+| Finance | `payment_received`, `payment_verified` | Only 2 with real dispatch |
+| CTV | `ctv_claim_submitted`, `ctv_claim_approved`, `ctv_claim_rejected`, `ctv_approved`, `ctv_suspended`, `ctv_commission_created`, `ctv_attribution_expiring`, `ctv_attribution_expired`, `ctv_weekly_summary` | CTV10 `ctv_lead_converted` excluded → internal_future |
+| System | `system_alert`, `system_announcement`, `user_role_changed`, `user_deactivated`, `pipeline_config_updated`, `holiday_calendar_incomplete` | |
+| Security | `suspicious_login` | |
+
+**`broadcast_only` events (10 events):**
+
+| Event | Reason |
+|---|---|
+| `unit_created`, `unit_updated`, `unit_deleted` | Org broadcast (existing BROADCAST_ONLY_EVENTS) |
+| `program_created`, `program_updated`, `program_deleted` | Org broadcast |
+| `offering_created`, `offering_updated`, `offering_deleted` | Org broadcast |
+| `lead_updated` | D1: UI real-time sync, quá rộng cho notification (L9) |
+
+**`internal_future` events (~8+ events):**
+
+| Event | Reason | Promote khi |
+|---|---|---|
+| `dorm_room_assigned` | Module chưa build | Dorm module implemented |
+| `dorm_maintenance_request` | Module chưa build | Dorm module implemented |
+| `asset_maintenance_alert` | Module chưa build | Asset module implemented |
+| `asset_checked_out` | Module chưa build | Asset module implemented |
+| `dorm_fee_created` | Module chưa build, wrong domain (F4) | Dorm module, fix category |
+| `ctv_lead_converted` | Dead config, không ai dispatch (CTV10) | Dispatch implementation |
+| `payment_overdue` | Registry-only, không có beat task (F3) | Beat task implemented |
+| Future finance events | F5-F10: `fee_calculated`, `invoice_issued`, `payment_rejected`, `fee_fully_paid`, `refund_processed`, `application_fee_paid` | Dispatch implemented per event |
 
 ### Phân quyền dữ liệu
 
@@ -161,7 +205,9 @@ for action in sorted(action_configs, key=lambda a: a.step):  # step order
 
 #### 1.1 Tạo `app/core/event_catalog.py`
 
-Merge data từ `event_metadata.py` (display/variables) + `notification_registry.py` (resolver/dedup/priority/link):
+Merge data từ `event_metadata.py` (display/variables) + `notification_registry.py` (resolver/dedup/priority/link).
+
+> **BLOCKER — CTV metadata khuyết:** `event_metadata.py` hiện thiếu 10 CTV events (`ctv_claim_submitted` … `ctv_weekly_summary`). Registry có runtime config, nhưng catalog cần display_name, variables, condition_fields cho frontend wizard. **PR1 phải thêm CTV metadata trước khi build catalog entries.** Xem section 1.9.
 
 ```python
 @dataclass(frozen=True)
@@ -184,17 +230,33 @@ class EventDefinition:
     dedup_key_template: Optional[str] = None
     link_strategy: Optional[str] = None    # "/leads/${lead_id}"
 
-    # Classification
-    notification_class: str = "user"       # "user" | "broadcast_only" | "internal"
-    retired: bool = False
+    # Classification (3-tier)
+    notification_class: str = "user"       # "user" | "broadcast_only" | "internal_future"
+    retired: bool = False                  # True = event permanently decommissioned
 ```
 
 Public API:
 - `get_event(event) -> Optional[EventDefinition]`
+- `get_event_by_key(key: str) -> Optional[EventDefinition]`
 - `get_notifiable_events() -> List[EventDefinition]` — only `notification_class="user"` + not retired
 - `get_active_events() -> List[EventDefinition]` — all non-retired (including broadcast)
 - `render_dedup_key(event, payload) -> Optional[str]`
 - `render_link(event, payload) -> Optional[str]`
+
+**File structure (~500 lines):**
+```
+1. Imports + EventDefinition dataclass + helpers (render_link, render_dedup_key)
+2. Lead events (~9 entries)
+3. Consultation events (~4 entries)
+4. Admission events (~3 entries)
+5. Finance events — user (~2 entries) + internal_future (~6 entries)
+6. CTV events — user (~9 entries) + internal_future (~1 entry)
+7. System / Security events (~7 entries)
+8. Broadcast-only events (~10 entries)
+9. Internal/future events — Dorm, Asset (~4 entries)
+10. EVENT_CATALOG dict assembly
+11. Public API functions
+```
 
 #### 1.2 Sync chạy trong entrypoint, trước server start
 
@@ -221,6 +283,14 @@ echo "=== Migrations complete. Starting application ==="
 exec "$@"
 ```
 
+**Sync output contract** — script phải log summary sau khi chạy:
+```
+Sync result: created=3, skipped=30, archived=0, missing_user_rules=0, orphan_rules=0
+```
+- `missing_user_rules > 0` → log ERROR (sync failed to create a rule cho user event)
+- `orphan_rules > 0` → log WARNING (DB has rules for events not in catalog)
+- Entrypoint `set -e` sẽ fail container nếu sync script exit non-zero
+
 Lý do chọn entrypoint thay vì alembic data migration:
 - Sync là idempotent operation, chạy mỗi deploy — phù hợp với entrypoint
 - Alembic data migration chỉ chạy 1 lần rồi đánh dấu applied — không tự heal nếu ai đó delete rule
@@ -230,14 +300,10 @@ Lý do chọn entrypoint thay vì alembic data migration:
 **`sync_notification_rules` CLI wrapper:**
 
 ```python
-# app/scripts/sync_notification_rules.py
-# Cuối file — CLI entrypoint:
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+# app/scripts/sync_notification_rules.py — CLI entrypoint (bottom of file):
 
 async def main():
+    import sys
     from app.config import settings
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -248,6 +314,14 @@ async def main():
         result = await sync_notification_rules(db)
         print(f"Sync result: {result}")
     await engine.dispose()
+
+    if result.get("missing_user_rules", 0) > 0:
+        print(f"ERROR: {result['missing_user_rules']} user events still missing rules")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
 ```
 
 #### 1.3 Dispatcher single path
@@ -327,6 +401,8 @@ async def delete_rule(db, rule):
     # ... post_commit callback unchanged
 ```
 
+> **Note:** `BadRequest` là service-layer domain exception (`app/utils/exceptions.py`), không phải `HTTPException`. Router exception handler translate → HTTP 400. Implementation thật nên cân nhắc dùng `BusinessRuleViolation` nếu muốn sạch semantics hơn, vì đây là business rule chứ không phải input validation.
+
 #### 1.6 Metadata endpoint serve từ catalog
 
 File: `app/routers/notification_rules.py`
@@ -338,7 +414,28 @@ from app.core.event_catalog import get_notifiable_events
 # Chỉ serve "user" notification events, không broadcast
 ```
 
-#### 1.7 Deprecate files cũ
+#### 1.7 EVENT_AUDIT_MATRIX items addressed in PR1
+
+| Matrix ID | Issue | PR1 action |
+|---|---|---|
+| L9 | `lead_updated` semantics unclear | Set `notification_class="broadcast_only"` in catalog |
+| L6, L10, L11 | Resolver recipient-fit partial | Document correct `allowed_resolvers` in catalog; actual resolver config is DB-owned |
+| A12 / E3 | Enrollment dedupe_key conflict | Standardize `dedup_key_template` in catalog: `app:${application_id}:status:enrolled` for both paths |
+| Finding 4 | `LEAD_STATUS_CHANGED` dual semantics | Document in catalog `description`; no event split |
+| CTV10 | `ctv_lead_converted` dead config | Set `notification_class="internal_future"` — no DB rule, no UI |
+| F4 | `dorm_fee_created` wrong domain | Set `category="dorm"`, `notification_class="internal_future"` |
+| Dorm/Asset | 4 events, modules not built | Set `notification_class="internal_future"` |
+| F3 | `payment_overdue` registry-only | Set `notification_class="internal_future"` — promote when beat task exists |
+| F5-F10 | Future finance events | Add to catalog as `internal_future` if needed for intent tracking |
+
+**Not in PR1 scope** (follow-up PRs):
+- Arch-2: `payment_service` `safe_dispatch()` pattern fix
+- Arch-3: Admission atomic double-dispatch
+- A15/A16: Missing `withdrawn`/`overridden` dispatch
+- GAP-C1/C2/C3: Consultation → lead cascade
+- F3/F8: Beat task + finance event implementation
+
+#### 1.8 Deprecate files cũ
 
 | File | Action |
 |------|--------|
@@ -346,19 +443,120 @@ from app.core.event_catalog import get_notifiable_events
 | `event_metadata.py` | Deprecation header, redirect sang catalog |
 | `notification_rule_loader.py` | Xóa `has_rule_override_for_event()` |
 
-#### PR1 files
+#### 1.9 Expanded scope — runtime fixes gộp vào PR1
+
+Các fix dưới đây phát hiện từ full codebase review, đều chạm cùng dispatcher/loader path mà PR1 đang refactor. Gộp vào PR1 thay vì mở PR riêng.
+
+**1.9a — Thêm CTV metadata (BLOCKER)**
+
+`event_metadata.py` hiện thiếu 10 CTV events mà `notification_registry.py` đã có runtime config. Catalog cần display_name, variables, condition_fields cho mỗi event.
+
+Events cần thêm: `ctv_claim_submitted`, `ctv_claim_approved`, `ctv_claim_rejected`, `ctv_approved`, `ctv_suspended`, `ctv_lead_converted`, `ctv_commission_created`, `ctv_attribution_expiring`, `ctv_attribution_expired`, `ctv_weekly_summary`.
+
+Source data: payload schemas trong `events.py` (lines 718-900) + resolver config trong `notification_registry.py` (lines 630-780).
+
+**1.9b — Bỏ nested `db.commit()` trong dispatcher `_post_commit`**
+
+File: `notification_dispatcher.py:~1081`
+
+Hiện tại: `_post_commit` callback gọi `await db.commit()` lần 2 sau khi router đã commit. Vi phạm "caller owns transaction" contract (line 477).
+
+Fix: Move browser delivery status updates vào trước flush trong main dispatch path, hoặc dùng separate DB session trong callback:
+
+```python
+# Option: separate session trong callback
+async def _post_commit():
+    async with AsyncSessionLocal() as new_db:
+        await notification_delivery_service.mark_delivery_ids_sent(new_db, sent_ids)
+        await new_db.commit()
+```
+
+**1.9c — Cooldown race condition → atomic `SET NX`**
+
+File: `notification_dispatcher.py` — 6 locations (lines 659/669, 860/877, 927/973)
+
+Hiện tại: check `EXISTS` rồi `SET` tách rời → concurrent dispatches có thể duplicate.
+
+Fix: Thay thế tất cả cooldown check+set bằng atomic `SET NX`:
+
+```python
+# Trước (2 calls, race window):
+if await safe_redis_exists(cooldown_key):
+    continue
+# ... later ...
+await safe_redis_set(cooldown_key, "1", ex=cooldown_seconds)
+
+# Sau (1 atomic call):
+acquired = await safe_redis_set(cooldown_key, "1", nx=True, ex=cooldown_seconds)
+if not acquired:
+    continue  # user already in cooldown
+```
+
+**1.9d — Template N+1 query trong rule loader**
+
+File: `notification_rule_loader.py:~655-695`
+
+Hiện tại: `get_rule_for_event()` dùng `selectinload(actions)` nhưng không load `template`. Nếu rule có `template_id`, query thứ 2 chạy mỗi dispatch.
+
+Fix: Thêm eager load:
+```python
+result = await db.execute(
+    select(models.NotificationRule)
+    .options(
+        selectinload(models.NotificationRule.actions),
+        selectinload(models.NotificationRule.template),  # ADD
+    )
+    .where(...)
+)
+```
+
+**1.9e — Template update không invalidate rule cache**
+
+File: `notification_template_service.py:~114`
+
+Hiện tại: Admin update template → CRUD service post-commit callback không invalidate cached rules dùng template đó.
+
+Fix: Khi update template, query rules có `template_id` → invalidate mỗi event:
+```python
+# Trong template update post-commit callback:
+rules = await db.execute(
+    select(models.NotificationRule.event)
+    .where(models.NotificationRule.template_id == template.id)
+)
+for (event_name,) in rules.all():
+    await invalidate_rule_cache(event_name)
+```
+
+**1.9f — Resolver deserialization fail → explicit error thay vì silent None**
+
+File: `notification_rule_loader.py:672-683`
+
+Hiện tại: `deserialize_resolver()` fail → `return None` → caller treats as "no rule" → fallback behavior.
+
+Fix: Raise explicit error, dispatcher handles:
+```python
+except Exception as e:
+    log.error("Failed to deserialize resolver for rule", rule_id=rule.id, error=str(e))
+    raise NotificationConfigError(f"Rule {rule.id} has invalid recipient_config: {e}")
+```
+
+Dispatcher catch `NotificationConfigError` → log error + skip (no fallback, no silent behavior).
+
+#### PR1 files (expanded)
 
 | File | Action |
 |------|--------|
-| `app/core/event_catalog.py` | New (~500 lines) |
+| `app/core/event_catalog.py` | New (~550 lines, +50 for CTV entries) |
 | `docker-entrypoint.sh` | Add sync command before exec (~2 lines) |
-| `app/services/notification_dispatcher.py` | Modify (~50 lines) |
+| `app/services/notification_dispatcher.py` | Modify: single path + remove nested commit + atomic cooldown (~80 lines) |
 | `app/services/notification_rule_crud_service.py` | Remove browser constraint + add delete guard (~15 lines) |
-| `app/services/notification_rule_loader.py` | Remove `has_rule_override_for_event` (-17 lines) |
+| `app/services/notification_rule_loader.py` | Remove `has_rule_override_for_event` + add template eager load + explicit resolver error (-17, +10 lines) |
+| `app/services/notification_template_service.py` | Add rule cache invalidation on template update (~10 lines) |
 | `app/scripts/sync_notification_rules.py` | New (~120 lines) |
 | `app/services/notification_registry.py` | Deprecate header |
 | `app/core/event_metadata.py` | Deprecate redirect |
 | `app/routers/notification_rules.py` | Modify metadata endpoint |
+| `app/utils/exceptions.py` | Add `NotificationConfigError` if not exists (~5 lines) |
 
 ---
 
@@ -447,6 +645,8 @@ Frontend Step 4 (FinalPreviewSection):
 - Optional: cho admin nhập sample values để preview realistic hơn
 - Gọi `POST /notification-rules/preview` với payload → hiển thị rendered content per action
 
+> **Safety:** Preview output PHẢI render như plain text trên frontend. Không dùng `dangerouslySetInnerHTML`. Backend preview endpoint không sanitize HTML — contract là text/template preview. Nếu sau này hỗ trợ rich HTML email preview, cần sanitize policy riêng.
+
 #### 2.2 Bỏ SYSTEM_EVENTS fallback
 
 File: `wizard-constants.ts` — xóa SYSTEM_EVENTS array, giữ category/resolver/channel display metadata
@@ -520,34 +720,46 @@ docker compose exec backend python -m app.scripts.sync_notification_rules
 File: `tests/unit/test_notification_contract.py` (new)
 
 ```
-TestCatalogCompleteness:
-    - test_all_notifiable_events_in_catalog
-    - test_broadcast_events_excluded_from_notifiable
+TestCatalogClassification:
+    - test_user_events_have_dispatch_in_codebase          # "user" events must have real emitters
+    - test_broadcast_only_events_excluded_from_notifiable  # broadcast_only never in get_notifiable_events()
+    - test_internal_future_events_excluded_from_notifiable # internal_future never in get_notifiable_events()
     - test_no_duplicate_event_keys
-    - test_active_events_have_required_fields
-    - test_dedup_templates_use_valid_variables
+    - test_active_events_have_required_fields              # display_name, category, default_resolver
 
 TestCatalogDBParity:
-    - test_all_notifiable_events_have_db_rule    # chỉ "user" class, không broadcast
-    - test_no_orphan_db_rules
+    - test_all_user_events_have_db_rule       # ONLY notification_class="user"
+    - test_no_orphan_db_rules                 # no DB rule for events not in catalog
     - test_no_enabled_rules_for_retired_events
+    - test_internal_future_events_have_no_rules  # internal_future must not sync rules
+
+TestDedup:
+    - test_dedup_templates_use_valid_variables    # dedup template vars ⊆ event variables
+    - test_dedup_templates_unique_per_event_family # A12/E3: no conflicting patterns
 
 TestDispatcherInvariants:
     - test_missing_rule_does_not_fallback
     - test_no_registry_import_in_dispatcher
     - test_retired_event_does_not_dispatch
     - test_broadcast_event_emits_domain_only
+    - test_internal_future_event_does_not_dispatch
     - test_cross_action_user_dedup_step_order_precedence
 
 TestDeleteGuard:
-    - test_cannot_delete_active_event_rule
+    - test_cannot_delete_user_event_rule      # active user event → 400
     - test_can_delete_retired_event_rule
     - test_can_delete_orphan_rule
 ```
 
-Invariant scope: `get_notifiable_events()` (chỉ `notification_class="user"`), không phải mọi `SystemEvents`.
+**Invariant scope rule:**
+- Hard invariant (CI fail): chỉ `notification_class="user"` events
+- `broadcast_only`: excluded from all parity checks
+- `internal_future`: excluded — no DB rule, no dispatch, no UI. Chỉ ghi nhận intent trong catalog
+- Dead config warning (không fail CI): event trong catalog `internal_future` nhưng có enabled DB rule → warning log
 
-#### 3.3 E2E selector fixes
+#### 3.3 E2E selector fixes (initial targeted, not exhaustive)
+
+Known fragile selectors to fix first:
 
 | Spec | Fix |
 |------|-----|
@@ -558,6 +770,8 @@ Invariant scope: `get_notifiable_events()` (chỉ `notification_class="user"`), 
 | `notification-rule-create.spec.ts:147` | Vietnamese text → `getByTestId("add-recipient-group")` |
 
 Components cần thêm `data-testid` attributes (~8 files).
+
+> **Note:** Danh sách trên là initial targeted fixes. Khi implement, audit full spec files cho additional brittle text/CSS selectors.
 
 #### 3.4 Playwright config
 
@@ -601,6 +815,25 @@ Production stable with single source of truth
 
 **Rollout safety:** PR1 deploy = backend restart = `docker-entrypoint.sh` runs `alembic upgrade head` + `sync_notification_rules` (single process, before gunicorn fork). Sync tạo missing rules TRƯỚC khi workers nhận traffic. Không có khoảng trống, không race condition.
 
+## Rollback Strategy
+
+**Fail mode: fail-closed.** Chấp nhận container không start còn hơn silently gửi notification sai.
+
+**`docker-entrypoint.sh` dùng `set -e`:**
+- Nếu `alembic upgrade head` fail → container exit, app không start
+- Nếu `sync_notification_rules` fail → container exit, app không start
+- Không có trạng thái nửa vời: hoặc chạy đúng hoặc không chạy
+
+**Rollback procedure nếu deploy fail:**
+1. Deploy lại image/commit trước PR1 (`git checkout` + rebuild)
+2. Sync là idempotent + additive — rerun an toàn sau khi fix
+3. DB rules đã tạo bởi sync sẽ giữ nguyên (không xung đột với code cũ vì code cũ fallback registry)
+
+**Runtime fail guard:**
+- Dispatcher log `"No enabled DB rule for active event"` = signal cần monitor
+- Production nên alert nếu log này xuất hiện sau PR1 deploy
+- Monitoring layers: CI chặn drift ở build time → sync chặn ở deploy time → dispatcher error log chặn ở runtime
+
 ## Verification Checklist
 
 ### Sau PR1 deploy:
@@ -611,6 +844,11 @@ Production stable with single source of truth
 - [ ] Delete active event rule → 400 Bad Request
 - [ ] Multi-browser actions pass CRUD validation
 - [ ] Cross-action dedup: user ở 2 groups chỉ nhận 1 browser notification (step thấp thắng)
+- [ ] CTV events có đầy đủ metadata trong catalog (display_name, variables, condition_fields)
+- [ ] Dispatcher `_post_commit` callback không chứa `db.commit()` trực tiếp
+- [ ] Cooldown dùng atomic `SET NX` — không còn tách `EXISTS` + `SET`
+- [ ] Template update invalidates cached rules dùng template đó
+- [ ] Resolver deserialization fail → explicit error, không return None im lặng
 
 ### Sau PR2 deploy:
 - [ ] Frontend không dùng SYSTEM_EVENTS fallback
@@ -640,6 +878,87 @@ Production stable with single source of truth
 | Invariant scope = notifiable events only | Broadcast-only events (9 org events) cấm tạo rule. | 2026-04-03 |
 | Preview API trong PR2 | Flow nhiều group/channel cần preview thật, không đủ nếu chỉ UI static. | 2026-04-03 |
 | Preview sample_payload = frontend-provided | EventDefinition không có sample values; admin biết context. | 2026-04-03 |
+| D1: `lead_updated` = broadcast_only | UI real-time sync, quá rộng cho notification. Nếu cần notify, tạo event hẹp hơn. | 2026-04-03 |
+| D2: Unimplemented modules = internal_future | Giữ business intent, không tạo dead admin-facing rules. Promote khi module build. | 2026-04-03 |
+| D3: `finance_events.py` dead code = separate PR | Không nhồi vào refactor. Ưu tiên remove nếu không plan wire-up. | 2026-04-03 |
+| D4: Future finance events = internal_future | Chỉ promote sang `user` khi có dispatch implementation thật. | 2026-04-03 |
+| 3-tier classification = final | `user` / `broadcast_only` / `internal_future`. Scope rule chốt. | 2026-04-03 |
+| D5: Expand PR1 scope, no PR0 | Runtime fixes (cooldown, commit, template cache, CTV metadata) cùng chạm dispatcher/loader path → gộp vào PR1 thay vì PR riêng. | 2026-04-03 |
+| D6: CTV metadata = blocker | 10 CTV events thiếu metadata. Catalog merge metadata+registry → CTV entries sẽ khuyết display info nếu không thêm. | 2026-04-03 |
+| D7: Cooldown atomic SET NX | Check+set tách rời có race condition. PR1 touching dispatcher → fix luôn. | 2026-04-03 |
+| D8: Nested commit = architecture violation | `_post_commit` callback commit lần 2 vi phạm "caller owns transaction". Fix trong PR1 dispatcher refactor. | 2026-04-03 |
+| D9: Round 3 confirms module health | Full codebase review (delivery, channels, resolvers, preferences, consents, dispatch callers, Zalo, frontend inbox): no new critical issues. 52 router dispatch calls all correct. | 2026-04-03 |
+| D10: Zalo polish ≠ blueprint scope | ZNS-1/2/3 belong to `feature/zalo-zns-phase1` branch, not blueprint PRs. Track separately. | 2026-04-03 |
+| D11: Frontend race conditions = P4 | Socket listener cleanup + mark-as-read races are real but don't block PR1/PR2/PR3. Tracked as FE-7/FE-8. | 2026-04-03 |
+
+## Follow-up Roadmap (outside blueprint PRs)
+
+### P1 — Business-critical notification gaps
+
+| ID | Gap | Scope | Trigger |
+|---|---|---|---|
+| F3 | `payment_overdue` Celery Beat task | New beat task + promote event to `user` | Finance sprint |
+| F8 | `fee_fully_paid` SystemEvent + dispatch | New event + dispatch in `payment_service` | Finance sprint |
+| A15 | `profile_withdrawn` dispatch missing | 2x `safe_dispatch()` in admission router | Admission sprint |
+| A16 | `profile_overridden` dispatch missing | 2x `safe_dispatch()` in admission router | Admission sprint |
+| GAP-C1/C2/C3 | Consultation → `lead_status_changed` cascade | Conditional dispatch when `status_updated=True` | Consultation sprint |
+
+### P2 — Coverage expansion
+
+| ID | Gap | Scope |
+|---|---|---|
+| F5-F10 | Finance events (fee_calculated, invoice_issued, payment_rejected, refund_processed, application_fee_paid) | New SystemEvents + dispatch + promote to `user` |
+| CTV10 | `ctv_lead_converted` dispatch | Dispatch when lead status changes for referrer leads |
+| E5 | Drop student → `APP_STATUS_CHANGED` | Add dispatch for consistency |
+| A12/E3 | Enrollment dedupe normalization | Catalog fix in PR1, verify runtime |
+
+### P3 — Architecture cleanup
+
+| ID | Gap | Scope |
+|---|---|---|
+| Arch-1 | `finance_events.py` DomainEvent dead code | Decision: remove or wire-up. Recommend remove. |
+| Arch-2 | `payment_service` uses `safe_dispatch()` in service | Refactor to `dispatch()` + callback pattern |
+| Arch-3 | Admission double-dispatch not atomic | Bundle into savepoint |
+
+### P4 — Frontend quality (PR2+ scope)
+
+| ID | Gap | Scope |
+|---|---|---|
+| FE-1 | `Control<any>` + `z.unknown()` defeats type safety | Type form schema properly in DefaultContentSection, NotificationRuleEditor |
+| FE-2 | NaN coercion in condition builder | `parseInt("abc") \|\| 0` → silent 0. Add `isNaN()` check + user feedback |
+| FE-3 | Missing metadata loading/error state | Show skeleton/error banner when useNotificationMetadata fails |
+| FE-4 | Accessibility: icon-only buttons | StepIndicator buttons need `aria-label`, screen reader text |
+| FE-5 | E2E: comprehensive `data-testid` audit | All wizard interactive elements need test IDs |
+| FE-6 | E2E: Vietnamese text selector hacks | `notification-rule-create.spec.ts` partial text matching (lines 203-211) |
+| FE-7 | Socket listener cleanup race condition | `SocketHandler.tsx:1020-1098` — 30+ listeners, re-run trước cleanup → memory leak. Guard via Set |
+| FE-8 | Mark-as-read mutation race with Socket.IO | `useNotifications.ts:88-119` — optimistic update + socket event cùng lúc → count sai. Server nên return state |
+| FE-9 | Quiet hours frontend validation missing | `NotificationSettingsClient.tsx:60-61` — no start < end check |
+| FE-10 | Delivery dashboard no auto-refresh | `DeliveryCharts.tsx` — stale data tới 5min. Set `refetchInterval: 15_000` |
+| FE-11 | Alert banner dismissal per-global | `AlertBanner.tsx:20-24` — dismiss 1 alert = suppress all 5min. Fix: per-issue tracking |
+| FE-12 | Event group toggle race condition | `NotificationSettingsClient.tsx:99-114` — rapid clicks → out-of-order mutations |
+
+### P5 — Operational improvements (deferred)
+
+| ID | Gap | Scope |
+|---|---|---|
+| Ops-1 | Redis key bloat from per-user rate limiting | Switch to hash buckets per hour |
+| Ops-2 | No optimistic locking on rule update | Add `updated_at` conflict detection in CRUD service |
+| Ops-3 | Exception taxonomy (`BadRequest` for everything) | Use `BusinessRuleViolation`, `ConflictError`, `ResourceNotFoundError` per domain |
+| Ops-4 | `app/tasks/__init__.py` missing delivery_tasks exports | Add exports for clarity (autodiscover works but unclear) |
+| Ops-5 | External resolver queries load full objects | `notification_recipients.py:77` — change to scalar select for email/phone only |
+| Ops-6 | `is_quiet_hours()` await unnecessary | `notification_preference_service.py:260` — sync function, remove `await` |
+| Ops-7 | `type_preferences` JSON no schema validation | `notification_preference.py` — malformed JSON → silent `True` fallback |
+| Ops-8 | `bulk_upsert()` consent not truly bulk | `notification_consent_repository.py:111-132` — loops individual upserts |
+
+### Zalo ZNS pre-merge checklist (`feature/zalo-zns-phase1`)
+
+Items to address before merging the Zalo ZNS branch. Independent of blueprint refactor PRs.
+
+| ID | Issue | File(s) | Action |
+|---|---|---|---|
+| ZNS-1 | Error classification uses string matching on `ChannelResult.error_message` | `delivery_tasks.py:29-53` | Refactor to use `ZaloSendResult.error_code` (int) passed through `ChannelResult`. Zalo channel already returns structured `error_code` via `ZaloSendResult` (`zalo.py:40,248`); issue is downstream classification in `delivery_tasks.py` still string-matches `"Zalo error -216"` etc. |
+| ZNS-2 | Webhook test coverage minimal | `test_zalo_webhook.py` (57 lines) | Add tests: delivery status update (msg_id lookup), tracking_id fallback, error_code != 0 → failed transition, quota sync after send |
+| ZNS-3 | No startup validation for Zalo credentials | `config.py:441-458` | Add cross-field check: if `ZALO_ENABLED=True` then `ZALO_APP_SECRET`, `ZALO_OA_ID`, `ZALO_REFRESH_TOKEN` must be non-empty. Fail fast at startup. |
 
 ## Residual After Refactor
 
@@ -648,3 +967,18 @@ Production stable with single source of truth
 - `reset_notification_rules_dev.py` — replace bằng `sync_notification_rules` cho dev seed
 - `seed_notification_rules.py` — deprecated, sync command thay thế
 - `link_template` DB column — dead data, xóa trong migration riêng khi sẵn sàng
+
+## Scope Rule
+
+Blueprint refactor này không cố fix toàn bộ missing business events.
+
+Nó làm 3 việc:
+1. Chốt source of truth (catalog + DB, single path)
+2. Làm sạch dispatcher/runtime (no fallback, no hidden behavior)
+3. Tạo nền catalog + UI + invariant để business event work sau này không drift
+
+Business events chỉ promote thành `user` notification events khi:
+- có dispatch implementation thật
+- có payload contract rõ
+- có resolver semantics rõ
+- có lý do nghiệp vụ để admin cấu hình notification

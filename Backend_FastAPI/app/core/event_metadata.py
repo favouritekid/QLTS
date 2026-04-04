@@ -1,5 +1,17 @@
 # app/core/event_metadata.py
 """
+⚠️ DEPRECATED (PR1 — notification refactor)
+
+This module is superseded by ``app.core.event_catalog`` which now provides
+both display metadata AND technical config in a single ``EventDefinition``.
+
+The metadata router now serves from ``event_catalog.get_notifiable_events()``
+instead of ``get_all_events_metadata()``.
+
+Kept temporarily for backward compatibility with any code that still
+imports ``EventVariable``, ``ConditionField``, or ``EventMetadata``.
+
+--- Original docstring ---
 ✅ NOTIFICATION 2.0 - PHASE 2: Event Metadata Registry
 
 Derived contract defining metadata for admin UI and frontend rule builders.

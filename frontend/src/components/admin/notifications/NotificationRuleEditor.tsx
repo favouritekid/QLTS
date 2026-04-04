@@ -55,7 +55,6 @@ import {
   resolveFieldAlias,
 } from "./wizard-utils";
 import {
-  SYSTEM_EVENTS,
   RECIPIENT_OPTIONS,
   EXTERNAL_RESOLVER_FALLBACK,
   SUPPORTED_INTERNAL_RESOLVERS,
@@ -87,7 +86,7 @@ const formSchema = z.object({
   title_template: z.string().min(1, "Vui lòng nhập tiêu đề"),
   message_template: z.string().min(1, "Vui lòng nhập nội dung"),
   notification_type: z.enum(["info", "success", "warning", "error"]),
-  link_template: z.string().optional(),
+  // PR2: link_template removed — link is code-owned (catalog)
   channels: z.array(z.string()),
   recipient_config: z.record(z.string(), z.unknown()),
   condition: z.record(z.string(), z.unknown()).nullable(),
@@ -156,7 +155,7 @@ export function NotificationRuleEditor({
   const [recipientGroups, setRecipientGroups] = useState<RecipientGroup[]>([createInternalGroup()]);
 
   // Data hooks
-  const { data: metadata } = useNotificationMetadata();
+  const { data: metadata, isLoading: metadataLoading, isError: metadataError } = useNotificationMetadata();
   const { data: existingRule, isLoading: loadingRule } = useNotificationRule(ruleId);
   const createMutation = useCreateNotificationRule();
   const updateMutation = useUpdateNotificationRule();
@@ -169,7 +168,6 @@ export function NotificationRuleEditor({
       title_template: "",
       message_template: "",
       notification_type: "info",
-      link_template: "",
       channels: ["browser"],
       recipient_config: { resolver_type: "lead_owner", params: {} },
       condition: null,
@@ -187,7 +185,6 @@ export function NotificationRuleEditor({
       title_template: existingRule.title_template,
       message_template: existingRule.message_template,
       notification_type: existingRule.notification_type as "info" | "success" | "warning" | "error",
-      link_template: existingRule.link_template ?? "",
       channels: existingRule.channels,
       recipient_config: existingRule.recipient_config,
       condition: existingRule.condition,
@@ -251,7 +248,7 @@ export function NotificationRuleEditor({
   // ====== Dynamic data from metadata ======
 
   const dynamicEvents = useMemo<EventOption[]>(() => {
-    if (!metadata?.events) return SYSTEM_EVENTS;
+    if (!metadata?.events) return [];  // PR2: loading state, no hardcoded fallback
     return metadata.events.map((event) => ({
       value: event.event,
       label: event.display_name,
@@ -285,18 +282,26 @@ export function NotificationRuleEditor({
 
   const dynamicResolverTypes = useMemo<RecipientOption[]>(() => {
     if (!metadata?.resolver_types) return RECIPIENT_OPTIONS;
+
+    // PR2: Filter by selected event's allowed_resolvers (if available)
+    const selectedMeta = selectedEvent
+      ? metadata.events?.find((e) => e.event === selectedEvent)
+      : null;
+    const allowed = selectedMeta?.allowed_resolvers;
+
     return metadata.resolver_types
       .filter((resolver) =>
         SUPPORTED_INTERNAL_RESOLVERS.includes(
           resolver.value as (typeof SUPPORTED_INTERNAL_RESOLVERS)[number],
         ),
       )
+      .filter((resolver) => !allowed || allowed.includes(resolver.value))
       .map((resolver) => ({
         value: resolver.value,
         label: resolver.label,
         description: resolver.description,
       }));
-  }, [metadata]);
+  }, [metadata, selectedEvent]);
 
   const selectedEventData = useMemo(() => {
     return dynamicEvents.find((e) => e.value === selectedEvent);
@@ -385,7 +390,6 @@ export function NotificationRuleEditor({
         title_template: data.title_template,
         message_template: data.message_template,
         notification_type: data.notification_type,
-        link_template: data.link_template ?? "",
       };
 
       const submitData = mapToAPI(recipientGroups, defaultContent, trigger);
@@ -619,6 +623,27 @@ export function NotificationRuleEditor({
                 {/* STEP 1: Trigger */}
                 {currentStep === 1 && (
                   <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
+                    {/* PR2: Loading/error state for metadata */}
+                    {metadataLoading && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground p-4 rounded-lg border">
+                        <span className="animate-spin">&#9696;</span>
+                        Đang tải danh sách sự kiện...
+                      </div>
+                    )}
+                    {metadataError && (
+                      <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4">
+                        <p className="text-sm text-destructive">
+                          Không thể tải metadata. Vui lòng kiểm tra kết nối và thử lại.
+                        </p>
+                      </div>
+                    )}
+                    {!metadataLoading && !metadataError && dynamicEvents.length === 0 && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                        <p className="text-sm text-amber-800">
+                          Không có sự kiện nào khả dụng. Vui lòng liên hệ quản trị viên.
+                        </p>
+                      </div>
+                    )}
                     <TriggerSection
                       value={form.watch("event")}
                       onChange={(v) => form.setValue("event", v)}
@@ -650,7 +675,7 @@ export function NotificationRuleEditor({
                     {shouldShowStepErrors(1) && stepErrors.step1.length > 0 && (
                       <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 space-y-1">
                         {stepErrors.step1.map((err, i) => (
-                          <p key={i} className="text-sm text-destructive">{"\u2022"} {err}</p>
+                          <p key={i} className="text-sm text-destructive">{"•"} {err}</p>
                         ))}
                       </div>
                     )}
@@ -666,6 +691,7 @@ export function NotificationRuleEditor({
                       onInsertVariable={insertVariable}
                       titleTemplate={titleTemplate}
                       messageTemplate={messageTemplate}
+                      linkStrategy={selectedEventMetadata?.link_strategy}
                     />
                   </div>
                 )}
@@ -699,6 +725,33 @@ export function NotificationRuleEditor({
                       }
                       enabled={form.getValues("enabled")}
                       onEnabledChange={(checked) => form.setValue("enabled", checked)}
+                      event={selectedEvent}
+                      messageTemplate={form.getValues("message_template") || ""}
+                      actions={(() => {
+                        // Build actions with same step/branch_key contract as mapToAPI
+                        let step = 0;
+                        return recipientGroups.flatMap((g) =>
+                          g.channels.map((ch) => {
+                            step++;
+                            return {
+                              step,
+                              channel: ch.channel,
+                              branch_key: `${g.group_key}_${ch.channel}`,
+                              content_mode: ch.content_mode ?? null,
+                              content_override: ch.content_override ?? null,
+                              delay_minutes: ch.delay_minutes ?? 0,
+                              template_code: ch.template_code ?? null,
+                            };
+                          })
+                        );
+                      })()}
+                      samplePayload={
+                        selectedEventMetadata?.variables
+                          ? Object.fromEntries(
+                              selectedEventMetadata.variables.map((v) => [v.name, v.name])
+                            )
+                          : {}
+                      }
                     />
                   </div>
                 )}

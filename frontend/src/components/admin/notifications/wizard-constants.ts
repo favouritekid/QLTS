@@ -37,45 +37,8 @@ export const SUPPORTED_INTERNAL_RESOLVERS = [
   "collaborator_user",
 ] as const;
 
-// ============================================================================
-// System events — fallback when metadata.events is unavailable
-// ============================================================================
-
-export const SYSTEM_EVENTS: EventOption[] = [
-  // Lead Events
-  { value: "lead_created", label: "Có lead mới được tạo", category: "lead", description: "Khi một lead mới được tạo trong hệ thống", icon: "👤" },
-  { value: "lead_assigned", label: "Lead được phân công", category: "lead", description: "Khi lead được gán cho cán bộ phụ trách", icon: "👤" },
-  { value: "lead_assignment_failed", label: "Phân công lead thất bại", category: "lead", description: "Khi không thể tự động phân công lead (không có cán bộ hoặc đã đầy)", icon: "👤" },
-  { value: "lead_reassigned", label: "Lead được chuyển giao", category: "lead", description: "Khi lead được chuyển sang đơn vị hoặc cán bộ khác", icon: "👤" },
-  { value: "lead_status_changed", label: "Trạng thái lead thay đổi", category: "lead", description: "Khi lead chuyển sang giai đoạn khác trong pipeline", icon: "👤" },
-  { value: "lead_deleted", label: "Lead bị xóa", category: "lead", description: "Khi lead bị xóa khỏi hệ thống", icon: "👤" },
-  // Consultation Events
-  { value: "consultation_created", label: "Có lịch tư vấn mới", category: "consultation", description: "Khi tạo lịch hẹn tư vấn cho lead", icon: "💬" },
-  { value: "consultation_updated", label: "Lịch tư vấn được cập nhật", category: "consultation", description: "Khi thông tin lịch tư vấn được sửa đổi", icon: "💬" },
-  { value: "consultation_deleted", label: "Lịch tư vấn bị hủy", category: "consultation", description: "Khi lịch tư vấn bị xóa", icon: "💬" },
-  { value: "consultation_reminder", label: "Nhắc nhở lịch tư vấn", category: "consultation", description: "Tự động nhắc trước giờ tư vấn", icon: "💬" },
-  // Application Events
-  { value: "application_created", label: "Có hồ sơ mới được tạo", category: "application", description: "Khi lead nộp hồ sơ ứng tuyển", icon: "📝" },
-  { value: "application_status_changed", label: "Trạng thái hồ sơ thay đổi", category: "application", description: "Khi trạng thái xử lý hồ sơ thay đổi", icon: "📝" },
-  { value: "application_deleted", label: "Hồ sơ bị xóa", category: "application", description: "Khi hồ sơ bị xóa khỏi hệ thống", icon: "📝" },
-  // Finance Events
-  { value: "dorm_fee_created", label: "Có phí ký túc mới", category: "finance", description: "Khi tạo khoản phí ký túc cho sinh viên", icon: "💰" },
-  { value: "payment_received", label: "Đã nhận thanh toán", category: "finance", description: "Khi ghi nhận thanh toán từ sinh viên", icon: "💰" },
-  { value: "payment_overdue", label: "Thanh toán quá hạn", category: "finance", description: "Khi khoản thanh toán đã quá hạn", icon: "💰" },
-  // Dorm Events
-  { value: "dorm_room_assigned", label: "Phân phòng ký túc", category: "dorm", description: "Khi sinh viên được phân phòng ký túc", icon: "🏠" },
-  { value: "dorm_maintenance_request", label: "Yêu cầu bảo trì ký túc", category: "dorm", description: "Khi có yêu cầu sửa chữa tại ký túc xá", icon: "🏠" },
-  // Asset Events
-  { value: "asset_maintenance_alert", label: "Cảnh báo bảo trì tài sản", category: "asset", description: "Khi tài sản cần bảo trì định kỳ", icon: "🔧" },
-  { value: "asset_checked_out", label: "Tài sản được mượn", category: "asset", description: "Khi có người mượn tài sản", icon: "🔧" },
-  // System Events
-  { value: "system_alert", label: "Cảnh báo hệ thống", category: "system", description: "Thông báo quan trọng từ hệ thống", icon: "🔔" },
-  { value: "system_announcement", label: "Thông báo chung", category: "system", description: "Thông báo chung cho toàn bộ người dùng", icon: "🔔" },
-  { value: "user_role_changed", label: "Vai trò người dùng thay đổi", category: "system", description: "Khi quyền hạn của người dùng được thay đổi", icon: "🔔" },
-  { value: "user_deactivated", label: "Tài khoản bị vô hiệu hóa", category: "system", description: "Khi tài khoản người dùng bị khóa", icon: "🔔" },
-  { value: "pipeline_config_updated", label: "Cấu hình pipeline thay đổi", category: "system", description: "Khi admin thay đổi cấu hình quy trình", icon: "🔔" },
-  { value: "officer_availability_changed", label: "Trạng thái cán bộ thay đổi", category: "system", description: "Khi cán bộ thay đổi trạng thái sẵn sàng", icon: "🔔" },
-];
+// PR2: SYSTEM_EVENTS removed — metadata API is the sole source of truth for events.
+// Event picker shows loading state when metadata is unavailable.
 
 // ============================================================================
 // Category display — UI labels, icons, sort order
