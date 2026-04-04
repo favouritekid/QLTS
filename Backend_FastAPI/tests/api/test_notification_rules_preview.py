@@ -98,3 +98,94 @@ class TestNotificationRulePreviewApi:
         assert data["actions"][0]["rendered_title"] == "Override title: Nguyen Van A"
         assert data["actions"][0]["rendered_message"] == "Override message for 123"
         assert data["actions"][0]["rendered_link"] == "/leads/123"
+
+    # PR3.5: Expanded coverage
+
+    async def test_preview_empty_actions_returns_default_browser(
+        self, client: AsyncClient, admin_token_headers: dict,
+    ):
+        """Empty actions list should return a single default browser preview."""
+        resp = await client.post(
+            "/api/notification-rules/preview",
+            headers=admin_token_headers,
+            json={
+                "event": "lead_created",
+                "title_template": "New lead: $lead_name",
+                "message_template": "Created by $actor_name",
+                "sample_payload": {"lead_name": "Test", "actor_name": "Admin"},
+                "actions": [],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["actions"]) == 1
+        assert data["actions"][0]["channel"] == "browser"
+        assert data["actions"][0]["step"] == 1
+        assert data["actions"][0]["rendered_title"] == "New lead: Test"
+        assert data["actions"][0]["rendered_message"] == "Created by Admin"
+
+    async def test_preview_template_override_shows_indicator(
+        self, client: AsyncClient, admin_token_headers: dict,
+    ):
+        """template_override mode should show explicit indicator, not default content."""
+        resp = await client.post(
+            "/api/notification-rules/preview",
+            headers=admin_token_headers,
+            json={
+                "event": "lead_assigned",
+                "title_template": "Default title",
+                "message_template": "Default msg",
+                "sample_payload": {"lead_id": "1"},
+                "actions": [
+                    {
+                        "step": 1,
+                        "channel": "email",
+                        "content_mode": "template_override",
+                        "template_code": "TPL_SOME_CODE",
+                        "delay_minutes": 0,
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        action = data["actions"][0]
+        # Should show template indicator, NOT default content
+        assert "Template" in action["rendered_title"] or "TPL_SOME_CODE" in action["rendered_title"]
+        assert action["content_mode"] == "template_override"
+
+    async def test_preview_multi_action_response_shape(
+        self, client: AsyncClient, admin_token_headers: dict,
+    ):
+        """Multiple actions should each get a preview with correct step/channel."""
+        resp = await client.post(
+            "/api/notification-rules/preview",
+            headers=admin_token_headers,
+            json={
+                "event": "application_status_changed",
+                "title_template": "Status: $new_status",
+                "message_template": "App #$application_id changed",
+                "sample_payload": {
+                    "application_id": "42",
+                    "new_status": "approved",
+                    "lead_id": "7",
+                },
+                "actions": [
+                    {"step": 1, "channel": "browser", "delay_minutes": 0},
+                    {"step": 2, "channel": "email", "delay_minutes": 5,
+                     "branch_key": "email_group"},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["actions"]) == 2
+        assert data["actions"][0]["step"] == 1
+        assert data["actions"][0]["channel"] == "browser"
+        assert data["actions"][1]["step"] == 2
+        assert data["actions"][1]["channel"] == "email"
+        assert data["actions"][1]["branch_key"] == "email_group"
+        assert data["actions"][1]["delay_minutes"] == 5
+        # Both should have rendered content
+        assert "approved" in data["actions"][0]["rendered_title"]
+        assert data["rendered_link"] is not None
