@@ -32,6 +32,7 @@ from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_f
 from ..utils.csv_helpers import sanitize_csv_cell
 from ..core.events import SystemEvents
 from .notification_dispatcher import dispatch
+from .notification_payloads import EventPayload
 
 log = structlog.get_logger(__name__)
 
@@ -1163,14 +1164,7 @@ async def create_lead(
                 _, _lead_created_cb = await dispatch(
                     db=db,
                     event=SystemEvents.LEAD_CREATED,
-                    payload={
-                        "lead_id": db_lead.id,
-                        "unit_id": db_lead.unit_id,
-                        "lead_name": db_lead.full_name or "Unknown",
-                        "source": db_lead.source or "Unknown",
-                        "actor_id": created_by.id if created_by else 0,
-                        "actor_name": created_by.full_name or created_by.username if created_by else "System",
-                    },
+                    payload=EventPayload.for_lead_created(db_lead, created_by),
                     dedupe_key=f"lead_created:{db_lead.id}",
                 )
         except Exception as e:
@@ -1184,15 +1178,10 @@ async def create_lead(
                     _, _lead_assigned_cb = await dispatch(
                         db=db,
                         event=SystemEvents.LEAD_ASSIGNED,
-                        payload={
-                            "lead_id": db_lead.id,
-                            "officer_id": direct_assignment_officer_id,
-                            "actor_id": created_by.id if created_by else 0,
-                            "actor_name": created_by.full_name or created_by.username if created_by else "System",
-                            "lead_name": db_lead.full_name or "Unknown",
-                            "lead_phone": db_lead.phone or "",
-                            "offering_name": offering_name
-                        },
+                        payload=EventPayload.for_lead_assigned(
+                            db_lead, direct_assignment_officer_id, created_by,
+                            offering_name=offering_name,
+                        ),
                         dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}",
                     )
             except Exception as e:
@@ -1686,17 +1675,15 @@ async def update_lead(
                     _, _reassign_cb = await dispatch(
                         db=db,
                         event=SystemEvents.LEAD_REASSIGNED,
-                        payload={
-                            "lead_id": lead_id,
-                            "old_officer_id": old_officer_id,  # type: ignore
-                            "new_officer_id": None,  # Will be assigned by auto-assignment
-                            "old_unit_id": old_unit_id,  # type: ignore
-                            "new_unit_id": new_target_unit_id,  # type: ignore
-                            "actor_id": updated_by.id,
-                            "actor_name": updated_by.full_name or updated_by.username,
-                            "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
-                            "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
-                        },
+                        payload=EventPayload.for_lead_reassigned(
+                            lead_id, updated_by,
+                            old_officer_id=old_officer_id,  # type: ignore
+                            new_officer_id=None,  # Will be assigned by auto-assignment
+                            old_unit_id=old_unit_id,  # type: ignore
+                            new_unit_id=new_target_unit_id,  # type: ignore
+                            reason=f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
+                            notify_user_ids=[old_officer_id] if old_officer_id else [],
+                        ),
                         dedupe_key=f"lead_reassigned:{lead_id}",
                     )
             except Exception as e:
@@ -2139,21 +2126,20 @@ async def assign_lead_manually(
         await db.refresh(lead, ["offering", "unit"])
 
         # Prepare notification payload according to LEAD_ASSIGNED schema
-        notification_payload = {
-            "lead_id": lead.id,
-            "officer_id": officer.id,
-            "actor_id": assigner.id,
-            "actor_name": assigner.full_name or assigner.username,
-            "lead_name": lead.full_name or "Unknown",
-            "lead_phone": lead.phone or "",
-            "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
-        }
+        offering_name = (
+            f"{lead.offering.program.name} - {lead.offering.offering_type}"
+            if lead.offering and lead.offering.program
+            else (lead.offering.offering_type if lead.offering else "N/A")
+        )
 
         async with db.begin_nested():
             _, _assign_cb = await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_ASSIGNED,
-                payload=notification_payload,
+                payload=EventPayload.for_lead_assigned(
+                    lead, officer.id, assigner,
+                    offering_name=offering_name,
+                ),
                 dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
             )
     except Exception as e:

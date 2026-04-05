@@ -3,6 +3,7 @@
 > **Trang thai**: Draft - Can review truoc khi trien khai
 > **Ngay tao**: 2026-03-06
 > **Tac gia**: Claude Code (dua tren ke hoach goc + phan tich codebase)
+> **Luu y**: Truoc khi tiep tuc Epic 2-3, can doi chieu voi [NOTIFICATION_PLAN_SPEC_ADDENDUM.md](/D:/QLTS/Backend_FastAPI/NOTIFICATION_PLAN_SPEC_ADDENDUM.md) de tranh lech source-of-truth cua notification core.
 
 ---
 

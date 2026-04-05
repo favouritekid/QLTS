@@ -41,18 +41,20 @@ router = APIRouter(tags=["Admin - Organization"])
 
 
 # ============================================================================
-# NOTIFICATION HELPER (DRY - Reduces router boilerplate)
+# DOMAIN BROADCAST HELPER
+# Organization events are domain broadcast only (Socket.IO real-time UI refresh).
+# They do NOT create user notifications — no registry config, no inbox rows.
 # ============================================================================
 
-async def _dispatch_org_notification(
+async def _dispatch_org_broadcast(
     db: AsyncSession,
     event: SystemEvents,
     payload: Dict[str, Any],
     dedupe_key: str | None = None,
 ) -> None:
     """
-    Helper to dispatch organization notifications.
-    Uses safe_dispatch which handles commit + callback + error handling.
+    Broadcast organization change for real-time UI refresh.
+    NOT a user notification — no inbox row, no email, no preference filtering.
     """
     await safe_dispatch(db=db, event=event, payload=payload, dedupe_key=dedupe_key)
 
@@ -79,8 +81,8 @@ async def create_new_organization_unit(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.UNIT_CREATED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.UNIT_CREATED, {
         "unit_id": unit.id,
         "unit_name": unit.name,
         "unit_type": unit.type,
@@ -151,8 +153,8 @@ async def update_existing_organization_unit(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.UNIT_UPDATED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.UNIT_UPDATED, {
         "unit_id": updated_unit.id,
         "unit_name": updated_unit.name,
         "unit_type": updated_unit.type,
@@ -199,8 +201,8 @@ async def delete_existing_organization_unit(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.UNIT_DELETED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.UNIT_DELETED, {
         "unit_id": unit.id,
         "unit_name": unit.name,
         "unit_type": unit.type,
@@ -233,8 +235,8 @@ async def create_new_program(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.PROGRAM_CREATED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.PROGRAM_CREATED, {
         "program_id": program.id,
         "program_name": program.name,
         "program_code": program.code,
@@ -276,8 +278,8 @@ async def update_existing_program(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.PROGRAM_UPDATED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.PROGRAM_UPDATED, {
         "program_id": program.id,
         "program_name": program.name,
         "program_code": program.code,
@@ -304,8 +306,8 @@ async def delete_existing_program(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.PROGRAM_DELETED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.PROGRAM_DELETED, {
         "program_id": program_id,
         "program_name": program.name,
         "program_code": program.code,
@@ -342,8 +344,8 @@ async def create_new_offering(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.OFFERING_CREATED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.OFFERING_CREATED, {
         "offering_id": offering.id,
         "offering_name": offering.offering_type,
         "program_id": offering.program_id,
@@ -392,8 +394,8 @@ async def update_existing_offering(
     # Execute post-commit callback
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.OFFERING_UPDATED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.OFFERING_UPDATED, {
         "offering_id": offering.id,
         "offering_name": offering.offering_type,
         "program_id": offering.program_id,
@@ -421,8 +423,8 @@ async def delete_existing_offering(
     await db.commit()
     await post_commit()
     
-    # ✅ Dispatch notification (fire-and-forget)
-    await _dispatch_org_notification(db, SystemEvents.OFFERING_DELETED, {
+    # Broadcast domain event for real-time UI refresh (not a user notification)
+    await _dispatch_org_broadcast(db, SystemEvents.OFFERING_DELETED, {
         "offering_id": offering_id,
         "offering_name": offering.offering_type,
         "program_id": offering.program_id,

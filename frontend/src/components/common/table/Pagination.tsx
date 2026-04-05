@@ -145,13 +145,13 @@ export function Pagination({
       <div className="flex items-center gap-4 text-sm text-muted-foreground">
         {showTotal && (
           <span>
-            Hien thi {startItem} - {endItem} / {total} ket qua
+            Hiển thị {startItem} - {endItem} / {total} kết quả
           </span>
         )}
 
         {showPageSizeSelector && onPageSizeChange && (
           <div className="flex items-center gap-2">
-            <span>Hien thi</span>
+            <span>Hiển thị</span>
             <Select
               value={String(pageSize)}
               onValueChange={handlePageSizeChange}
@@ -168,7 +168,7 @@ export function Pagination({
                 ))}
               </SelectContent>
             </Select>
-            <span>dong</span>
+            <span>dòng</span>
           </div>
         )}
       </div>
@@ -182,7 +182,7 @@ export function Pagination({
           className="h-10 w-10 md:h-8 md:w-8"
           onClick={() => handlePageChange(1)}
           disabled={!canGoPrev || isLoading}
-          aria-label="Trang dau"
+          aria-label="Trang đầu"
         >
           <ChevronsLeft className="h-4 w-4" />
         </Button>
@@ -194,7 +194,7 @@ export function Pagination({
           className="h-10 w-10 md:h-8 md:w-8"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={!canGoPrev || isLoading}
-          aria-label="Trang truoc"
+          aria-label="Trang trước"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -226,7 +226,7 @@ export function Pagination({
           className="h-10 w-10 md:h-8 md:w-8"
           onClick={() => handlePageChange(totalPages)}
           disabled={!canGoNext || isLoading}
-          aria-label="Trang cuoi"
+          aria-label="Trang cuối"
         >
           <ChevronsRight className="h-4 w-4" />
         </Button>

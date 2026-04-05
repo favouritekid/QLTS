@@ -45,6 +45,8 @@ interface UseNotificationTemplatesParams {
   category?: string; // Filter by category
   is_system?: boolean; // Filter by system flag
   search?: string; // Search by name or description
+  allowed_event?: string; // Filter templates that support this event
+  supported_channel?: string; // Filter templates that support this channel
 }
 
 /**
@@ -56,7 +58,7 @@ export function useNotificationTemplates(
   params: UseNotificationTemplatesParams = {},
   options?: { initialData?: NotificationTemplatesPage }
 ) {
-  const { page = 1, page_size = 50, category, is_system, search } = params;
+  const { page = 1, page_size = 50, category, is_system, search, allowed_event, supported_channel } = params;
 
   return useQuery<NotificationTemplatesPage, AxiosError<ApiErrorResponse>>({
     queryKey: notificationTemplateKeys.list({
@@ -65,12 +67,14 @@ export function useNotificationTemplates(
       category,
       is_system,
       search,
+      allowed_event,
+      supported_channel,
     }),
     queryFn: async () => {
       const response = await api.get<NotificationTemplatesPage>(
         API_ENDPOINTS.NOTIFICATION_TEMPLATES.LIST,
         {
-          params: { page, page_size, category, is_system, search },
+          params: { page, page_size, category, is_system, search, allowed_event, supported_channel },
         }
       );
       return response.data;

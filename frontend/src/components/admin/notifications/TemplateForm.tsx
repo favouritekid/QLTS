@@ -64,16 +64,23 @@ const CATEGORIES = [
   { value: "finance", label: "Finance" },
   { value: "dorm", label: "Dorm" },
   { value: "system", label: "System" },
+  { value: "asset", label: "Tài sản" },
+  { value: "security", label: "Bảo mật" },
+  { value: "pipeline", label: "Pipeline" },
+  { value: "operational", label: "Vận hành" },
 ];
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required").max(100, "Name must be under 100 characters"),
+  template_code: z.string().min(1, "Mã template là bắt buộc").max(100, "Mã template tối đa 100 ký tự"),
   description: z.string().optional(),
   title_template: z.string().min(1, "Title template is required").max(255),
   message_template: z.string().min(1, "Message template is required"),
   link_template: z.string().optional(),
   variables: z.array(z.string()).optional(),
   category: z.string().optional(),
+  supported_channels: z.array(z.string()),
+  template_type: z.string(),
   is_system: z.boolean(),
 });
 
@@ -105,12 +112,15 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
+      template_code: "",
       description: "",
       title_template: "",
       message_template: "",
       link_template: "",
       variables: [],
       category: undefined,
+      supported_channels: ["browser"],
+      template_type: "system",
       is_system: false,
     },
   });
@@ -120,23 +130,29 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
     if (open && existingTemplate && isEditMode) {
       form.reset({
         name: existingTemplate.name,
+        template_code: existingTemplate.template_code || "",
         description: existingTemplate.description || "",
         title_template: existingTemplate.title_template,
         message_template: existingTemplate.message_template,
         link_template: existingTemplate.link_template || "",
         variables: existingTemplate.variables || [],
         category: existingTemplate.category || undefined,
+        supported_channels: existingTemplate.supported_channels || ["browser"],
+        template_type: (existingTemplate.template_type as "system" | "zalo_zns" | "email_html" | "sms") || "system",
         is_system: existingTemplate.is_system,
       });
     } else if (open && !isEditMode) {
       form.reset({
         name: "",
+        template_code: "",
         description: "",
         title_template: "",
         message_template: "",
         link_template: "",
         variables: [],
         category: undefined,
+        supported_channels: ["browser"],
+        template_type: "system",
         is_system: false,
       });
     }
@@ -149,12 +165,15 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
         // Note: is_system flag cannot be changed after creation
         const updateData: NotificationTemplateUpdate = {
           name: data.name,
+          template_code: data.template_code,
           description: data.description || null,
           title_template: data.title_template,
           message_template: data.message_template,
           link_template: data.link_template || null,
           variables: data.variables,
           category: data.category || null,
+          supported_channels: data.supported_channels,
+          template_type: data.template_type,
         };
         await updateMutation.mutateAsync({ templateId, data: updateData });
         toast.success("Template updated successfully");
@@ -162,12 +181,15 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
         // Create new template
         const createData: NotificationTemplateCreate = {
           name: data.name,
+          template_code: data.template_code,
           description: data.description || null,
           title_template: data.title_template,
           message_template: data.message_template,
           link_template: data.link_template || null,
           variables: data.variables,
           category: data.category || null,
+          supported_channels: data.supported_channels,
+          template_type: data.template_type,
           is_system: data.is_system,
         };
         await createMutation.mutateAsync(createData);
@@ -238,12 +260,30 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Name *</FormLabel>
+                    <FormLabel>Tên template *</FormLabel>
                     <FormControl>
                       <Input placeholder="e.g., lead_assignment" {...field} />
                     </FormControl>
                     <FormDescription>
                       Unique identifier for this template (used internally)
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Template Code */}
+              <FormField
+                control={form.control}
+                name="template_code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Mã template *</FormLabel>
+                    <FormControl>
+                      <Input placeholder="VD: TPL_LEAD_ASSIGN" {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      Mã định danh duy nhất cho template (VD: TPL_LEAD_ASSIGN)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -256,7 +296,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 name="description"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Description</FormLabel>
+                    <FormLabel>Mô tả</FormLabel>
                     <FormControl>
                       <Textarea
                         placeholder="Human-readable description for administrators"
@@ -275,7 +315,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 name="category"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Category</FormLabel>
+                    <FormLabel>Danh mục</FormLabel>
                     <Select value={field.value} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
@@ -298,21 +338,75 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 )}
               />
 
+              {/* Supported Channels */}
+              <FormField
+                control={form.control}
+                name="supported_channels"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Kênh hỗ trợ</FormLabel>
+                    <div className="flex flex-wrap gap-3">
+                      {["browser", "email", "zalo", "sms"].map((ch) => (
+                        <label key={ch} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={field.value?.includes(ch)}
+                            onChange={(e) => {
+                              const current = field.value || [];
+                              field.onChange(
+                                e.target.checked
+                                  ? [...current, ch]
+                                  : current.filter((c: string) => c !== ch)
+                              );
+                            }}
+                          />
+                          {ch}
+                        </label>
+                      ))}
+                    </div>
+                    <FormDescription>Kênh mà template này hỗ trợ</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Template Type */}
+              <FormField
+                control={form.control}
+                name="template_type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Loại template</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="system">System</SelectItem>
+                        <SelectItem value="email_html">Email HTML</SelectItem>
+                        <SelectItem value="zalo_zns">Zalo ZNS</SelectItem>
+                        <SelectItem value="sms">SMS</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>Loại template cho kênh gửi</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               {/* Title Template */}
               <FormField
                 control={form.control}
                 name="title_template"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Title Template *</FormLabel>
+                    <FormLabel>Template tiêu đề *</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g., Lead assigned: {lead_name}"
+                        placeholder="e.g., Lead assigned: $lead_name"
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      Use {"{variable_name}"} for placeholders (e.g., {"{lead_name}"})
+                      Use $variable_name for placeholders (e.g., $lead_name)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -325,16 +419,16 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 name="message_template"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Message Template *</FormLabel>
+                    <FormLabel>Template nội dung *</FormLabel>
                     <FormControl>
                       <Textarea
-                        placeholder="e.g., You have been assigned to lead {lead_name} (Phone: {lead_phone})"
+                        placeholder="e.g., You have been assigned to lead $lead_name (Phone: $lead_phone)"
                         rows={4}
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      Use {"{variable_name}"} for placeholders
+                      Use $variable_name for placeholders
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -347,10 +441,10 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 name="link_template"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Link Template</FormLabel>
+                    <FormLabel>Template đường dẫn</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g., /leads/{lead_id}"
+                        placeholder="e.g., /leads/$lead_id"
                         {...field}
                       />
                     </FormControl>
@@ -447,11 +541,13 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                   onClick={() => onOpenChange(false)}
                   disabled={isPending}
                 >
-                  Cancel
+                  Hủy
                 </Button>
                 <Button type="submit" disabled={isPending}>
                   {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {isEditMode ? "Update Template" : "Create Template"}
+                  {isEditMode
+                    ? (isPending ? "Đang cập nhật..." : "Cập nhật template")
+                    : (isPending ? "Đang tạo..." : "Tạo template")}
                 </Button>
               </DialogFooter>
             </form>

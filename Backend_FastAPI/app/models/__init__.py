@@ -57,6 +57,11 @@ from .admission_config import (
 # Notification models
 from .notification import Notification, NotificationAction, NotificationRule, NotificationTemplate
 from .notification_preference import NotificationPreference
+from .notification_delivery import NotificationDelivery
+from .notification_consent import NotificationConsent
+from .notification_consent_history import NotificationConsentHistory
+from .notification_quota import NotificationQuota
+from .zalo_token_store import ZaloTokenStore
 
 # Organization models (includes temporal models)
 # OLD: from .organization import Major  # REMOVED after 3-tier migration
@@ -161,9 +166,15 @@ __all__ = [
     "AdmissionPath",  # Phase 1: Admission Configuration Console
     # Notification
     "Notification",
+    "NotificationAction",
     "NotificationRule",
     "NotificationTemplate",
     "NotificationPreference",
+    "NotificationDelivery",
+    "NotificationConsent",
+    "NotificationConsentHistory",
+    "NotificationQuota",
+    "ZaloTokenStore",
     # Organization (Legacy)
     # "Major",  # REMOVED after 3-tier migration k6l7m8n9o0p1
     # "MajorAcademicInfo",  # REMOVED after 3-tier migration k6l7m8n9o0p1

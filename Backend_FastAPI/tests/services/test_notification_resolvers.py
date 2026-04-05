@@ -16,6 +16,7 @@ from app.services.notification_resolvers import (
     UnitManagersResolver,
     AllUsersResolver,
     AllAdminsResolver,
+    CollaboratorUserResolver,
     SpecificUsersResolver,
     CompositeResolver,
     ActorExcludedResolver,
@@ -200,6 +201,14 @@ class TestNotificationResolvers:
         result = await resolver.resolve_users(db, payload)
 
         assert result == [10, 20, 30]
+
+    async def test_collaborator_user_resolver_direct_user_id(self, db: AsyncSession):
+        """Should reuse user_id from payload without extra DB lookup."""
+        resolver = CollaboratorUserResolver()
+
+        result = await resolver.resolve_users(db, {"user_id": 77})
+
+        assert result == [77]
 
     # =========================================================================
     # COMPOSITE & WRAPPER RESOLVERS

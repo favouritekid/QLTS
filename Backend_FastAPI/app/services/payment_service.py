@@ -178,10 +178,41 @@ class PaymentService:
             created_by=user_id,
         )
 
-        # Post-commit: notify for verification
+        # Resolve data for notification while session is active
+        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        _profile_id = fee.admission_profile_id if fee else None
+        _lead_id = None
+        _officer_id = None
+        if fee:
+            profile = await self._get_profile_for_fee(fee)
+            if profile:
+                _lead_id = profile.lead_id
+                if hasattr(profile, 'lead') and profile.lead:
+                    _officer_id = profile.lead.assigned_officer_id
+
+        _notify_payload = {
+            "payment_id": payment.id,
+            "invoice_id": invoice_id,
+            "fee_id": fee.id if fee else None,
+            "amount": str(amount),
+            "payment_type": fee.fee_type if fee else "unknown",
+            "admission_profile_id": _profile_id,
+            "lead_id": _lead_id,
+            "unit_id": unit_id,
+            "user_id": _officer_id or user_id,
+            "actor_id": user_id,
+        }
+        _db = self.db
+
         async def post_commit():
-            # TODO: Emit PaymentRecorded event for verification queue
-            pass
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.PAYMENT_RECEIVED,
+                payload=_notify_payload,
+            )
 
         return payment, post_commit
 
@@ -311,10 +342,49 @@ class PaymentService:
             fee_remaining=str(fee_remaining),
         )
 
-        # Post-commit: notify payment confirmed
+        # Resolve lead_id while session is still active
+        profile = await self._get_profile_for_fee(fee)
+        _lead_id = profile.lead_id if profile else None
+
+        # Resolve lead's assigned officer for notification recipient
+        _officer_id = None
+        if profile and hasattr(profile, 'lead') and profile.lead:
+            _officer_id = profile.lead.assigned_officer_id
+
+        # Capture data for post-commit closure
+        # Recipient: the officer who owns the lead (not the verifier)
+        # Phase 1 internal: notify officer about payment confirmation
+        # Phase 2 external (Zalo ZNS): will also notify applicant via lead phone
+        _notify_payload = {
+            "payment_id": payment.id,
+            "invoice_id": invoice.id,
+            "fee_id": fee.id,
+            "amount": str(payment.amount),
+            "verified_by_id": verifier_id,
+            "verified_at": (
+                payment.verified_at.isoformat()
+                if payment.verified_at
+                else datetime.now(timezone.utc).isoformat()
+            ),
+            "admission_profile_id": fee.admission_profile_id,
+            "lead_id": _lead_id,
+            "unit_id": unit_id,
+            # SpecificUsersResolver: notify lead's officer
+            "user_id": _officer_id or verifier_id,
+        }
+        _db = self.db
+
         async def post_commit():
-            # TODO: Emit PaymentVerified event for notifications
-            pass
+            # safe_dispatch handles commit + callback + error suppression
+            # Called AFTER router has committed business data
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.PAYMENT_VERIFIED,
+                payload=_notify_payload,
+            )
 
         return payment, post_commit
 

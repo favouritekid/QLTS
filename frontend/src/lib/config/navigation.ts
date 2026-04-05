@@ -25,12 +25,14 @@ import {
   Percent,
   Receipt,
   Settings,
+  Send,
   Share2,
   ShieldCheck,
   Target,
   Trash2,
   TrendingUp,
   Trello,
+  UserCheck,
   Users,
   Workflow,
 } from "lucide-react";
@@ -194,6 +196,18 @@ export const navigationConfig: NavigationConfig = {
           href: "/admin/notification-templates",
           icon: FileText,
           roles: ["admin", "manager"], // Admin configuration
+        },
+        {
+          label: "Delivery Ops",
+          href: "/admin/notification-deliveries",
+          icon: Send,
+          roles: ["admin"], // Admin-only delivery tracking
+        },
+        {
+          label: "Consent",
+          href: "/admin/notification-consents",
+          icon: UserCheck,
+          roles: ["admin"], // Admin-only consent management
         },
       ],
     },

@@ -313,13 +313,20 @@ export interface NotificationPreferenceUpdate {
 
 // ✅ NOTIFICATION 2.0: Multi-Step Workflow Support
 export interface NotificationAction {
-  id?: number; // Optional for create
-  rule_id?: number; // Optional for create
-  step: number; // Step order (1, 2, 3, ...)
-  channel: string; // "socket" | "email" | "zalo" | "sms"
-  template_code: string | null; // Template code to use
-  delay_minutes: number; // Delay before sending (0 = immediate)
-  config: Record<string, unknown> | null; // Additional channel config
+  id: number;
+  rule_id: number;
+  step: number;
+  channel: string; // "browser" | "email" | "zalo" | "sms"
+  template_code: string | null;
+  delay_minutes: number;
+  config: Record<string, unknown> | null;
+  // Phase 3: delivery branch fields
+  recipient_config: Record<string, unknown> | null;
+  content_mode: string | null; // "inherit_default" | "template_override" | "inline_override" | "channel_native"
+  content_override: Record<string, unknown> | null;
+  branch_key: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface NotificationActionCreate {
@@ -328,20 +335,26 @@ export interface NotificationActionCreate {
   template_code?: string | null;
   delay_minutes?: number;
   config?: Record<string, unknown> | null;
+  // Phase 3: delivery branch fields
+  recipient_config?: Record<string, unknown> | null;
+  content_mode?: string | null;
+  content_override?: Record<string, unknown> | null;
+  branch_key?: string | null;
 }
 
 export interface NotificationRule {
   id: number;
-  event: string; // SystemEvents enum value
+  event: string;
   title_template: string;
   message_template: string;
-  notification_type: string; // info, success, warning, error
+  notification_type: string;
   link_template: string | null;
-  channels: string[]; // ["socket", "email", "zalo", "sms"] - DEPRECATED, use actions
-  recipient_config: Record<string, unknown>; // {resolver_type, params}
-  condition: Record<string, unknown> | null; // Optional activation conditions
+  channels: string[]; // DEPRECATED: derived from actions
+  recipient_config: Record<string, unknown>;
+  condition: Record<string, unknown> | null;
   enabled: boolean;
-  actions: NotificationAction[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
+  template_id: number | null;
+  actions: NotificationAction[];
   created_at: string;
   updated_at: string;
 }
@@ -352,11 +365,12 @@ export interface NotificationRuleCreate {
   message_template: string;
   notification_type: string;
   link_template?: string | null;
-  channels: string[]; // Fallback for backward compatibility
+  channels: string[];
   recipient_config: Record<string, unknown>;
   condition?: Record<string, unknown> | null;
   enabled?: boolean;
-  actions?: NotificationActionCreate[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
+  template_id?: number | null;
+  actions?: NotificationActionCreate[];
 }
 
 export interface NotificationRuleUpdate {
@@ -382,15 +396,19 @@ export interface NotificationRulesPage {
 
 export interface NotificationTemplate {
   id: number;
-  name: string; // Unique template name
+  name: string;
+  template_code: string;
   description: string | null;
   title_template: string;
   message_template: string;
   link_template: string | null;
-  variables: string[] | null; // Available variables like ["lead_name", "officer_id"]
-  category: string | null; // Template category (lead, consultation, etc.)
-  is_system: boolean; // System template (cannot be deleted)
-  usage_count: number; // Number of rules using this template
+  variables: string[] | null;
+  category: string | null;
+  supported_channels: string[];
+  allowed_events: string[] | null;
+  template_type: string;
+  is_system: boolean;
+  usage_count: number;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -398,23 +416,31 @@ export interface NotificationTemplate {
 
 export interface NotificationTemplateCreate {
   name: string;
+  template_code: string;
   description?: string | null;
   title_template: string;
   message_template: string;
   link_template?: string | null;
   variables?: string[] | null;
   category?: string | null;
+  supported_channels?: string[];
+  allowed_events?: string[] | null;
+  template_type?: string;
   is_system?: boolean;
 }
 
 export interface NotificationTemplateUpdate {
   name?: string;
+  template_code?: string;
   description?: string | null;
   title_template?: string;
   message_template?: string;
   link_template?: string | null;
   variables?: string[] | null;
   category?: string | null;
+  supported_channels?: string[];
+  allowed_events?: string[] | null;
+  template_type?: string;
 }
 
 export interface NotificationTemplatesPage {
@@ -423,8 +449,98 @@ export interface NotificationTemplatesPage {
 }
 
 // ============================================
+// ✅ PHASE B8: NOTIFICATION DELIVERY OPS
+// ============================================
+
+export interface NotificationDelivery {
+  id: number;
+  notification_id: number | null;
+  event: string;
+  channel: string;
+  recipient_kind: string; // "internal" | "external"
+  user_id: number | null;
+  source_type: string | null;
+  source_id: number | null;
+  destination: string | null;
+  status: string; // "queued" | "sent" | "failed" | "skipped"
+  error_reason: string | null;
+  dedupe_key: string | null;
+  rule_id: number | null;
+  action_step: number | null;
+  template_code: string | null;
+  payload_snapshot: Record<string, unknown> | null;
+  provider_message_id: string | null;
+  scheduled_for: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  next_retry_at: string | null;
+  max_retries: number;
+  dead_lettered_at: string | null;
+  created_at: string;
+  updated_at: string;
+  sent_at: string | null;
+}
+
+export interface NotificationDeliveriesPage {
+  total_count: number;
+  deliveries: NotificationDelivery[];
+}
+
+// ============================================
+// ✅ PHASE B7: NOTIFICATION CONSENT
+// ============================================
+
+export interface NotificationConsent {
+  id: number;
+  channel: string;
+  source_type: string;
+  source_id: number;
+  normalized_phone: string | null;
+  normalized_email: string | null;
+  consent_status: string; // "granted" | "revoked"
+  consent_source: string;
+  granted_by: number | null;
+  granted_at: string | null;
+  revoked_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationConsentsPage {
+  total_count: number;
+  consents: NotificationConsent[];
+}
+
+export interface NotificationConsentUpsert {
+  channel: string;
+  source_type: string;
+  source_id: number;
+  consent_status?: string;
+  normalized_phone?: string | null;
+  normalized_email?: string | null;
+  consent_source?: string;
+  notes?: string | null;
+}
+
+export interface NotificationConsentImportResult {
+  processed: number;
+  granted: number;
+  revoked: number;
+  skipped: number;
+  errors: Array<Record<string, unknown>>;
+}
+
+// ============================================
 // ✅ NOTIFICATION 2.0: METADATA FOR DYNAMIC BUILDER
 // ============================================
+
+export interface ConditionField {
+  path: string;
+  type: string;
+  description: string;
+  operators: string[];
+}
 
 export interface EventVariable {
   name: string;
@@ -438,30 +554,44 @@ export interface EventMetadata {
   display_name: string;
   description: string;
   variables: EventVariable[];
+  condition_fields: ConditionField[];
   filter_fields: string[];
   default_channels: string[];
   category: string; // "lead" | "application" | "consultation" | "finance" | etc.
+  // PR2: New fields from catalog
+  allowed_resolvers?: string[];  // e.g. ["lead_owner", "unit_managers", ...]
+  link_strategy?: string | null;  // e.g. "/leads/${lead_id}" — read-only display
 }
 
 export interface ResolverTypeOption {
-  value: string; // "assigned_officer" | "lead_owner" | etc.
-  label: string; // Vietnamese label
+  value: string;
+  label: string;
   description: string;
-  example: string;
-  requires_params: boolean;
 }
 
 export interface OperatorOption {
-  value: string; // "==" | "!=" | ">" | "<" | etc.
-  label: string; // Vietnamese label
+  value: string; // "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "not_in" | "contains"
+  label: string;
+}
+
+export interface ChannelInfo {
+  value: string;
+  status: "live" | "planned";
+}
+
+export interface ExternalResolverOption {
+  value: string;
+  label: string;
   description: string;
 }
 
 export interface NotificationMetadata {
   events: EventMetadata[];
-  channels: string[]; // ["socket", "email", "zalo", "sms"]
+  channels: ChannelInfo[];
   resolver_types: ResolverTypeOption[];
+  external_resolver_types: ExternalResolverOption[];
   operators: OperatorOption[];
+  existing_rule_events?: string[];
 }
 
 // ============================================

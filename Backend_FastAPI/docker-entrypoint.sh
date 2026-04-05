@@ -4,5 +4,8 @@ set -e
 echo "=== Running Alembic migrations ==="
 alembic upgrade head
 
-echo "=== Migrations complete. Starting application ==="
+echo "=== Syncing notification rules ==="
+python -m app.scripts.sync_notification_rules
+
+echo "=== Startup complete. Starting application ==="
 exec "$@"

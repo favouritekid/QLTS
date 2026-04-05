@@ -52,6 +52,17 @@ AsyncSessionLocal = sessionmaker(
 # === KHỞI TẠO REDIS CLIENT GỐC ===
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
+
+async def get_redis():
+    """Return the shared Redis client for direct operations.
+
+    Use safe_redis_* for simple get/set with circuit breaker protection.
+    Use get_redis() when you need SET NX, pipelines, or other advanced
+    operations not covered by safe_redis_* wrappers.
+    """
+    return redis_client
+
+
 # ===============================================================
 # === 🔧 CIRCUIT BREAKER PATTERN VỚI AIOBREAKER (SỬA LẠI) 🔧 ===
 # ===============================================================
@@ -94,10 +105,20 @@ async def safe_redis_exists(key: str) -> bool:
         return False
 
 
-async def safe_redis_set(key: str, value: str, ex: int):
-    """Set key trong Redis (an toàn qua circuit breaker)."""
+async def safe_redis_set(key: str, value: str, ex: int = None, nx: bool = False):
+    """Set key trong Redis (an toàn qua circuit breaker).
+
+    Args:
+        nx: If True, use SET NX (only set if key doesn't exist).
+            Returns True if key was set, False if already exists.
+    """
     try:
-        return await redis_breaker.call_async(redis_client.set, key, value, ex=ex)
+        kwargs = {}
+        if ex is not None:
+            kwargs["ex"] = ex
+        if nx:
+            kwargs["nx"] = True
+        return await redis_breaker.call_async(redis_client.set, key, value, **kwargs)
     except REDIS_BREAKER_EXCEPTIONS:
         log.error("Redis SET failed", key=key, exc_info=True)
         raise
@@ -185,6 +206,20 @@ async def safe_redis_expire(key: str, seconds: int):
     except REDIS_BREAKER_EXCEPTIONS:
         log.error("Redis EXPIRE failed", key=key, seconds=seconds, exc_info=True)
         return False
+
+
+async def safe_redis_incr(key: str, amount: int = 1):
+    """
+    Increment a Redis key by amount (safe with circuit breaker).
+
+    Phase C2: Used for per-user rate limiting (INCR + EXPIRE pattern).
+    Returns the new value as int, or None on failure.
+    """
+    try:
+        return await redis_breaker.call_async(redis_client.incr, key, amount)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis INCR failed", key=key, amount=amount, exc_info=True)
+        return None
 
 
 # ✅ FIX: Tạo async context manager cho pipeline

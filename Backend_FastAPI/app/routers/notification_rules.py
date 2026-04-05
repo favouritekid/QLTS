@@ -14,13 +14,16 @@ from typing import Optional, Dict, Any, List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from .. import database, models, schemas
+from ..config import settings
 from app.core.deps import CasbinAuth, get_notification_rule_for_admin  # Phase 2.2
-from ..core.event_metadata import get_all_events_metadata
+from ..core.event_catalog import get_notifiable_events
 from ..services import notification_rule_crud_service
+from ..repositories import NotificationTemplateRepository
 from ..utils.exceptions import BadRequest
 
 log = structlog.get_logger(__name__)
@@ -46,12 +49,27 @@ class OperatorOption(BaseModel):
     label: str
 
 
+class ChannelInfo(BaseModel):
+    """Channel with live/planned status"""
+    value: str
+    status: str  # "live" | "planned"
+
+
+class ExternalResolverTypeOption(BaseModel):
+    """External recipient resolver option for Zalo/SMS delivery"""
+    value: str
+    label: str
+    description: str
+
+
 class MetadataResponse(BaseModel):
     """Complete metadata for building notification rules dynamically"""
-    events: List[Dict[str, Any]]  # ✅ FIX: Changed from Dict to List
-    channels: List[str]
+    events: List[Dict[str, Any]]
+    channels: List[ChannelInfo]
     resolver_types: List[ResolverTypeOption]
+    external_resolver_types: List[ExternalResolverTypeOption]
     operators: List[OperatorOption]
+    existing_rule_events: List[str] = []  # Events that already have a DB rule (for duplicate warning)
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -59,6 +77,7 @@ class MetadataResponse(BaseModel):
 async def get_notification_metadata(
     request: Request,
     current_admin: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
 ):
     """
     ✅ NOTIFICATION 2.0 - PHASE 2: Get metadata for notification rule builder.
@@ -73,13 +92,38 @@ async def get_notification_metadata(
     """
     log.info("Fetching notification metadata", admin_id=current_admin.id)
 
-    # ✅ FIX: Convert events dict to list for frontend compatibility
-    events_dict = get_all_events_metadata()
-    events_list = list(events_dict.values())
+    # PR1: Serve from event_catalog — only "user" classification events
+    notifiable = get_notifiable_events()
+    events_list = [
+        {
+            "event": d.event.value,
+            "display_name": d.display_name,
+            "description": d.description,
+            "variables": [
+                {"name": v.name, "type": v.type, "description": v.description, "required": v.required}
+                for v in d.variables
+            ],
+            "filter_fields": [v.name for v in d.variables if v.required],
+            "default_channels": list(d.default_channels),
+            "category": d.category,
+            "condition_fields": [
+                {"path": cf.path, "type": cf.type, "description": cf.description, "operators": list(cf.operators)}
+                for cf in d.condition_fields
+            ],
+            "allowed_resolvers": list(d.allowed_resolvers),
+            "link_strategy": d.link_strategy,
+        }
+        for d in notifiable
+    ]
 
     return {
         "events": events_list,
-        "channels": ["socket", "email", "zalo", "sms"],
+        "channels": [
+            {"value": "browser", "status": "live"},
+            {"value": "email", "status": "live"},
+            {"value": "zalo", "status": "live" if settings.ZALO_ENABLED else "planned"},
+            {"value": "sms", "status": "planned"},
+        ],
         "resolver_types": [
             {
                 "value": "lead_owner",
@@ -112,14 +156,26 @@ async def get_notification_metadata(
                 "description": "Gửi cho danh sách user cụ thể"
             },
             {
-                "value": "composite",
-                "label": "Composite (Multiple Resolvers)",
-                "description": "Kết hợp nhiều resolver"
+                "value": "collaborator_user",
+                "label": "Collaborator User",
+                "description": "Gửi cho user liên kết với cộng tác viên"
+            }
+        ],
+        "external_resolver_types": [
+            {
+                "value": "lead_contact",
+                "label": "Lead (qua Zalo/SMS)",
+                "description": "Gửi cho lead qua số điện thoại/Zalo"
             },
             {
-                "value": "actor_excluded",
-                "label": "Exclude Actor",
-                "description": "Gửi nhưng loại trừ người thực hiện hành động"
+                "value": "admission_contact",
+                "label": "Hồ sơ tuyển sinh (qua Zalo/SMS)",
+                "description": "Gửi cho ứng viên qua số điện thoại/Zalo"
+            },
+            {
+                "value": "collaborator_contact",
+                "label": "Cộng tác viên (qua Zalo/SMS)",
+                "description": "Gửi cho cộng tác viên qua số điện thoại/Zalo"
             }
         ],
         "operators": [
@@ -132,7 +188,101 @@ async def get_notification_metadata(
             {"value": "in", "label": "In List"},
             {"value": "not_in", "label": "Not In List"},
             {"value": "contains", "label": "Contains"},
-        ]
+        ],
+        "existing_rule_events": [
+            row[0] for row in (
+                await db.execute(
+                    select(models.NotificationRule.event).distinct()
+                )
+            ).all()
+        ],
+    }
+
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.post("/preview", response_model=schemas.NotificationRulePreviewResponse)
+async def preview_notification_rule(
+    request: Request,
+    rule_data: schemas.NotificationRulePreview,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """
+    PR2: Render preview of notification content for each action/branch.
+
+    Frontend sends sample_payload with concrete values for template variables.
+    Backend renders templates and returns per-action previews with code-owned link.
+    Preview output is plain text — no HTML rendering.
+    """
+    from string import Template
+    from app.core.event_catalog import get_event_by_key, render_link
+
+    definition = get_event_by_key(rule_data.event)
+    if not definition:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown event: {rule_data.event}",
+        )
+    if definition.notification_class != "user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Event '{rule_data.event}' is not a configurable user event.",
+        )
+
+    payload = rule_data.sample_payload
+    link = render_link(definition.event, payload)
+
+    previews = []
+    for action in rule_data.actions or []:
+        mode = action.content_mode or "inherit_default"
+
+        if mode == "inline_override" and action.content_override:
+            title = Template(action.content_override.get("title_template", "")).safe_substitute(payload)
+            message = Template(action.content_override.get("message_template", "")).safe_substitute(payload)
+        elif mode == "template_override" and action.template_code:
+            # Lookup real template content for preview
+            tpl = await NotificationTemplateRepository(db).get_by_template_code(
+                action.template_code
+            )
+            if tpl:
+                title = Template(tpl.title_template).safe_substitute(payload)
+                message = Template(tpl.message_template).safe_substitute(payload)
+            else:
+                title = f"[Template not found: {action.template_code}]"
+                message = ""
+        else:
+            title = Template(rule_data.title_template).safe_substitute(payload)
+            message = Template(rule_data.message_template).safe_substitute(payload)
+
+        previews.append({
+            "step": action.step,
+            "channel": action.channel,
+            "branch_key": action.branch_key,
+            "rendered_title": title,
+            "rendered_message": message,
+            "rendered_link": link,
+            "content_mode": mode,
+            "delay_minutes": action.delay_minutes or 0,
+        })
+
+    # If no actions provided, render a single default preview
+    if not previews:
+        previews.append({
+            "step": 1,
+            "channel": "browser",
+            "branch_key": None,
+            "rendered_title": Template(rule_data.title_template).safe_substitute(payload),
+            "rendered_message": Template(rule_data.message_template).safe_substitute(payload),
+            "rendered_link": link,
+            "content_mode": "inherit_default",
+            "delay_minutes": 0,
+        })
+
+    return {
+        "event": rule_data.event,
+        "link_strategy": definition.link_strategy,
+        "rendered_link": link,
+        "actions": previews,
     }
 
 

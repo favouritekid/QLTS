@@ -1726,6 +1726,174 @@ RequireManager = Depends(require_admin_or_manager)
 RequireStaff = Depends(require_any_staff)
 
 
+# ============================================================================
+# D4: DELIVERY OPS IDOR SCOPING
+# ============================================================================
+
+
+class DeliveryScopeFilter:
+    """Pre-resolved scope for notification delivery queries."""
+    __slots__ = ("scope_kind", "allowed_user_ids", "allowed_unit_ids", "officer_id")
+
+    def __init__(
+        self,
+        scope_kind: str,
+        allowed_user_ids: Optional[List[int]] = None,
+        allowed_unit_ids: Optional[List[int]] = None,
+        officer_id: Optional[int] = None,
+    ):
+        self.scope_kind = scope_kind
+        self.allowed_user_ids = allowed_user_ids
+        self.allowed_unit_ids = allowed_unit_ids
+        self.officer_id = officer_id
+
+
+async def get_delivery_scope_filter(
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> DeliveryScopeFilter:
+    """
+    Resolve delivery scope: Admin=all, Manager=unit hierarchy, Officer=self.
+
+    Performance note (H4): For managers, executes 2 queries per request
+    (hierarchy CTE + user IDs). Acceptable for current scale (<100 units).
+    If this becomes a bottleneck, consider caching allowed_user_ids in Redis
+    with TTL keyed by (user_id, unit_id) and invalidating on unit changes.
+    """
+    if current_user.role == UserRole.ADMIN:
+        return DeliveryScopeFilter(scope_kind="all")
+
+    if current_user.role == UserRole.MANAGER and current_user.unit_id:
+        from ..repositories.organization_repository import OrganizationRepository
+        org_repo = OrganizationRepository(db)
+        descendant_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+        from sqlalchemy import select
+        user_q = select(models.User.id).where(models.User.unit_id.in_(descendant_unit_ids))
+        result = await db.execute(user_q)
+        allowed_ids = [row[0] for row in result.all()]
+        return DeliveryScopeFilter(
+            scope_kind="unit",
+            allowed_user_ids=allowed_ids,
+            allowed_unit_ids=descendant_unit_ids,
+        )
+
+    return DeliveryScopeFilter(
+        scope_kind="self",
+        allowed_user_ids=[current_user.id],
+        officer_id=current_user.id,
+    )
+
+
+async def _check_external_source_in_units(
+    db: AsyncSession, record, unit_ids: List[int]
+) -> bool:
+    """Check if an external delivery's source resource belongs to given units.
+
+    Supports source_type='lead', 'admission_profile', and 'collaborator'.
+    Unknown source types return False (deny by default).
+    """
+    if not unit_ids:
+        return False
+    from sqlalchemy import select
+    if record.source_type == "lead":
+        from app.models.lead import Lead
+        q = select(Lead.unit_id).where(Lead.id == record.source_id)
+        result = await db.execute(q)
+        row = result.first()
+        return row is not None and row[0] in unit_ids
+    if record.source_type == "admission_profile":
+        from app.models.admission import AdmissionProfile
+        from app.models.lead import Lead
+        q = (
+            select(Lead.unit_id)
+            .join(AdmissionProfile, AdmissionProfile.lead_id == Lead.id)
+            .where(AdmissionProfile.id == record.source_id)
+        )
+        result = await db.execute(q)
+        row = result.first()
+        return row is not None and row[0] in unit_ids
+    if record.source_type == "collaborator":
+        from app.models.collaborator import Collaborator
+        q = select(Collaborator.unit_id).where(Collaborator.id == record.source_id)
+        result = await db.execute(q)
+        row = result.first()
+        return row is not None and row[0] in unit_ids
+    return False
+
+
+async def _check_external_source_assigned_to(
+    db: AsyncSession, record, officer_id: int
+) -> bool:
+    """Check if an external delivery's source is assigned to the given officer.
+
+    Supports:
+    - source_type='lead': Lead.assigned_officer_id
+    - source_type='admission_profile': AdmissionProfile → Lead.assigned_officer_id
+    - source_type='collaborator': Collaborator.managed_by_officer_id
+    """
+    from sqlalchemy import select
+    from app.models.lead import Lead
+    if record.source_type == "lead":
+        q = select(Lead.assigned_officer_id).where(Lead.id == record.source_id)
+    elif record.source_type == "admission_profile":
+        from app.models.admission import AdmissionProfile
+        q = (
+            select(Lead.assigned_officer_id)
+            .join(AdmissionProfile, AdmissionProfile.lead_id == Lead.id)
+            .where(AdmissionProfile.id == record.source_id)
+        )
+    elif record.source_type == "collaborator":
+        from app.models.collaborator import Collaborator
+        q = select(Collaborator.managed_by_officer_id).where(Collaborator.id == record.source_id)
+    else:
+        return False
+    result = await db.execute(q)
+    row = result.first()
+    return row is not None and row[0] == officer_id
+
+
+async def get_delivery_for_user(
+    delivery_id: int = Path(..., description="Delivery record ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Get single delivery with IDOR check. Returns 404 on scope violation."""
+    from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+    repo = NotificationDeliveryRepository(db)
+    record = await repo.get_by_id(delivery_id)
+    if not record:
+        raise ResourceNotFoundError(detail="Delivery record not found")
+
+    if current_user.role == UserRole.ADMIN:
+        return record
+
+    if current_user.role == UserRole.MANAGER and current_user.unit_id:
+        from ..repositories.organization_repository import OrganizationRepository
+        org_repo = OrganizationRepository(db)
+        descendant_unit_ids = await org_repo.get_descendant_unit_ids(current_user.unit_id)
+        from sqlalchemy import select
+        if record.user_id:
+            user_q = select(models.User.unit_id).where(models.User.id == record.user_id)
+            result = await db.execute(user_q)
+            row = result.first()
+            if row and row[0] in descendant_unit_ids:
+                return record
+        elif record.recipient_kind == "external" and record.source_type and record.source_id:
+            # External deliveries: check source ownership via unit hierarchy
+            if await _check_external_source_in_units(db, record, descendant_unit_ids):
+                return record
+        raise ResourceNotFoundError(detail="Delivery record not found")
+
+    # Officer scope
+    if record.user_id == current_user.id:
+        return record
+    if record.user_id is None and record.recipient_kind == "external":
+        if record.source_type in ("lead", "admission_profile", "collaborator") and record.source_id:
+            if await _check_external_source_assigned_to(db, record, current_user.id):
+                return record
+    raise ResourceNotFoundError(detail="Delivery record not found")
+
+
 async def get_config_filter(
     active_only: bool = True,
     current_user: models.User = Depends(get_current_active_user),

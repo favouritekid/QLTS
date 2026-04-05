@@ -99,7 +99,7 @@ class NotificationRuleRepository(BaseRepository[models.NotificationRule]):
             title_template=rule_data.title_template,
             message_template=rule_data.message_template,
             notification_type=rule_data.notification_type,
-            link_template=rule_data.link_template,
+            link_template=None,  # PR1: link is code-owned (catalog), not DB-stored
             channels=rule_data.channels,
             recipient_config=recipient_config_dict,
             condition=rule_data.condition,
@@ -118,7 +118,12 @@ class NotificationRuleRepository(BaseRepository[models.NotificationRule]):
                 channel=action_data.channel,
                 template_code=action_data.template_code,
                 delay_minutes=action_data.delay_minutes,
-                config=action_data.config
+                config=action_data.config,
+                # Phase 3: delivery branch fields
+                recipient_config=action_data.recipient_config.model_dump() if action_data.recipient_config else None,
+                content_mode=action_data.content_mode,
+                content_override=action_data.content_override,
+                branch_key=action_data.branch_key,
             )
             self.db.add(new_action)
 
@@ -146,7 +151,12 @@ class NotificationRuleRepository(BaseRepository[models.NotificationRule]):
                 channel=action_data.channel,
                 template_code=action_data.template_code,
                 delay_minutes=action_data.delay_minutes,
-                config=action_data.config
+                config=action_data.config,
+                # Phase 3: delivery branch fields
+                recipient_config=action_data.recipient_config.model_dump() if action_data.recipient_config else None,
+                content_mode=action_data.content_mode,
+                content_override=action_data.content_override,
+                branch_key=action_data.branch_key,
             )
             self.db.add(new_action)
 

@@ -1,9 +1,22 @@
 # app/core/event_metadata.py
 """
+⚠️ DEPRECATED (PR1 — notification refactor)
+
+This module is superseded by ``app.core.event_catalog`` which now provides
+both display metadata AND technical config in a single ``EventDefinition``.
+
+The metadata router now serves from ``event_catalog.get_notifiable_events()``
+instead of ``get_all_events_metadata()``.
+
+Kept temporarily for backward compatibility with any code that still
+imports ``EventVariable``, ``ConditionField``, or ``EventMetadata``.
+
+--- Original docstring ---
 ✅ NOTIFICATION 2.0 - PHASE 2: Event Metadata Registry
 
-Central registry defining metadata for all system events. This is the "source of truth"
-for notification variable definitions, making the frontend completely dynamic.
+Derived contract defining metadata for admin UI and frontend rule builders.
+NOT the runtime source of truth — dispatch() uses notification_registry.py and DB rules.
+This registry drives the admin metadata API for dynamic form generation.
 
 Backend defines:
     - Available variables for each event
@@ -39,6 +52,52 @@ class EventVariable:
 
 
 @dataclass
+class ConditionField:
+    """
+    Definition of a field available for rule conditions.
+
+    Unlike EventVariable (template-visible flat payload fields),
+    ConditionField uses nested paths evaluated against the condition context.
+    """
+    path: str       # "actor.role", "event.new_status_id", "lead.source"
+    type: str       # "string", "integer", "boolean", "array", "datetime"
+    description: str  # Vietnamese UI label
+    operators: list   # ["eq", "ne", "in", "not_in", "contains"]
+
+
+# Operator sets by type
+_OPS_STRING = ["eq", "ne", "in", "not_in", "contains"]
+_OPS_NUMERIC = ["eq", "ne", "gt", "gte", "lt", "lte", "in", "not_in"]
+_OPS_BOOLEAN = ["eq", "ne"]
+_OPS_ARRAY = ["contains"]
+
+# Common actor fields (most events have these)
+_ACTOR_CONDITION_FIELDS = [
+    ConditionField("actor.id", "integer", "ID người thực hiện", _OPS_NUMERIC),
+    ConditionField("actor.name", "string", "Tên người thực hiện", _OPS_STRING),
+    ConditionField("actor.role", "string", "Vai trò người thực hiện (VD: admin, manager, officer)", _OPS_STRING),
+    ConditionField("actor.unit_id", "integer", "ID đơn vị của người thực hiện", _OPS_NUMERIC),
+]
+
+# Lead entity fields (events that have lead_id/lead_name/unit_id in payload)
+_LEAD_ENTITY_CONDITION_FIELDS = [
+    ConditionField("lead.id", "integer", "ID của lead", _OPS_NUMERIC),
+    ConditionField("lead.name", "string", "Tên lead", _OPS_STRING),
+    ConditionField("lead.source", "string", "Nguồn lead (VD: website, facebook)", _OPS_STRING),
+    ConditionField("lead.consultation_status_id", "string", "Mã trạng thái tư vấn hiện tại (VD: new, contacted)", _OPS_STRING),
+    ConditionField("lead.stage_id", "string", "Mã giai đoạn pipeline hiện tại (VD: NEW_LEAD, CONTACTED)", _OPS_STRING),
+    ConditionField("lead.unit_id", "integer", "ID đơn vị của lead", _OPS_NUMERIC),
+    ConditionField("lead.officer_id", "integer", "ID officer phụ trách lead", _OPS_NUMERIC),
+]
+
+# Consultation fields
+_CONSULTATION_CONDITION_FIELDS = [
+    ConditionField("consultation.id", "integer", "ID record tư vấn", _OPS_NUMERIC),
+    ConditionField("consultation.status_id", "string", "Mã trạng thái tư vấn", _OPS_STRING),
+]
+
+
+@dataclass
 class EventMetadata:
     """
     Complete metadata for a system event.
@@ -54,12 +113,27 @@ class EventMetadata:
     description: str
     variables: List[EventVariable]
     filter_fields: List[str]
-    default_channels: List[str] = field(default_factory=lambda: ["socket"])
+    default_channels: List[str] = field(default_factory=lambda: ["browser"])
+    # NOTE: default_channels currently only includes "browser" and "email".
+    # "zalo" and "sms" are planned/gated channels (see NotificationChannel in
+    # event_groups.py). They are defined in the enum but default to False in
+    # DEFAULT_GROUP_CHANNELS and are NOT listed in any event's default_channels
+    # here until their delivery backends are production-ready.
+    # See NOTIFICATION_PLAN_SPEC_ADDENDUM.md for the gating roadmap.
     category: str = "general"
+    condition_fields: List[ConditionField] = field(default_factory=list)
 
 
 # =============================================================================
 # ✅ EVENT METADATA REGISTRY - 27 EVENTS DEFINED
+#
+# Channel inventory:
+#   browser  — active, delivered via Socket.IO + DB row
+#   email    — active, delivered via EmailService / Celery worker
+#   zalo     — planned (ZNS Phase 1), gated behind feature flag, not in any
+#              default_channels list below until delivery backend is live
+#   sms      — planned (future), gated behind feature flag, not in any
+#              default_channels list below until delivery backend is live
 # =============================================================================
 
 EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
@@ -76,13 +150,15 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("lead_id", "integer", "ID của lead"),
             EventVariable("officer_id", "integer", "ID officer được assign"),
             EventVariable("actor_id", "integer", "ID người thực hiện"),
+            EventVariable("actor_name", "string", "Tên người thực hiện", required=False),
             EventVariable("lead_name", "string", "Tên lead", required=False),
             EventVariable("lead_phone", "string", "SĐT lead", required=False),
             EventVariable("offering_name", "string", "Tên ngành/chương trình", required=False),
         ],
         filter_fields=["lead_id", "officer_id", "actor_id"],
-        default_channels=["socket", "email"],
-        category="lead"
+        default_channels=["browser", "email"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS,
     ),
 
     SystemEvents.LEAD_ASSIGNMENT_FAILED: EventMetadata(
@@ -95,10 +171,12 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("reason", "string", "Lý do thất bại"),
             EventVariable("lead_name", "string", "Tên lead", required=False),
             EventVariable("actor_id", "integer", "ID người thực hiện"),
+            EventVariable("actor_name", "string", "Tên người thực hiện", required=False),
         ],
         filter_fields=["lead_id", "unit_id", "reason"],
-        default_channels=["socket", "email"],
-        category="lead"
+        default_channels=["browser", "email"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS,
     ),
 
     SystemEvents.LEAD_REASSIGNED: EventMetadata(
@@ -112,11 +190,16 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("old_unit_id", "integer", "ID đơn vị cũ"),
             EventVariable("new_unit_id", "integer", "ID đơn vị mới"),
             EventVariable("actor_id", "integer", "ID người thực hiện"),
+            EventVariable("actor_name", "string", "Tên người thực hiện", required=False),
             EventVariable("reason", "string", "Lý do chuyển giao", required=False),
         ],
         filter_fields=["lead_id", "old_officer_id", "new_officer_id", "old_unit_id", "new_unit_id"],
-        default_channels=["socket", "email"],
-        category="lead"
+        default_channels=["browser", "email"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS + [
+            ConditionField("event.old_unit_id", "integer", "ID đơn vị cũ", _OPS_NUMERIC),
+            ConditionField("event.new_unit_id", "integer", "ID đơn vị mới", _OPS_NUMERIC),
+        ],
     ),
 
     SystemEvents.LEAD_STATUS_CHANGED: EventMetadata(
@@ -125,14 +208,27 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         description="Khi lead chuyển sang giai đoạn khác trong pipeline",
         variables=[
             EventVariable("lead_id", "integer", "ID của lead"),
+            EventVariable("lead_name", "string", "Tên lead", required=False),
             EventVariable("officer_id", "integer", "ID officer phụ trách", required=False),
+            EventVariable("officer_name", "string", "Tên officer phụ trách", required=False),
             EventVariable("old_status", "string", "Trạng thái cũ"),
             EventVariable("new_status", "string", "Trạng thái mới"),
+            EventVariable("old_stage", "integer", "ID giai đoạn pipeline cũ", required=False),
+            EventVariable("new_stage", "integer", "ID giai đoạn pipeline mới", required=False),
+            EventVariable("updated_fields", "array", "Danh sách trường đã thay đổi", required=False),
             EventVariable("actor_id", "integer", "ID người thực hiện"),
+            EventVariable("actor_name", "string", "Tên người thực hiện", required=False),
         ],
-        filter_fields=["lead_id", "officer_id", "old_status", "new_status"],
-        default_channels=["socket"],
-        category="lead"
+        filter_fields=["lead_id", "officer_id", "old_status", "new_status", "old_stage", "new_stage", "updated_fields"],
+        default_channels=["browser"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS + [
+            ConditionField("event.old_status_id", "string", "Mã trạng thái cũ", _OPS_STRING),
+            ConditionField("event.new_status_id", "string", "Mã trạng thái mới", _OPS_STRING),
+            ConditionField("event.old_stage_id", "string", "Mã giai đoạn pipeline cũ", _OPS_STRING),
+            ConditionField("event.new_stage_id", "string", "Mã giai đoạn pipeline mới", _OPS_STRING),
+            ConditionField("event.updated_fields", "array", "Danh sách trường đã thay đổi", _OPS_ARRAY),
+        ],
     ),
 
     SystemEvents.LEAD_CREATED: EventMetadata(
@@ -145,10 +241,38 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("lead_name", "string", "Tên lead", required=False),
             EventVariable("source", "string", "Nguồn lead", required=False),
             EventVariable("actor_id", "integer", "ID người tạo"),
+            EventVariable("actor_name", "string", "Tên người tạo", required=False),
         ],
         filter_fields=["lead_id", "unit_id", "source"],
-        default_channels=["socket"],
-        category="lead"
+        default_channels=["browser"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS,
+    ),
+
+    SystemEvents.LEAD_UPDATED: EventMetadata(
+        event=SystemEvents.LEAD_UPDATED,
+        display_name="Lead được cập nhật",
+        description="Khi lead được cập nhật thông tin",
+        variables=[
+            EventVariable("lead_id", "integer", "ID của lead"),
+            EventVariable("updated_fields", "array", "Danh sách trường đã thay đổi", required=False),
+            EventVariable("status_changed", "boolean", "Có thay đổi trạng thái không", required=False),
+            EventVariable("actor_id", "integer", "ID người cập nhật"),
+            EventVariable("actor_name", "string", "Tên người cập nhật", required=False),
+            EventVariable("updated_by", "string", "Tên người cập nhật (alias)", required=False),
+            EventVariable("updated_summary", "string", "Tóm tắt trường đã thay đổi", required=False),
+            EventVariable("updated_at", "datetime", "Thời điểm cập nhật (ISO)", required=False),
+            EventVariable("message", "string", "Thông báo cập nhật", required=False),
+        ],
+        filter_fields=["lead_id", "status_changed"],
+        default_channels=["browser"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + [
+            ConditionField("lead.id", "integer", "ID của lead", _OPS_NUMERIC),
+        ] + [
+            ConditionField("event.status_changed", "boolean", "Có thay đổi trạng thái không", _OPS_BOOLEAN),
+            ConditionField("event.updated_fields", "array", "Danh sách trường đã thay đổi", _OPS_ARRAY),
+        ],
     ),
 
     SystemEvents.LEAD_DELETED: EventMetadata(
@@ -161,10 +285,52 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("unit_id", "integer", "ID đơn vị"),
             EventVariable("officer_id", "integer", "ID officer đã phụ trách", required=False),
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
+            EventVariable("actor_name", "string", "Tên admin thực hiện", required=False),
         ],
         filter_fields=["lead_id", "unit_id", "officer_id"],
-        default_channels=["socket"],
-        category="lead"
+        default_channels=["browser"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS,
+    ),
+
+    SystemEvents.LEAD_RESTORED: EventMetadata(
+        event=SystemEvents.LEAD_RESTORED,
+        display_name="Lead được khôi phục",
+        description="Khi lead bị xóa được khôi phục lại",
+        variables=[
+            EventVariable("lead_id", "integer", "ID của lead"),
+            EventVariable("lead_name", "string", "Tên lead", required=False),
+            EventVariable("unit_id", "integer", "ID đơn vị"),
+            EventVariable("officer_id", "integer", "ID officer phụ trách", required=False),
+            EventVariable("actor_id", "integer", "ID admin thực hiện"),
+            EventVariable("actor_name", "string", "Tên admin thực hiện"),
+        ],
+        filter_fields=["lead_id", "unit_id", "officer_id"],
+        default_channels=["browser"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS,
+    ),
+
+    SystemEvents.LEAD_IMPORTED: EventMetadata(
+        event=SystemEvents.LEAD_IMPORTED,
+        display_name="Import lead hàng loạt",
+        description="Khi lead được import từ file CSV/Excel",
+        variables=[
+            EventVariable("total_imported", "integer", "Số lead đã import"),
+            EventVariable("sample_lead_ids", "array", "Danh sách ID mẫu (tối đa 10)", required=False),
+            EventVariable("unit_id", "integer", "ID đơn vị"),
+            EventVariable("filename", "string", "Tên file import"),
+            EventVariable("actor_id", "integer", "ID người thực hiện"),
+            EventVariable("actor_name", "string", "Tên người thực hiện"),
+        ],
+        filter_fields=["unit_id"],
+        default_channels=["browser"],
+        category="lead",
+        condition_fields=_ACTOR_CONDITION_FIELDS + [
+            ConditionField("event.unit_id", "integer", "ID đơn vị import", _OPS_NUMERIC),
+            ConditionField("event.total_imported", "integer", "Số lead đã import", _OPS_NUMERIC),
+            ConditionField("event.filename", "string", "Tên file import", _OPS_STRING),
+        ],
     ),
 
     # =========================================================================
@@ -181,10 +347,13 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("officer_id", "integer", "ID officer tư vấn", required=False),
             EventVariable("status_id", "string", "Trạng thái tư vấn"),
             EventVariable("actor_id", "integer", "ID người tạo"),
+            EventVariable("actor_name", "string", "Tên người tạo", required=False),
+            EventVariable("unit_id", "integer", "ID đơn vị"),
         ],
-        filter_fields=["consultation_id", "lead_id", "officer_id", "status_id"],
-        default_channels=["socket"],
-        category="consultation"
+        filter_fields=["consultation_id", "lead_id", "officer_id", "status_id", "unit_id"],
+        default_channels=["browser"],
+        category="consultation",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS + _CONSULTATION_CONDITION_FIELDS,
     ),
 
     SystemEvents.CONSULTATION_UPDATED: EventMetadata(
@@ -198,10 +367,15 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("old_status_id", "string", "Trạng thái cũ", required=False),
             EventVariable("new_status_id", "string", "Trạng thái mới"),
             EventVariable("actor_id", "integer", "ID người cập nhật"),
+            EventVariable("actor_name", "string", "Tên người cập nhật", required=False),
         ],
         filter_fields=["consultation_id", "lead_id", "officer_id", "new_status_id"],
-        default_channels=["socket"],
-        category="consultation"
+        default_channels=["browser"],
+        category="consultation",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS + _CONSULTATION_CONDITION_FIELDS + [
+            ConditionField("event.old_status_id", "string", "Mã trạng thái tư vấn cũ", _OPS_STRING),
+            ConditionField("event.new_status_id", "string", "Mã trạng thái tư vấn mới", _OPS_STRING),
+        ],
     ),
 
     SystemEvents.CONSULTATION_DELETED: EventMetadata(
@@ -213,10 +387,12 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("lead_id", "integer", "ID của lead"),
             EventVariable("officer_id", "integer", "ID officer", required=False),
             EventVariable("actor_id", "integer", "ID người xóa"),
+            EventVariable("actor_name", "string", "Tên người xóa", required=False),
         ],
         filter_fields=["consultation_id", "lead_id", "officer_id"],
-        default_channels=["socket"],
-        category="consultation"
+        default_channels=["browser"],
+        category="consultation",
+        condition_fields=_ACTOR_CONDITION_FIELDS + _LEAD_ENTITY_CONDITION_FIELDS + _CONSULTATION_CONDITION_FIELDS,
     ),
 
     SystemEvents.CONSULTATION_REMINDER: EventMetadata(
@@ -233,12 +409,17 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("minutes_until", "integer", "Số phút còn lại"),
         ],
         filter_fields=["consultation_id", "lead_id", "officer_id", "minutes_until"],
-        default_channels=["socket", "email"],
-        category="consultation"
+        default_channels=["browser", "email"],
+        category="consultation",
+        condition_fields=_LEAD_ENTITY_CONDITION_FIELDS + _CONSULTATION_CONDITION_FIELDS + [
+            ConditionField("event.minutes_until", "integer", "Số phút còn lại", _OPS_NUMERIC),
+            ConditionField("event.scheduled_at", "datetime", "Thời gian hẹn", _OPS_NUMERIC),
+        ],
     ),
 
     # =========================================================================
     # APPLICATION EVENTS (4 events)
+    # NOTE: APPLICATION_* is a legacy notification namespace for AdmissionProfile.
     # =========================================================================
 
     SystemEvents.APPLICATION_CREATED: EventMetadata(
@@ -253,7 +434,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người tạo"),
         ],
         filter_fields=["application_id", "lead_id", "officer_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="application"
     ),
 
@@ -270,7 +451,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người thay đổi"),
         ],
         filter_fields=["application_id", "lead_id", "officer_id", "new_status"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="application"
     ),
 
@@ -286,7 +467,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin xóa"),
         ],
         filter_fields=["application_id", "lead_id", "officer_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="application"
     ),
 
@@ -306,7 +487,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người tạo"),
         ],
         filter_fields=["dorm_id", "fee_id", "amount"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="finance"
     ),
 
@@ -322,7 +503,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người ghi nhận"),
         ],
         filter_fields=["payment_id", "user_id", "payment_type", "amount"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="finance"
     ),
 
@@ -338,7 +519,27 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("fee_type", "string", "Loại phí"),
         ],
         filter_fields=["fee_id", "user_id", "days_overdue", "fee_type"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
+        category="finance"
+    ),
+
+    SystemEvents.PAYMENT_VERIFIED: EventMetadata(
+        event=SystemEvents.PAYMENT_VERIFIED,
+        display_name="Thanh toán được xác nhận",
+        description="Khi thanh toán đã được xác minh (checker xác nhận)",
+        variables=[
+            EventVariable("payment_id", "integer", "ID thanh toán"),
+            EventVariable("invoice_id", "integer", "ID hóa đơn"),
+            EventVariable("fee_id", "integer", "ID phí"),
+            EventVariable("amount", "string", "Số tiền thanh toán"),
+            EventVariable("verified_by_id", "integer", "ID người xác nhận"),
+            EventVariable("verified_at", "datetime", "Thời điểm xác nhận"),
+            EventVariable("admission_profile_id", "integer", "ID hồ sơ tuyển sinh"),
+            EventVariable("lead_id", "integer", "ID lead"),
+            EventVariable("unit_id", "integer", "ID đơn vị"),
+        ],
+        filter_fields=["payment_id", "fee_id", "amount", "admission_profile_id"],
+        default_channels=["browser", "email"],
         category="finance"
     ),
 
@@ -357,7 +558,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người phân"),
         ],
         filter_fields=["dorm_id", "room_id", "student_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="dorm"
     ),
 
@@ -374,7 +575,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("reporter_id", "integer", "ID người báo cáo"),
         ],
         filter_fields=["request_id", "dorm_id", "priority"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="dorm"
     ),
 
@@ -394,7 +595,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("unit_id", "integer", "ID đơn vị phụ trách", required=False),
         ],
         filter_fields=["asset_id", "maintenance_type", "unit_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="asset"
     ),
 
@@ -410,7 +611,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người cho mượn"),
         ],
         filter_fields=["asset_id", "borrower_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="asset"
     ),
 
@@ -429,7 +630,22 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("expires_at", "datetime", "Thời gian hết hạn", required=False),
         ],
         filter_fields=["severity"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
+        category="system"
+    ),
+
+    SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE: EventMetadata(
+        event=SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE,
+        display_name="Lịch nghỉ lễ chưa đầy đủ",
+        description="Lịch nghỉ lễ âm lịch cho năm tới chưa được cấu hình",
+        variables=[
+            EventVariable("severity", "string", "Mức độ"),
+            EventVariable("message", "string", "Nội dung cảnh báo"),
+            EventVariable("action_url", "string", "URL cấu hình lịch nghỉ", required=False),
+            EventVariable("year", "integer", "Năm chưa đầy đủ"),
+        ],
+        filter_fields=["year"],
+        default_channels=["browser", "email"],
         category="system"
     ),
 
@@ -444,7 +660,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin tạo"),
         ],
         filter_fields=["priority"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="system"
     ),
 
@@ -460,7 +676,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
         ],
         filter_fields=["user_id", "old_role", "new_role", "unit_id"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
         category="system"
     ),
 
@@ -476,7 +692,21 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
         ],
         filter_fields=["user_id", "reason"],
-        default_channels=["socket", "email"],
+        default_channels=["browser", "email"],
+        category="system"
+    ),
+
+    SystemEvents.USER_PROFILE_UPDATED: EventMetadata(
+        event=SystemEvents.USER_PROFILE_UPDATED,
+        display_name="Cập nhật hồ sơ người dùng",
+        description="Khi admin cập nhật hồ sơ người dùng",
+        variables=[
+            EventVariable("user_id", "integer", "ID user bị ảnh hưởng"),
+            EventVariable("updated_fields", "string", "Các trường thay đổi"),
+            EventVariable("actor_id", "integer", "ID admin thực hiện"),
+        ],
+        filter_fields=["user_id"],
+        default_channels=["browser"],
         category="system"
     ),
 
@@ -496,7 +726,7 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID admin thực hiện"),
         ],
         filter_fields=["config_type", "operation"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="pipeline"
     ),
 
@@ -517,8 +747,31 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
             EventVariable("actor_id", "integer", "ID người thay đổi"),
         ],
         filter_fields=["officer_id", "new_status", "unit_id"],
-        default_channels=["socket"],
+        default_channels=["browser"],
         category="operational"
+    ),
+
+    # =========================================================================
+    # SECURITY EVENTS
+    # =========================================================================
+
+    SystemEvents.SUSPICIOUS_LOGIN: EventMetadata(
+        event=SystemEvents.SUSPICIOUS_LOGIN,
+        display_name="Đăng nhập đáng ngờ",
+        description="Khi phát hiện đăng nhập bất thường (IP mới, thiết bị mới, vị trí mới)",
+        variables=[
+            EventVariable("user_id", "integer", "ID người dùng"),
+            EventVariable("login_history_id", "integer", "ID lịch sử đăng nhập"),
+            EventVariable("ip_address", "string", "Địa chỉ IP"),
+            EventVariable("location", "string", "Vị trí (thành phố, quốc gia)", required=False),
+            EventVariable("device", "string", "Thông tin thiết bị/trình duyệt", required=False),
+            EventVariable("risk_score", "integer", "Điểm rủi ro (0-100)", required=False),
+            EventVariable("anomalies", "string", "Danh sách bất thường", required=False),
+            EventVariable("actor_id", "integer", "ID người đăng nhập"),
+        ],
+        filter_fields=["user_id", "risk_score", "ip_address"],
+        default_channels=["browser", "email"],
+        category="security"
     ),
 }
 
@@ -564,7 +817,16 @@ def get_all_events_metadata() -> Dict[str, Dict]:
             ],
             "filter_fields": metadata.filter_fields,
             "default_channels": metadata.default_channels,
-            "category": metadata.category
+            "category": metadata.category,
+            "condition_fields": [
+                {
+                    "path": cf.path,
+                    "type": cf.type,
+                    "description": cf.description,
+                    "operators": cf.operators,
+                }
+                for cf in metadata.condition_fields
+            ],
         }
     return result
 

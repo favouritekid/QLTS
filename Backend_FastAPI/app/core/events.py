@@ -144,6 +144,40 @@ class SystemEvents(str, Enum):
     Recipients: Previously assigned officer, unit managers
     """
 
+    LEAD_RESTORED = "lead_restored"
+    """
+    Triggered when a soft-deleted lead is restored.
+
+    Payload Schema:
+        {
+            "lead_id": int,
+            "lead_name": Optional[str],
+            "unit_id": int,
+            "officer_id": Optional[int],
+            "actor_id": int,
+            "actor_name": str
+        }
+
+    Recipients: Lead's assigned officer (if any), unit managers
+    """
+
+    LEAD_IMPORTED = "lead_imported"
+    """
+    Triggered when leads are bulk-imported from a file.
+
+    Payload Schema:
+        {
+            "total_imported": int,
+            "sample_lead_ids": List[int],    # Max 10 IDs for reference
+            "unit_id": int,
+            "filename": str,
+            "actor_id": int,
+            "actor_name": str
+        }
+
+    Recipients: Unit managers (awareness of bulk operations)
+    """
+
     # =========================================================================
     # CONSULTATION EVENTS
     # =========================================================================
@@ -216,6 +250,9 @@ class SystemEvents(str, Enum):
 
     # =========================================================================
     # APPLICATION EVENTS
+    # NOTE: APPLICATION_* is a legacy notification namespace for AdmissionProfile.
+    # The active domain entity is AdmissionProfile, not Application.
+    # Do not reuse APPLICATION_CREATED for approval/enrollment — use APPLICATION_STATUS_CHANGED.
     # =========================================================================
 
     APPLICATION_CREATED = "application_created"
@@ -317,6 +354,30 @@ class SystemEvents(str, Enum):
         }
 
     Recipients: The user with overdue payment, finance staff
+    """
+
+    PAYMENT_VERIFIED = "payment_verified"
+    """
+    Triggered when a payment is verified (funds confirmed by checker).
+
+    Bridged from finance domain event PaymentVerified.
+    This is the confirmed payment event used for external ZNS notifications.
+    PAYMENT_RECEIVED is for recording only; external Zalo must use this event.
+
+    Payload Schema:
+        {
+            "payment_id": int,            # Required: ID of the verified payment
+            "invoice_id": int,            # Required: ID of the invoice
+            "fee_id": int,                # Required: ID of the fee
+            "amount": str,                # Payment amount (Decimal as string)
+            "verified_by_id": int,        # Required: User who verified the payment
+            "verified_at": str,           # ISO timestamp of verification
+            "admission_profile_id": int,  # Required: Admission profile linked to fee
+            "lead_id": int,               # Required: Lead linked to admission profile
+            "unit_id": int                # Required: Unit for scoping
+        }
+
+    Recipients: Finance staff, the applicant (external via Zalo ZNS phase 1)
     """
 
     # =========================================================================
@@ -470,6 +531,20 @@ class SystemEvents(str, Enum):
         }
 
     Recipients: The deactivated user (for awareness before logout)
+    """
+
+    USER_PROFILE_UPDATED = "user_profile_updated"
+    """
+    Triggered when an admin updates a user's profile.
+
+    Payload Schema:
+        {
+            "user_id": int,               # Required: ID of the affected user
+            "updated_fields": str,        # Comma-separated list of changed fields
+            "actor_id": int               # Admin who made the change
+        }
+
+    Recipients: The affected user (via specific_users resolver)
     """
 
     # =========================================================================

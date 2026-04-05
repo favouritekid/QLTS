@@ -120,7 +120,7 @@ async def update_template(
     Update an existing notification template.
     """
     repo = NotificationTemplateRepository(db)
-    
+
     # Check if updating name to existing name
     if template_update.name and template_update.name != template.name:
         existing_template = await repo.get_by_name(template_update.name)
@@ -139,6 +139,14 @@ async def update_template(
             setattr(template, field, value)
             updated_fields.append(field)
 
+    # 1.9e: Find rules that reference this template (for cache invalidation)
+    from sqlalchemy import select
+    rules_result = await db.execute(
+        select(models.NotificationRule.event)
+        .where(models.NotificationRule.template_id == template.id)
+    )
+    affected_events = [row[0] for row in rules_result.fetchall()]
+
     if updated_fields:
         await db.flush()
         await db.refresh(template)
@@ -149,6 +157,17 @@ async def update_template(
 
     async def _post_commit():
         """Execute after router commits the transaction."""
+        # 1.9e: Invalidate rule cache for any rules using this template
+        if affected_events:
+            from app.services.notification_rule_loader import invalidate_rule_cache
+            for event_name in affected_events:
+                await invalidate_rule_cache(event_name)
+            log.info(
+                "Invalidated rule caches for template update",
+                template_id=template_id,
+                affected_events=affected_events,
+            )
+
         if updated_fields:
             log.info(
                 "Updated notification template",
@@ -184,6 +203,14 @@ async def delete_template(
             f"Cannot delete template '{template.name}' - currently used by {template.usage_count} rule(s)"
         )
 
+    # 1.9e: Find affected rules before delete (for cache invalidation)
+    from sqlalchemy import select
+    rules_result = await db.execute(
+        select(models.NotificationRule.event)
+        .where(models.NotificationRule.template_id == template.id)
+    )
+    affected_events = [row[0] for row in rules_result.fetchall()]
+
     # Store for logging
     template_id = template.id
     template_name = template.name
@@ -194,6 +221,12 @@ async def delete_template(
     # Create post-commit callback
     async def _post_commit():
         """Execute after router commits the transaction."""
+        # 1.9e: Invalidate rule caches for affected events
+        if affected_events:
+            from app.services.notification_rule_loader import invalidate_rule_cache
+            for event_name in affected_events:
+                await invalidate_rule_cache(event_name)
+
         log.info(
             "Deleted notification template",
             template_id=template_id,

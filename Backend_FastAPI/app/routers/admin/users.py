@@ -51,8 +51,7 @@ from app.config import settings
 from app.core import deps
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
-from app.services import activity_service, lead_service, notification_service, user_service
-from app.routers.notifications import send_realtime_notification
+from app.services import activity_service, lead_service, user_service
 from app.tasks import process_automatic_lead_assignment_task
 from app.core.constants import UserRole
 from app.utils.exceptions import (
@@ -1016,37 +1015,25 @@ async def update_existing_user(
     # Send notification to user if admin updated their info
     if current_admin.id != updated_user.id and changes:
         log.info(
-            "Admin updated user info, creating notification",
+            "Admin updated user info, dispatching notification",
             admin_id=current_admin.id,
             target_user_id=updated_user.id,
             changes=list(changes.keys()),
         )
         change_description = ", ".join([f"{key}" for key in changes.keys()])
-        try:
-            notification, notify_callback = await notification_service.create_notification(
-                db=db,
-                user_id=updated_user.id,
-                title="Your profile has been updated",
-                message=f"An administrator has updated your profile. Changed: {change_description}",
-                notification_type="admin_update",
-                link="/profile",
-            )
-            await db.commit()
-            await notify_callback()
-            log.info(
-                "Notification created successfully",
-                notification_id=notification.id,
-                target_user_id=updated_user.id,
-            )
-            # Send real-time notification via WebSocket
-            await send_realtime_notification(notification)
-        except Exception as e:
-            log.error(
-                "Failed to create/send notification",
-                admin_id=current_admin.id,
-                target_user_id=updated_user.id,
-                error=str(e),
-            )
+        from app.services.notification_dispatcher import safe_dispatch
+        from app.core.events import SystemEvents
+
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.USER_PROFILE_UPDATED,
+            payload={
+                "user_id": updated_user.id,
+                "updated_fields": change_description,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"user_profile_updated:{updated_user.id}",
+        )
     else:
         log.debug(
             "Skipping notification",

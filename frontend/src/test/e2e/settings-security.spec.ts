@@ -21,6 +21,9 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@12345";
 const ADMIN_TOTP_SECRET = process.env.E2E_ADMIN_TOTP_SECRET || "";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
+const AUTH_STORAGE_VERSION = 1;
+const HYDRATION_ISSUE_PATTERN =
+  /hydration|recoverable|did not match|server rendered html/i;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,6 +78,37 @@ async function waitForPageReady(page: Page): Promise<void> {
   await page.waitForTimeout(500);
 }
 
+function trackHydrationIssues(page: Page) {
+  const issues: string[] = [];
+
+  const onConsole = (msg: { type(): string; text(): string }) => {
+    const text = msg.text();
+    if (
+      (msg.type() === "error" || msg.type() === "warning") &&
+      HYDRATION_ISSUE_PATTERN.test(text)
+    ) {
+      issues.push(`[console:${msg.type()}] ${text}`);
+    }
+  };
+
+  const onPageError = (error: Error) => {
+    if (HYDRATION_ISSUE_PATTERN.test(error.message)) {
+      issues.push(`[pageerror] ${error.message}`);
+    }
+  };
+
+  page.on("console", onConsole);
+  page.on("pageerror", onPageError);
+
+  return {
+    issues,
+    dispose: () => {
+      page.off("console", onConsole);
+      page.off("pageerror", onPageError);
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Test Suite — login ONCE, reuse for all tests
 // ---------------------------------------------------------------------------
@@ -121,15 +155,15 @@ test.describe("Settings Pages", () => {
 
     // Set auth in localStorage
     const authBody = await authResp.json();
-    await sharedPage.evaluate((user) => {
+    await sharedPage.evaluate(({ user, version }) => {
       localStorage.setItem(
         "auth-storage",
         JSON.stringify({
           state: { user, isAuthenticated: true },
-          version: 0,
+          version,
         })
       );
-    }, authBody.user);
+    }, { user: authBody.user, version: AUTH_STORAGE_VERSION });
 
     // Reload to pick up localStorage auth state
     await sharedPage.reload();
@@ -187,6 +221,29 @@ test.describe("Settings Pages", () => {
     await sharedPage.goto("/settings");
     await waitForPageReady(sharedPage);
     await expect(sharedPage.locator('input[type="password"]').first()).toBeVisible();
+  });
+
+  test("password page hydrates cleanly and keeps password inputs empty", async () => {
+    const hydrationTracker = trackHydrationIssues(sharedPage);
+
+    try {
+      await sharedPage.goto("/settings");
+      await waitForPageReady(sharedPage);
+
+      const passwordInputs = sharedPage.locator('input[type="password"]');
+      await expect(passwordInputs).toHaveCount(3);
+
+      const values = await passwordInputs.evaluateAll((inputs) =>
+        inputs.map((input) => (input as HTMLInputElement).value)
+      );
+      expect(values).toEqual(["", "", ""]);
+
+      const bodyText = await sharedPage.evaluate(() => document.body.innerText || "");
+      expect(bodyText).not.toMatch(HYDRATION_ISSUE_PATTERN);
+      expect(hydrationTracker.issues).toEqual([]);
+    } finally {
+      hydrationTracker.dispose();
+    }
   });
 
   // =========================================================================

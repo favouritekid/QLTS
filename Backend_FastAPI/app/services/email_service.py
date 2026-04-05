@@ -277,6 +277,148 @@ To manage your notification preferences, visit your Settings page.
 
         return self.send_email(user_email, subject, html_body, text_body)
 
+    def send_delivery_email(
+        self,
+        to_email: str,
+        recipient_name: str,
+        title: str,
+        message: str,
+        link: Optional[str] = None,
+        notification_type: str = "info",
+    ) -> bool:
+        """
+        Send email from raw content (Phase C1 — no Notification model dependency).
+
+        Used by the Celery worker to send emails from payload_snapshot.
+        Works for both internal users (user_id resolved) and external recipients.
+
+        Args:
+            to_email: Recipient email address
+            recipient_name: Display name for greeting
+            title: Notification title
+            message: Notification message body
+            link: Optional relative link (e.g., "/leads/123")
+            notification_type: Type for styling (info, success, warning, error)
+
+        Returns:
+            bool: True if sent successfully
+        """
+        subject = f"[QLTS] {title}"
+
+        # Render HTML using the same template logic
+        html_body = self._render_delivery_html(
+            recipient_name, title, message, link, notification_type
+        )
+
+        # Plain text version
+        detail_link = ""
+        if link:
+            base = settings.FRONTEND_URL.rstrip("/")
+            raw_link = link if link.startswith("/") else f"/{link}"
+            detail_link = f"View details: {base}{raw_link}"
+
+        text_body = f"""
+{title}
+
+{message}
+
+Type: {notification_type}
+
+{detail_link}
+
+---
+You received this email because you have notifications enabled in your QLTS account.
+To manage your notification preferences, visit your Settings page.
+"""
+
+        return self.send_email(to_email, subject, html_body, text_body)
+
+    def _render_delivery_html(
+        self,
+        recipient_name: str,
+        title: str,
+        message: str,
+        link: Optional[str] = None,
+        notification_type: str = "info",
+    ) -> str:
+        """Render delivery email HTML from raw strings.
+
+        SECURITY: All user-controlled inputs are HTML-escaped to prevent XSS.
+        Same visual template as _render_notification_html but without Notification model.
+        """
+        safe_name = html_escape(recipient_name)
+        safe_type = html_escape(notification_type)
+        safe_title = html_escape(title)
+        safe_message = html_escape(message)
+
+        full_link = ""
+        if link:
+            base = settings.FRONTEND_URL.rstrip("/")
+            raw_link = link if link.startswith("/") else f"/{link}"
+            full_link = html_escape(f"{base}{raw_link}")
+
+        link_html = ""
+        if full_link:
+            link_html = f'<a href="{full_link}" class="button">View Details</a>'
+
+        return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background-color: #4F46E5; color: white; padding: 20px; text-align: center; }}
+        .content {{ background-color: #f9fafb; padding: 30px; border-radius: 8px; margin-top: 20px; }}
+        .notification-type {{
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }}
+        .type-admin_update {{ background-color: #DBEAFE; color: #1E40AF; }}
+        .type-success {{ background-color: #D1FAE5; color: #065F46; }}
+        .type-error {{ background-color: #FEE2E2; color: #991B1B; }}
+        .type-warning {{ background-color: #FEF3C7; color: #92400E; }}
+        .type-info {{ background-color: #E0E7FF; color: #3730A3; }}
+        .title {{ font-size: 24px; font-weight: bold; margin-bottom: 15px; }}
+        .message {{ font-size: 16px; margin-bottom: 20px; }}
+        .button {{
+            display: inline-block;
+            background-color: #4F46E5;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            margin-top: 20px;
+        }}
+        .footer {{ text-align: center; margin-top: 30px; font-size: 12px; color: #6B7280; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>QLTS Notification</h1>
+        </div>
+        <div class="content">
+            <p>Hi {safe_name},</p>
+            <span class="notification-type type-{safe_type}">{safe_type.upper()}</span>
+            <div class="title">{safe_title}</div>
+            <div class="message">{safe_message}</div>
+            {link_html}
+        </div>
+        <div class="footer">
+            <p>You received this email because you have notifications enabled in your QLTS account.</p>
+            <p>To manage your notification preferences, visit your Settings page.</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
     def _render_notification_html(
         self, user_name: str, notification: models.Notification
     ) -> str:

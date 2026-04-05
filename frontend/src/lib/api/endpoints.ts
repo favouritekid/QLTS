@@ -173,6 +173,7 @@ export const API_ENDPOINTS = {
     TOGGLE: (id: number) => `/api/notification-rules/${id}/toggle`,
     DELETE: (id: number) => `/api/notification-rules/${id}`,
     METADATA: "/api/notification-rules/metadata", // ✅ NOTIFICATION 2.0: Dynamic metadata
+    PREVIEW: "/api/notification-rules/preview", // PR2: Preview API
   },
   // ✅ PHASE 3.1: Notification Templates (Admin-only)
   NOTIFICATION_TEMPLATES: {
@@ -181,6 +182,29 @@ export const API_ENDPOINTS = {
     DETAIL: (id: number) => `/api/notification-templates/${id}`,
     UPDATE: (id: number) => `/api/notification-templates/${id}`,
     DELETE: (id: number) => `/api/notification-templates/${id}`,
+  },
+  // ✅ PHASE B8: Notification Delivery Ops (Admin-only)
+  NOTIFICATION_DELIVERIES: {
+    LIST: "/api/notification-deliveries",
+    STATS: "/api/notification-deliveries/stats",
+    FAILURES: "/api/notification-deliveries/failures",
+    DETAIL: (id: number) => `/api/notification-deliveries/${id}`,
+    REPLAY: (id: number) => `/api/notification-deliveries/${id}/replay`,
+    // D5: Mature monitoring dashboard
+    TIME_SERIES: "/api/notification-deliveries/stats/time-series",
+    TOP_EVENTS: "/api/notification-deliveries/stats/top-events",
+    LATENCY: "/api/notification-deliveries/stats/latency",
+    HEALTH: "/api/notification-deliveries/health",
+    QUOTAS: "/api/notification-deliveries/quotas",
+    CIRCUIT_BREAKERS: "/api/notification-deliveries/circuit-breakers",
+    CIRCUIT_BREAKER_RESET: (channel: string) =>
+      `/api/notification-deliveries/circuit-breakers/${channel}/reset`,
+  },
+  // ✅ PHASE B7: Notification Consents (Admin-only)
+  NOTIFICATION_CONSENTS: {
+    LIST: "/api/notification-consents",
+    UPSERT: "/api/notification-consents/upsert",
+    BULK_IMPORT: "/api/notification-consents/bulk-import",
   },
   // ✅ LOGIN SECURITY: Phase 5 - User Response Flow
   SECURITY: {

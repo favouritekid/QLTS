@@ -104,8 +104,10 @@ class NotificationRule(Base):
                           comment="Optional link template (e.g., /leads/{lead_id})")
 
     # Delivery configuration
+    # DEPRECATED (Phase C1): Derived from actions. Do not read at runtime.
+    # Kept for backward compat in API responses. Will be removed in Phase D.
     channels = Column(JSON, nullable=False, default=["browser"],
-                     comment="Delivery channels: [\"browser\", \"email\", \"sms\"]")
+                     comment="DEPRECATED (C1): Derived from actions. Will be removed in Phase D.")
 
     # Recipient resolution configuration
     recipient_config = Column(JSON, nullable=False,
@@ -211,8 +213,8 @@ class NotificationTemplate(Base):
                      comment="Template category (e.g., 'lead', 'consultation')")
 
     # NEW: NOTIFICATION 2.0 - Channel and Event filtering (JSONB for efficient queries)
-    supported_channels = Column(JSONB, nullable=False, default=["socket"],
-                               comment='Channels this template supports (["socket", "email", "zalo", "sms"])')
+    supported_channels = Column(JSONB, nullable=False, default=["browser"],
+                               comment='Channels this template supports (["browser", "email", "zalo", "sms"])')
     allowed_events = Column(JSONB, nullable=True,
                            comment='Events this template is designed for (null = all events)')
 
@@ -220,9 +222,9 @@ class NotificationTemplate(Base):
                           comment='Template type: system, zalo_zns, email_html, sms')
 
     # System and usage tracking
-    is_system = Column(Boolean, nullable=False, default=False, index=True,
+    is_system = Column(Boolean, nullable=False, default=False, server_default="false", index=True,
                       comment="System template (cannot be deleted)")
-    usage_count = Column(Integer, nullable=False, default=0,
+    usage_count = Column(Integer, nullable=False, default=0, server_default="0",
                         comment="Number of rules using this template")
 
     # Audit fields
@@ -251,7 +253,7 @@ class NotificationAction(Base):
     Fields:
         rule_id: Foreign key to NotificationRule (cascade delete)
         step: Step number in the workflow (1, 2, 3...)
-        channel: Delivery channel for this action ("socket", "email", "zalo", "sms")
+        channel: Delivery channel for this action ("browser", "email", "zalo", "sms")
         template_code: Optional reference to NotificationTemplate.template_code
         delay_minutes: Delay before executing this action (0 = immediate)
         config: Channel-specific configuration (JSON)
@@ -284,7 +286,7 @@ class NotificationAction(Base):
 
     # Delivery channel
     channel = Column(String(50), nullable=False,
-                    comment="Delivery channel: socket, email, zalo, sms")
+                    comment="Delivery channel: browser, email, zalo, sms")
 
     # Optional template reference (by code, not ID for flexibility)
     template_code = Column(String(100), nullable=True,
@@ -297,6 +299,16 @@ class NotificationAction(Base):
     # Channel-specific configuration
     config = Column(JSON, nullable=True,
                    comment="Channel-specific configuration (e.g., Zalo template ID)")
+
+    # Phase 3: Delivery branch fields
+    recipient_config = Column(JSON, nullable=True,
+        comment="Per-action recipient resolver config. Falls back to rule.recipient_config if null.")
+    content_mode = Column(String(50), nullable=True,
+        comment="Content source: inherit_default, template_override, inline_override, channel_native")
+    content_override = Column(JSON, nullable=True,
+        comment="Inline title/message/link override when content_mode=inline_override")
+    branch_key = Column(String(100), nullable=True,
+        comment="Human-readable branch identifier for debugging and UI round-trip")
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(),

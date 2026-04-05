@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import structlog
-# from sqlalchemy import and_, desc, func, select (removed - using repository)
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
@@ -78,7 +78,25 @@ async def create_notification(
 
     Returns:
         Tuple of (notification, post_commit_callback)
+
+    .. deprecated::
+        Use dispatch() or safe_dispatch() from notification_dispatcher instead.
+        This function bypasses the per-channel preference filtering and
+        multi-channel delivery pipeline.
     """
+    import warnings
+    warnings.warn(
+        "create_notification() is deprecated. "
+        "Use dispatch() or safe_dispatch() from notification_dispatcher instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    log.warning(
+        "DEPRECATED: create_notification() called directly — migrate to dispatcher",
+        user_id=user_id,
+        notification_type=notification_type,
+        title=title[:50],
+    )
     # Check user preferences
     should_send = await notification_preference_service.should_send_notification(
         db, user_id, notification_type
@@ -280,6 +298,21 @@ async def mark_as_read(
         notification.is_read = True
         notification.read_at = now
 
+    # Phase C2: Also mark linked delivery rows as "read"
+    marked_notification_ids = [n.id for n in notifications]
+    if marked_notification_ids:
+        from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+        from app.services import notification_delivery_service
+        delivery_repo = NotificationDeliveryRepository(db)
+        for nid in marked_notification_ids:
+            linked = await delivery_repo.get_by_notification_id(nid)
+            read_ids = [
+                d.id for d in linked
+                if d.channel == "browser" and d.status in ("sent", "delivered")
+            ]
+            if read_ids:
+                await notification_delivery_service.mark_delivery_ids_read(db, read_ids)
+
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
 
@@ -311,20 +344,50 @@ async def mark_all_as_read(
     Returns:
         Tuple of (count, post_commit_callback)
     """
-    repo = NotificationRepository(db)
-    notifications = await repo.get_unread_for_user(user_id)
-
-    # Mark as read
+    # Bulk UPDATE instead of loading all ORM objects (E8 fix)
     from datetime import timezone
+    from sqlalchemy import update
     now = datetime.now(timezone.utc)
-    for notification in notifications:
-        notification.is_read = True
-        notification.read_at = now
 
-    # ✅ TRANSACTION FIX: Flush instead of commit
+    # Count first for callback
+    repo = NotificationRepository(db)
+    count_result = await db.execute(
+        select(func.count()).select_from(models.Notification).where(
+            models.Notification.user_id == user_id,
+            models.Notification.is_read == False,  # noqa: E712
+        )
+    )
+    count = count_result.scalar() or 0
+
+    if count > 0:
+        # Bulk update notifications
+        await db.execute(
+            update(models.Notification)
+            .where(
+                models.Notification.user_id == user_id,
+                models.Notification.is_read == False,  # noqa: E712
+            )
+            .values(is_read=True, read_at=now)
+        )
+
+        # Phase C2: Bulk update linked browser delivery rows to "read"
+        from app.models.notification_delivery import NotificationDelivery
+        await db.execute(
+            update(NotificationDelivery)
+            .where(
+                NotificationDelivery.notification_id.in_(
+                    select(models.Notification.id).where(
+                        models.Notification.user_id == user_id,
+                        models.Notification.read_at == now,  # just marked
+                    )
+                ),
+                NotificationDelivery.channel == "browser",
+                NotificationDelivery.status.in_(["sent", "delivered"]),
+            )
+            .values(status="read")
+        )
+
     await db.flush()
-
-    count = len(notifications)
 
     # ✅ Create post-commit callback
     async def _post_commit():

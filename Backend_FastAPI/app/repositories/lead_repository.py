@@ -533,7 +533,6 @@ class LeadRepository(BaseRepository[models.Lead]):
             select(models.ConsultationStatus.id).where(
                 models.ConsultationStatus.is_final == False,
                 models.ConsultationStatus.is_universal == False,
-                models.ConsultationStatus.is_active == True,
             )
         )
         pending_status_ids = [row[0] for row in pending_result.all()]

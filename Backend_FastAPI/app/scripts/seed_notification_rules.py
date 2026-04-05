@@ -38,6 +38,7 @@ from app.services.notification_resolvers import (
     AllAdminsResolver,
     AllUsersResolver,
     BaseResolver,
+    CollaboratorUserResolver,
     CompositeResolver,
     DormResidentsResolver,
     DormStaffResolver,
@@ -79,6 +80,7 @@ def serialize_resolver(resolver: BaseResolver) -> Dict[str, Any]:
         AllAdminsResolver: "all_admins",
         AllUsersResolver: "all_users",
         SpecificUsersResolver: "specific_users",
+        CollaboratorUserResolver: "collaborator_user",
         DormResidentsResolver: "dorm_residents",
         DormStaffResolver: "dorm_staff",
     }

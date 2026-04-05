@@ -120,6 +120,7 @@ async def should_send_notification(
         "send_email": email_allowed and not in_quiet_hours,
         "allow_sound": sound_allowed and not in_quiet_hours,
         "allow_browser": preference.browser_enabled and not in_quiet_hours,
+        "allow_zalo": getattr(preference, "zalo_enabled", False) and not in_quiet_hours,
         "in_quiet_hours": in_quiet_hours,
     }
 
@@ -249,6 +250,8 @@ async def filter_users_by_group(
         if channel_key == "browser" and not pref.browser_enabled:
             continue
         if channel_key == "email" and not pref.email_enabled:
+            continue
+        if channel_key == "zalo" and not getattr(pref, "zalo_enabled", False):
             continue
         if channel_key == "sound" and not pref.sound_enabled:
             continue

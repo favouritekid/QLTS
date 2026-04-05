@@ -73,6 +73,10 @@ const CATEGORIES = [
   { value: "finance", label: "Finance" },
   { value: "dorm", label: "Dorm" },
   { value: "system", label: "System" },
+  { value: "asset", label: "Tài sản" },
+  { value: "security", label: "Bảo mật" },
+  { value: "pipeline", label: "Pipeline" },
+  { value: "operational", label: "Vận hành" },
 ];
 
 interface TemplateListProps {

@@ -1,5 +1,19 @@
 # app/services/notification_registry.py
 """
+⚠️ DEPRECATED (PR1 — notification refactor)
+
+This module is superseded by ``app.core.event_catalog`` which is now the
+single source of truth for event semantics.  The dispatcher no longer
+reads from this registry at runtime.
+
+Kept temporarily for:
+- ``NotificationType`` enum (still imported by other modules)
+- ``NotificationConfig`` dataclass (referenced in type hints)
+- ``validate_registry()`` / ``initialize_registry()`` (startup validation)
+
+Will be fully removed in a follow-up cleanup PR.
+
+--- Original docstring ---
 Notification Registry - Central configuration for all notification events.
 
 The registry maps each SystemEvent to its:
@@ -26,7 +40,8 @@ from string import Template
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from app.core.events import SystemEvents
-from app.core.event_groups import NotificationEventGroup, EVENT_GROUP_MAPPING
+from app.core.event_groups import NotificationEventGroup, NotificationChannel, EVENT_GROUP_MAPPING
+from app.services.notification_rule_loader import synthesize_actions_from_channels as _synthesize_actions
 from app.services.notification_resolvers import (
     BaseResolver,
     LeadOwnerResolver,
@@ -50,12 +65,7 @@ log = logging.getLogger(__name__)
 # =============================================================================
 
 
-class NotificationChannel(str, Enum):
-    """Supported notification delivery channels."""
-    BROWSER = "browser"  # In-browser notifications (delivered via Socket.IO)
-    EMAIL = "email"
-    SMS = "sms"
-    ZALO = "zalo"
+# NotificationChannel is imported from app.core.event_groups (single canonical enum)
 
 
 class NotificationType(str, Enum):
@@ -127,9 +137,24 @@ class NotificationConfig:
         """Get channel values as list of strings (for backward compatibility)."""
         return [c.value for c in self.channels]
 
+    @property
+    def actions(self) -> list:
+        """Synthesize ActionConfig list from channels for dispatch() compatibility."""
+        return _synthesize_actions(self.channel_values)
+
 
 # =============================================================================
 # NOTIFICATION REGISTRY
+#
+# This registry maps SystemEvents -> NotificationConfig and is consumed by
+# notification_dispatcher.dispatch() at runtime.
+#
+# NOTE on NotificationAction (models/notification.py):
+#   NotificationAction is the DB model for multi-step workflow actions stored
+#   alongside NotificationRule. It is a future capability -- not wired into
+#   the production dispatch() path. dispatch() reads NotificationConfig from
+#   this in-memory registry, NOT NotificationAction rows from the DB.
+#   See Addendum Section 6 for the planned integration roadmap.
 # =============================================================================
 
 # Shorthand aliases for cleaner registry entries
@@ -242,6 +267,48 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         notification_type=NT.INFO,
         link_template="/leads/${lead_id}",
         priority=150,  # Lower priority - routine updates
+    ),
+
+    SystemEvents.LEAD_RESTORED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(CompositeResolver([
+            LeadOwnerResolver(),
+            UnitManagersResolver()
+        ])),
+        template=(
+            "Lead Restored",
+            "Lead #${lead_id} (${lead_name}) has been restored."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.SUCCESS,
+        link_template="/leads/${lead_id}",
+        priority=100,
+    ),
+
+    SystemEvents.LEAD_IMPORTED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(UnitManagersResolver()),
+        template=(
+            "Leads Imported",
+            "${total_imported} leads imported from ${filename} by ${actor_name}."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.INFO,
+        link_template="/leads",
+        priority=120,
+    ),
+
+    SystemEvents.USER_PROFILE_UPDATED: NotificationConfig(
+        group=NotificationEventGroup.SYSTEM,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Your profile has been updated",
+            "An administrator updated your profile. Changed fields: ${updated_fields}."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.INFO,
+        link_template="/profile",
+        priority=40,
     ),
 
     # =========================================================================
@@ -401,6 +468,19 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         notification_type=NT.ERROR,
         link_template="/finance/fees/${fee_id}",
         priority=20,  # Very high priority for overdue
+    ),
+
+    SystemEvents.PAYMENT_VERIFIED: NotificationConfig(
+        group=NotificationEventGroup.FINANCE,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Thanh toán được xác nhận",
+            "Thanh toán ${amount} đã được xác nhận thành công."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.SUCCESS,
+        link_template="/finance/payments/${payment_id}",
+        priority=60,
     ),
 
     # =========================================================================

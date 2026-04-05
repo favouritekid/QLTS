@@ -8,6 +8,7 @@ Tests:
 4. update_existing_user      — notification import + unpack + commit
 """
 import io
+from datetime import datetime, timezone
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
@@ -157,6 +158,28 @@ async def test_update_user_creates_notification(
 ):
     """Bug #4: notification must be created (no NameError, proper unpack + commit)."""
     target_id = regular_user_in_db["id"]
+    started_at = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(models.NotificationRule).where(
+                models.NotificationRule.event == "user_profile_updated"
+            )
+        )
+        if result.scalars().first() is None:
+            db.add(
+                models.NotificationRule(
+                    event="user_profile_updated",
+                    title_template="Your profile has been updated",
+                    message_template="An administrator updated your profile. Changed fields: ${updated_fields}.",
+                    recipient_config={"resolver_type": "specific_users", "params": {}},
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
+        from app.services.notification_rule_loader import invalidate_rule_cache
+        await invalidate_rule_cache("user_profile_updated")
 
     resp = await client.put(
         f"/api/admin/users/{target_id}",
@@ -169,11 +192,19 @@ async def test_update_user_creates_notification(
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(models.Notification).where(
-                models.Notification.user_id == target_id,
-                models.Notification.type == "admin_update",
-            ).order_by(models.Notification.created_at.desc()).limit(1)
+                models.Notification.title == "Your profile has been updated",
+                models.Notification.message.ilike("%full_name%"),
+                models.Notification.created_at >= started_at,
+            ).order_by(models.Notification.created_at.desc())
         )
-        notif = result.scalars().first()
+        notifications = result.scalars().all()
+        notif = notifications[0] if notifications else None
+        assert notif is not None, \
+            "Notification NOT created â€” NameError or missing commit!"
+        assert len(notifications) == 1, \
+            f"Expected exactly 1 recipient for user profile update, got {len(notifications)}"
+        assert notif.user_id == target_id, \
+            "Per-user profile update notification leaked to the wrong recipient"
         assert notif is not None, \
             "Notification NOT created — NameError or missing commit!"
         assert "full_name" in notif.message, \

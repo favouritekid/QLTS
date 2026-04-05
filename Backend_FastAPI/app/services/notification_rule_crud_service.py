@@ -10,11 +10,170 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
-from app.utils.exceptions import BadRequest
-from app.repositories import NotificationRuleRepository
-from .notification_rule_loader import invalidate_rule_cache
+from app.utils.exceptions import BadRequest, BusinessRuleViolation
+from app.repositories import NotificationRuleRepository, NotificationTemplateRepository
+from .notification_rule_loader import invalidate_rule_cache, derive_channels_from_actions, ActionConfig
+from app.services.notification_rule_loader import OPERATOR_ALIASES, FIELD_ALIASES_GLOBAL, FIELD_ALIASES_PER_EVENT, _resolve_field_alias
+from app.core.event_catalog import get_event
+from app.core.events import SystemEvents
 
 log = structlog.get_logger(__name__)
+
+
+_VALID_EXTERNAL_RESOLVERS = frozenset({
+    "lead_contact", "admission_contact", "collaborator_contact",
+})
+
+
+def _validate_zalo_action_config(step: int, config) -> None:
+    """Validate Zalo action config — requires zalo_template_id."""
+    if not config or not isinstance(config, dict):
+        raise BadRequest(
+            f"Action step {step}: channel 'zalo' requires config with 'zalo_template_id'. "
+            "Example: {\"zalo_template_id\": \"abc123\"}"
+        )
+    if not config.get("zalo_template_id"):
+        raise BadRequest(
+            f"Action step {step}: channel 'zalo' requires 'zalo_template_id' in config."
+        )
+    ext_resolver = config.get("external_resolver")
+    if ext_resolver:
+        _validate_external_resolver(step, ext_resolver)
+
+
+def _validate_external_resolver(step: int, resolver_type: str) -> None:
+    """Validate external_resolver is a known type."""
+    if resolver_type not in _VALID_EXTERNAL_RESOLVERS:
+        raise BadRequest(
+            f"Action step {step}: unknown external_resolver '{resolver_type}'. "
+            f"Valid resolvers: {sorted(_VALID_EXTERNAL_RESOLVERS)}"
+        )
+
+
+def _validate_actions(actions) -> None:
+    """
+    Validate NotificationAction constraints (synchronous checks only).
+
+    Rules:
+      - C1: delay_minutes >= 0 allowed (worker handles delayed execution)
+      - steps must be contiguous 1..n
+      - no duplicate steps
+      - no duplicate channels within same rule
+
+    Note: template_code existence + channel support is validated asynchronously
+    by _validate_action_template_codes() which must be called separately.
+    """
+    if not actions:
+        return
+
+    steps = set()
+    channels = set()
+    for action in actions:
+        step = action.step if hasattr(action, 'step') else action.get('step')
+        channel = action.channel if hasattr(action, 'channel') else action.get('channel')
+        delay = action.delay_minutes if hasattr(action, 'delay_minutes') else action.get('delay_minutes', 0)
+
+        if delay is not None and delay < 0:
+            raise BadRequest(
+                f"delay_minutes must be >= 0 (step {step} has delay_minutes={delay})."
+            )
+
+        if step in steps:
+            raise BadRequest(f"Duplicate step number: {step}")
+        steps.add(step)
+
+        channels.add(channel)
+
+        # FP3: Channel-specific config validation
+        config = action.config if hasattr(action, 'config') else action.get('config')
+        if channel == "zalo":
+            _validate_zalo_action_config(step, config)
+        elif config and isinstance(config, dict):
+            # Validate external_resolver for any channel that has it
+            ext_resolver = config.get("external_resolver")
+            if ext_resolver:
+                _validate_external_resolver(step, ext_resolver)
+
+    # PR1: "max one browser" constraint removed — cross-action dedup in dispatcher
+    # handles multi-group browser precedence (lower step wins).
+
+    # Phase 3a: content_mode + branch_key validation
+    # Guard: only validate on objects with explicit Phase 3 fields (skip MagicMock, legacy dicts)
+    VALID_CONTENT_MODES = {"inherit_default", "template_override", "inline_override", "channel_native", None}
+    branch_keys: set = set()
+
+    for action in actions:
+        content_mode = getattr(action, 'content_mode', None)
+        # Skip validation if content_mode is not a str/None (e.g. MagicMock attribute)
+        if not isinstance(content_mode, (str, type(None))):
+            continue
+
+        if content_mode not in VALID_CONTENT_MODES:
+            raise BadRequest(f"Invalid content_mode: '{content_mode}'")
+
+        if content_mode == "template_override" and not action.template_code:
+            raise BadRequest(f"Action step {action.step}: content_mode='template_override' requires template_code")
+
+        if content_mode == "inline_override":
+            content_override = getattr(action, 'content_override', None)
+            if not content_override or not isinstance(content_override, dict):
+                raise BadRequest(f"Action step {action.step}: content_mode='inline_override' requires content_override")
+
+        if content_mode == "channel_native" and action.channel not in ("zalo", "sms"):
+            raise BadRequest(f"Action step {action.step}: content_mode='channel_native' only valid for zalo/sms channels")
+
+        bk = getattr(action, 'branch_key', None)
+        if isinstance(bk, str) and bk:
+            if bk in branch_keys:
+                raise BadRequest(f"Duplicate branch_key: '{bk}'")
+            branch_keys.add(bk)
+
+    # Verify steps are contiguous 1..n
+    if steps and steps != set(range(1, len(steps) + 1)):
+        raise BadRequest(
+            f"Action steps must be contiguous 1..{len(steps)}, got: {sorted(steps)}"
+        )
+
+
+async def _validate_action_template_codes(
+    db: AsyncSession,
+    actions,
+) -> None:
+    """
+    Phase E2: Validate template_code references in actions.
+
+    For each action that specifies a template_code:
+      1. The template must exist in the database.
+      2. The template's supported_channels must include the action's channel.
+
+    Raises BadRequest on validation failure.
+    """
+    if not actions:
+        return
+
+    repo = NotificationTemplateRepository(db)
+
+    for action in actions:
+        step = action.step if hasattr(action, 'step') else action.get('step')
+        channel = action.channel if hasattr(action, 'channel') else action.get('channel')
+        template_code = action.template_code if hasattr(action, 'template_code') else action.get('template_code')
+
+        if not template_code:
+            continue
+
+        template = await repo.get_by_template_code(template_code)
+        if not template:
+            raise BadRequest(
+                f"Action step {step}: template_code '{template_code}' does not exist."
+            )
+
+        # Check channel support
+        supported = template.supported_channels or []
+        if channel not in supported:
+            raise BadRequest(
+                f"Action step {step}: template '{template_code}' does not support "
+                f"channel '{channel}'. Supported channels: {supported}"
+            )
 
 
 async def get_rules(
@@ -31,6 +190,84 @@ async def get_rules(
     return await repo.list_rules(skip, limit, event, enabled)
 
 
+def _get_non_user_events() -> frozenset:
+    """Build set of events that must NOT have user notification rules (from catalog)."""
+    from app.core.event_catalog import EVENT_CATALOG
+    return frozenset(
+        defn.event.value for defn in EVENT_CATALOG.values()
+        if defn.notification_class != "user"
+    )
+
+# Lazy-initialized; populated on first create_rule call
+_NON_USER_EVENTS_CACHE: frozenset | None = None
+
+def _is_non_user_event(event_key: str) -> bool:
+    """Check if event is broadcast_only or internal_future (not configurable)."""
+    global _NON_USER_EVENTS_CACHE
+    if _NON_USER_EVENTS_CACHE is None:
+        _NON_USER_EVENTS_CACHE = _get_non_user_events()
+    return event_key in _NON_USER_EVENTS_CACHE
+
+# Legacy alias — kept for backward compat in tests
+BROADCAST_ONLY_EVENTS = frozenset({
+    "unit_created", "unit_updated", "unit_deleted",
+    "program_created", "program_updated", "program_deleted",
+    "offering_created", "offering_updated", "offering_deleted",
+    "lead_updated",  # PR1: D1 decision
+})
+
+
+def _canonicalize_condition(condition: dict | None, event: str) -> dict | None:
+    """Recursively normalize operators AND field paths in condition tree."""
+    if not condition:
+        return condition
+    if "conditions" in condition:  # compound
+        return {
+            **condition,
+            "operator": condition["operator"],
+            "conditions": [_canonicalize_condition(c, event) for c in condition["conditions"]],
+        }
+    op = condition.get("operator", "")
+    field = condition.get("field", "")
+    return {
+        **condition,
+        "operator": OPERATOR_ALIASES.get(op, op),
+        "field": _resolve_field_alias(field, event),
+    }
+
+
+def _validate_condition_fields(condition: dict | None, allowed_paths: set) -> list:
+    """Return list of invalid field paths (recursive for compound)."""
+    if not condition:
+        return []
+    errors = []
+    if "conditions" in condition:
+        for sub in condition.get("conditions", []):
+            errors.extend(_validate_condition_fields(sub, allowed_paths))
+        return errors
+    field = condition.get("field", "")
+    if field and field not in allowed_paths:
+        errors.append(f"Unknown condition field: '{field}'")
+    return errors
+
+
+def _validate_condition_operators(condition: dict | None, field_operator_map: dict) -> list:
+    """Return list of invalid operator usages (recursive for compound)."""
+    if not condition:
+        return []
+    errors = []
+    if "conditions" in condition:
+        for sub in condition.get("conditions", []):
+            errors.extend(_validate_condition_operators(sub, field_operator_map))
+        return errors
+    field = condition.get("field", "")
+    op = OPERATOR_ALIASES.get(condition.get("operator", ""), condition.get("operator", ""))
+    allowed_ops = field_operator_map.get(field)
+    if allowed_ops is not None and op not in allowed_ops:
+        errors.append(f"Operator '{op}' not allowed for field '{field}' (allowed: {allowed_ops})")
+    return errors
+
+
 async def create_rule(
     db: AsyncSession,
     rule_data: schemas.NotificationRuleCreate,
@@ -38,14 +275,57 @@ async def create_rule(
     """
     Create a new notification rule.
     """
+    # Reject non-user events (broadcast_only + internal_future) — from catalog
+    if _is_non_user_event(rule_data.event):
+        raise BadRequest(
+            f"Event '{rule_data.event}' is not a configurable user event and cannot have notification rules."
+        )
+
+    # Validate event exists in SystemEvents enum (B3 fix: catch unknown events early)
+    try:
+        event_enum = SystemEvents(rule_data.event)
+    except ValueError:
+        raise BadRequest(f"Unknown event '{rule_data.event}'. Verify event name is a valid SystemEvents member.")
+
+    # Phase 2: Canonicalize condition (normalize operators + field paths)
+    rule_data.condition = _canonicalize_condition(rule_data.condition, rule_data.event) if rule_data.condition else None
+
+    # Phase 2: Validate condition fields and operators against event metadata
+    if rule_data.condition:
+        event_meta = get_event(event_enum)
+        if event_meta and event_meta.condition_fields:
+            allowed_paths = {cf.path for cf in event_meta.condition_fields}
+            field_errors = _validate_condition_fields(rule_data.condition, allowed_paths)
+            if field_errors:
+                raise BadRequest(f"Invalid condition fields: {'; '.join(field_errors)}")
+
+            field_op_map = {cf.path: cf.operators for cf in event_meta.condition_fields}
+            op_errors = _validate_condition_operators(rule_data.condition, field_op_map)
+            if op_errors:
+                raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
+
     repo = NotificationRuleRepository(db)
-    
+
     # Check if rule already exists for this event
     existing_rule = await repo.get_by_event(rule_data.event)
     if existing_rule:
         raise BadRequest(
             f"Notification rule for event '{rule_data.event}' already exists (ID: {existing_rule.id})"
         )
+
+    # Validate action constraints (sync checks)
+    _validate_actions(rule_data.actions)
+
+    # Phase E2: Validate template_code references (async DB lookup)
+    await _validate_action_template_codes(db, rule_data.actions)
+
+    # Phase C1: channels is ALWAYS derived from actions (input ignored)
+    if rule_data.actions:
+        derived = [a.channel for a in rule_data.actions]
+        seen = set()
+        rule_data.channels = [c for c in derived if not (c in seen or seen.add(c))]
+    else:
+        rule_data.channels = []
 
     # Create rule via repository
     new_rule = await repo.create_with_actions(rule_data)
@@ -84,8 +364,32 @@ async def update_rule(
     old_template_id = rule.template_id
     updated_fields = []
 
-    # Update basic fields
-    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions"})
+    # Update basic fields (exclude actions + channels + link_template)
+    # PR1: link_template is code-owned (catalog), not DB-writable
+    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions", "channels", "link_template"})
+
+    # Phase 2: If condition is being updated, canonicalize and validate
+    if 'condition' in update_data and update_data['condition'] is not None:
+        event_name = rule.event
+        update_data['condition'] = _canonicalize_condition(update_data['condition'], event_name)
+
+        try:
+            event_enum = SystemEvents(event_name)
+            event_meta = get_event(event_enum)
+            if event_meta and event_meta.condition_fields:
+                allowed_paths = {cf.path for cf in event_meta.condition_fields}
+                field_errors = _validate_condition_fields(update_data['condition'], allowed_paths)
+                if field_errors:
+                    raise BadRequest(f"Invalid condition fields: {'; '.join(field_errors)}")
+
+                field_op_map = {cf.path: cf.operators for cf in event_meta.condition_fields}
+                op_errors = _validate_condition_operators(update_data['condition'], field_op_map)
+                if op_errors:
+                    raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
+        except ValueError:
+            log.warning("Unknown event for condition validation", event=event_name)
+            raise BadRequest(f"Unknown event '{event_name}' — condition validation failed. Verify event name.")
+
     for field, value in update_data.items():
         if value is not None:
             setattr(rule, field, value)
@@ -93,9 +397,18 @@ async def update_rule(
 
     # Handle actions update
     if rule_update.actions is not None:
+        _validate_actions(rule_update.actions)
+        # Phase E2: Validate template_code references (async DB lookup)
+        await _validate_action_template_codes(db, rule_update.actions)
         await repo.delete_actions(rule.id)
         await repo.add_actions(rule.id, rule_update.actions)
         updated_fields.append("actions")
+        # Phase C0: Sync channels from actions
+        derived = [a.channel for a in rule_update.actions]
+        seen = set()
+        rule.channels = [c for c in derived if not (c in seen or seen.add(c))]
+        if "channels" not in updated_fields:
+            updated_fields.append("channels")
 
     # Update usage_count if template_id changed
     if "template_id" in updated_fields:
@@ -175,7 +488,19 @@ async def delete_rule(
 ) -> Tuple[None, Callable]:
     """
     Delete a notification rule.
+
+    PR1: Active catalog events cannot be deleted (use disable/toggle instead).
+    Only orphan or retired events can be hard-deleted.
     """
+    # PR1: Delete guard — prevent deleting rules for active catalog events
+    from app.core.event_catalog import get_event_by_key
+    defn = get_event_by_key(rule.event)
+    if defn and not defn.retired:
+        raise BusinessRuleViolation(
+            f"Cannot delete rule for active event '{rule.event}'. "
+            f"Use disable (toggle) instead. Delete is only allowed for retired/orphan events."
+        )
+
     repo = NotificationRuleRepository(db)
     rule_id = rule.id
     event_type = rule.event

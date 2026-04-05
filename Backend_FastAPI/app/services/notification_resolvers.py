@@ -390,14 +390,26 @@ class AllUsersResolver(BaseResolver):
             if exclude_user_ids:
                 query = query.where(~models.User.id.in_(exclude_user_ids))
 
+            # Safety cap to prevent OOM on large user bases
+            ALL_USERS_CAP = 5000
+            query = query.limit(ALL_USERS_CAP)
+
             result = await db.execute(query)
             user_ids = [row[0] for row in result.fetchall()]
 
-            self._log_info(
-                f"Resolved {len(user_ids)} active users",
-                roles=roles,
-                excluded_count=len(exclude_user_ids)
-            )
+            if len(user_ids) >= ALL_USERS_CAP:
+                self._log_warning(
+                    f"AllUsersResolver hit cap ({ALL_USERS_CAP}). Some users may not receive notification.",
+                    roles=roles,
+                    excluded_count=len(exclude_user_ids),
+                    cap=ALL_USERS_CAP,
+                )
+            else:
+                self._log_info(
+                    f"Resolved {len(user_ids)} active users",
+                    roles=roles,
+                    excluded_count=len(exclude_user_ids)
+                )
             return user_ids
 
         except Exception as e:

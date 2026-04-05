@@ -2,7 +2,14 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.services.notification_channels import (
+    normalize_channel,
+    normalize_channels,
+    validate_channel_for_write,
+    validate_channels_for_write,
+)
 
 
 class NotificationBase(BaseModel):
@@ -39,54 +46,16 @@ class NotificationsPage(BaseModel):
 
 class MarkAsReadRequest(BaseModel):
     """Request to mark notifications as read"""
-    notification_ids: List[int]
+    notification_ids: List[int] = Field(..., max_length=100)
 
 
 class BulkDeleteRequest(BaseModel):
     """Request to delete multiple notifications"""
-    notification_ids: List[int]
+    notification_ids: List[int] = Field(..., max_length=100)
 
 
 # =============================================================================
 # ✅ NOTIFICATION 2.0 - PHASE 1: Notification Action Schemas
-# =============================================================================
-
-
-class NotificationActionBase(BaseModel):
-    """Base schema for notification action (workflow step)"""
-    step: int = 1  # Step number in workflow
-    channel: str  # Delivery channel: socket, email, zalo, sms
-    template_code: Optional[str] = None  # Optional template code reference
-    delay_minutes: int = 0  # Delay before execution (0 = immediate)
-    config: Optional[Dict[str, Any]] = None  # Channel-specific config
-
-
-class NotificationActionCreate(NotificationActionBase):
-    """Schema for creating a notification action"""
-    pass
-
-
-class NotificationActionUpdate(BaseModel):
-    """Schema for updating a notification action (partial update)"""
-    step: Optional[int] = None
-    channel: Optional[str] = None
-    template_code: Optional[str] = None
-    delay_minutes: Optional[int] = None
-    config: Optional[Dict[str, Any]] = None
-
-
-class NotificationAction(NotificationActionBase):
-    """Schema for reading notification action (response)"""
-    id: int
-    rule_id: int
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-# =============================================================================
-# ✅ PHASE 2.2 + FIX: Notification Rule Schemas (with validation)
 # =============================================================================
 
 
@@ -104,6 +73,82 @@ class RecipientConfig(BaseModel):
     params: Dict[str, Any] = {}  # Resolver-specific parameters
 
 
+class NotificationActionBase(BaseModel):
+    """Base schema for notification action (workflow step)"""
+    step: int = 1  # Step number in workflow
+    channel: str  # Delivery channel: browser, email, zalo, sms
+    template_code: Optional[str] = None  # Optional template code reference
+    delay_minutes: int = 0  # Delay before execution (0 = immediate)
+    config: Optional[Dict[str, Any]] = None  # Channel-specific config
+
+    # Phase 3: Delivery branch fields
+    recipient_config: Optional[RecipientConfig] = None
+    content_mode: Optional[str] = None
+    content_override: Optional[Dict[str, Any]] = None
+    branch_key: Optional[str] = None
+
+
+class NotificationActionCreate(NotificationActionBase):
+    """Schema for creating a notification action"""
+
+    @field_validator("channel")
+    @classmethod
+    def reject_socket_channel(cls, v: str) -> str:
+        return validate_channel_for_write(v)
+
+
+class NotificationActionUpdate(BaseModel):
+    """Schema for updating a notification action (partial update)"""
+    step: Optional[int] = None
+    channel: Optional[str] = None
+    template_code: Optional[str] = None
+    delay_minutes: Optional[int] = None
+    config: Optional[Dict[str, Any]] = None
+
+    # Phase 3: Delivery branch fields
+    recipient_config: Optional[RecipientConfig] = None
+    content_mode: Optional[str] = None
+    content_override: Optional[Dict[str, Any]] = None
+    branch_key: Optional[str] = None
+
+    @field_validator("channel")
+    @classmethod
+    def reject_socket_channel(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return validate_channel_for_write(v)
+        return v
+
+
+VALID_CONTENT_MODES = {"inherit_default", "template_override", "inline_override", "channel_native"}
+
+
+class NotificationAction(NotificationActionBase):
+    """Schema for reading notification action (response)"""
+    id: int
+    rule_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("channel")
+    @classmethod
+    def normalize_legacy_channel(cls, v: str) -> str:
+        return normalize_channel(v)
+
+    @field_validator("content_mode")
+    @classmethod
+    def validate_content_mode(cls, v):
+        if v is not None and v not in VALID_CONTENT_MODES:
+            raise ValueError(f"Invalid content_mode: {v}")
+        return v
+
+
+# =============================================================================
+# ✅ PHASE 2.2 + FIX: Notification Rule Schemas (with validation)
+# =============================================================================
+
+
 class NotificationRuleBase(BaseModel):
     """Base schema for notification rule (with validation)"""
     event: str  # SystemEvents enum value (e.g., "LEAD_ASSIGNED")
@@ -111,7 +156,11 @@ class NotificationRuleBase(BaseModel):
     message_template: str  # Message template
     notification_type: str = "info"  # info, success, warning, error
     link_template: Optional[str] = None  # Optional link template
-    channels: List[str] = ["browser"]  # ["browser", "email", "sms"]
+
+    # Phase C1: channels is DEPRECATED on write path.
+    # It is accepted but IGNORED — channels are derived from actions.
+    # Kept in response schema as read-only for backward compat.
+    channels: Optional[List[str]] = None
 
     # ✅ Now typed with validation
     recipient_config: RecipientConfig  # Validated resolver config
@@ -125,6 +174,8 @@ class NotificationRuleCreate(NotificationRuleBase):
     """Schema for creating a notification rule"""
     actions: List[NotificationActionCreate] = []  # ✅ NOTIFICATION 2.0: Workflow actions
 
+    # Phase C1: channels ignored on write — derived from actions
+
 
 class NotificationRuleUpdate(BaseModel):
     """Schema for updating a notification rule (partial update)"""
@@ -132,27 +183,71 @@ class NotificationRuleUpdate(BaseModel):
     message_template: Optional[str] = None
     notification_type: Optional[str] = None
     link_template: Optional[str] = None
-    channels: Optional[List[str]] = None
+    channels: Optional[List[str]] = None  # DEPRECATED (C1): ignored, derived from actions
     recipient_config: Optional[Dict[str, Any]] = None
     condition: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
     actions: Optional[List[NotificationActionCreate]] = None  # ✅ NOTIFICATION 2.0: Update actions
 
+    # Phase C1: channels ignored on write — derived from actions
+
 
 class NotificationRule(NotificationRuleBase):
     """Schema for reading notification rule (response)"""
     id: int
+    channels: List[str] = []  # Read-only, derived from actions
     actions: List[NotificationAction] = []  # ✅ NOTIFICATION 2.0: Include workflow actions
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
+    @field_validator("channels")
+    @classmethod
+    def normalize_legacy_channels(cls, v: List[str]) -> List[str]:
+        if v:
+            return normalize_channels(v)
+        return v
+
 
 class NotificationRulesPage(BaseModel):
     """Paginated notification rules response"""
     total_count: int
     rules: List[NotificationRule]
+
+
+# =============================================================================
+# PR2: Preview API Schemas
+# =============================================================================
+
+
+class NotificationRulePreview(BaseModel):
+    """Request schema for previewing notification rule content."""
+    event: str
+    title_template: str
+    message_template: str
+    sample_payload: Dict[str, str] = {}
+    actions: Optional[List[NotificationActionCreate]] = []
+
+
+class ActionPreviewItem(BaseModel):
+    """Single action preview in response."""
+    step: int
+    channel: str
+    branch_key: Optional[str] = None
+    rendered_title: str
+    rendered_message: str
+    rendered_link: Optional[str] = None
+    content_mode: Optional[str] = None
+    delay_minutes: int = 0
+
+
+class NotificationRulePreviewResponse(BaseModel):
+    """Response schema for rule preview."""
+    event: str
+    link_strategy: Optional[str] = None
+    rendered_link: Optional[str] = None
+    actions: List[ActionPreviewItem] = []
 
 
 # =============================================================================
@@ -172,7 +267,7 @@ class NotificationTemplateBase(BaseModel):
     category: Optional[str] = None  # Template category (lead, consultation, etc.)
 
     # ✅ NOTIFICATION 2.0: New metadata fields
-    supported_channels: List[str] = ["socket"]  # Channels this template supports
+    supported_channels: List[str] = ["browser"]  # Channels this template supports
     allowed_events: Optional[List[str]] = None  # Events this template is for (null = all)
     template_type: str = "system"  # Template type: system, zalo_zns, email_html, sms
 
@@ -180,6 +275,11 @@ class NotificationTemplateBase(BaseModel):
 class NotificationTemplateCreate(NotificationTemplateBase):
     """Schema for creating a notification template"""
     is_system: bool = False  # System template flag
+
+    @field_validator("supported_channels")
+    @classmethod
+    def reject_socket_channels(cls, v: List[str]) -> List[str]:
+        return validate_channels_for_write(v)
 
 
 class NotificationTemplateUpdate(BaseModel):
@@ -198,6 +298,13 @@ class NotificationTemplateUpdate(BaseModel):
     allowed_events: Optional[List[str]] = None
     template_type: Optional[str] = None
 
+    @field_validator("supported_channels")
+    @classmethod
+    def reject_socket_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is not None:
+            return validate_channels_for_write(v)
+        return v
+
 
 class NotificationTemplate(NotificationTemplateBase):
     """Schema for reading notification template (response)"""
@@ -210,11 +317,29 @@ class NotificationTemplate(NotificationTemplateBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @field_validator("supported_channels")
+    @classmethod
+    def normalize_legacy_channels(cls, v: List[str]) -> List[str]:
+        return normalize_channels(v)
+
 
 class NotificationTemplatesPage(BaseModel):
     """Paginated notification templates response"""
     total_count: int
     templates: List[NotificationTemplate]
+
+
+# =============================================================================
+# ✅ PHASE 2: Condition Field Schema (for metadata API response)
+# =============================================================================
+
+
+class ConditionFieldSchema(BaseModel):
+    """Schema for condition field metadata returned by metadata API."""
+    path: str
+    type: str
+    description: str
+    operators: List[str]
 
 
 # =============================================================================

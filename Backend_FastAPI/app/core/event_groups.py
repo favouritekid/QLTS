@@ -55,7 +55,7 @@ class NotificationEventGroup(str, Enum):
     """Pipeline configuration events: stage/status updates"""
 
     ORGANIZATION = "organization"
-    """Organization events: unit, program, offering changes (Admin only)"""
+    """Organization events: domain broadcast only, NOT user notifications. See addendum."""
 
     SECURITY = "security"
     """Security events: suspicious logins, password changes, device changes"""
@@ -75,6 +75,8 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.LEAD_UPDATED: NotificationEventGroup.LEAD,  # ✅ Added - was missing!
     SystemEvents.LEAD_ASSIGNMENT_FAILED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_DELETED: NotificationEventGroup.LEAD,
+    SystemEvents.LEAD_RESTORED: NotificationEventGroup.LEAD,
+    SystemEvents.LEAD_IMPORTED: NotificationEventGroup.LEAD,
     SystemEvents.OFFICER_AVAILABILITY_CHANGED: NotificationEventGroup.LEAD,  # Affects lead distribution
 
     # Consultation events
@@ -92,6 +94,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.DORM_FEE_CREATED: NotificationEventGroup.FINANCE,
     SystemEvents.PAYMENT_RECEIVED: NotificationEventGroup.FINANCE,
     SystemEvents.PAYMENT_OVERDUE: NotificationEventGroup.FINANCE,
+    SystemEvents.PAYMENT_VERIFIED: NotificationEventGroup.FINANCE,
 
     # Dorm events
     SystemEvents.DORM_ROOM_ASSIGNED: NotificationEventGroup.DORM,
@@ -106,23 +109,22 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.SYSTEM_ANNOUNCEMENT: NotificationEventGroup.SYSTEM,
     SystemEvents.USER_ROLE_CHANGED: NotificationEventGroup.SYSTEM,
     SystemEvents.USER_DEACTIVATED: NotificationEventGroup.SYSTEM,
+    SystemEvents.USER_PROFILE_UPDATED: NotificationEventGroup.SYSTEM,
 
     # Pipeline events
     SystemEvents.PIPELINE_CONFIG_UPDATED: NotificationEventGroup.PIPELINE,
 
-    # Organization events
-    SystemEvents.UNIT_CREATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.UNIT_UPDATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.UNIT_DELETED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.PROGRAM_CREATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.PROGRAM_UPDATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.PROGRAM_DELETED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.OFFERING_CREATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.OFFERING_UPDATED: NotificationEventGroup.ORGANIZATION,
-    SystemEvents.OFFERING_DELETED: NotificationEventGroup.ORGANIZATION,
+    # Organization events — domain broadcast only, no user notifications.
+    # These events are dispatched for Socket.IO real-time UI refresh but have
+    # no registry config or metadata. Intentionally excluded from group mapping
+    # to avoid implying user-facing notification capability.
+    # If user notifications are needed, add registry + metadata entries first.
 
     # Security events
     SystemEvents.SUSPICIOUS_LOGIN: NotificationEventGroup.SECURITY,
+
+    # System operational events
+    SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE: NotificationEventGroup.SYSTEM,
 
     # CTV events
     SystemEvents.CTV_CLAIM_SUBMITTED: NotificationEventGroup.CTV,
@@ -146,16 +148,18 @@ def get_event_group(event: SystemEvents) -> NotificationEventGroup:
         event: The system event
 
     Returns:
-        The NotificationEventGroup for this event
-
-    Raises:
-        KeyError: If event is not mapped to a group (configuration error)
+        The NotificationEventGroup for this event.
+        Falls back to SYSTEM group with warning if event is not explicitly mapped.
     """
     if event not in EVENT_GROUP_MAPPING:
-        raise KeyError(
-            f"Event {event} is not mapped to any group. "
-            "Please update EVENT_GROUP_MAPPING in event_groups.py"
+        import structlog
+        log = structlog.get_logger(__name__)
+        log.warning(
+            "Event not in EVENT_GROUP_MAPPING, falling back to SYSTEM group",
+            unmapped_event=event.value if hasattr(event, 'value') else str(event),
+            action="Add event to EVENT_GROUP_MAPPING in event_groups.py",
         )
+        return NotificationEventGroup.SYSTEM
     return EVENT_GROUP_MAPPING[event]
 
 
@@ -226,10 +230,10 @@ EVENT_GROUP_LABELS: Dict[NotificationEventGroup, Dict[str, str]] = {
         "description_vi": "Thông báo về thay đổi cấu hình pipeline (Chỉ Admin)"
     },
     NotificationEventGroup.ORGANIZATION: {
-        "en": "Organization Management",
-        "vi": "Quản lý Tổ chức",
-        "description_en": "Notifications about unit, program, and offering changes (Admin only)",
-        "description_vi": "Thông báo về thay đổi đơn vị, chương trình, loại hình đào tạo (Chỉ Admin)"
+        "en": "Organization (broadcast only)",
+        "vi": "Tổ chức (chỉ broadcast)",
+        "description_en": "Domain broadcast only — not user-facing notifications",
+        "description_vi": "Chỉ broadcast real-time — không phải thông báo cho user"
     },
     NotificationEventGroup.SECURITY: {
         "en": "Security",
@@ -256,6 +260,9 @@ class NotificationChannel(str, Enum):
     EMAIL = "email"
     """Email notification"""
 
+    ZALO = "zalo"
+    """Zalo ZNS notification (Phase 1)"""
+
     SMS = "sms"
     """SMS notification (future feature)"""
 
@@ -265,56 +272,62 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
     NotificationEventGroup.LEAD: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.CONSULTATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.APPLICATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.FINANCE: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.DORM: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.ASSET: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.SYSTEM: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.PIPELINE: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
-    NotificationEventGroup.ORGANIZATION: {
-        NotificationChannel.BROWSER: True,
-        NotificationChannel.EMAIL: False,
-        NotificationChannel.SMS: False,
-    },
+    # ORGANIZATION group excluded — domain broadcast only, not user notification channels
     NotificationEventGroup.SECURITY: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.CTV: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
+        NotificationChannel.ZALO: False,
         NotificationChannel.SMS: False,
     },
 }

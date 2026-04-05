@@ -26,6 +26,8 @@ from app.repositories.notification_repository import NotificationRepository
 from app.repositories.notification_rule_repository import NotificationRuleRepository
 from app.repositories.notification_template_repository import NotificationTemplateRepository
 from app.repositories.notification_preference_repository import NotificationPreferenceRepository
+from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
+from app.repositories.notification_consent_repository import NotificationConsentRepository
 from app.repositories.officer_repository import OfficerRepository
 from app.repositories.organization_repository import OrganizationRepository
 from app.repositories.pipeline_repository import PipelineRepository
@@ -47,6 +49,11 @@ __all__ = [
     "KpiRepository",
     "LeadRepository",
     "NotificationRepository",
+    "NotificationRuleRepository",
+    "NotificationTemplateRepository",
+    "NotificationPreferenceRepository",
+    "NotificationDeliveryRepository",
+    "NotificationConsentRepository",
     "OfferingTypeRepository",
     "OfficerRepository",
     "OrganizationRepository",

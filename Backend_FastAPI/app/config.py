@@ -398,6 +398,65 @@ class Settings(BaseSettings):
         validation_alias="VNPAY_API_URL"
     )  # Query API URL
 
+    # -- Notification Anti-spam (Phase C2) --
+    NOTIFICATION_COOLDOWN_SECONDS: int = Field(
+        default=300, validation_alias="NOTIFICATION_COOLDOWN_SECONDS"
+    )  # Min interval (seconds) between same event+user+channel (default 5 min)
+    NOTIFICATION_RATE_LIMIT_PER_HOUR: int = Field(
+        default=50, validation_alias="NOTIFICATION_RATE_LIMIT_PER_HOUR"
+    )  # Max notifications per user per hour
+
+    # -- Notification Alerting (Phase D3) --
+    ALERT_FAILURE_RATE_THRESHOLD: float = Field(
+        default=0.20, validation_alias="ALERT_FAILURE_RATE_THRESHOLD"
+    )  # Alert when failure rate exceeds 20%
+    ALERT_BACKLOG_THRESHOLD: int = Field(
+        default=500, validation_alias="ALERT_BACKLOG_THRESHOLD"
+    )  # Alert when queued backlog exceeds count
+    ALERT_WEBHOOK_LAG_MINUTES: int = Field(
+        default=60, validation_alias="ALERT_WEBHOOK_LAG_MINUTES"
+    )  # Alert when sent deliveries without webhook > this many minutes
+
+    # -- Notification Circuit Breaker (Phase D2) --
+    CIRCUIT_BREAKER_FAIL_MAX: int = Field(
+        default=10, validation_alias="CIRCUIT_BREAKER_FAIL_MAX"
+    )  # Failures before tripping breaker for a channel
+    CIRCUIT_BREAKER_TIMEOUT: int = Field(
+        default=300, validation_alias="CIRCUIT_BREAKER_TIMEOUT"
+    )  # Seconds before breaker transitions from open → half-open
+
+    # -- Notification Quota (Phase D1) --
+    ZALO_DAILY_QUOTA_LIMIT: int = Field(
+        default=500, validation_alias="ZALO_DAILY_QUOTA_LIMIT"
+    )  # Zalo ZNS daily send limit per OA
+    QUOTA_WARN_THRESHOLD_PCT: int = Field(
+        default=80, validation_alias="QUOTA_WARN_THRESHOLD_PCT"
+    )  # Alert when quota usage exceeds this %
+    QUOTA_BLOCK_THRESHOLD_PCT: int = Field(
+        default=100, validation_alias="QUOTA_BLOCK_THRESHOLD_PCT"
+    )  # Block sends when quota usage exceeds this %
+
+    # -- Zalo ZNS Integration (Phase C1) --
+    # Get credentials from Zalo Business portal (business.zalo.me)
+    ZALO_ENABLED: bool = Field(
+        default=False, validation_alias="ZALO_ENABLED"
+    )  # Master switch — must be True to register Zalo channel
+    ZALO_APP_ID: str = Field(
+        default="", validation_alias="ZALO_APP_ID"
+    )  # Zalo app ID from developer portal
+    ZALO_APP_SECRET: str = Field(
+        default="", validation_alias="ZALO_APP_SECRET"
+    )  # Secret key for HMAC webhook verification + OAuth
+    ZALO_OA_ID: str = Field(
+        default="", validation_alias="ZALO_OA_ID"
+    )  # Official Account ID
+    ZALO_REFRESH_TOKEN: str = Field(
+        default="", validation_alias="ZALO_REFRESH_TOKEN"
+    )  # Initial seed refresh token (used only on first bootstrap)
+    ZALO_WEBHOOK_SECRET: str = Field(
+        default="", validation_alias="ZALO_WEBHOOK_SECRET"
+    )  # Secret for verifying webhook HMAC signatures
+
     # -- MoMo Payment Gateway Settings --
     # Get credentials from MoMo merchant portal
     # Docs: https://developers.momo.vn/v3/docs/payment/api/collection-link/

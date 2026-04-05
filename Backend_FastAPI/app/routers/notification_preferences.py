@@ -46,6 +46,7 @@ class EventGroupPreference(BaseModel):
     group: str
     browser: bool
     email: bool
+    zalo: bool
     sms: bool
 
 

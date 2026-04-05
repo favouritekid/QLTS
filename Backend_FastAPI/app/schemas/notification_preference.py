@@ -19,6 +19,7 @@ class NotificationPreferenceBase(BaseModel):
     email_enabled: bool = True
     sound_enabled: bool = True
     browser_enabled: bool = True
+    zalo_enabled: bool = False  # Disabled by default — user must opt in
     email_digest: str = Field(
         default="instant", pattern="^(instant|daily|weekly|disabled)$"
     )
@@ -40,6 +41,7 @@ class NotificationPreferenceUpdate(BaseModel):
     email_enabled: Optional[bool] = None
     sound_enabled: Optional[bool] = None
     browser_enabled: Optional[bool] = None
+    zalo_enabled: Optional[bool] = None
     email_digest: Optional[str] = Field(
         default=None, pattern="^(instant|daily|weekly|disabled)$"
     )

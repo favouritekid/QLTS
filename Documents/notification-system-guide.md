@@ -2,6 +2,7 @@
 
 > Tài liệu hướng dẫn phát triển hệ thống thông báo real-time cho dự án QLTS.
 > **Phiên bản: NOTIFICATION 2.0** (Cập nhật: 2024-12-21)
+> **Luu y**: Doc nay can duoc doc cung voi [Backend_FastAPI/NOTIFICATION_PLAN_SPEC_ADDENDUM.md](/D:/QLTS/Backend_FastAPI/NOTIFICATION_PLAN_SPEC_ADDENDUM.md). Neu co xung dot, addendum moi nhat se uu tien hon.
 
 ---
 

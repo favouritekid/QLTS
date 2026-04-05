@@ -134,7 +134,11 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
     db.add(initial_status)
     
     await db.flush()
-    
+
+    # PR1: Seed notification rules from catalog (dispatcher requires DB rules)
+    from app.scripts.sync_notification_rules import sync_notification_rules
+    await sync_notification_rules(db)
+
     return {
         "unit_id": unit.id,
         "stage_id": stage.id,

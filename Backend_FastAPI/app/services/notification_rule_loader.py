@@ -9,12 +9,14 @@ This module handles:
 4. ✅ Caching rules for performance (Edge Case #6 fix)
 """
 import json
+from dataclasses import dataclass, field
 from string import Template
 from typing import Any, Dict, List, Optional
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app import models
 from app.core.events import SystemEvents
@@ -25,6 +27,7 @@ from app.services.notification_resolvers import (
     AllAdminsResolver,
     AllUsersResolver,
     BaseResolver,
+    CollaboratorUserResolver,
     CompositeResolver,
     DormResidentsResolver,
     DormStaffResolver,
@@ -35,6 +38,64 @@ from app.services.notification_resolvers import (
 )
 
 log = structlog.get_logger(__name__)
+
+# =============================================================================
+# Phase 2: Operator & field alias maps for backward-compatible condition eval
+# =============================================================================
+
+# Phase 2: Operator aliases for legacy symbolic operators
+OPERATOR_ALIASES = {
+    "==": "eq", "!=": "ne",
+    ">": "gt", ">=": "gte",
+    "<": "lt", "<=": "lte",
+}
+
+# Phase 2: Legacy flat field -> canonical nested path (global, unambiguous)
+FIELD_ALIASES_GLOBAL = {
+    "new_status": "event.new_status_id",
+    "old_status": "event.old_status_id",
+    "old_stage": "event.old_stage_id",
+    "new_stage": "event.new_stage_id",
+    "lead_id": "lead.id",
+    "lead_name": "lead.name",
+    "officer_id": "lead.officer_id",
+    "actor_id": "actor.id",
+    "actor_name": "actor.name",
+    "consultation_id": "consultation.id",
+    "status_changed": "event.status_changed",
+    "updated_fields": "event.updated_fields",
+}
+
+# Ambiguous aliases resolved per-event
+FIELD_ALIASES_PER_EVENT = {
+    "lead_imported": {"unit_id": "event.unit_id"},
+    "_default": {"unit_id": "lead.unit_id"},
+}
+
+
+def _resolve_field_alias(field: str, event: str = "") -> str:
+    """Resolve legacy flat field to canonical nested path, event-aware."""
+    if field in FIELD_ALIASES_GLOBAL:
+        return FIELD_ALIASES_GLOBAL[field]
+    per_event = FIELD_ALIASES_PER_EVENT.get(event, FIELD_ALIASES_PER_EVENT["_default"])
+    return per_event.get(field, field)
+
+
+def _resolve_field(field: str, context: dict):
+    """Resolve field value from evaluation context.
+    Supports dotted paths (actor.role) and flat keys (lead_id).
+    """
+    if "." in field:
+        parts = field.split(".")
+        current = context
+        for part in parts:
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                return None
+        return current
+    return context.get(field)
+
 
 # =============================================================================
 # ✅ FIX: Edge Case #6 - Redis Caching for Rules
@@ -110,6 +171,7 @@ def deserialize_resolver(config: Dict[str, Any]) -> BaseResolver:
         "all_admins": AllAdminsResolver,
         "all_users": AllUsersResolver,
         "specific_users": SpecificUsersResolver,
+        "collaborator_user": CollaboratorUserResolver,
         "dorm_residents": DormResidentsResolver,
         "dorm_staff": DormStaffResolver,
     }
@@ -149,7 +211,7 @@ def deserialize_resolver(config: Dict[str, Any]) -> BaseResolver:
 # =============================================================================
 
 
-def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bool:
+def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict, event: str = "") -> bool:
     """
     Evaluate activation condition for a notification rule.
 
@@ -241,7 +303,7 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
         try:
             if operator == "and":
                 # ALL conditions must be true
-                result = all(evaluate_condition(cond, payload) for cond in sub_conditions)
+                result = all(evaluate_condition(cond, payload, event) for cond in sub_conditions)
                 log.debug(
                     "AND condition evaluated",
                     sub_count=len(sub_conditions),
@@ -250,7 +312,7 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
                 return result
             elif operator == "or":
                 # AT LEAST ONE condition must be true
-                result = any(evaluate_condition(cond, payload) for cond in sub_conditions)
+                result = any(evaluate_condition(cond, payload, event) for cond in sub_conditions)
                 log.debug(
                     "OR condition evaluated",
                     sub_count=len(sub_conditions),
@@ -267,6 +329,9 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
             return False
 
     # ✅ Handle simple conditions (original logic)
+    # Phase 2: Normalize operator aliases (e.g. "==" -> "eq")
+    operator = OPERATOR_ALIASES.get(operator, operator)
+
     field = condition.get("field")
     expected_value = condition.get("value")
 
@@ -278,8 +343,17 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
         )
         return False
 
-    # Get actual value from payload (support nested fields with dot notation)
-    actual_value = payload.get(field)
+    # Phase 2: Resolve legacy flat field names to canonical nested paths
+    original_field = field
+    field = _resolve_field_alias(field, event)
+
+    # Get actual value from context (supports dotted paths like actor.role)
+    actual_value = _resolve_field(field, payload)
+
+    # Fallback: if alias resolved to dotted path but context is flat,
+    # try original flat key for backward compat
+    if actual_value is None and original_field != field:
+        actual_value = payload.get(original_field)
 
     # Handle missing field
     if actual_value is None:
@@ -328,6 +402,59 @@ def evaluate_condition(condition: Optional[Dict[str, Any]], payload: dict) -> bo
 
 
 # =============================================================================
+# ACTION CONFIGURATION (Phase C0)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class ActionConfig:
+    """
+    Configuration for a single notification action step.
+
+    Phase C0: actions are the runtime truth for channel delivery.
+    Each action represents one channel + step in the delivery pipeline.
+    """
+    step: int
+    channel: str
+    delay_minutes: int = 0
+    template_code: Optional[str] = None
+    config: Optional[Dict[str, Any]] = field(default=None, hash=False)
+    # Phase 3: delivery branch fields
+    recipient_config: Optional[Dict[str, Any]] = field(default=None, hash=False)
+    content_mode: Optional[str] = None
+    content_override: Optional[Dict[str, Any]] = field(default=None, hash=False)
+    branch_key: Optional[str] = None
+
+
+def synthesize_actions_from_channels(channels: List[str]) -> List[ActionConfig]:
+    """
+    Create synthetic ActionConfig list from a channels array.
+
+    Used for backward compatibility when a rule has channels but no
+    NotificationAction rows (legacy rules before C0 migration).
+    """
+    return [
+        ActionConfig(step=i, channel=ch, delay_minutes=0)
+        for i, ch in enumerate(channels, start=1)
+    ]
+
+
+def derive_channels_from_actions(actions: List[ActionConfig]) -> List[str]:
+    """
+    Derive unique channel list from actions, preserving step order.
+
+    Used to keep the top-level `channels` field in sync with actions.
+    """
+    seen: set = set()
+    result: List[str] = []
+    for a in sorted(actions, key=lambda x: x.step):
+        if a.channel not in seen:
+            result.append(a.channel)
+            seen.add(a.channel)
+    return result
+
+
+# =============================================================================
 # RULE CONFIGURATION CLASS
 # =============================================================================
 
@@ -353,6 +480,7 @@ class DatabaseRuleConfig:
         condition: Optional[Dict[str, Any]],
         priority: int = 100,
         dedup_key_template: Optional[str] = None,
+        actions: Optional[List[ActionConfig]] = None,
     ):
         self.rule_id = rule_id
         self.event = event
@@ -360,11 +488,15 @@ class DatabaseRuleConfig:
         self.message_template = message_template
         self.notification_type = notification_type
         self.link_template = link_template
-        self._channels = channels  # Store raw strings
+        self._channels = channels  # Legacy / derived field
         self.resolver = resolver
         self.condition = condition
         self.priority = priority
         self.dedup_key_template = dedup_key_template
+
+        # Phase C0: actions are the runtime truth.
+        # If not provided, synthesize from channels for backward compat.
+        self._actions = actions if actions else synthesize_actions_from_channels(channels)
 
         # Derive group from event
         try:
@@ -381,14 +513,19 @@ class DatabaseRuleConfig:
             self.group = NotificationEventGroup.SYSTEM
 
     @property
+    def actions(self) -> List[ActionConfig]:
+        """Get action configs — the runtime truth for delivery pipeline."""
+        return self._actions
+
+    @property
     def channels(self) -> List[str]:
-        """Get channels as list of strings (matches NotificationConfig.channel_values)."""
-        return self._channels
-    
+        """Derived from actions. Kept for backward compat."""
+        return derive_channels_from_actions(self._actions)
+
     @property
     def channel_values(self) -> List[str]:
         """Alias for channels for interface compatibility with NotificationConfig."""
-        return self._channels
+        return self.channels
 
     def render_title(self, payload: dict) -> str:
         """Render title template with payload data."""
@@ -412,7 +549,7 @@ class DatabaseRuleConfig:
 
     def should_activate(self, payload: dict) -> bool:
         """Check if this rule should activate for the given payload."""
-        return evaluate_condition(self.condition, payload)
+        return evaluate_condition(self.condition, payload, self.event)
 
 
 # =============================================================================
@@ -473,6 +610,25 @@ async def get_rule_for_event(
                 await safe_redis_delete(cache_key)
                 # Fall through to DB query
             else:
+                # Deserialize cached actions
+                cached_actions = rule_data.get("actions")
+                action_configs = None
+                if cached_actions:
+                    action_configs = [
+                        ActionConfig(
+                            step=a_data["step"],
+                            channel=a_data["channel"],
+                            delay_minutes=a_data.get("delay_minutes", 0),
+                            template_code=a_data.get("template_code"),
+                            config=a_data.get("config"),
+                            recipient_config=a_data.get("recipient_config"),
+                            content_mode=a_data.get("content_mode"),
+                            content_override=a_data.get("content_override"),
+                            branch_key=a_data.get("branch_key"),
+                        )
+                        for a_data in cached_actions
+                    ]
+
                 # Successfully loaded from cache
                 config = DatabaseRuleConfig(
                     rule_id=rule_data["id"],
@@ -481,9 +637,10 @@ async def get_rule_for_event(
                     message_template=rule_data["message_template"],
                     notification_type=rule_data["notification_type"],
                     link_template=rule_data.get("link_template"),
-                    channels=rule_data["channels"],
+                    channels=rule_data.get("channels", []),
                     resolver=resolver,
                     condition=rule_data.get("condition"),
+                    actions=action_configs,
                 )
                 return config
     except Exception as e:
@@ -494,26 +651,46 @@ async def get_rule_for_event(
         )
 
     # ✅ Query database for enabled rule (cache miss or error)
+    # Phase C0: eager-load actions for action-based execution
+    # 1.9d: eager-load template to avoid N+1 query
     result = await db.execute(
         select(models.NotificationRule)
+        .options(
+            selectinload(models.NotificationRule.actions),
+            selectinload(models.NotificationRule.template),
+        )
         .where(
             models.NotificationRule.event == event_name,
             models.NotificationRule.enabled == True
         )
     )
-    rule = result.scalar_one_or_none()
-
-    if not rule:
+    # PR1: fail-fast on duplicate enabled rules — config error, not silent pick
+    rules = result.scalars().all()
+    if not rules:
         log.debug(
             "No enabled rule found for event",
             event_type=event_name
         )
         return None
+    if len(rules) > 1:
+        from app.utils.exceptions import NotificationConfigError
+        rule_ids = [r.id for r in rules]
+        log.error(
+            "Multiple enabled rules for same event — config error",
+            event_type=event_name,
+            rule_ids=rule_ids,
+        )
+        raise NotificationConfigError(
+            f"Event '{event_name}' has {len(rules)} enabled rules (IDs: {rule_ids}). "
+            f"Expected exactly 1. Disable or delete duplicate rules."
+        )
+    rule = rules[0]
 
-    # Deserialize resolver
+    # Deserialize resolver — explicit error, no silent None (1.9f)
     try:
         resolver = deserialize_resolver(rule.recipient_config)
     except Exception as e:
+        from app.utils.exceptions import NotificationConfigError
         log.error(
             "Failed to deserialize resolver for rule",
             rule_id=rule.id,
@@ -521,47 +698,51 @@ async def get_rule_for_event(
             error=str(e),
             recipient_config=rule.recipient_config
         )
-        return None
+        raise NotificationConfigError(
+            f"Rule {rule.id} ({event_name}) has invalid recipient_config: {e}"
+        )
 
-    # ✅ FIX: Load template if rule references one
+    # 1.9d: Use eager-loaded template relationship (no N+1)
     title_template = rule.title_template
     message_template = rule.message_template
     link_template = rule.link_template
 
-    if rule.template_id:
-        try:
-            template_result = await db.execute(
-                select(models.NotificationTemplate)
-                .where(models.NotificationTemplate.id == rule.template_id)
-            )
-            template = template_result.scalar_one_or_none()
+    if rule.template_id and rule.template:
+        template = rule.template
+        title_template = template.title_template
+        message_template = template.message_template
+        link_template = template.link_template if not rule.link_template else rule.link_template
+        log.debug(
+            "Using eager-loaded template for rule",
+            rule_id=rule.id,
+            template_id=template.id,
+        )
+    elif rule.template_id:
+        log.warning(
+            "Template not found for rule (eager-load returned None), using rule templates",
+            rule_id=rule.id,
+            template_id=rule.template_id,
+        )
 
-            if template:
-                # Use template content (template takes precedence)
-                title_template = template.title_template
-                message_template = template.message_template
-                # Link can be overridden by rule, fallback to template if rule's is empty
-                link_template = template.link_template if not rule.link_template else rule.link_template
-
-                log.info(
-                    "Loaded template for notification rule",
-                    rule_id=rule.id,
-                    template_id=template.id,
-                    template_name=template.name
-                )
-            else:
-                log.warning(
-                    "Template not found for rule, using rule templates",
-                    rule_id=rule.id,
-                    template_id=rule.template_id
-                )
-        except Exception as e:
-            log.error(
-                "Failed to load template for rule, using rule templates",
-                rule_id=rule.id,
-                template_id=rule.template_id,
-                error=str(e)
+    # Phase C0: Build ActionConfig list from DB actions (or synthesize from channels)
+    db_actions = sorted(rule.actions, key=lambda a: a.step) if rule.actions else []
+    if db_actions:
+        action_configs = [
+            ActionConfig(
+                step=a.step,
+                channel=a.channel,
+                delay_minutes=a.delay_minutes,
+                template_code=a.template_code,
+                config=a.config,
+                recipient_config=a.recipient_config,
+                content_mode=a.content_mode,
+                content_override=a.content_override,
+                branch_key=a.branch_key,
             )
+            for a in db_actions
+        ]
+    else:
+        action_configs = None  # Will fall back to synthesize from channels
 
     # Create config
     config = DatabaseRuleConfig(
@@ -571,13 +752,26 @@ async def get_rule_for_event(
         message_template=message_template,
         notification_type=rule.notification_type,
         link_template=link_template,
-        channels=rule.channels,
+        channels=rule.channels or [],
         resolver=resolver,
         condition=rule.condition,
+        actions=action_configs,
     )
 
     # ✅ Cache the rule data for future requests
     try:
+        # Serialize actions for cache
+        actions_cache = [
+            {"step": a.step, "channel": a.channel,
+             "delay_minutes": a.delay_minutes,
+             "template_code": a.template_code, "config": a.config,
+             "recipient_config": a.recipient_config,
+             "content_mode": a.content_mode,
+             "content_override": a.content_override,
+             "branch_key": a.branch_key}
+            for a in config.actions
+        ]
+
         rule_data = {
             "id": rule.id,
             "event": rule.event,
@@ -585,7 +779,8 @@ async def get_rule_for_event(
             "message_template": message_template,
             "notification_type": rule.notification_type,
             "link_template": link_template,
-            "channels": rule.channels,
+            "channels": rule.channels or [],
+            "actions": actions_cache,
             "recipient_config": rule.recipient_config,  # Will deserialize on each request
             "condition": rule.condition,
         }
@@ -616,3 +811,7 @@ async def get_rule_for_event(
     )
 
     return config
+
+
+    # has_rule_override_for_event() — REMOVED in PR1 (notification refactor).
+    # Dispatcher no longer uses registry fallback; single-path via catalog + DB rule.

@@ -12,6 +12,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   Bell,
@@ -61,9 +62,9 @@ import {
   useNotificationRules,
   useToggleNotificationRule,
   useDeleteNotificationRule,
+  useNotificationMetadata,
 } from "@/hooks/useNotificationRules";
 import type { NotificationRule } from "@/types/api.types";
-import { NotificationRuleWizard } from "./NotificationRuleWizard";
 
 // Event category configuration
 const EVENT_CATEGORIES = {
@@ -87,6 +88,41 @@ const EVENT_CATEGORIES = {
     icon: "👥",
     description: "Thông báo về phân công công việc",
   },
+  finance: {
+    label: "Sự kiện Tài chính",
+    icon: "💰",
+    description: "Thông báo liên quan đến học phí và thanh toán",
+  },
+  dorm: {
+    label: "Sự kiện Ký túc",
+    icon: "🏠",
+    description: "Thông báo liên quan đến ký túc xá",
+  },
+  asset: {
+    label: "Sự kiện Tài sản",
+    icon: "🔧",
+    description: "Thông báo liên quan đến quản lý tài sản",
+  },
+  system: {
+    label: "Sự kiện Hệ thống",
+    icon: "🔔",
+    description: "Thông báo hệ thống và bảo trì",
+  },
+  security: {
+    label: "Sự kiện Bảo mật",
+    icon: "🔒",
+    description: "Thông báo liên quan đến bảo mật tài khoản",
+  },
+  pipeline: {
+    label: "Sự kiện Pipeline",
+    icon: "📊",
+    description: "Thông báo liên quan đến quy trình tuyển sinh",
+  },
+  operational: {
+    label: "Sự kiện Vận hành",
+    icon: "⚙️",
+    description: "Thông báo liên quan đến vận hành hệ thống",
+  },
   other: {
     label: "Sự kiện khác",
     icon: "🔔",
@@ -96,7 +132,18 @@ const EVENT_CATEGORIES = {
 
 type CategoryKey = keyof typeof EVENT_CATEGORIES;
 
-function getCategoryFromEvent(event: string): CategoryKey {
+function getCategoryFromEvent(
+  event: string,
+  eventCategoryMap?: Map<string, string>,
+): CategoryKey {
+  // Prefer metadata-based lookup
+  if (eventCategoryMap) {
+    const category = eventCategoryMap.get(event);
+    if (category && category in EVENT_CATEGORIES) {
+      return category as CategoryKey;
+    }
+  }
+  // Fallback to prefix-split heuristic
   const prefix = event.toLowerCase().split("_")[0];
   if (prefix in EVENT_CATEGORIES) {
     return prefix as CategoryKey;
@@ -114,17 +161,27 @@ interface NotificationRuleListProps {
 }
 
 export function NotificationRuleList({ initialData }: NotificationRuleListProps) {
+  const router = useRouter();
   const [deleteRuleId, setDeleteRuleId] = useState<number | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingRuleId, setEditingRuleId] = useState<number | undefined>(undefined);
 
   // Filters
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled">("enabled");
   const [typeFilter, setTypeFilter] = useState<"all" | "success" | "warning" | "error" | "info">("all");
 
   // Collapsed sections state
   const [collapsedSections, setCollapsedSections] = useState<Set<CategoryKey>>(new Set());
+
+  // Fetch notification metadata for event->category mapping
+  const { data: metadata } = useNotificationMetadata();
+  const eventCategoryMap = useMemo(() => {
+    if (!metadata?.events) return undefined;
+    const map = new Map<string, string>();
+    for (const evt of metadata.events) {
+      map.set(evt.event, evt.category);
+    }
+    return map;
+  }, [metadata]);
 
   // Fetch rules (fetch all at once, filter client-side) with initialData
   const { data, isLoading, error } = useNotificationRules(
@@ -177,7 +234,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
     const groups = new Map<CategoryKey, NotificationRule[]>();
 
     for (const rule of filtered) {
-      const category = getCategoryFromEvent(rule.event);
+      const category = getCategoryFromEvent(rule.event, eventCategoryMap);
       if (!groups.has(category)) {
         groups.set(category, []);
       }
@@ -185,14 +242,18 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
     }
 
     // Convert to array and sort by category order
-    const categoryOrder: CategoryKey[] = ["lead", "application", "consultation", "assignment", "other"];
+    const categoryOrder: CategoryKey[] = [
+      "lead", "application", "consultation", "assignment",
+      "finance", "dorm", "asset", "pipeline",
+      "system", "security", "operational", "other",
+    ];
     return categoryOrder
       .filter((cat) => groups.has(cat))
       .map((cat) => ({
         category: cat,
         rules: groups.get(cat)!,
       }));
-  }, [data, search, statusFilter, typeFilter]);
+  }, [data, search, statusFilter, typeFilter, eventCategoryMap]);
 
   const handleToggle = async (rule: NotificationRule) => {
     try {
@@ -214,24 +275,18 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
       await deleteMutation.mutateAsync(deleteRuleId);
       toast.success("Đã xóa quy tắc thành công");
       setDeleteRuleId(null);
-    } catch {
-      toast.error("Không thể xóa quy tắc");
+    } catch (error) {
+      const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || "Không thể xóa quy tắc");
     }
   };
 
   const handleCreateClick = () => {
-    setEditingRuleId(undefined);
-    setFormOpen(true);
+    router.push("/admin/notification-rules/new");
   };
 
   const handleEditClick = (ruleId: number) => {
-    setEditingRuleId(ruleId);
-    setFormOpen(true);
-  };
-
-  const handleFormClose = () => {
-    setFormOpen(false);
-    setEditingRuleId(undefined);
+    router.push(`/admin/notification-rules/${ruleId}/edit`);
   };
 
   const toggleSection = (category: CategoryKey) => {
@@ -253,13 +308,13 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
     // Map resolver types to Vietnamese
     const resolverMap: Record<string, string> = {
       "assigned_officer": "Cán bộ phụ trách",
-      "lead_owner": "Người sở hữu lead",
-      "specific_user": "Người dùng cụ thể",
-      "specific_role": "Vai trò cụ thể",
-      "unit_members": "Thành viên đơn vị",
+      "lead_owner": "Cán bộ phụ trách lead",
+      "unit_staff": "Nhân viên cùng đơn vị",
+      "unit_managers": "Quản lý đơn vị",
+      "specific_users": "Người dùng cụ thể",
       "all_users": "Tất cả người dùng",
-      "applicant": "Người nộp hồ sơ",
-      "consultation_officer": "Cán bộ tư vấn",
+      "all_admins": "Tất cả Admin",
+      "collaborator_user": "Cộng tác viên",
     };
 
     return resolverMap[type] || type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
@@ -592,12 +647,6 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Create/Edit Wizard Dialog */}
-      <NotificationRuleWizard
-        ruleId={editingRuleId}
-        open={formOpen}
-        onOpenChange={handleFormClose}
-      />
     </div>
   );
 }

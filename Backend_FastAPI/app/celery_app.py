@@ -92,6 +92,7 @@ celery_app.conf.update(
 #
 #     # Notification tasks -> default queue (or dedicated if needed)
 #     "broadcast_notification_task": {"queue": "default"},
+#     "execute_notification_delivery": {"queue": "notifications"},  # Phase C1
 #     "check_consultation_reminders_task": {"queue": "default"},
 #     "cleanup_old_notifications_task": {"queue": "default"},
 #
@@ -166,6 +167,40 @@ celery_app.conf.beat_schedule = {
     "send-ctv-weekly-summary": {
         "task": "send_ctv_weekly_summary_task",
         "schedule": crontab(hour=9, minute=0, day_of_week=1),  # Monday 09:00
+        "options": {"queue": "default"},
+    },
+
+    # --- Phase C2: Delivery retry sweep ---
+    "sweep-retry-deliveries": {
+        "task": "sweep_retry_deliveries",
+        "schedule": 120,  # Every 2 minutes
+        "options": {"queue": "default"},
+    },
+
+    # --- Phase C2: Stale delivery reconciliation ---
+    "reconcile-stale-deliveries": {
+        "task": "reconcile_stale_deliveries",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes
+        "options": {"queue": "default"},
+    },
+
+    # --- Phase D1: Quota sync ---
+    "sync-notification-quotas": {
+        "task": "sync_notification_quotas",
+        "schedule": crontab(minute=0, hour="*/6"),  # Every 6 hours
+        "options": {"queue": "default"},
+    },
+    # M3: Ensure quota row exists at midnight for new day
+    "sync-notification-quotas-midnight": {
+        "task": "sync_notification_quotas",
+        "schedule": crontab(minute=1, hour=0),  # 00:01 daily
+        "options": {"queue": "default"},
+    },
+
+    # --- Phase D3: Notification alert checks ---
+    "check-notification-alerts": {
+        "task": "check_notification_alerts",
+        "schedule": 300,  # Every 5 minutes
         "options": {"queue": "default"},
     },
 }

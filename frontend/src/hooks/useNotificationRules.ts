@@ -118,8 +118,9 @@ export function useCreateNotificationRule() {
       return response.data;
     },
     onSuccess: () => {
-      // Invalidate all list queries to refetch
+      // Invalidate list + metadata (existing_rule_events changed)
       queryClient.invalidateQueries({ queryKey: notificationRuleKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: [...notificationRuleKeys.all, "metadata"] });
     },
   });
 }
@@ -237,8 +238,9 @@ export function useDeleteNotificationRule() {
       queryClient.removeQueries({
         queryKey: notificationRuleKeys.detail(ruleId),
       });
-      // Invalidate list queries
+      // Invalidate list + metadata (existing_rule_events changed)
       queryClient.invalidateQueries({ queryKey: notificationRuleKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: [...notificationRuleKeys.all, "metadata"] });
     },
   });
 }
@@ -267,5 +269,53 @@ export function useNotificationMetadata() {
     },
     staleTime: 30 * 60 * 1000, // 30 minutes (metadata rarely changes)
     gcTime: 60 * 60 * 1000, // 1 hour
+  });
+}
+
+
+// PR2: Preview mutation
+export interface PreviewRequest {
+  event: string;
+  title_template: string;
+  message_template: string;
+  sample_payload: Record<string, string>;
+  actions?: Array<{
+    step: number;
+    channel: string;
+    branch_key?: string | null;
+    content_mode?: string | null;
+    content_override?: Record<string, string> | null;
+    delay_minutes?: number;
+    template_code?: string | null;
+  }>;
+}
+
+export interface ActionPreview {
+  step: number;
+  channel: string;
+  branch_key: string | null;
+  rendered_title: string;
+  rendered_message: string;
+  rendered_link: string | null;
+  content_mode: string | null;
+  delay_minutes: number;
+}
+
+export interface PreviewResponse {
+  event: string;
+  link_strategy: string | null;
+  rendered_link: string | null;
+  actions: ActionPreview[];
+}
+
+export function usePreviewNotificationRule() {
+  return useMutation<PreviewResponse, AxiosError<ApiErrorResponse>, PreviewRequest>({
+    mutationFn: async (data) => {
+      const response = await api.post<PreviewResponse>(
+        API_ENDPOINTS.NOTIFICATION_RULES.PREVIEW,
+        data
+      );
+      return response.data;
+    },
   });
 }
