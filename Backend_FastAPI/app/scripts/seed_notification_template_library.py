@@ -1,4 +1,4 @@
-﻿"""
+"""
 Seed a reusable notification template library from the event catalog.
 
 Design:
@@ -41,140 +41,140 @@ class TemplateSeed:
 
 _INTERNAL_OVERRIDES: dict[str, dict[str, str | list[str]]] = {
     "lead_assigned": {
-        "title_template": "Lead Ä‘Æ°á»£c phÃ¢n cÃ´ng: $lead_name",
-        "message_template": "Lead $lead_name Ä‘Ã£ Ä‘Æ°á»£c phÃ¢n cÃ´ng cho báº¡n. SÄT: $lead_phone.",
+        "title_template": "Lead \u0111\u01b0\u1ee3c ph\u00e2n c\u00f4ng: $lead_name",
+        "message_template": "Lead $lead_name \u0111\u00e3 \u0111\u01b0\u1ee3c ph\u00e2n c\u00f4ng cho b\u1ea1n. S\u0110T: $lead_phone.",
     },
     "lead_assignment_failed": {
-        "title_template": "PhÃ¢n cÃ´ng lead tháº¥t báº¡i",
-        "message_template": "Lead $lead_name chÆ°a thá»ƒ phÃ¢n cÃ´ng tá»± Ä‘á»™ng. LÃ½ do: $reason.",
+        "title_template": "Ph\u00e2n c\u00f4ng lead th\u1ea5t b\u1ea1i",
+        "message_template": "Lead $lead_name ch\u01b0a th\u1ec3 ph\u00e2n c\u00f4ng t\u1ef1 \u0111\u1ed9ng. L\u00fd do: $reason.",
     },
     "lead_reassigned": {
-        "title_template": "Lead Ä‘Æ°á»£c chuyá»ƒn giao",
-        "message_template": "Lead #$lead_id Ä‘Ã£ Ä‘Æ°á»£c chuyá»ƒn giao. LÃ½ do: $reason.",
+        "title_template": "Lead \u0111\u01b0\u1ee3c chuy\u1ec3n giao",
+        "message_template": "Lead #$lead_id \u0111\u00e3 \u0111\u01b0\u1ee3c chuy\u1ec3n giao. L\u00fd do: $reason.",
     },
     "lead_status_changed": {
-        "title_template": "Lead Ä‘á»•i tráº¡ng thÃ¡i: $lead_name",
-        "message_template": "Lead $lead_name Ä‘Ã£ chuyá»ƒn tá»« '$old_status' sang '$new_status'.",
+        "title_template": "Lead \u0111\u1ed5i tr\u1ea1ng th\u00e1i: $lead_name",
+        "message_template": "Lead $lead_name \u0111\u00e3 chuy\u1ec3n t\u1eeb '$old_status' sang '$new_status'.",
     },
     "lead_created": {
-        "title_template": "Lead má»›i: $lead_name",
-        "message_template": "Há»‡ thá»‘ng vá»«a táº¡o lead má»›i $lead_name tá»« nguá»“n $source.",
+        "title_template": "Lead m\u1edbi: $lead_name",
+        "message_template": "H\u1ec7 th\u1ed1ng v\u1eeba t\u1ea1o lead m\u1edbi $lead_name t\u1eeb ngu\u1ed3n $source.",
     },
     "lead_deleted": {
-        "title_template": "Lead bá»‹ xÃ³a",
-        "message_template": "Lead $lead_name Ä‘Ã£ bá»‹ xÃ³a khá»i há»‡ thá»‘ng.",
+        "title_template": "Lead b\u1ecb x\u00f3a",
+        "message_template": "Lead $lead_name \u0111\u00e3 b\u1ecb x\u00f3a kh\u1ecfi h\u1ec7 th\u1ed1ng.",
     },
     "lead_restored": {
-        "title_template": "Lead Ä‘Æ°á»£c khÃ´i phá»¥c",
-        "message_template": "Lead $lead_name Ä‘Ã£ Ä‘Æ°á»£c khÃ´i phá»¥c láº¡i.",
+        "title_template": "Lead \u0111\u01b0\u1ee3c kh\u00f4i ph\u1ee5c",
+        "message_template": "Lead $lead_name \u0111\u00e3 \u0111\u01b0\u1ee3c kh\u00f4i ph\u1ee5c l\u1ea1i.",
     },
     "lead_imported": {
-        "title_template": "Import lead hoÃ n táº¥t",
-        "message_template": "ÄÃ£ import $total_imported lead tá»« file $filename.",
+        "title_template": "Import lead ho\u00e0n t\u1ea5t",
+        "message_template": "\u0110\u00e3 import $total_imported lead t\u1eeb file $filename.",
     },
     "officer_availability_changed": {
-        "title_template": "Officer Ä‘á»•i tráº¡ng thÃ¡i sáºµn sÃ ng",
-        "message_template": "Officer $username Ä‘Ã£ Ä‘á»•i tráº¡ng thÃ¡i tá»« '$old_status' sang '$new_status'.",
+        "title_template": "Officer \u0111\u1ed5i tr\u1ea1ng th\u00e1i s\u1eb5n s\u00e0ng",
+        "message_template": "Officer $username \u0111\u00e3 \u0111\u1ed5i tr\u1ea1ng th\u00e1i t\u1eeb '$old_status' sang '$new_status'.",
     },
     "consultation_created": {
-        "title_template": "TÆ° váº¥n má»›i cho lead #$lead_id",
-        "message_template": "ÄÃ£ táº¡o lá»‹ch sá»­ tÆ° váº¥n má»›i cho lead #$lead_id vá»›i tráº¡ng thÃ¡i $status_id.",
+        "title_template": "T\u01b0 v\u1ea5n m\u1edbi cho lead #$lead_id",
+        "message_template": "\u0110\u00e3 t\u1ea1o l\u1ecbch s\u1eed t\u01b0 v\u1ea5n m\u1edbi cho lead #$lead_id v\u1edbi tr\u1ea1ng th\u00e1i $status_id.",
     },
     "consultation_updated": {
-        "title_template": "Cáº­p nháº­t tÆ° váº¥n cho lead #$lead_id",
-        "message_template": "TÆ° váº¥n #$consultation_id Ä‘Ã£ Ä‘á»•i tráº¡ng thÃ¡i tá»« '$old_status_id' sang '$new_status_id'.",
+        "title_template": "C\u1eadp nh\u1eadt t\u01b0 v\u1ea5n cho lead #$lead_id",
+        "message_template": "T\u01b0 v\u1ea5n #$consultation_id \u0111\u00e3 \u0111\u1ed5i tr\u1ea1ng th\u00e1i t\u1eeb '$old_status_id' sang '$new_status_id'.",
     },
     "consultation_deleted": {
-        "title_template": "XÃ³a báº£n ghi tÆ° váº¥n",
-        "message_template": "Báº£n ghi tÆ° váº¥n #$consultation_id cá»§a lead #$lead_id Ä‘Ã£ bá»‹ xÃ³a.",
+        "title_template": "X\u00f3a b\u1ea3n ghi t\u01b0 v\u1ea5n",
+        "message_template": "B\u1ea3n ghi t\u01b0 v\u1ea5n #$consultation_id c\u1ee7a lead #$lead_id \u0111\u00e3 b\u1ecb x\u00f3a.",
     },
     "consultation_reminder": {
-        "title_template": "Nháº¯c lá»‹ch tÆ° váº¥n: $lead_name",
-        "message_template": "Báº¡n cÃ³ lá»‹ch tÆ° váº¥n vá»›i $lead_name sau $minutes_until phÃºt.",
+        "title_template": "Nh\u1eafc l\u1ecbch t\u01b0 v\u1ea5n: $lead_name",
+        "message_template": "B\u1ea1n c\u00f3 l\u1ecbch t\u01b0 v\u1ea5n v\u1edbi $lead_name sau $minutes_until ph\u00fat.",
     },
     "application_created": {
-        "title_template": "Há»“ sÆ¡ má»›i Ä‘Æ°á»£c táº¡o",
-        "message_template": "Há»“ sÆ¡ #$application_id vá»«a Ä‘Æ°á»£c táº¡o cho lead #$lead_id.",
+        "title_template": "H\u1ed3 s\u01a1 m\u1edbi \u0111\u01b0\u1ee3c t\u1ea1o",
+        "message_template": "H\u1ed3 s\u01a1 #$application_id v\u1eeba \u0111\u01b0\u1ee3c t\u1ea1o cho lead #$lead_id.",
     },
     "application_status_changed": {
-        "title_template": "Há»“ sÆ¡ Ä‘á»•i tráº¡ng thÃ¡i",
-        "message_template": "Há»“ sÆ¡ #$application_id Ä‘Ã£ chuyá»ƒn tá»« '$old_status' sang '$new_status'.",
+        "title_template": "H\u1ed3 s\u01a1 \u0111\u1ed5i tr\u1ea1ng th\u00e1i",
+        "message_template": "H\u1ed3 s\u01a1 #$application_id \u0111\u00e3 chuy\u1ec3n t\u1eeb '$old_status' sang '$new_status'.",
     },
     "application_deleted": {
-        "title_template": "Há»“ sÆ¡ bá»‹ xÃ³a",
-        "message_template": "Há»“ sÆ¡ #$application_id cá»§a lead $lead_name Ä‘Ã£ bá»‹ xÃ³a.",
+        "title_template": "H\u1ed3 s\u01a1 b\u1ecb x\u00f3a",
+        "message_template": "H\u1ed3 s\u01a1 #$application_id c\u1ee7a lead $lead_name \u0111\u00e3 b\u1ecb x\u00f3a.",
     },
     "payment_received": {
-        "title_template": "ÄÃ£ ghi nháº­n thanh toÃ¡n",
-        "message_template": "Há»‡ thá»‘ng Ä‘Ã£ ghi nháº­n thanh toÃ¡n #$payment_id vá»›i sá»‘ tiá»n $amount.",
+        "title_template": "\u0110\u00e3 ghi nh\u1eadn thanh to\u00e1n",
+        "message_template": "H\u1ec7 th\u1ed1ng \u0111\u00e3 ghi nh\u1eadn thanh to\u00e1n #$payment_id v\u1edbi s\u1ed1 ti\u1ec1n $amount.",
     },
     "payment_verified": {
-        "title_template": "Thanh toÃ¡n Ä‘Æ°á»£c xÃ¡c nháº­n",
-        "message_template": "Thanh toÃ¡n #$payment_id Ä‘Ã£ Ä‘Æ°á»£c xÃ¡c nháº­n vá»›i sá»‘ tiá»n $amount.",
+        "title_template": "Thanh to\u00e1n \u0111\u01b0\u1ee3c x\u00e1c nh\u1eadn",
+        "message_template": "Thanh to\u00e1n #$payment_id \u0111\u00e3 \u0111\u01b0\u1ee3c x\u00e1c nh\u1eadn v\u1edbi s\u1ed1 ti\u1ec1n $amount.",
     },
     "ctv_claim_submitted": {
-        "title_template": "CTV gá»­i claim má»›i",
-        "message_template": "CTV $collaborator_name vá»«a gá»­i claim cho lead $lead_name.",
+        "title_template": "CTV g\u1eedi claim m\u1edbi",
+        "message_template": "CTV $collaborator_name v\u1eeba g\u1eedi claim cho lead $lead_name.",
     },
     "ctv_claim_approved": {
-        "title_template": "Claim Ä‘Æ°á»£c duyá»‡t",
-        "message_template": "Claim #$claim_id cho lead $lead_name Ä‘Ã£ Ä‘Æ°á»£c duyá»‡t.",
+        "title_template": "Claim \u0111\u01b0\u1ee3c duy\u1ec7t",
+        "message_template": "Claim #$claim_id cho lead $lead_name \u0111\u00e3 \u0111\u01b0\u1ee3c duy\u1ec7t.",
     },
     "ctv_claim_rejected": {
-        "title_template": "Claim bá»‹ tá»« chá»‘i",
-        "message_template": "Claim #$claim_id cho lead $lead_name bá»‹ tá»« chá»‘i. LÃ½ do: $rejection_reason.",
+        "title_template": "Claim b\u1ecb t\u1eeb ch\u1ed1i",
+        "message_template": "Claim #$claim_id cho lead $lead_name b\u1ecb t\u1eeb ch\u1ed1i. L\u00fd do: $rejection_reason.",
     },
     "ctv_approved": {
-        "title_template": "TÃ i khoáº£n CTV Ä‘Æ°á»£c duyá»‡t",
-        "message_template": "TÃ i khoáº£n cá»™ng tÃ¡c viÃªn $collaborator_name Ä‘Ã£ Ä‘Æ°á»£c duyá»‡t.",
+        "title_template": "T\u00e0i kho\u1ea3n CTV \u0111\u01b0\u1ee3c duy\u1ec7t",
+        "message_template": "T\u00e0i kho\u1ea3n c\u1ed9ng t\u00e1c vi\u00ean $collaborator_name \u0111\u00e3 \u0111\u01b0\u1ee3c duy\u1ec7t.",
     },
     "ctv_suspended": {
-        "title_template": "TÃ i khoáº£n CTV bá»‹ Ä‘Ã¬nh chá»‰",
-        "message_template": "TÃ i khoáº£n cá»™ng tÃ¡c viÃªn $collaborator_name Ä‘Ã£ bá»‹ Ä‘Ã¬nh chá»‰. LÃ½ do: $reason.",
+        "title_template": "T\u00e0i kho\u1ea3n CTV b\u1ecb \u0111\u00ecnh ch\u1ec9",
+        "message_template": "T\u00e0i kho\u1ea3n c\u1ed9ng t\u00e1c vi\u00ean $collaborator_name \u0111\u00e3 b\u1ecb \u0111\u00ecnh ch\u1ec9. L\u00fd do: $reason.",
     },
     "ctv_commission_created": {
-        "title_template": "PhÃ¡t sinh hoa há»“ng má»›i",
-        "message_template": "Báº¡n cÃ³ khoáº£n hoa há»“ng má»›i #$commission_id vá»›i sá»‘ tiá»n $amount.",
+        "title_template": "Ph\u00e1t sinh hoa h\u1ed3ng m\u1edbi",
+        "message_template": "B\u1ea1n c\u00f3 kho\u1ea3n hoa h\u1ed3ng m\u1edbi #$commission_id v\u1edbi s\u1ed1 ti\u1ec1n $amount.",
     },
     "ctv_attribution_expiring": {
-        "title_template": "Quyá»n giá»›i thiá»‡u sáº¯p háº¿t háº¡n",
-        "message_template": "Quyá»n giá»›i thiá»‡u lead #$lead_id sáº½ háº¿t háº¡n sau $days_remaining ngÃ y.",
+        "title_template": "Quy\u1ec1n gi\u1edbi thi\u1ec7u s\u1eafp h\u1ebft h\u1ea1n",
+        "message_template": "Quy\u1ec1n gi\u1edbi thi\u1ec7u lead #$lead_id s\u1ebd h\u1ebft h\u1ea1n sau $days_remaining ng\u00e0y.",
     },
     "ctv_attribution_expired": {
-        "title_template": "Quyá»n giá»›i thiá»‡u Ä‘Ã£ háº¿t háº¡n",
-        "message_template": "Quyá»n giá»›i thiá»‡u cho lead #$lead_id Ä‘Ã£ háº¿t háº¡n.",
+        "title_template": "Quy\u1ec1n gi\u1edbi thi\u1ec7u \u0111\u00e3 h\u1ebft h\u1ea1n",
+        "message_template": "Quy\u1ec1n gi\u1edbi thi\u1ec7u cho lead #$lead_id \u0111\u00e3 h\u1ebft h\u1ea1n.",
     },
     "ctv_weekly_summary": {
-        "title_template": "BÃ¡o cÃ¡o tuáº§n cá»™ng tÃ¡c viÃªn",
-        "message_template": "Tuáº§n $week: $new_leads lead má»›i, $commissions hoa há»“ng, tá»•ng thu nháº­p $total_earnings.",
+        "title_template": "B\u00e1o c\u00e1o tu\u1ea7n c\u1ed9ng t\u00e1c vi\u00ean",
+        "message_template": "Tu\u1ea7n $week: $new_leads lead m\u1edbi, $commissions hoa h\u1ed3ng, t\u1ed5ng thu nh\u1eadp $total_earnings.",
     },
     "system_alert": {
-        "title_template": "Cáº£nh bÃ¡o há»‡ thá»‘ng: $severity",
+        "title_template": "C\u1ea3nh b\u00e1o h\u1ec7 th\u1ed1ng: $severity",
         "message_template": "$message",
     },
     "holiday_calendar_incomplete": {
-        "title_template": "Lá»‹ch nghá»‰ lá»… chÆ°a Ä‘áº§y Ä‘á»§",
-        "message_template": "$message (nÄƒm $year).",
+        "title_template": "L\u1ecbch ngh\u1ec9 l\u1ec5 ch\u01b0a \u0111\u1ea7y \u0111\u1ee7",
+        "message_template": "$message (n\u0103m $year).",
     },
     "system_announcement": {
         "title_template": "$title",
         "message_template": "$message",
     },
     "user_role_changed": {
-        "title_template": "Vai trÃ² tÃ i khoáº£n thay Ä‘á»•i",
-        "message_template": "TÃ i khoáº£n cá»§a báº¡n Ä‘Ã£ Ä‘á»•i tá»« '$old_role' sang '$new_role'.",
+        "title_template": "Vai tr\u00f2 t\u00e0i kho\u1ea3n thay \u0111\u1ed5i",
+        "message_template": "T\u00e0i kho\u1ea3n c\u1ee7a b\u1ea1n \u0111\u00e3 \u0111\u1ed5i t\u1eeb '$old_role' sang '$new_role'.",
     },
     "user_deactivated": {
-        "title_template": "TÃ i khoáº£n bá»‹ vÃ´ hiá»‡u hÃ³a",
-        "message_template": "TÃ i khoáº£n $username Ä‘Ã£ bá»‹ vÃ´ hiá»‡u hÃ³a. LÃ½ do: $reason.",
+        "title_template": "T\u00e0i kho\u1ea3n b\u1ecb v\u00f4 hi\u1ec7u h\u00f3a",
+        "message_template": "T\u00e0i kho\u1ea3n $username \u0111\u00e3 b\u1ecb v\u00f4 hi\u1ec7u h\u00f3a. L\u00fd do: $reason.",
     },
     "pipeline_config_updated": {
-        "title_template": "Cáº­p nháº­t cáº¥u hÃ¬nh pipeline",
-        "message_template": "Cáº¥u hÃ¬nh $config_type Ä‘Ã£ Ä‘Æ°á»£c $operation trÃªn tÃ i nguyÃªn $resource_id.",
+        "title_template": "C\u1eadp nh\u1eadt c\u1ea5u h\u00ecnh pipeline",
+        "message_template": "C\u1ea5u h\u00ecnh $config_type \u0111\u00e3 \u0111\u01b0\u1ee3c $operation tr\u00ean t\u00e0i nguy\u00ean $resource_id.",
     },
     "suspicious_login": {
-        "title_template": "ÄÄƒng nháº­p Ä‘Ã¡ng ngá»",
-        "message_template": "PhÃ¡t hiá»‡n Ä‘Äƒng nháº­p Ä‘Ã¡ng ngá» tá»« IP $ip_address táº¡i $location.",
+        "title_template": "\u0110\u0103ng nh\u1eadp \u0111\u00e1ng ng\u1edd",
+        "message_template": "Ph\u00e1t hi\u1ec7n \u0111\u0103ng nh\u1eadp \u0111\u00e1ng ng\u1edd t\u1eeb IP $ip_address t\u1ea1i $location.",
     },
 }
 
@@ -184,8 +184,8 @@ _ZNS_DRAFTS: list[TemplateSeed] = [
         name="ZNS Draft - Payment Verified v1",
         template_code="ZNS_PAYMENT_VERIFIED_V1",
         description="Draft mapping for external applicant notification when payment is verified.",
-        title_template="Thanh toÃ¡n Ä‘Æ°á»£c xÃ¡c nháº­n",
-        message_template="Thanh toÃ¡n #$payment_id Ä‘Ã£ Ä‘Æ°á»£c xÃ¡c nháº­n vá»›i sá»‘ tiá»n $amount.",
+        title_template="Thanh to\u00e1n \u0111\u01b0\u1ee3c x\u00e1c nh\u1eadn",
+        message_template="Thanh to\u00e1n #$payment_id \u0111\u00e3 \u0111\u01b0\u1ee3c x\u00e1c nh\u1eadn v\u1edbi s\u1ed1 ti\u1ec1n $amount.",
         link_template=None,
         variables=["payment_id", "invoice_id", "fee_id", "amount", "verified_at", "lead_id"],
         category="finance",
@@ -197,8 +197,8 @@ _ZNS_DRAFTS: list[TemplateSeed] = [
         name="ZNS Draft - Application Status Changed v1",
         template_code="ZNS_APPLICATION_STATUS_CHANGED_V1",
         description="Draft mapping for applicant-facing application status updates.",
-        title_template="Há»“ sÆ¡ thay Ä‘á»•i tráº¡ng thÃ¡i",
-        message_template="Há»“ sÆ¡ #$application_id Ä‘Ã£ chuyá»ƒn sang tráº¡ng thÃ¡i '$new_status'.",
+        title_template="H\u1ed3 s\u01a1 thay \u0111\u1ed5i tr\u1ea1ng th\u00e1i",
+        message_template="H\u1ed3 s\u01a1 #$application_id \u0111\u00e3 chuy\u1ec3n sang tr\u1ea1ng th\u00e1i '$new_status'.",
         link_template=None,
         variables=["application_id", "lead_id", "old_status", "new_status"],
         category="application",
@@ -210,8 +210,8 @@ _ZNS_DRAFTS: list[TemplateSeed] = [
         name="ZNS Draft - Consultation Reminder v1",
         template_code="ZNS_CONSULTATION_REMINDER_V1",
         description="Draft mapping for reminder before consultation.",
-        title_template="Nháº¯c lá»‹ch tÆ° váº¥n",
-        message_template="Báº¡n cÃ³ lá»‹ch tÆ° váº¥n vá»›i $lead_name sau $minutes_until phÃºt.",
+        title_template="Nh\u1eafc l\u1ecbch t\u01b0 v\u1ea5n",
+        message_template="B\u1ea1n c\u00f3 l\u1ecbch t\u01b0 v\u1ea5n v\u1edbi $lead_name sau $minutes_until ph\u00fat.",
         link_template=None,
         variables=["consultation_id", "lead_id", "lead_name", "lead_phone", "scheduled_at", "minutes_until"],
         category="consultation",
@@ -340,4 +340,3 @@ if __name__ == "__main__":
 
     import asyncio
     asyncio.run(main(apply_changes=apply_changes))
-
