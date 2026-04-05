@@ -802,6 +802,10 @@ async def add_new_consultation(
     """Thêm một ghi chú tư vấn mới cho Lead (Đã xác thực 2 lớp)."""
     # Service 'add_consultation' có logic check quyền sở hữu
     # nhưng check ở đây vẫn an toàn hơn
+    # Capture lead state before consultation (for cascade dispatch)
+    old_consultation_status = lead.consultation_status_id
+    old_pipeline_stage = lead.pipeline_stage_id
+
     consultation, status_updated, terminal_guard_reason = await lead_service.add_consultation(
         db, lead.id, current_user.id, consultation_in
     )
@@ -814,6 +818,26 @@ async def add_new_consultation(
         payload=EventPayload.for_consultation_created(consultation, lead, current_user),
         dedupe_key=f"consultation_created:{consultation.id}",
     )
+
+    # Cascade: if consultation caused lead pipeline change, dispatch LEAD_STATUS_CHANGED
+    if status_updated:
+        await db.refresh(lead)
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.LEAD_STATUS_CHANGED,
+            payload={
+                "lead_id": lead.id,
+                "lead_name": lead.full_name,
+                "officer_id": lead.assigned_officer_id,
+                "old_status": old_consultation_status,
+                "new_status": lead.consultation_status_id,
+                "old_stage": old_pipeline_stage,
+                "new_stage": lead.pipeline_stage_id,
+                "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,
+            },
+            dedupe_key=f"lead_status_changed:{lead.id}:{lead.consultation_status_id}",
+        )
 
     return schemas.ConsultationCreateResult(
         consultation=schemas.Consultation.model_validate(consultation),
@@ -983,6 +1007,10 @@ async def update_a_consultation(
     consultation = await repo.get_consultation_with_status_stage(consultation_id)
     old_status_id = consultation.consultation_status_id if consultation else None
 
+    # Capture lead state before update (for cascade dispatch)
+    old_lead_consultation_status = lead.consultation_status_id
+    old_lead_pipeline_stage = lead.pipeline_stage_id
+
     result = await lead_service.update_consultation(
         db, lead.id, consultation_id, consultation_in, current_user
     )
@@ -1008,6 +1036,27 @@ async def update_a_consultation(
             new_status=result.consultation_status_id or "none",
             actor_id=current_user.id,
         )
+
+        # Cascade: if update caused lead pipeline change, dispatch LEAD_STATUS_CHANGED
+        await db.refresh(lead)
+        if (lead.consultation_status_id != old_lead_consultation_status or
+                lead.pipeline_stage_id != old_lead_pipeline_stage):
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": lead.id,
+                    "lead_name": lead.full_name,
+                    "officer_id": lead.assigned_officer_id,
+                    "old_status": old_lead_consultation_status,
+                    "new_status": lead.consultation_status_id,
+                    "old_stage": old_lead_pipeline_stage,
+                    "new_stage": lead.pipeline_stage_id,
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{lead.id}:{lead.consultation_status_id}",
+            )
 
     return result
 

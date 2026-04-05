@@ -439,7 +439,7 @@ _ADMISSION_EVENTS: tuple = (
         variables=(
             _var("application_id", "integer", "ID hồ sơ"),
             _var("lead_id", "integer", "ID lead"),
-            _var("officer_id", "integer", "ID officer"),
+            # officer_id intentionally omitted — LeadOwnerResolver uses DB lookup
             _var("major_program_name", "string", "Tên ngành", False),
             _var("actor_id", "integer", "ID người thực hiện"),
         ),
@@ -457,10 +457,13 @@ _ADMISSION_EVENTS: tuple = (
         variables=(
             _var("application_id", "integer", "ID hồ sơ"),
             _var("lead_id", "integer", "ID lead"),
-            _var("officer_id", "integer", "ID officer"),
+            # officer_id intentionally omitted — LeadOwnerResolver uses DB lookup
             _var("old_status", "string", "Trạng thái cũ"),
             _var("new_status", "string", "Trạng thái mới"),
             _var("actor_id", "integer", "ID người thực hiện"),
+            # enroll-specific extras (only present when new_status=enrolled)
+            _var("student_id", "integer", "ID sinh viên (chỉ khi nhập học)", False),
+            _var("student_code", "string", "Mã sinh viên (chỉ khi nhập học)", False),
         ),
         default_resolver="lead_owner",
         allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
@@ -477,7 +480,7 @@ _ADMISSION_EVENTS: tuple = (
         variables=(
             _var("application_id", "integer", "ID hồ sơ"),
             _var("lead_id", "integer", "ID lead"),
-            _var("officer_id", "integer", "ID officer"),
+            # officer_id intentionally omitted — LeadOwnerResolver uses DB lookup
             _var("lead_name", "string", "Tên lead", False),
             _var("actor_id", "integer", "ID người thực hiện"),
         ),

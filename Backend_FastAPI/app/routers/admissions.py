@@ -1897,6 +1897,9 @@ async def override_admission(
     - 404: Profile not found (or IDOR protection)
     """
     try:
+        # Capture pre-transition status
+        pre_status = profile.status
+
         # 1. DELEGATE to Service (includes AUDIT LOGGING)
         result, callback = await admission_service.override_profile(
             db=db,
@@ -1912,7 +1915,27 @@ async def override_admission(
         # 3. POST-COMMIT Side Effects
         await callback()
 
-        # 4. RETURN Pydantic Model
+        # 4. Dispatch APPLICATION_STATUS_CHANGED only
+        # NOTE: No LEAD_STATUS_CHANGED here — lead_admission_sync maps both
+        # approved and overridden to sts09, so lead pipeline status does not
+        # actually change during override. Emitting LEAD_STATUS_CHANGED would
+        # be semantically incorrect.
+        if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": result.lead_id,
+                    "old_status": pre_status,
+                    "new_status": "overridden",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_overridden:{profile_id}",
+            )
+
+        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
