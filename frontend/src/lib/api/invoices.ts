@@ -91,7 +91,7 @@ export async function getInvoicesByFee(feeId: number): Promise<Invoice[]> {
  * @throws {AxiosError} 403 if no permission
  */
 export async function issueInvoice(invoiceId: number): Promise<Invoice> {
-  const response = await api.post<Invoice>(API_ENDPOINTS.FINANCE.INVOICES.ISSUE(invoiceId))
+  const response = await api.put<Invoice>(API_ENDPOINTS.FINANCE.INVOICES.ISSUE(invoiceId))
   return response.data
 }
 

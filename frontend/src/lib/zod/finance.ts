@@ -831,6 +831,14 @@ export function parseAmount(amount: string): number {
 }
 
 /**
+ * Parse a formatted VND string like "9.000.000 VND" into a whole-number amount.
+ */
+export function parseVNDDisplayAmount(amount: string): number {
+  const digitsOnly = amount.replace(/[^\d-]/g, "")
+  return digitsOnly ? parseInt(digitsOnly, 10) : 0
+}
+
+/**
  * Compare two amounts (as strings)
  */
 export function compareAmounts(a: string, b: string): number {

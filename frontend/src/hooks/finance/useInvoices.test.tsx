@@ -160,7 +160,7 @@ describe("useInvoices Hooks", () => {
       it("should issue invoice successfully", async () => {
         // Override with a draft invoice that can be issued
         server.use(
-          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
+          http.put(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
             return HttpResponse.json({
               id: 1,
               fee_id: 1,
@@ -198,7 +198,7 @@ describe("useInvoices Hooks", () => {
 
       it("should handle issue error when invoice cannot be issued", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
+          http.put(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
             return HttpResponse.json(
               { detail: "Invoice cannot be issued" },
               { status: 400 }

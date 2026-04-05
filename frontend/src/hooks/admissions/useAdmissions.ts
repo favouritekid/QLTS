@@ -372,7 +372,7 @@ export function useEnrollStudent(id: number) {
       queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
       // Delay navigation
       setTimeout(() => {
-        router.push(`/students/${data.student_id}`)
+        router.replace(`/admissions/${id}`)
       }, 1500)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {

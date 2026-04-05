@@ -37,6 +37,7 @@ import { DatePicker } from "@/components/common/form/DatePicker"
 import { CreditCard, Loader2 } from "lucide-react"
 import { useCreatePayment } from "@/hooks/finance/usePayments"
 import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
+import { parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { toast } from "sonner"
 
 // =============================================================================
@@ -107,7 +108,7 @@ export function PaymentRecordDialog({
   })
 
   const onSubmit = async (values: PaymentFormValues) => {
-    const maxAmountNum = parseFloat(maxAmount.replace(/[^\d.-]/g, ""));
+    const maxAmountNum = parseVNDDisplayAmount(maxAmount)
     if (!isNaN(maxAmountNum) && values.amount > maxAmountNum) {
       form.setError("amount", { message: `Số tiền không được vượt quá số dư (${maxAmount})` });
       return;

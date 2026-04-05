@@ -17,16 +17,22 @@ import {
   useSubmitAdmission,
   useDeleteAdmission,
   useApproveAdmission,
+  useEnrollStudent,
   admissionsKeys,
 } from "./useAdmissions";
 
 // Mock next/navigation (required by hooks using useRouter)
+const pushMock = vi.fn();
+const replaceMock = vi.fn();
+const backMock = vi.fn();
+const prefetchMock = vi.fn();
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
-    push: vi.fn(),
-    replace: vi.fn(),
-    back: vi.fn(),
-    prefetch: vi.fn(),
+    push: pushMock,
+    replace: replaceMock,
+    back: backMock,
+    prefetch: prefetchMock,
   }),
   usePathname: () => "/admissions",
   useSearchParams: () => new URLSearchParams(),
@@ -80,6 +86,7 @@ function createWrapperWithClient() {
 describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   describe("useSubmitAdmission (BUG-14)", () => {
@@ -326,6 +333,42 @@ describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
       );
 
       invalidateSpy.mockRestore();
+    });
+  });
+
+  describe("BUG-003: enroll redirect", () => {
+    it("useEnrollStudent should redirect back to the admission detail route after enroll", async () => {
+      vi.useFakeTimers();
+
+      server.use(
+        http.post(
+          `${API_BASE_URL}/api/admissions/:id/enroll`,
+          () =>
+            HttpResponse.json({
+              student_id: 321,
+              student_code: "SV20260001",
+              enrollment_date: new Date().toISOString(),
+            })
+        )
+      );
+
+      const { Wrapper } = createWrapperWithClient();
+
+      const { result } = renderHook(
+        () => useEnrollStudent(MOCK_ADMISSION_ID),
+        { wrapper: Wrapper }
+      );
+
+      await act(async () => {
+        await result.current.mutateAsync();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+
+      expect(replaceMock).toHaveBeenCalledWith(`/admissions/${MOCK_ADMISSION_ID}`);
+      expect(pushMock).not.toHaveBeenCalledWith("/students/321");
     });
   });
 });
