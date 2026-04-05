@@ -371,7 +371,7 @@ async def mark_all_as_read(
         )
 
         # Phase C2: Bulk update linked browser delivery rows to "read"
-        from app.models.notification import NotificationDelivery
+        from app.models.notification_delivery import NotificationDelivery
         await db.execute(
             update(NotificationDelivery)
             .where(

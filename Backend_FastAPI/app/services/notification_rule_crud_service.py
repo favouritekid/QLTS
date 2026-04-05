@@ -281,27 +281,28 @@ async def create_rule(
             f"Event '{rule_data.event}' is not a configurable user event and cannot have notification rules."
         )
 
+    # Validate event exists in SystemEvents enum (B3 fix: catch unknown events early)
+    try:
+        event_enum = SystemEvents(rule_data.event)
+    except ValueError:
+        raise BadRequest(f"Unknown event '{rule_data.event}'. Verify event name is a valid SystemEvents member.")
+
     # Phase 2: Canonicalize condition (normalize operators + field paths)
     rule_data.condition = _canonicalize_condition(rule_data.condition, rule_data.event) if rule_data.condition else None
 
     # Phase 2: Validate condition fields and operators against event metadata
     if rule_data.condition:
-        try:
-            event_enum = SystemEvents(rule_data.event)
-            event_meta = get_event(event_enum)
-            if event_meta and event_meta.condition_fields:
-                allowed_paths = {cf.path for cf in event_meta.condition_fields}
-                field_errors = _validate_condition_fields(rule_data.condition, allowed_paths)
-                if field_errors:
-                    raise BadRequest(f"Invalid condition fields: {'; '.join(field_errors)}")
+        event_meta = get_event(event_enum)
+        if event_meta and event_meta.condition_fields:
+            allowed_paths = {cf.path for cf in event_meta.condition_fields}
+            field_errors = _validate_condition_fields(rule_data.condition, allowed_paths)
+            if field_errors:
+                raise BadRequest(f"Invalid condition fields: {'; '.join(field_errors)}")
 
-                field_op_map = {cf.path: cf.operators for cf in event_meta.condition_fields}
-                op_errors = _validate_condition_operators(rule_data.condition, field_op_map)
-                if op_errors:
-                    raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
-        except ValueError:
-            log.warning("Unknown event for condition validation", event=rule_data.event if hasattr(rule_data, 'event') else 'N/A')
-            raise BadRequest(f"Unknown event '{rule_data.event if hasattr(rule_data, 'event') else 'N/A'}' — condition validation skipped. Verify event name.")
+            field_op_map = {cf.path: cf.operators for cf in event_meta.condition_fields}
+            op_errors = _validate_condition_operators(rule_data.condition, field_op_map)
+            if op_errors:
+                raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
 
     repo = NotificationRuleRepository(db)
 
@@ -386,8 +387,8 @@ async def update_rule(
                 if op_errors:
                     raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
         except ValueError:
-            log.warning("Unknown event for condition validation", event=rule_data.event if hasattr(rule_data, 'event') else 'N/A')
-            raise BadRequest(f"Unknown event '{rule_data.event if hasattr(rule_data, 'event') else 'N/A'}' — condition validation skipped. Verify event name.")
+            log.warning("Unknown event for condition validation", event=event_name)
+            raise BadRequest(f"Unknown event '{event_name}' — condition validation failed. Verify event name.")
 
     for field, value in update_data.items():
         if value is not None:
