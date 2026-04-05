@@ -300,7 +300,8 @@ async def create_rule(
                 if op_errors:
                     raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
         except ValueError:
-            pass  # Unknown event, skip validation
+            log.warning("Unknown event for condition validation", event=rule_data.event if hasattr(rule_data, 'event') else 'N/A')
+            raise BadRequest(f"Unknown event '{rule_data.event if hasattr(rule_data, 'event') else 'N/A'}' — condition validation skipped. Verify event name.")
 
     repo = NotificationRuleRepository(db)
 
@@ -385,7 +386,8 @@ async def update_rule(
                 if op_errors:
                     raise BadRequest(f"Invalid condition operators: {'; '.join(op_errors)}")
         except ValueError:
-            pass  # Unknown event, skip validation
+            log.warning("Unknown event for condition validation", event=rule_data.event if hasattr(rule_data, 'event') else 'N/A')
+            raise BadRequest(f"Unknown event '{rule_data.event if hasattr(rule_data, 'event') else 'N/A'}' — condition validation skipped. Verify event name.")
 
     for field, value in update_data.items():
         if value is not None:

@@ -1459,21 +1459,25 @@ async def _prepend_to_inbox_cache(user_ids: List[int], notification_ids: List[in
         return
 
     try:
-        # Prepend each notification to the corresponding user's inbox cache
-        for user_id, notification_id in zip(user_ids, notification_ids):
-            cache_key = f"{INBOX_CACHE_KEY_PREFIX}:{user_id}"
+        from app.database import safe_redis_pipeline
 
-            # LPUSH to prepend notification ID to front of list
-            await safe_redis_lpush(cache_key, str(notification_id))
-
-            # LTRIM to keep only first 100 items
-            await safe_redis_ltrim(cache_key, 0, INBOX_CACHE_MAX_SIZE - 1)
-
-            # Set/refresh TTL
-            await safe_redis_expire(cache_key, INBOX_CACHE_TTL)
+        # Use Redis pipeline to batch all operations (E1 fix: N+1 → 1 round-trip)
+        PIPELINE_BATCH_SIZE = 500  # Flush pipeline every 500 users to avoid huge buffers
+        for batch_start in range(0, len(user_ids), PIPELINE_BATCH_SIZE):
+            batch_end = min(batch_start + PIPELINE_BATCH_SIZE, len(user_ids))
+            async with safe_redis_pipeline(transaction=False) as pipe:
+                for user_id, notification_id in zip(
+                    user_ids[batch_start:batch_end],
+                    notification_ids[batch_start:batch_end]
+                ):
+                    cache_key = f"{INBOX_CACHE_KEY_PREFIX}:{user_id}"
+                    pipe.lpush(cache_key, str(notification_id))
+                    pipe.ltrim(cache_key, 0, INBOX_CACHE_MAX_SIZE - 1)
+                    pipe.expire(cache_key, INBOX_CACHE_TTL)
+                await pipe.execute()
 
         log.info(
-            "Inbox cache prepend successful",
+            "Inbox cache prepend successful (pipelined)",
             user_count=len(user_ids),
             notification_count=len(notification_ids),
             cache_max_size=INBOX_CACHE_MAX_SIZE,

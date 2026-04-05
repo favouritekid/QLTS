@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.services.notification_channels import (
     normalize_channel,
@@ -46,12 +46,12 @@ class NotificationsPage(BaseModel):
 
 class MarkAsReadRequest(BaseModel):
     """Request to mark notifications as read"""
-    notification_ids: List[int]
+    notification_ids: List[int] = Field(..., max_length=100)
 
 
 class BulkDeleteRequest(BaseModel):
     """Request to delete multiple notifications"""
-    notification_ids: List[int]
+    notification_ids: List[int] = Field(..., max_length=100)
 
 
 # =============================================================================
