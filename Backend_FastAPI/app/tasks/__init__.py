@@ -29,6 +29,11 @@ from .cache_tasks import (
     sync_kpi_ytd_task,
 )
 from .session_tasks import cleanup_idle_sessions_task
+from .delivery_tasks import (
+    execute_notification_delivery,
+    sweep_retry_deliveries,
+    reconcile_stale_deliveries,
+)
 
 __all__ = [
     # Email tasks
@@ -45,4 +50,8 @@ __all__ = [
     "sync_kpi_ytd_task",
     # Session tasks
     "cleanup_idle_sessions_task",
+    # Delivery tasks (Phase C1+C2)
+    "execute_notification_delivery",
+    "sweep_retry_deliveries",
+    "reconcile_stale_deliveries",
 ]
