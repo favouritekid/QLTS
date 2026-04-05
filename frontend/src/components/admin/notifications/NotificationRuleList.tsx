@@ -275,8 +275,9 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
       await deleteMutation.mutateAsync(deleteRuleId);
       toast.success("Đã xóa quy tắc thành công");
       setDeleteRuleId(null);
-    } catch {
-      toast.error("Không thể xóa quy tắc");
+    } catch (error) {
+      const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || "Không thể xóa quy tắc");
     }
   };
 

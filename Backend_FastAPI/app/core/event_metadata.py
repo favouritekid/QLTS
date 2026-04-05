@@ -696,6 +696,20 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         category="system"
     ),
 
+    SystemEvents.USER_PROFILE_UPDATED: EventMetadata(
+        event=SystemEvents.USER_PROFILE_UPDATED,
+        display_name="Cập nhật hồ sơ người dùng",
+        description="Khi admin cập nhật hồ sơ người dùng",
+        variables=[
+            EventVariable("user_id", "integer", "ID user bị ảnh hưởng"),
+            EventVariable("updated_fields", "string", "Các trường thay đổi"),
+            EventVariable("actor_id", "integer", "ID admin thực hiện"),
+        ],
+        filter_fields=["user_id"],
+        default_channels=["browser"],
+        category="system"
+    ),
+
     # =========================================================================
     # PIPELINE CONFIG EVENTS (1 event)
     # =========================================================================

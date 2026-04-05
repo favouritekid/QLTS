@@ -118,8 +118,9 @@ export function useCreateNotificationRule() {
       return response.data;
     },
     onSuccess: () => {
-      // Invalidate all list queries to refetch
+      // Invalidate list + metadata (existing_rule_events changed)
       queryClient.invalidateQueries({ queryKey: notificationRuleKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: [...notificationRuleKeys.all, "metadata"] });
     },
   });
 }
@@ -237,8 +238,9 @@ export function useDeleteNotificationRule() {
       queryClient.removeQueries({
         queryKey: notificationRuleKeys.detail(ruleId),
       });
-      // Invalidate list queries
+      // Invalidate list + metadata (existing_rule_events changed)
       queryClient.invalidateQueries({ queryKey: notificationRuleKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: [...notificationRuleKeys.all, "metadata"] });
     },
   });
 }

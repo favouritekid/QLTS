@@ -298,6 +298,19 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         priority=120,
     ),
 
+    SystemEvents.USER_PROFILE_UPDATED: NotificationConfig(
+        group=NotificationEventGroup.SYSTEM,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Your profile has been updated",
+            "An administrator updated your profile. Changed fields: ${updated_fields}."
+        ),
+        channels=(CH.BROWSER,),
+        notification_type=NT.INFO,
+        link_template="/profile",
+        priority=40,
+    ),
+
     # =========================================================================
     # 📞 CONSULTATION EVENTS
     # =========================================================================

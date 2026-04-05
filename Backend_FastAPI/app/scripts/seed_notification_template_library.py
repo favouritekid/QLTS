@@ -168,6 +168,10 @@ _INTERNAL_OVERRIDES: dict[str, dict[str, str | list[str]]] = {
         "title_template": "T\u00e0i kho\u1ea3n b\u1ecb v\u00f4 hi\u1ec7u h\u00f3a",
         "message_template": "T\u00e0i kho\u1ea3n $username \u0111\u00e3 b\u1ecb v\u00f4 hi\u1ec7u h\u00f3a. L\u00fd do: $reason.",
     },
+    "user_profile_updated": {
+        "title_template": "H\u1ed3 s\u01a1 c\u1ee7a b\u1ea1n \u0111\u00e3 \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt",
+        "message_template": "Admin \u0111\u00e3 c\u1eadp nh\u1eadt h\u1ed3 s\u01a1 c\u1ee7a b\u1ea1n. Tr\u01b0\u1eddng thay \u0111\u1ed5i: $updated_fields.",
+    },
     "pipeline_config_updated": {
         "title_template": "C\u1eadp nh\u1eadt c\u1ea5u h\u00ecnh pipeline",
         "message_template": "C\u1ea5u h\u00ecnh $config_type \u0111\u00e3 \u0111\u01b0\u1ee3c $operation tr\u00ean t\u00e0i nguy\u00ean $resource_id.",

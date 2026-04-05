@@ -103,6 +103,18 @@ class TestCatalogClassification:
         link = render_link(SystemEvents.LEAD_ASSIGNED, {"lead_id": 42})
         assert link == "/leads/42"
 
+    def test_system_alert_link_requires_safe_relative_path(self):
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": "/maintenance-info"}) == "/maintenance-info"
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": "https://evil.example/phish"}) is None
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": "javascript:alert(1)"}) is None
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": "//evil.example/phish"}) is None
+
+    def test_user_profile_updated_is_specific_users_only(self):
+        defn = get_event(SystemEvents.USER_PROFILE_UPDATED)
+        assert defn is not None
+        assert defn.default_resolver == "specific_users"
+        assert defn.allowed_resolvers == ("specific_users",)
+
 
 # =============================================================================
 # B. Dispatcher invariants (unit-level, mocked DB)
@@ -428,7 +440,7 @@ class TestUserEventsHaveDispatchCallers:
         "ctv_approved", "ctv_suspended", "ctv_commission_created",
         "ctv_attribution_expiring", "ctv_attribution_expired", "ctv_weekly_summary",
         "system_alert", "system_announcement", "user_role_changed",
-        "user_deactivated", "pipeline_config_updated",
+        "user_deactivated", "user_profile_updated", "pipeline_config_updated",
         "officer_availability_changed", "suspicious_login",
         "holiday_calendar_incomplete",
     })

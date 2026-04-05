@@ -109,6 +109,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.SYSTEM_ANNOUNCEMENT: NotificationEventGroup.SYSTEM,
     SystemEvents.USER_ROLE_CHANGED: NotificationEventGroup.SYSTEM,
     SystemEvents.USER_DEACTIVATED: NotificationEventGroup.SYSTEM,
+    SystemEvents.USER_PROFILE_UPDATED: NotificationEventGroup.SYSTEM,
 
     # Pipeline events
     SystemEvents.PIPELINE_CONFIG_UPDATED: NotificationEventGroup.PIPELINE,

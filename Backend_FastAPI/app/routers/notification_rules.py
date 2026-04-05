@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any, List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
@@ -68,6 +69,7 @@ class MetadataResponse(BaseModel):
     resolver_types: List[ResolverTypeOption]
     external_resolver_types: List[ExternalResolverTypeOption]
     operators: List[OperatorOption]
+    existing_rule_events: List[str] = []  # Events that already have a DB rule (for duplicate warning)
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -75,6 +77,7 @@ class MetadataResponse(BaseModel):
 async def get_notification_metadata(
     request: Request,
     current_admin: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
 ):
     """
     ✅ NOTIFICATION 2.0 - PHASE 2: Get metadata for notification rule builder.
@@ -185,7 +188,14 @@ async def get_notification_metadata(
             {"value": "in", "label": "In List"},
             {"value": "not_in", "label": "Not In List"},
             {"value": "contains", "label": "Contains"},
-        ]
+        ],
+        "existing_rule_events": [
+            row[0] for row in (
+                await db.execute(
+                    select(models.NotificationRule.event).distinct()
+                )
+            ).all()
+        ],
     }
 
 

@@ -591,6 +591,7 @@ export interface NotificationMetadata {
   resolver_types: ResolverTypeOption[];
   external_resolver_types: ExternalResolverOption[];
   operators: OperatorOption[];
+  existing_rule_events?: string[];
 }
 
 // ============================================

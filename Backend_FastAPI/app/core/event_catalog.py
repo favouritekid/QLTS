@@ -116,6 +116,24 @@ _SYSTEM_RESOLVERS = ("all_users", "all_admins", "specific_users")
 _FINANCE_RESOLVERS = ("specific_users", "all_admins", "unit_managers")
 
 
+def _is_safe_relative_link(link: str) -> bool:
+    """Allow only same-origin relative app paths for notification links."""
+    if not link:
+        return False
+
+    trimmed = link.strip()
+    if not trimmed:
+        return False
+    if trimmed.startswith("//"):
+        return False
+
+    lowered = trimmed.lower()
+    if lowered.startswith(("javascript:", "data:", "vbscript:", "http://", "https://")):
+        return False
+
+    return trimmed.startswith("/")
+
+
 # ===================================================================
 # EVENT DEFINITIONS — organized by category
 # ===================================================================
@@ -870,6 +888,22 @@ _SYSTEM_EVENTS: tuple = (
         priority=5,
     ),
     EventDefinition(
+        event=SystemEvents.USER_PROFILE_UPDATED,
+        category="system",
+        display_name="Cập nhật hồ sơ người dùng",
+        description="Khi admin cập nhật hồ sơ người dùng",
+        variables=(
+            _var("user_id", "integer", "ID user"),
+            _var("updated_fields", "string", "Các trường thay đổi"),
+            _var("actor_id", "integer", "ID người thực hiện"),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("specific_users",),
+        default_channels=("browser",),
+        priority=40,
+        link_strategy="/profile",
+    ),
+    EventDefinition(
         event=SystemEvents.PIPELINE_CONFIG_UPDATED,
         category="pipeline",
         display_name="Cập nhật cấu hình pipeline",
@@ -1091,4 +1125,7 @@ def render_link(event: SystemEvents, payload: dict) -> Optional[str]:
     defn = EVENT_CATALOG.get(event)
     if not defn or not defn.link_strategy:
         return None
-    return Template(defn.link_strategy).safe_substitute(payload)
+    rendered = Template(defn.link_strategy).safe_substitute(payload).strip()
+    if not _is_safe_relative_link(rendered):
+        return None
+    return rendered

@@ -533,6 +533,20 @@ class SystemEvents(str, Enum):
     Recipients: The deactivated user (for awareness before logout)
     """
 
+    USER_PROFILE_UPDATED = "user_profile_updated"
+    """
+    Triggered when an admin updates a user's profile.
+
+    Payload Schema:
+        {
+            "user_id": int,               # Required: ID of the affected user
+            "updated_fields": str,        # Comma-separated list of changed fields
+            "actor_id": int               # Admin who made the change
+        }
+
+    Recipients: The affected user (via specific_users resolver)
+    """
+
     # =========================================================================
     # PIPELINE CONFIG EVENTS
     # =========================================================================

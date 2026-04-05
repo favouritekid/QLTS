@@ -160,6 +160,12 @@ export function NotificationRuleEditor({
   const createMutation = useCreateNotificationRule();
   const updateMutation = useUpdateNotificationRule();
 
+  // Create mode: track which events already have rules (from metadata endpoint — complete, no pagination)
+  const existingRuleEvents = useMemo(() => {
+    if (!metadata?.existing_rule_events) return new Set<string>();
+    return new Set(metadata.existing_rule_events);
+  }, [metadata]);
+
   // Form
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -672,6 +678,13 @@ export function NotificationRuleEditor({
                       updateCondition={updateCondition}
                       selectedEventMetadata={selectedEventMetadata}
                     />
+                    {!isEditMode && selectedEvent && existingRuleEvents.has(selectedEvent) && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3">
+                        <p className="text-sm text-amber-800 dark:text-amber-200">
+                          ⚠ Sự kiện <strong>{selectedEvent}</strong> đã có quy tắc. Hệ thống chỉ cho phép 1 quy tắc/sự kiện — lưu sẽ bị từ chối.
+                        </p>
+                      </div>
+                    )}
                     {shouldShowStepErrors(1) && stepErrors.step1.length > 0 && (
                       <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 space-y-1">
                         {stepErrors.step1.map((err, i) => (

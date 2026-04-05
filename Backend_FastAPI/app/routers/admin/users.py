@@ -1026,13 +1026,13 @@ async def update_existing_user(
 
         await safe_dispatch(
             db=db,
-            event=SystemEvents.SYSTEM_ALERT,
+            event=SystemEvents.USER_PROFILE_UPDATED,
             payload={
                 "user_id": updated_user.id,
-                "title": "Your profile has been updated",
-                "message": f"An administrator has updated your profile. Changed: {change_description}",
+                "updated_fields": change_description,
                 "actor_id": current_admin.id,
             },
+            dedupe_key=f"user_profile_updated:{updated_user.id}",
         )
     else:
         log.debug(

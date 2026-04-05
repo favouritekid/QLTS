@@ -133,11 +133,11 @@ export function DataTableToolbar<TData>({
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="ml-auto h-10 md:h-8">
                 <Settings2 className="mr-2 h-4 w-4" />
-                Cot
+                Cột
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-[180px]">
-              <DropdownMenuLabel>Hien thi cot</DropdownMenuLabel>
+              <DropdownMenuLabel>Hiển thị cột</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {table
                 .getAllColumns()

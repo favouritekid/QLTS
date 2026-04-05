@@ -234,6 +234,14 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         notification_type="error",
         groups=[_internal_group("specific_users", ["browser"])],
     ),
+    "user_profile_updated": _build_rule(
+        event="user_profile_updated",
+        title_template="Hồ sơ của bạn đã được cập nhật",
+        message_template="Admin đã cập nhật hồ sơ của bạn. Các trường thay đổi: $updated_fields.",
+        notification_type="info",
+        link_template="/profile",
+        groups=[_internal_group("specific_users", ["browser"])],
+    ),
     "suspicious_login": _build_rule(
         event="suspicious_login",
         title_template="Đăng nhập đáng ngờ từ thiết bị lạ",
