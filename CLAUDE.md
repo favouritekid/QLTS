@@ -285,3 +285,4 @@ draft -> submitted -> approved -> confirmed -> enrolled
 - **Frontend Architecture**: `frontend/FRONTEND_ARCHITECTURE_V3.md`
 - **Frontend Guidelines**: `frontend/CLAUDE.md`
 - **Authorization Guide**: `Backend_FastAPI/AUTHORIZATION_GUIDELINES.md`
+- **Production Deploy Guide**: `Documents/PRODUCTION_DEPLOY_GUIDE.md`
