@@ -14,6 +14,7 @@ interface WizardStepRecipientGroupsProps {
   externalResolverOptions: ExternalResolverOption[];
   availableChannels?: string[];
   validationErrors?: string[];
+  selectedEvent?: string; // For template picker filtering
 }
 
 export default function WizardStepRecipientGroups({
@@ -23,6 +24,7 @@ export default function WizardStepRecipientGroups({
   externalResolverOptions,
   availableChannels,
   validationErrors,
+  selectedEvent,
 }: WizardStepRecipientGroupsProps) {
   // Check if browser is used by any group
   const browserUsedGroups = new Set<number>();
@@ -92,6 +94,7 @@ export default function WizardStepRecipientGroups({
             browserUsedGroups.size > 0 && !browserUsedGroups.has(idx)
           }
           availableChannels={availableChannels}
+          selectedEvent={selectedEvent}
         />
       ))}
 

@@ -22,6 +22,7 @@ from ..config import settings
 from app.core.deps import CasbinAuth, get_notification_rule_for_admin  # Phase 2.2
 from ..core.event_catalog import get_notifiable_events
 from ..services import notification_rule_crud_service
+from ..repositories import NotificationTemplateRepository
 from ..utils.exceptions import BadRequest
 
 log = structlog.get_logger(__name__)
@@ -193,6 +194,7 @@ async def get_notification_metadata(
 async def preview_notification_rule(
     request: Request,
     rule_data: schemas.NotificationRulePreview,
+    db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
     """
@@ -228,8 +230,16 @@ async def preview_notification_rule(
             title = Template(action.content_override.get("title_template", "")).safe_substitute(payload)
             message = Template(action.content_override.get("message_template", "")).safe_substitute(payload)
         elif mode == "template_override" and action.template_code:
-            title = f"[Template: {action.template_code}]"
-            message = "(Xem tr\u01b0\u1edbc template ch\u01b0a kh\u1ea3 d\u1ee5ng \u2014 n\u1ed9i dung s\u1ebd \u0111\u01b0\u1ee3c render t\u1eeb template khi g\u1eedi th\u1eadt)"
+            # Lookup real template content for preview
+            tpl = await NotificationTemplateRepository(db).get_by_template_code(
+                action.template_code
+            )
+            if tpl:
+                title = Template(tpl.title_template).safe_substitute(payload)
+                message = Template(tpl.message_template).safe_substitute(payload)
+            else:
+                title = f"[Template not found: {action.template_code}]"
+                message = ""
         else:
             title = Template(rule_data.title_template).safe_substitute(payload)
             message = Template(rule_data.message_template).safe_substitute(payload)

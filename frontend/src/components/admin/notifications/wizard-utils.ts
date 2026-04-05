@@ -286,13 +286,21 @@ export function validateGroups(groups: RecipientGroup[]): string[] {
         }
       }
 
+      if (branch.content_mode === "template_override") {
+        if (!branch.template_code) {
+          errors.push(
+            `K\u00eanh ${branch.channel} trong nh\u00f3m "${group.label}" \u0111ang d\u00f9ng template ri\u00eang nh\u01b0ng ch\u01b0a ch\u1ecdn template`,
+          );
+        }
+      }
+
       if (branch.content_mode === "channel_native") {
         if (
           !branch.config ||
           !(branch.config as Record<string, unknown>).zalo_template_id
         ) {
           errors.push(
-            `Kênh ${branch.channel} trong nhóm "${group.label}" cần mã template Zalo`,
+            `K\u00eanh ${branch.channel} trong nh\u00f3m "${group.label}" c\u1ea7n m\u00e3 template Zalo`,
           );
         }
       }

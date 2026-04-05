@@ -19,6 +19,7 @@ interface RecipientGroupCardProps {
   externalResolverOptions: ExternalResolverOption[];
   browserUsedByOtherGroup: boolean;
   availableChannels?: string[];
+  selectedEvent?: string; // For template picker filtering
 }
 
 export default function RecipientGroupCard({
@@ -30,6 +31,7 @@ export default function RecipientGroupCard({
   externalResolverOptions,
   browserUsedByOtherGroup,
   availableChannels: availableChannelsProp,
+  selectedEvent,
 }: RecipientGroupCardProps) {
   const activeChannels = new Set(group.channels.map((c) => c.channel));
   const channelList = group.recipient_kind === "external"
@@ -136,6 +138,7 @@ export default function RecipientGroupCard({
               key={`${branch.channel}-${idx}`}
               branch={branch}
               recipientKind={group.recipient_kind}
+              selectedEvent={selectedEvent}
               onChange={(updated) => updateChannel(idx, updated)}
               onRemove={() => removeChannel(idx)}
             />

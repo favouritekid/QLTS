@@ -8,10 +8,12 @@ import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
 import type { ChannelBranch, ContentMode, RecipientKind } from "./wizard-types";
 import { CHANNEL_LABELS } from "./wizard-types";
+import TemplatePicker from "./TemplatePicker";
 
 interface ChannelBranchCardProps {
   branch: ChannelBranch;
   recipientKind: RecipientKind;
+  selectedEvent?: string; // For template picker filtering
   onChange: (updated: ChannelBranch) => void;
   onRemove: () => void;
 }
@@ -25,6 +27,7 @@ const CHANNEL_LABELS_EXTENDED: Record<string, string> = {
 export default function ChannelBranchCard({
   branch,
   recipientKind,
+  selectedEvent,
   onChange,
   onRemove,
 }: ChannelBranchCardProps) {
@@ -39,8 +42,13 @@ export default function ChannelBranchCard({
   const [jsonText, setJsonText] = useState(initialJson);
   const [jsonError, setJsonError] = useState("");
 
-  const setMode = (m: ContentMode) => {
-    onChange({ ...branch, content_mode: m, content_override: m === "inline_override" ? { title_template: "", message_template: "" } : null });
+  const setMode = (m: ContentMode, templateCode?: string | null) => {
+    onChange({
+      ...branch,
+      content_mode: m,
+      template_code: m === "template_override" ? (templateCode ?? branch.template_code) : null,
+      content_override: m === "inline_override" ? { title_template: "", message_template: "" } : null,
+    });
   };
 
   const setOverride = (field: string, value: string) => {
@@ -73,33 +81,45 @@ export default function ChannelBranchCard({
         <div className="space-y-2">
           <Label className="text-xs text-muted-foreground">Cách hiển thị nội dung</Label>
 
-          {/* template_override: read-only preservation (not authorable from wizard) */}
-          {mode === "template_override" ? (
-            <div className="rounded border border-yellow-200 bg-yellow-50 p-2 text-xs text-yellow-800">
-              <p className="font-medium">Đang dùng template riêng</p>
-              <p>Template: <code>{branch.template_code ?? "N/A"}</code></p>
-              <p className="mt-1">Nếu muốn đổi sang nội dung khác, template hiện tại sẽ bị xóa.</p>
-            </div>
-          ) : (
-            <div className="flex gap-3">
-              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                <input
-                  type="radio"
-                  name={`mode_${branch.channel}`}
-                  checked={mode === "inherit_default"}
-                  onChange={() => setMode("inherit_default")}
-                />
-                Dùng nội dung từ Bước 2
-              </label>
-              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                <input
-                  type="radio"
-                  name={`mode_${branch.channel}`}
-                  checked={mode === "inline_override"}
-                  onChange={() => setMode("inline_override")}
-                />
-                Soạn nội dung riêng
-              </label>
+          <div className="flex flex-wrap gap-3">
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input
+                type="radio"
+                name={`mode_${branch.channel}`}
+                checked={mode === "inherit_default"}
+                onChange={() => setMode("inherit_default")}
+              />
+              {"D\u00f9ng n\u1ed9i dung t\u1eeb B\u01b0\u1edbc 2"}
+            </label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input
+                type="radio"
+                name={`mode_${branch.channel}`}
+                checked={mode === "inline_override"}
+                onChange={() => setMode("inline_override")}
+              />
+              {"So\u1ea1n n\u1ed9i dung ri\u00eang"}
+            </label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input
+                type="radio"
+                name={`mode_${branch.channel}`}
+                checked={mode === "template_override"}
+                onChange={() => setMode("template_override")}
+              />
+              {"Ch\u1ecdn t\u1eeb th\u01b0 vi\u1ec7n template"}
+            </label>
+          </div>
+
+          {/* Template picker — shown when template_override selected */}
+          {mode === "template_override" && selectedEvent && (
+            <div className="pl-4 border-l-2 border-primary/20">
+              <TemplatePicker
+                event={selectedEvent}
+                channel={branch.channel}
+                value={branch.template_code}
+                onChange={(code) => setMode("template_override", code)}
+              />
             </div>
           )}
 

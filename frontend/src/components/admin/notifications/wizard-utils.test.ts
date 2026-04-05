@@ -288,14 +288,15 @@ describe("validateGroups", () => {
     expect(errors.some((e) => e.includes("kênh gửi"))).toBe(true);
   });
 
-  it("detects multiple browser channels across groups", () => {
+  it("allows multiple browser channels across groups (PR2: multi-browser OK)", () => {
     const g1 = makeInternalGroup();
     const g2 = makeInternalGroup({
       group_key: "group_2",
       recipient_config: { resolver_type: "unit_staff", params: {} },
     });
     const errors = validateGroups([g1, g2]);
-    expect(errors.some((e) => e.includes("Trong ứng dụng"))).toBe(true);
+    // PR2: Multi-browser allowed — cross-action dedup in dispatcher handles precedence
+    expect(errors.some((e) => e.includes("Trong"))).toBe(false);
   });
 
   it("detects inline_override without content", () => {
@@ -446,5 +447,119 @@ describe("OPERATOR_ALIAS_MAP", () => {
     expect(OPERATOR_ALIAS_MAP["=="]).toBe("eq");
     expect(OPERATOR_ALIAS_MAP["!="]).toBe("ne");
     expect(OPERATOR_ALIAS_MAP[">="]).toBe("gte");
+  });
+});
+
+// =============================================================================
+// Template override validation + mode switching
+// =============================================================================
+
+describe("validateGroups — template_override", () => {
+  it("reports error when template_override has no template_code", () => {
+    const groups: RecipientGroup[] = [
+      {
+        ...createInternalGroup(),
+        channels: [
+          {
+            channel: "browser",
+            delay_minutes: 0,
+            content_mode: "template_override",
+            template_code: null, // Missing!
+            content_override: null,
+            config: null,
+          },
+        ],
+      },
+    ];
+    const errors = validateGroups(groups);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some((e) => e.includes("template"))).toBe(true);
+  });
+
+  it("passes when template_override has template_code", () => {
+    const groups: RecipientGroup[] = [
+      {
+        ...createInternalGroup(),
+        channels: [
+          {
+            channel: "browser",
+            delay_minutes: 0,
+            content_mode: "template_override",
+            template_code: "TPL_LEAD_ASSIGNED_V1",
+            content_override: null,
+            config: null,
+          },
+        ],
+      },
+    ];
+    const errors = validateGroups(groups);
+    // No template-related error
+    expect(errors.filter((e) => e.includes("template")).length).toBe(0);
+  });
+});
+
+describe("mapToAPI — template_code preservation", () => {
+  it("maps template_code when content_mode is template_override", () => {
+    const groups: RecipientGroup[] = [
+      {
+        ...createInternalGroup(),
+        channels: [
+          {
+            channel: "browser",
+            delay_minutes: 0,
+            content_mode: "template_override",
+            template_code: "TPL_TEST_V1",
+            content_override: null,
+            config: null,
+          },
+        ],
+      },
+    ];
+    const defaultContent: WizardDefaultContent = {
+      title_template: "Default",
+      message_template: "Default msg",
+      notification_type: "info",
+    };
+    const trigger: WizardTrigger = {
+      event: "lead_assigned",
+      condition: null,
+      enabled: true,
+    };
+
+    const result = mapToAPI(groups, defaultContent, trigger);
+    expect(result.actions![0].template_code).toBe("TPL_TEST_V1");
+    expect(result.actions![0].content_mode).toBe("template_override");
+  });
+
+  it("clears template_code when switching to inherit_default", () => {
+    const groups: RecipientGroup[] = [
+      {
+        ...createInternalGroup(),
+        channels: [
+          {
+            channel: "browser",
+            delay_minutes: 0,
+            content_mode: "inherit_default",
+            template_code: null, // Cleared by UI
+            content_override: null,
+            config: null,
+          },
+        ],
+      },
+    ];
+    const defaultContent: WizardDefaultContent = {
+      title_template: "Default",
+      message_template: "Default msg",
+      notification_type: "info",
+    };
+    const trigger: WizardTrigger = {
+      event: "lead_assigned",
+      condition: null,
+      enabled: true,
+    };
+
+    const result = mapToAPI(groups, defaultContent, trigger);
+    expect(result.actions![0].template_code).toBeNull();
+    expect(result.actions![0].content_mode).toBe("inherit_default");
   });
 });

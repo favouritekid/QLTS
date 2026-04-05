@@ -706,6 +706,7 @@ export function NotificationRuleEditor({
                       externalResolverOptions={metadata?.external_resolver_types ?? EXTERNAL_RESOLVER_FALLBACK}
                       availableChannels={dynamicChannels.filter((c) => c.status === "live").map((c) => c.value)}
                       validationErrors={shouldShowStepErrors(3) ? stepErrors.step3 : undefined}
+                      selectedEvent={selectedEvent}
                     />
                   </div>
                 )}
