@@ -278,7 +278,7 @@ class TestResubmitEndpoint:
 
         resubmit_response = await client.post(
             f"/api/admissions/{profile.id}/resubmit",
-            json={"notes": "Uploaded all missing documents"},
+            json={"version": profile.version, "notes": "Uploaded all missing documents"},
             headers=headers,
         )
 
@@ -313,7 +313,7 @@ class TestResubmitEndpoint:
 
         resubmit_response = await client.post(
             f"/api/admissions/{profile.id}/resubmit",
-            json={"notes": "Should not work"},
+            json={"version": profile.version, "notes": "Should not work"},
             headers=headers,
         )
 
@@ -338,7 +338,7 @@ class TestResubmitEndpoint:
 
         resubmit_response = await client.post(
             f"/api/admissions/{profile.id}/resubmit",
-            json={"notes": "Should not work"},
+            json={"version": profile.version, "notes": "Should not work"},
             headers=headers,
         )
 
