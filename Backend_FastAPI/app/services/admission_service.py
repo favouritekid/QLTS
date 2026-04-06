@@ -2000,12 +2000,18 @@ async def update_profile(
     
     # ✅ Fix: Fetch fresh scores but do NOT assign to profile.subject_scores (avoid SA error)
     fresh_scores = await admission_repo.get_profile_scores(profile.id)
-    
+
     # Calculate totals for response using fresh data
     _calculate_and_update_totals(profile, scores=fresh_scores)
 
-    # ✅ Fix: Re-compute validation errors/status with new scores
-    _compute_frontend_fields(profile, current_user)
+    # ✅ Fix: Re-compute validation errors/status with new scores + fresh documents.
+    # Must pass documents, otherwise _validate_documents() short-circuits (returns no doc errors)
+    # and documents_checklist is rebuilt with all statuses = "missing", causing the response to
+    # claim validation_errors=[] and eligibility="eligible" even when mandatory docs are missing
+    # (or, conversely, showing "missing" for docs that are actually uploaded). See MEDIUM #1 in
+    # the post-BUG-001 residual risks audit.
+    documents = await admission_repo.get_all_documents(profile.id)
+    _compute_frontend_fields(profile, current_user, documents)
 
     # Audit trail: log profile update with field-level changes
     from ..services import audit_service

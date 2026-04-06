@@ -581,6 +581,183 @@ class TestUpdateProfileLazyLoadRegression:
         )
 
 
+class TestUpdateProfileDocumentsInResponse:
+    """Regression tests for MEDIUM #1: update_profile response must reflect actual document state.
+
+    Background: update_profile() used to call _compute_frontend_fields(profile, current_user)
+    without passing `documents`, causing _validate_documents() to short-circuit (it only runs
+    when `documents is not None`, per admission_service.py:283) and documents_checklist to be
+    rebuilt from applied_rules with all statuses = "missing" (per admission_service.py:640).
+
+    Result: PUT /api/admissions/{id} returned validation_errors=[] and eligibility="eligible"
+    even when mandatory documents were missing, and conversely reported documents_checklist
+    statuses as "missing" even when docs were already uploaded. This broke API contract
+    consistency — clients trusting the response of PUT would render wrong state.
+
+    The fix loads documents via admission_repo.get_all_documents() right before the
+    _compute_frontend_fields call, mirroring the pattern already used in get_profile
+    (admission_service.py:1759).
+
+    Note: these tests use a direct DB patch of `applied_rules` to inject mandatory_docs,
+    because setup_admission_api_data() does not seed an AdmissionPath with mandatory docs.
+    The bug is only observable when applied_rules.mandatory_docs is non-empty.
+    """
+
+    async def _create_draft_with_mandatory_docs(
+        self,
+        client: AsyncClient,
+        user_info: dict,
+        major_id: int,
+        unit_id: int,
+        mandatory_doc_codes: list[str],
+    ) -> tuple[int, dict]:
+        """Create a draft profile via API, then patch applied_rules in DB to add mandatory_docs.
+
+        Returns (profile_id, auth_headers).
+        """
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=user_info["id"],
+            academic_year=2025,
+        )
+        headers = await get_auth_headers(client, user_info)
+
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        profile_id = create_response.json()["id"]
+
+        # Directly patch applied_rules.mandatory_docs in DB so _validate_documents has
+        # something to report on
+        from sqlalchemy import update as sql_update
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(models.AdmissionProfile).where(
+                        models.AdmissionProfile.id == profile_id
+                    )
+                )
+                profile = result.scalar_one()
+                patched_rules = dict(profile.applied_rules or {})
+                patched_rules["mandatory_docs"] = mandatory_doc_codes
+                patched_rules["upload_required_docs"] = mandatory_doc_codes
+                await session.execute(
+                    sql_update(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == profile_id)
+                    .values(applied_rules=patched_rules)
+                )
+
+        return profile_id, headers
+
+    async def test_update_profile_response_reports_missing_mandatory_docs(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Profile's applied_rules requires ["hoc_ba_thpt", "cccd"] but no documents are
+        uploaded. PUT /api/admissions/{id} response MUST include these in validation_errors.
+
+        Before fix: validation_errors was [] (documents=None short-circuited _validate_documents).
+        After fix: validation_errors contains "Thiếu tài liệu bắt buộc: hoc_ba_thpt" and
+        "Thiếu tài liệu bắt buộc: cccd".
+        """
+        profile_id, headers = await self._create_draft_with_mandatory_docs(
+            client=client,
+            user_info=officer_user_in_db,
+            major_id=seed_lead_dependencies["major_program_id"],
+            unit_id=seed_lead_dependencies["unit_id"],
+            mandatory_doc_codes=["hoc_ba_thpt", "cccd"],
+        )
+
+        # PUT to update a trivial field. No documents uploaded.
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nam", "version": 1},
+            headers=headers,
+        )
+
+        assert update_response.status_code == 200, (
+            f"Expected 200, got {update_response.status_code}: {update_response.text}"
+        )
+        body = update_response.json()
+
+        validation_errors = body.get("validation_errors") or []
+        assert any("hoc_ba_thpt" in e for e in validation_errors), (
+            f"Expected validation_errors to report missing 'hoc_ba_thpt', "
+            f"got {validation_errors!r}. "
+            f"This indicates _compute_frontend_fields was called without `documents` — "
+            f"MEDIUM #1 regressed."
+        )
+        assert any("cccd" in e for e in validation_errors), (
+            f"Expected validation_errors to report missing 'cccd', got {validation_errors!r}"
+        )
+
+        # Eligibility should NOT be "eligible" when mandatory docs are missing
+        assert body.get("eligibility_status") == "ineligible", (
+            f"Expected eligibility_status='ineligible' when mandatory docs missing, "
+            f"got {body.get('eligibility_status')!r}. MEDIUM #1 regressed."
+        )
+
+    async def test_update_profile_response_consistent_with_get_profile(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Response of PUT /api/admissions/{id} must match a subsequent GET on key computed
+        fields. Before the fix, PUT returned validation_errors=[] and eligibility="eligible"
+        while GET returned validation_errors=[...missing docs] and eligibility="ineligible".
+        """
+        profile_id, headers = await self._create_draft_with_mandatory_docs(
+            client=client,
+            user_info=officer_user_in_db,
+            major_id=seed_lead_dependencies["major_program_id"],
+            unit_id=seed_lead_dependencies["unit_id"],
+            mandatory_doc_codes=["hoc_ba_thpt"],
+        )
+
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nam", "version": 1},
+            headers=headers,
+        )
+        assert update_response.status_code == 200
+        put_body = update_response.json()
+
+        get_response = await client.get(
+            f"/api/admissions/{profile_id}",
+            headers=headers,
+        )
+        assert get_response.status_code == 200
+        get_body = get_response.json()
+
+        # Key computed fields must agree between PUT and GET responses
+        assert put_body.get("validation_errors") == get_body.get("validation_errors"), (
+            f"PUT validation_errors {put_body.get('validation_errors')!r} != "
+            f"GET validation_errors {get_body.get('validation_errors')!r}. "
+            f"MEDIUM #1 regressed — update_profile is not loading documents before "
+            f"_compute_frontend_fields."
+        )
+        assert put_body.get("eligibility_status") == get_body.get("eligibility_status"), (
+            f"PUT eligibility {put_body.get('eligibility_status')!r} != "
+            f"GET eligibility {get_body.get('eligibility_status')!r}"
+        )
+        assert put_body.get("completion_percent") == get_body.get("completion_percent"), (
+            f"PUT completion {put_body.get('completion_percent')} != "
+            f"GET completion {get_body.get('completion_percent')}"
+        )
+
+
 # ==============================================================================
 # TEST: SUBMIT AND EVALUATE
 # ==============================================================================
