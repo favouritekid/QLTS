@@ -44,6 +44,8 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentProvince = useWatch({ control: form.control, name: "permanent_province" }) || ""
   const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
   const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
+  const permanentResidentialGroup = useWatch({ control: form.control, name: "permanent_residential_group" }) || ""
+  const permanentStreetAddress = useWatch({ control: form.control, name: "permanent_street_address" }) || ""
 
   // Address mode: local state, re-derived when profile.version changes.
   // Uses React's "adjusting state during render" pattern — no useEffect.
@@ -249,9 +251,13 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               provinceValue={permanentProvince}
               districtValue={permanentDistrict}
               wardValue={permanentWard}
+              residentialGroupValue={permanentResidentialGroup}
+              streetAddressValue={permanentStreetAddress}
               onProvinceChange={(value) => form.setValue("permanent_province", value)}
               onDistrictChange={(value) => form.setValue("permanent_district", value || "")}
               onWardChange={(value) => form.setValue("permanent_ward", value)}
+              onResidentialGroupChange={(value) => form.setValue("permanent_residential_group", value)}
+              onStreetAddressChange={(value) => form.setValue("permanent_street_address", value)}
               mode={addressMode}
               onModeChange={setAddressMode}
               disabled={!isEditable}

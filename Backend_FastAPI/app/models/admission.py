@@ -131,7 +131,21 @@ class AdmissionProfile(Base):
     permanent_province: Mapped[str] = mapped_column(String(100), nullable=True)
     permanent_district: Mapped[str] = mapped_column(String(100), nullable=True)
     permanent_ward: Mapped[str] = mapped_column(String(100), nullable=True)
-    
+    # Sub-ward + street address — free-text. There is no national database
+    # of sub-ward units (tổ dân phố / thôn / buôn / ấp / khóm / khu phố...);
+    # naming varies by region (north/south/highland/Khmer areas) and tổ
+    # numbers are renumbered as populations shift, so a structured lookup
+    # is impractical for the QLTS scope. The CCCD form (mẫu CC01) uses
+    # the same two-line free-text pattern.
+    permanent_residential_group: Mapped[str] = mapped_column(
+        String(150), nullable=True,
+        comment="Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố — community sub-unit, free-text"
+    )
+    permanent_street_address: Mapped[str] = mapped_column(
+        String(255), nullable=True,
+        comment="Số nhà, tên đường — street address line, free-text"
+    )
+
     place_of_birth: Mapped[str] = mapped_column(String(255), nullable=True)
     native_place: Mapped[str] = mapped_column(String(255), nullable=True)
     

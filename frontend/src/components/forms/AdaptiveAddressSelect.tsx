@@ -19,14 +19,21 @@ import { useDistricts, useProvinces, useWards } from "@/lib/hooks/useAdministrat
 
 import { Label } from "@/components/ui/label"
 import { Combobox } from "@/components/ui/combobox"
+import { Input } from "@/components/ui/input"
 
 interface AdaptiveAddressSelectProps {
   provinceValue: string
   districtValue: string | null
   wardValue: string
+  /** Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố — community sub-unit, free-text. */
+  residentialGroupValue?: string
+  /** Số nhà, tên đường — street address line, free-text. */
+  streetAddressValue?: string
   onProvinceChange: (province: string) => void
   onDistrictChange: (district: string | null) => void
   onWardChange: (ward: string) => void
+  onResidentialGroupChange?: (residentialGroup: string) => void
+  onStreetAddressChange?: (streetAddress: string) => void
   /** Address mode: "current" (2-level) or "legacy" (3-level) */
   mode: AddressMode
   onModeChange: (mode: AddressMode) => void
@@ -38,9 +45,13 @@ export function AdaptiveAddressSelect({
   provinceValue,
   districtValue,
   wardValue,
+  residentialGroupValue,
+  streetAddressValue,
   onProvinceChange,
   onDistrictChange,
   onWardChange,
+  onResidentialGroupChange,
+  onStreetAddressChange,
   mode,
   onModeChange,
   label = "Hộ khẩu thường trú",
@@ -192,6 +203,34 @@ export function AdaptiveAddressSelect({
           />
         </div>
       </div>
+
+      {/* Sub-ward + street address — free-text rows below the selectors.
+          Rendered only when the parent wires up handlers, so legacy callers
+          that haven't adopted the new fields keep working unchanged. */}
+      {(onResidentialGroupChange || onStreetAddressChange) && (
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+          {onResidentialGroupChange && (
+            <div>
+              <Input
+                value={residentialGroupValue ?? ""}
+                onChange={(e) => onResidentialGroupChange(e.target.value)}
+                placeholder="Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố"
+                disabled={disabled}
+              />
+            </div>
+          )}
+          {onStreetAddressChange && (
+            <div>
+              <Input
+                value={streetAddressValue ?? ""}
+                onChange={(e) => onStreetAddressChange(e.target.value)}
+                placeholder="Số nhà, tên đường"
+                disabled={disabled}
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
