@@ -8,11 +8,12 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Combobox } from "@/components/ui/combobox"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import type { AddressMode } from "@/lib/api/administrative"
 import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
+import { useProvinces } from "@/lib/hooks/useAdministrative"
 import { format } from "date-fns" // Optional if needed for display, but input date handles ISO
 
 interface PersonalInfoTabProps {
@@ -27,7 +28,17 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const { data: religions } = useConfigData("religion")
   const { data: nationalities } = useConfigData("nationality")
   const { data: disabilities } = useConfigData("disability_type")
-  const { data: provinces } = useConfigData("province")
+
+  // Provinces come from administrative API, not config categories.
+  // Use the legacy snapshot (63 provinces) for `place_of_birth` / `native_place`
+  // because those fields store free-text province names from the applicant's
+  // historical records — legacy keeps the old province set users typically
+  // wrote in their birth certificates / household books.
+  const { data: provinces = [] } = useProvinces("legacy")
+  const provinceOptions = useMemo(
+    () => provinces.map((p) => ({ value: p.name, label: p.name })),
+    [provinces],
+  )
 
   // Watch address fields for reactivity (useWatch triggers re-render on change)
   const permanentProvince = useWatch({ control: form.control, name: "permanent_province" }) || ""
@@ -163,7 +174,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                   <Combobox
                     value={field.value || ""}
                     onChange={field.onChange}
-                    suggestions={provinces?.map(p => p.name) || []}
+                    options={provinceOptions}
                     placeholder="Chọn tỉnh/thành phố"
                     searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
                     emptyText="Không tìm thấy"
@@ -186,7 +197,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                   <Combobox
                     value={field.value || ""}
                     onChange={field.onChange}
-                    suggestions={provinces?.map(p => p.name) || []}
+                    options={provinceOptions}
                     placeholder="Chọn tỉnh/thành phố"
                     searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
                     emptyText="Không tìm thấy"
