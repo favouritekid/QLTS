@@ -2220,7 +2220,8 @@ async def get_admission_for_manager(
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
         .options(
-            selectinload(models.AdmissionProfile.lead),
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
             selectinload(models.AdmissionProfile.assigned_reviewer),
         )
         .with_for_update()  # ✅ CRITICAL: Prevent concurrent approve/reject
@@ -2297,7 +2298,8 @@ async def get_admission_for_user(
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
         .options(
-            selectinload(models.AdmissionProfile.lead),
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
             selectinload(models.AdmissionProfile.assigned_reviewer),
         )
         .with_for_update()

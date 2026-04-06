@@ -603,7 +603,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
             .options(
-                joinedload(models.AdmissionProfile.lead),
+                joinedload(models.AdmissionProfile.lead).joinedload(models.Lead.assigned_officer),
+                selectinload(models.AdmissionProfile.assigned_reviewer),
                 selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),

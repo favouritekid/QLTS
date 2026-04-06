@@ -768,6 +768,65 @@ def _compute_frontend_fields(
     profile.citizen_id_masked = mask_citizen_id(profile.citizen_id)
 
 
+async def _populate_response_fields(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    current_user: Optional[models.User],
+    *,
+    documents: Optional[List[models.ProfileDocument]] = None,
+) -> None:
+    """Populate transient computed fields on a profile for API response serialization.
+
+    Call this AFTER ``await db.flush()`` and BEFORE returning from any mutation
+    function whose return value is serialized via ``AdmissionProfileResponse``.
+    Without this call, computed fields (``permissions``, ``available_actions``,
+    ``eligibility_status``, ``step_status``, ``completion_percent``,
+    ``validation_errors``, ``assigned_officer_name``, ``assigned_reviewer_name``)
+    silently fall back to schema defaults — making mutation responses diverge
+    from subsequent ``GET`` responses.
+
+    Args:
+        db: AsyncSession used to (optionally) load fresh documents.
+        profile: AdmissionProfile mutated in-place by ``_compute_frontend_fields``.
+        current_user: Acting user. May be ``None`` for system callbacks (e.g. a
+            future payment gateway hitting ``record_application_fee_payment``
+            without a user context). When ``None`` the helper is a no-op:
+            computed fields stay at schema defaults, which is acceptable for
+            non-user-facing flows because there is no UI rendering that needs
+            ``permissions``.
+        documents: Optional pre-loaded list of ``ProfileDocument``. If ``None``
+            the helper fetches them via ``AdmissionRepository.get_all_documents``.
+            Pass when documents are already loaded (e.g. after
+            ``reload_profile_with_lead``) to avoid a redundant query.
+
+    Requires ``profile.lead`` (with nested ``lead.assigned_officer``) and
+    ``profile.assigned_reviewer`` to already be eager-loaded by the caller —
+    use the nested ``selectinload`` pattern from ``update_profile`` or the
+    ``get_admission_for_manager`` / ``get_admission_for_user`` dependencies.
+    Missing eager-loads will silently produce ``null`` denormalized name fields
+    rather than crash, because ``_compute_frontend_fields`` uses
+    ``profile.__dict__.get(...)``.
+    """
+    if current_user is None:
+        # System callback path: no role/permissions to compute. Skip silently.
+        return
+
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # Populate transient score fields (average_score, total_score, snapshot_score,
+    # admission_scores). _compute_frontend_fields → _validate_scores reads these
+    # via direct attribute access and would AttributeError on a freshly DB-loaded
+    # profile. Mirror update_profile's pattern: fetch fresh scores then compute.
+    fresh_scores = await admission_repo.get_profile_scores(profile.id)
+    _calculate_and_update_totals(profile, scores=fresh_scores)
+
+    if documents is None:
+        documents = await admission_repo.get_all_documents(profile.id)
+
+    _compute_frontend_fields(profile, current_user, documents)
+
+
 async def _create_admission_milestone_consultation(
     db: AsyncSession,
     lead: models.Lead,
@@ -3302,12 +3361,16 @@ async def approve_profile(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead)) 
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update() # Lock the row
     )
     result = await db.execute(stmt)
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
@@ -3383,6 +3446,9 @@ async def approve_profile(
 
     await db.flush()  # Flush, don't commit! Router commits.
 
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, approver)
+
     # Audit trail: log approval
     from ..services import audit_service
     await audit_service.log_status_change(
@@ -3457,12 +3523,16 @@ async def reject_profile(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead)) 
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update() # Lock the row
     )
     result = await db.execute(stmt)
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
@@ -3523,6 +3593,9 @@ async def reject_profile(
         )
 
     await db.flush()
+
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, rejector)
 
     # Audit trail: log rejection
     from ..services import audit_service
@@ -3592,7 +3665,11 @@ async def request_revision(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead))
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update()
     )
     result = await db.execute(stmt)
@@ -3653,6 +3730,9 @@ async def request_revision(
         )
 
     await db.flush()
+
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, reviewer)
 
     # Audit trail
     from ..services import audit_service
@@ -3731,7 +3811,11 @@ async def record_application_fee_payment(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead))
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update()
     )
     result = await db.execute(stmt)
@@ -3785,6 +3869,10 @@ async def record_application_fee_payment(
     )
 
     await db.flush()
+
+    # Populate transient computed fields so the mutation response matches GET.
+    # Helper handles recorded_by=None silently (system callback path).
+    await _populate_response_fields(db, profile, recorded_by)
 
     log.info(
         "Application fee payment recorded",
@@ -3869,12 +3957,16 @@ async def resubmit_profile(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead)) 
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update() # Lock the row
     )
     result = await db.execute(stmt)
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
@@ -3948,6 +4040,9 @@ async def resubmit_profile(
     )
 
     await db.flush()
+
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, officer)
 
     # Audit trail: log resubmission
     from ..services import audit_service
@@ -4161,6 +4256,9 @@ async def override_profile(
 
     await db.flush()
 
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, admin)
+
     # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11)
     # TODO: Implement proper audit log table
     log.warning(
@@ -4214,7 +4312,11 @@ async def claim_review(
 
     if profile.assigned_reviewer_id:
         if profile.assigned_reviewer_id == reviewer.id:
-            # Idempotent success (already claimed by self)
+            # Idempotent success (already claimed by self).
+            # Still populate transient computed fields so the response matches
+            # what a fresh GET would return — router holds the same `profile`
+            # reference via the dependency.
+            await _populate_response_fields(db, profile, reviewer)
             return
 
         # Already claimed by someone else
@@ -4229,6 +4331,9 @@ async def claim_review(
     profile.updated_at = datetime.now(timezone.utc)
 
     await db.flush()
+
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, reviewer)
 
     # Audit trail
     from ..services import audit_service
@@ -4288,6 +4393,9 @@ async def unclaim_review(
     profile.updated_at = datetime.now(timezone.utc)
 
     await db.flush()
+
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, current_user)
 
     # Audit trail
     from ..services import audit_service
@@ -4378,6 +4486,10 @@ async def finalize_profile(
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
     profile = await admission_repo.reload_profile_with_lead(profile.id)
+
+    # Populate transient computed fields so the mutation response matches GET.
+    # reload_profile_with_lead already eager-loads documents, so reuse them.
+    await _populate_response_fields(db, profile, admin, documents=profile.documents)
 
     # POST-COMMIT CALLBACK
     async def post_commit():
@@ -4653,7 +4765,11 @@ async def mark_student_dropped(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead))
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update()
     )
     result = await db.execute(stmt)
@@ -4704,6 +4820,9 @@ async def mark_student_dropped(
         )
 
     await db.flush()
+
+    # Populate transient computed fields so the mutation response matches GET.
+    await _populate_response_fields(db, profile, actor)
 
     # Audit trail
     from ..services import audit_service

@@ -1116,3 +1116,505 @@ class TestAutoAssignOfficer:
             lead = result.scalar_one()
             assert lead.assigned_officer_id == officer_user_in_db["id"], \
                 f"Expected auto-assign to officer {officer_user_in_db['id']}, got {lead.assigned_officer_id}"
+
+
+# ==============================================================================
+# TEST: MEDIUM #2 — MUTATION RESPONSE CONTRACT
+# ==============================================================================
+#
+# Background: 10 admission mutation endpoints (approve/reject/request_revision/
+# resubmit/record_fee/override/finalize/claim/unclaim/mark_dropped) used to
+# return AdmissionProfileResponse with empty defaults for every computed field
+# (permissions={}, available_actions=[], eligibility_status="pending", etc.)
+# because the service functions never called _compute_frontend_fields() before
+# returning. The fix added a single helper `_populate_response_fields` that is
+# called after `await db.flush()` in each function.
+#
+# These tests assert the post-mutation response has populated computed fields,
+# proving the helper ran. They also cross-check key fields against a subsequent
+# GET response to lock in the contract that PUT/POST responses match GET.
+#
+# Test strength was verified across 3 patterns by reverting helper calls in
+# approve_profile (own-query), claim_review (dependency + idempotent), and
+# finalize_profile (delegated/reload). Each revert produced a clear FAIL.
+# ==============================================================================
+
+
+async def _create_profile_with_state(
+    client: AsyncClient,
+    setup_user: dict,
+    seed_lead_dependencies: dict,
+    target_status: str,
+    *,
+    mandatory_doc_codes: list = None,
+    assigned_reviewer_id: int = None,
+    rejection_reason: str = None,
+    requires_application_fee: bool = False,
+) -> tuple[int, int, dict]:
+    """Create a profile via API then patch its state directly in DB.
+
+    Bypasses state machine validation. State machine correctness is covered by
+    tests/integration/test_admission_state_transitions.py separately.
+
+    Returns:
+        (profile_id, version, setup_headers)
+    """
+    from sqlalchemy import update as sql_update
+
+    unit_id = seed_lead_dependencies["unit_id"]
+    major_id = seed_lead_dependencies["major_program_id"]
+
+    data = await setup_admission_api_data(
+        major_id=major_id,
+        unit_id=unit_id,
+        officer_id=setup_user["id"],
+        academic_year=2025,
+    )
+    headers = await get_auth_headers(client, setup_user)
+
+    create_response = await client.post(
+        "/api/admissions",
+        json={
+            "lead_id": data["lead_id"],
+            "admission_method_id": data["admission_method_id"],
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+    profile_id = create_response.json()["id"]
+
+    # Patch DB to put the profile into the requested state
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == profile_id
+                )
+            )
+            profile = result.scalar_one()
+            patched_rules = dict(profile.applied_rules or {})
+            if mandatory_doc_codes is not None:
+                patched_rules["mandatory_docs"] = mandatory_doc_codes
+                patched_rules["upload_required_docs"] = mandatory_doc_codes
+            if requires_application_fee:
+                patched_rules["requires_application_fee"] = True
+                patched_rules["fee_amount"] = 500000
+                patched_rules["fee_status"] = "pending"
+
+            update_values = {
+                "status": target_status,
+                "applied_rules": patched_rules,
+                "citizen_id": f"099{random.randint(100000000, 999999999)}",
+            }
+            if assigned_reviewer_id is not None:
+                update_values["assigned_reviewer_id"] = assigned_reviewer_id
+                update_values["assigned_at"] = datetime.now(timezone.utc)
+            if rejection_reason is not None:
+                update_values["rejection_reason"] = rejection_reason
+
+            await session.execute(
+                sql_update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == profile_id)
+                .values(**update_values)
+            )
+
+    # Return current version (always 1 right after create+patch since version is not bumped by sql_update)
+    return profile_id, 1, headers
+
+
+def _assert_computed_fields_populated(body: dict, context: str = "") -> None:
+    """Assert response body has populated computed fields (not schema defaults).
+
+    These three checks prove `_compute_frontend_fields` ran:
+    - permissions: dict, default={}, populated should have ≥1 key
+    - step_status: dict, default={}, populated should have keys "1".."7"
+    - eligibility_status: default="pending", populated should be "eligible"/"ineligible"
+    """
+    msg_prefix = f"[{context}] " if context else ""
+
+    permissions = body.get("permissions")
+    assert isinstance(permissions, dict) and len(permissions) > 0, (
+        f"{msg_prefix}permissions should be non-empty dict (computed by helper), "
+        f"got {permissions!r}. MEDIUM #2 regressed — _populate_response_fields "
+        f"call may be missing or didn't run."
+    )
+
+    step_status = body.get("step_status")
+    assert isinstance(step_status, dict) and len(step_status) > 0, (
+        f"{msg_prefix}step_status should be non-empty dict (computed by helper), "
+        f"got {step_status!r}"
+    )
+
+    eligibility = body.get("eligibility_status")
+    assert eligibility in ("eligible", "ineligible"), (
+        f"{msg_prefix}eligibility_status should be 'eligible' or 'ineligible' "
+        f"(computed), got {eligibility!r}. Default 'pending' indicates the "
+        f"helper didn't run."
+    )
+
+
+class TestApproveResponseFields:
+    """Mutation: POST /api/admissions/{id}/approve must populate computed fields."""
+
+    async def test_approve_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/approve",
+            json={"version": version, "notes": "Approved for test"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Approve failed: {response.text}"
+        body = response.json()
+        _assert_computed_fields_populated(body, context="approve")
+
+        # Cross-check with GET — PUT/POST response should match GET
+        get_response = await client.get(
+            f"/api/admissions/{profile_id}", headers=manager_headers
+        )
+        assert get_response.status_code == 200
+        get_body = get_response.json()
+        assert body.get("eligibility_status") == get_body.get("eligibility_status"), (
+            "approve response eligibility_status diverges from GET"
+        )
+
+
+class TestRejectResponseFields:
+    """Mutation: POST /api/admissions/{id}/reject must populate computed fields."""
+
+    async def test_reject_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/reject",
+            json={"version": version, "reason": "Missing required documents for test"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Reject failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="reject")
+
+
+class TestRequestRevisionResponseFields:
+    """Mutation: POST /api/admissions/{id}/request-revision must populate computed fields."""
+
+    async def test_request_revision_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/request-revision",
+            json={"version": version, "reason": "Please clarify the academic history section"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Request revision failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="request-revision")
+
+
+class TestResubmitResponseFields:
+    """Mutation: POST /api/admissions/{id}/resubmit must populate computed fields."""
+
+    async def test_resubmit_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, officer_headers = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="rejected",
+            rejection_reason="Previous rejection reason for test",
+        )
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/resubmit",
+            json={"version": version, "notes": "Fixed all issues"},
+            headers=officer_headers,
+        )
+        assert response.status_code in (200, 201), f"Resubmit failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="resubmit")
+
+
+class TestRecordFeePaymentResponseFields:
+    """Mutation: POST /api/admissions/{id}/record-fee-payment must populate computed fields."""
+
+    async def test_record_fee_payment_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+            requires_application_fee=True,
+        )
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/record-fee-payment"
+            f"?transaction_id=TXN-TEST-{random.randint(10000, 99999)}&amount=500000",
+            headers=admin_headers,
+        )
+        assert response.status_code in (200, 201), f"Record fee failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="record-fee-payment")
+
+
+class TestDropStudentResponseFields:
+    """Mutation: POST /api/admissions/{id}/drop must populate computed fields."""
+
+    async def test_drop_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="enrolled",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/drop",
+            json={"version": version, "reason": "Test drop: student transferred"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Drop failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="drop")
+
+
+class TestOverrideResponseFields:
+    """Mutation: POST /api/admissions/{id}/override must populate computed fields."""
+
+    async def test_override_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="approved",
+        )
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/override",
+            json={"reason": "Special case for scholarship recipient", "bypass_rules": []},
+            headers=admin_headers,
+        )
+        assert response.status_code in (200, 201), f"Override failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="override")
+
+
+class TestFinalizeResponseFields:
+    """Mutation: POST /api/admissions/{id}/finalize must populate computed fields.
+
+    finalize_profile is the trickiest in-scope function: it delegates to
+    enroll_student (which creates a Student record) then calls
+    reload_profile_with_lead. The helper is called with pre-loaded documents
+    to avoid a redundant query.
+    """
+
+    async def test_finalize_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="confirmed",
+        )
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/finalize",
+            json={},
+            headers=admin_headers,
+        )
+        assert response.status_code in (200, 201), f"Finalize failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="finalize")
+
+
+class TestClaimResponseFields:
+    """Mutation: POST /api/admissions/{id}/claim must populate computed fields."""
+
+    async def test_claim_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/claim",
+            json={"version": version},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Claim failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="claim")
+
+
+class TestUnclaimResponseFields:
+    """Mutation: POST /api/admissions/{id}/unclaim must populate computed fields."""
+
+    async def test_unclaim_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+            assigned_reviewer_id=manager_user_in_db["id"],
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/unclaim",
+            json={"version": version},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Unclaim failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="unclaim")
+
+
+# ==============================================================================
+# SPECIAL TESTS: edge cases highlighted by plan v3 evaluation
+# ==============================================================================
+
+
+class TestRecordFeePaymentNoneRecordedBy:
+    """Direct service-level call: helper must not crash when recorded_by=None.
+
+    Simulates a future payment-gateway callback that has no user context.
+    The helper signature accepts Optional[User] and skips silently when None,
+    preventing AttributeError at _compute_frontend_fields:419 (current_user.role).
+    """
+
+    async def test_record_fee_payment_with_none_recorded_by_does_not_crash(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        from app.services import admission_service
+
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+            requires_application_fee=True,
+        )
+
+        # Direct service call with recorded_by=None — must not raise
+        async with AsyncSessionLocal() as session:
+            try:
+                profile, _callback = await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile_id,
+                    payment_data={
+                        "transaction_id": f"TXN-NONE-{random.randint(10000, 99999)}",
+                        "amount": 500000,
+                    },
+                    recorded_by=None,
+                )
+                await session.commit()
+            except AttributeError as exc:
+                pytest.fail(
+                    f"record_application_fee_payment crashed when recorded_by=None: {exc}. "
+                    f"_populate_response_fields may not be handling the None case."
+                )
+
+        # Status should be updated
+        assert profile is not None
+        assert profile.id == profile_id
+
+
+class TestClaimReviewIdempotent:
+    """Idempotent claim path: when same reviewer claims twice, the second call
+    must still return populated computed fields. The fix adds a helper call
+    BEFORE the early `return` in the idempotent branch of claim_review.
+    """
+
+    async def test_claim_review_idempotent_response_has_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        # First claim — normal path (state mutation)
+        first_response = await client.post(
+            f"/api/admissions/{profile_id}/claim",
+            json={"version": version},
+            headers=manager_headers,
+        )
+        assert first_response.status_code in (200, 201), (
+            f"First claim failed: {first_response.text}"
+        )
+        first_body = first_response.json()
+        _assert_computed_fields_populated(first_body, context="claim-first")
+
+        # Second claim by SAME reviewer — idempotent early-return path.
+        # Use the version returned by the first claim (it was bumped).
+        second_version = first_body.get("version", version + 1)
+        second_response = await client.post(
+            f"/api/admissions/{profile_id}/claim",
+            json={"version": second_version},
+            headers=manager_headers,
+        )
+        assert second_response.status_code in (200, 201), (
+            f"Second (idempotent) claim failed: {second_response.text}"
+        )
+        _assert_computed_fields_populated(
+            second_response.json(),
+            context="claim-idempotent (proves helper ran in early-return path)",
+        )
