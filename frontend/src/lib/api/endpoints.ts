@@ -238,7 +238,7 @@ export const API_ENDPOINTS = {
       DETAIL: (invoiceId: number) => `/api/invoices/${invoiceId}`,
       ISSUE: (invoiceId: number) => `/api/invoices/${invoiceId}/issue`,
       CANCEL: (invoiceId: number) => `/api/invoices/${invoiceId}/cancel`,
-      PENALTY: (invoiceId: number) => `/api/invoices/${invoiceId}/penalty`,
+      PENALTY: (invoiceId: number) => `/api/invoices/${invoiceId}/apply-penalty`,
     },
 
     PAYMENTS: {

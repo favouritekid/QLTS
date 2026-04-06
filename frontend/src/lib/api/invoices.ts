@@ -106,8 +106,8 @@ export async function issueInvoice(invoiceId: number): Promise<Invoice> {
  * @throws {AxiosError} 403 if no permission
  */
 export async function cancelInvoice(invoiceId: number, reason: string): Promise<Invoice> {
-  const response = await api.post<Invoice>(API_ENDPOINTS.FINANCE.INVOICES.CANCEL(invoiceId), {
-    reason,
+  const response = await api.put<Invoice>(API_ENDPOINTS.FINANCE.INVOICES.CANCEL(invoiceId), undefined, {
+    params: { reason },
   })
   return response.data
 }
@@ -116,14 +116,16 @@ export async function cancelInvoice(invoiceId: number, reason: string): Promise<
  * Apply penalty to an overdue invoice
  *
  * @param invoiceId - The invoice ID
- * @param data - Penalty amount and reason
+ * @param data - Penalty amount
  * @returns Updated invoice with penalty applied
  *
  * @throws {AxiosError} 400 if invoice not overdue
  * @throws {AxiosError} 403 if no permission
  */
 export async function applyPenalty(invoiceId: number, data: InvoicePenaltyRequest): Promise<Invoice> {
-  const response = await api.post<Invoice>(API_ENDPOINTS.FINANCE.INVOICES.PENALTY(invoiceId), data)
+  const response = await api.post<Invoice>(API_ENDPOINTS.FINANCE.INVOICES.PENALTY(invoiceId), undefined, {
+    params: { penalty_amount: data.penalty_amount },
+  })
   return response.data
 }
 

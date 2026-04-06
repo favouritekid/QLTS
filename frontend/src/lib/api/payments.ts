@@ -130,7 +130,7 @@ export async function createPayment(data: PaymentCreateRequest): Promise<Payment
  * @throws {AxiosError} 403 if no permission
  */
 export async function verifyPayment(paymentId: number): Promise<Payment> {
-  const response = await api.post<Payment>(API_ENDPOINTS.FINANCE.PAYMENTS.VERIFY(paymentId))
+  const response = await api.put<Payment>(API_ENDPOINTS.FINANCE.PAYMENTS.VERIFY(paymentId))
   return response.data
 }
 
@@ -146,7 +146,9 @@ export async function verifyPayment(paymentId: number): Promise<Payment> {
  * @throws {AxiosError} 403 if no permission
  */
 export async function rejectPayment(paymentId: number, data: PaymentRejectRequest): Promise<Payment> {
-  const response = await api.post<Payment>(API_ENDPOINTS.FINANCE.PAYMENTS.REJECT(paymentId), data)
+  const response = await api.put<Payment>(API_ENDPOINTS.FINANCE.PAYMENTS.REJECT(paymentId), undefined, {
+    params: { reason: data.rejection_reason },
+  })
   return response.data
 }
 

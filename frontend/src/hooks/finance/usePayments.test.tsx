@@ -284,7 +284,7 @@ describe("usePayments Hooks", () => {
 
       it("should handle maker-checker violation (same user cannot verify)", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/payments/:paymentId/verify`, () => {
+          http.put(`${API_BASE_URL}/api/payments/:paymentId/verify`, () => {
             return HttpResponse.json(
               { detail: "Maker cannot verify own payment" },
               { status: 400 }
@@ -308,7 +308,7 @@ describe("usePayments Hooks", () => {
 
       it("should handle error when payment cannot be verified", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/payments/:paymentId/verify`, () => {
+          http.put(`${API_BASE_URL}/api/payments/:paymentId/verify`, () => {
             return HttpResponse.json(
               { detail: "Payment cannot be verified" },
               { status: 400 }
@@ -358,7 +358,7 @@ describe("usePayments Hooks", () => {
 
       it("should handle error when payment cannot be rejected", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/payments/:paymentId/reject`, () => {
+          http.put(`${API_BASE_URL}/api/payments/:paymentId/reject`, () => {
             return HttpResponse.json(
               { detail: "Payment cannot be rejected" },
               { status: 400 }

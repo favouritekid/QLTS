@@ -16,8 +16,6 @@ import type {
   FeeCalculateRequest,
   FeeWaiveRequest,
   PaymentCreateRequest,
-  PaymentRejectRequest,
-  InvoicePenaltyRequest,
 } from "@/types/finance.types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -224,8 +222,10 @@ export const financeHandlers = [
   }),
 
   // Cancel fee
-  http.post(`${API_BASE_URL}/api/fees/:feeId/cancel`, async ({ params }) => {
+  http.post(`${API_BASE_URL}/api/fees/:feeId/cancel`, async ({ params, request }) => {
     const { feeId } = params;
+    const url = new URL(request.url);
+    const reason = url.searchParams.get("reason");
     const fee = mockFees.find((f) => f.id === parseInt(feeId as string));
 
     if (!fee) {
@@ -237,6 +237,10 @@ export const financeHandlers = [
         { detail: "Fee cannot be cancelled" },
         { status: 400 }
       );
+    }
+
+    if (!reason) {
+      return HttpResponse.json({ detail: "Cancellation reason is required" }, { status: 400 });
     }
 
     const updatedFee = {
@@ -252,8 +256,11 @@ export const financeHandlers = [
   }),
 
   // Recalculate fee
-  http.post(`${API_BASE_URL}/api/fees/:feeId/recalculate`, async ({ params }) => {
+  http.post(`${API_BASE_URL}/api/fees/:feeId/recalculate`, async ({ params, request }) => {
     const { feeId } = params;
+    const url = new URL(request.url);
+    const newBaseAmount = url.searchParams.get("new_base_amount");
+    const reason = url.searchParams.get("reason");
     const fee = mockFees.find((f) => f.id === parseInt(feeId as string));
 
     if (!fee) {
@@ -267,8 +274,25 @@ export const financeHandlers = [
       );
     }
 
+    if (!newBaseAmount || !reason) {
+      return HttpResponse.json(
+        { detail: "New base amount and reason are required" },
+        { status: 400 }
+      );
+    }
+
+    const recalculatedBaseAmount = parseFloat(newBaseAmount);
+    const totalDiscount = parseFloat(fee.total_discount);
+    const paidAmount = parseFloat(fee.paid_amount);
+    const waivedAmount = parseFloat(fee.waived_amount);
+    const recalculatedFinalAmount = Math.max(recalculatedBaseAmount - totalDiscount, 0);
+    const recalculatedRemainingAmount = Math.max(recalculatedFinalAmount - paidAmount - waivedAmount, 0);
+
     const updatedFee = {
       ...fee,
+      base_amount: newBaseAmount,
+      final_amount: recalculatedFinalAmount.toString(),
+      remaining_amount: recalculatedRemainingAmount.toString(),
       calculated_at: new Date().toISOString(),
       version: fee.version + 1,
       updated_at: new Date().toISOString(),
@@ -368,7 +392,7 @@ export const financeHandlers = [
   }),
 
   // Issue invoice
-  http.post(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, async ({ params }) => {
+  http.put(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, async ({ params }) => {
     const { invoiceId } = params;
     const invoice = mockInvoices.find(
       (inv) => inv.id === parseInt(invoiceId as string)
@@ -399,9 +423,10 @@ export const financeHandlers = [
   }),
 
   // Cancel invoice
-  http.post(`${API_BASE_URL}/api/invoices/:invoiceId/cancel`, async ({ params, request }) => {
+  http.put(`${API_BASE_URL}/api/invoices/:invoiceId/cancel`, async ({ params, request }) => {
     const { invoiceId } = params;
-    const body = (await request.json()) as { reason: string };
+    const url = new URL(request.url);
+    const reason = url.searchParams.get("reason");
     const invoice = mockInvoices.find(
       (inv) => inv.id === parseInt(invoiceId as string)
     );
@@ -417,12 +442,16 @@ export const financeHandlers = [
       );
     }
 
+    if (!reason) {
+      return HttpResponse.json({ detail: "Cancellation reason is required" }, { status: 400 });
+    }
+
     const updatedInvoice = {
       ...invoice,
       status: "cancelled",
       cancelled_at: new Date().toISOString(),
       cancelled_by_id: 1,
-      cancelled_reason: body.reason,
+      cancelled_reason: reason,
       can_issue: false,
       can_cancel: false,
       can_record_payment: false,
@@ -433,9 +462,10 @@ export const financeHandlers = [
   }),
 
   // Apply penalty
-  http.post(`${API_BASE_URL}/api/invoices/:invoiceId/penalty`, async ({ params, request }) => {
+  http.post(`${API_BASE_URL}/api/invoices/:invoiceId/apply-penalty`, async ({ params, request }) => {
     const { invoiceId } = params;
-    const body = (await request.json()) as InvoicePenaltyRequest;
+    const url = new URL(request.url);
+    const penaltyAmount = url.searchParams.get("penalty_amount");
     const invoice = mockInvoices.find(
       (inv) => inv.id === parseInt(invoiceId as string)
     );
@@ -451,12 +481,16 @@ export const financeHandlers = [
       );
     }
 
+    if (!penaltyAmount) {
+      return HttpResponse.json({ detail: "Penalty amount is required" }, { status: 400 });
+    }
+
     const updatedInvoice = {
       ...invoice,
-      penalty_amount: body.penalty_amount,
+      penalty_amount: penaltyAmount,
       total_due: (
         parseFloat(invoice.amount) +
-        parseFloat(body.penalty_amount) -
+        parseFloat(penaltyAmount) -
         parseFloat(invoice.paid_amount)
       ).toString(),
     };
@@ -551,7 +585,7 @@ export const financeHandlers = [
   }),
 
   // Verify payment
-  http.post(`${API_BASE_URL}/api/payments/:paymentId/verify`, async ({ params }) => {
+  http.put(`${API_BASE_URL}/api/payments/:paymentId/verify`, async ({ params }) => {
     const { paymentId } = params;
     const payment = mockPayments.find(
       (p) => p.id === parseInt(paymentId as string)
@@ -582,9 +616,10 @@ export const financeHandlers = [
   }),
 
   // Reject payment
-  http.post(`${API_BASE_URL}/api/payments/:paymentId/reject`, async ({ params, request }) => {
+  http.put(`${API_BASE_URL}/api/payments/:paymentId/reject`, async ({ params, request }) => {
     const { paymentId } = params;
-    const body = (await request.json()) as PaymentRejectRequest;
+    const url = new URL(request.url);
+    const reason = url.searchParams.get("reason");
     const payment = mockPayments.find(
       (p) => p.id === parseInt(paymentId as string)
     );
@@ -600,12 +635,16 @@ export const financeHandlers = [
       );
     }
 
+    if (!reason) {
+      return HttpResponse.json({ detail: "Rejection reason is required" }, { status: 400 });
+    }
+
     const updatedPayment = {
       ...payment,
       status: "rejected",
       rejected_at: new Date().toISOString(),
       rejected_by_id: 2,
-      rejection_reason: body.rejection_reason,
+      rejection_reason: reason,
       can_verify: false,
       can_reject: false,
     };

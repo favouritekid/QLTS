@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseVNDDisplayAmount } from "./finance";
+import { feeRecalculateRequestSchema, parseVNDDisplayAmount } from "./finance";
 
 describe("parseVNDDisplayAmount", () => {
   it("parses vi-VN formatted currency strings correctly", () => {
@@ -13,5 +13,28 @@ describe("parseVNDDisplayAmount", () => {
   it("returns 0 for empty or non-numeric values", () => {
     expect(parseVNDDisplayAmount("")).toBe(0);
     expect(parseVNDDisplayAmount("VND")).toBe(0);
+  });
+});
+
+describe("feeRecalculateRequestSchema", () => {
+  it("accepts a valid recalculate payload", () => {
+    expect(
+      feeRecalculateRequestSchema.parse({
+        new_base_amount: "15000000",
+        reason: "Cap nhat lai muc phi goc theo quyet dinh moi",
+      })
+    ).toEqual({
+      new_base_amount: "15000000",
+      reason: "Cap nhat lai muc phi goc theo quyet dinh moi",
+    });
+  });
+
+  it("rejects payloads without amount or reason", () => {
+    expect(() =>
+      feeRecalculateRequestSchema.parse({
+        new_base_amount: "",
+        reason: "short",
+      })
+    ).toThrow();
   });
 });

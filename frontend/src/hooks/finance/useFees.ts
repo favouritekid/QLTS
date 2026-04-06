@@ -14,6 +14,7 @@ import type {
   FeeDetail,
   FeeFilters,
   FeeCalculateRequest,
+  FeeRecalculateRequest,
   FeeWaiveRequest,
   ProfileFinanceSummary,
 } from "@/types/finance.types"
@@ -308,14 +309,18 @@ export function useCancelFee() {
  * ```tsx
  * const { mutate: recalculateFee, isPending } = useRecalculateFee()
  *
- * recalculateFee(123)
+ * recalculateFee({ feeId: 123, data: { new_base_amount: "15000000", reason: "Cập nhật lại mức phí gốc" } })
  * ```
  */
 export function useRecalculateFee() {
   const queryClient = useQueryClient()
 
-  return useMutation<FeeDetail, AxiosError<ApiErrorResponse>, number>({
-    mutationFn: (feeId) => feesApi.recalculateFee(feeId),
+  return useMutation<
+    Fee,
+    AxiosError<ApiErrorResponse>,
+    { feeId: number; data: FeeRecalculateRequest }
+  >({
+    mutationFn: ({ feeId, data }) => feesApi.recalculateFee(feeId, data),
     onSuccess: (fee) => {
       toast.success("Đã tính lại phí thành công")
       invalidateFeeQueries(queryClient, fee.id, {

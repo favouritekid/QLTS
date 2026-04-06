@@ -373,6 +373,11 @@ export interface FeeWaiveRequest {
   reason: string
 }
 
+export interface FeeRecalculateRequest {
+  new_base_amount: string // Decimal as string
+  reason: string
+}
+
 export interface PaymentCreateRequest {
   invoice_id: number
   method_id: number
@@ -405,7 +410,6 @@ export interface PaymentRejectRequest {
 
 export interface InvoicePenaltyRequest {
   penalty_amount: string
-  reason?: string
 }
 
 export interface OverpaymentApplyRequest {
@@ -479,7 +483,6 @@ export interface PaymentRejectFormValues {
 
 export interface InvoicePenaltyFormValues {
   penalty_amount: string
-  reason: string
 }
 
 export interface OnlinePaymentFormValues {
