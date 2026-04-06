@@ -207,6 +207,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # FINANCE MODULE - Full accounting operations
         # =====================================================================
 
+        # DASHBOARD - Finance overview
+        {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},
+
         # FEES - Read + Calculate + Waive + Recalculate (not Cancel - admin only)
         {"subject": "{role}", "object": "/api/fees", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/{id}", "action": "GET"},
@@ -301,6 +304,7 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/documents", "action": "GET"},  # Resolved docs
         {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/validate-activation", "action": "GET"},  # Validate
         # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
+        {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},  # Finance overview
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
         {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},  # Recalculate fee
         {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},  # Cancel invoice

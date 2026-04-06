@@ -145,6 +145,10 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                 path=request.url.path,
                 method=request.method,
                 client_ip=request.client.host if request.client else None,
+                cookies_present=list(request.cookies.keys()),
+                has_cookie_header="cookie" in {k.lower() for k in request.headers.keys()},
+                has_access_token="access_token" in request.cookies,
+                has_refresh_token="refresh_token" in request.cookies,
             )
             return JSONResponse(
                 status_code=403,
@@ -296,7 +300,7 @@ def set_csrf_cookie(response: Response, token: Optional[str] = None) -> str:
         value=csrf_token,
         httponly=False,  # Must be readable by JavaScript
         secure=settings.APP_ENV == "production",
-        samesite="strict",  # Strict for CSRF token cookie
+        samesite="strict" if settings.APP_ENV == "production" else "lax",  # Lax in dev for cross-origin (port 3000→8000)
         max_age=3600 * 24,  # 24 hours
         path="/",
     )
