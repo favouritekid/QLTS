@@ -435,6 +435,152 @@ class TestUpdateProfileCitizenId:
         assert update_response.status_code == 409, f"Expected 409 Conflict: {update_response.text}"
 
 
+class TestUpdateProfileLazyLoadRegression:
+    """Regression tests for MissingGreenlet / lazy-load bugs in update_profile.
+
+    Background: Before the fix, `_compute_frontend_fields()` (sync helper called at the
+    end of update_profile) accessed `profile.lead.assigned_officer.full_name`, but
+    the `update_profile` query only eager-loaded `lead` — not the nested
+    `lead.assigned_officer`. This triggered a lazy-load from a sync function inside
+    an async SQLAlchemy session, causing `sqlalchemy.exc.MissingGreenlet` and a 500
+    response with no CORS headers (which the browser reported as a misleading
+    "CORS policy blocked" error).
+
+    The fix does two things:
+    1. `update_profile` now eager-loads `lead.assigned_officer` and `assigned_reviewer`
+    2. `_compute_frontend_fields` uses `profile.__dict__.get(...)` instead of
+       `hasattr/getattr` to avoid triggering lazy-loads entirely
+    """
+
+    async def test_update_draft_profile_with_assigned_officer_does_not_crash(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        PUT /api/admissions/{id} must NOT raise MissingGreenlet when:
+        - The profile's lead has an assigned_officer_id set
+        - _compute_frontend_fields is called after the update
+
+        Before fix: returned 500 with SQLAlchemy MissingGreenlet traceback
+        After fix: returns 200 with updated profile including assigned_officer_name
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        # Create lead with assigned_officer_id pointing to officer_user_in_db
+        # This is the key condition that triggered the lazy-load bug
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2025,
+        )
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        # Create profile in draft state
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        profile_id = create_response.json()["id"]
+
+        # Update the draft profile — this call must NOT raise MissingGreenlet.
+        # Changing gender is sufficient; the bug triggers regardless of which field changes.
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nam", "version": 1},
+            headers=headers,
+        )
+
+        # Primary assertion: no 500 (no MissingGreenlet)
+        assert update_response.status_code == 200, (
+            f"Expected 200 but got {update_response.status_code}. "
+            f"Response: {update_response.text}. "
+            f"If this is a 500 with MissingGreenlet, the eager-load fix in "
+            f"update_profile() or the __dict__.get() fix in _compute_frontend_fields() "
+            f"regressed."
+        )
+
+        body = update_response.json()
+
+        # Secondary assertion: update actually applied
+        assert body.get("gender") == "Nam", f"Gender not updated: {body}"
+
+        # Tertiary assertion: _compute_frontend_fields ran and populated denormalized
+        # display names (proving the sync helper didn't crash on lazy-load).
+        # assigned_officer_name is set from profile.lead.assigned_officer.full_name
+        # via profile.__dict__.get("lead").__dict__.get("assigned_officer").
+        # Note: officer_user_in_db fixture may not set full_name, so we only assert
+        # the KEY exists (schema contract), not a specific value.
+        assert "assigned_officer_name" in body, (
+            "assigned_officer_name missing from response — _compute_frontend_fields "
+            "may not have run correctly"
+        )
+
+    async def test_update_draft_profile_without_assigned_officer_does_not_crash(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Edge case: lead has NO assigned_officer (officer_id=None).
+        The __dict__.get() fallback must return None without raising.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        # Note: setup_admission_api_data requires officer for consultation, so we still
+        # pass officer_id, but we then manually null out lead.assigned_officer_id below.
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2025,
+        )
+
+        # Null out the assigned_officer_id directly in DB
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                lead = await session.get(models.Lead, data["lead_id"])
+                lead.assigned_officer_id = None
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        profile_id = create_response.json()["id"]
+
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nữ", "version": 1},
+            headers=headers,
+        )
+
+        assert update_response.status_code == 200, (
+            f"Expected 200, got {update_response.status_code}: {update_response.text}"
+        )
+        body = update_response.json()
+        assert body.get("assigned_officer_name") is None, (
+            f"Expected None when lead has no assigned_officer, got {body.get('assigned_officer_name')!r}"
+        )
+
+
 # ==============================================================================
 # TEST: SUBMIT AND EVALUATE
 # ==============================================================================

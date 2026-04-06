@@ -456,18 +456,15 @@ def _compute_frontend_fields(
     profile.available_actions = [action for action, allowed in permissions.items() if allowed]
 
     # Denormalized display names (avoid N+1 in frontend)
-    profile.assigned_reviewer_name = (
-        profile.assigned_reviewer.full_name
-        if hasattr(profile, 'assigned_reviewer') and profile.assigned_reviewer
-        else None
-    )
-    profile.assigned_officer_name = (
-        profile.lead.assigned_officer.full_name
-        if (profile.lead
-            and hasattr(profile.lead, 'assigned_officer')
-            and profile.lead.assigned_officer)
-        else None
-    )
+    # ⚠️ Use __dict__.get() instead of hasattr/getattr to avoid triggering
+    # SQLAlchemy lazy-load from a sync function (raises MissingGreenlet in async session).
+    # Callers MUST eager-load these relationships via selectinload() before reaching here.
+    _reviewer = profile.__dict__.get("assigned_reviewer")
+    profile.assigned_reviewer_name = _reviewer.full_name if _reviewer else None
+
+    _lead = profile.__dict__.get("lead")
+    _officer = _lead.__dict__.get("assigned_officer") if _lead else None
+    profile.assigned_officer_name = _officer.full_name if _officer else None
 
     # =========================================================================
     # 3. ELIGIBILITY STATUS & VALIDATION ERRORS
@@ -1803,7 +1800,13 @@ async def update_profile(
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(selectinload(models.AdmissionProfile.lead)) # Eager load lead for IDOR check
+        .options(
+            # Eager load lead for IDOR check + nested assigned_officer for _compute_frontend_fields
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            # Eager load assigned_reviewer for _compute_frontend_fields
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
         .with_for_update() # Lock the row
     )
     result = await db.execute(stmt)
