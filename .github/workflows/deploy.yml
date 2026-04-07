@@ -13,6 +13,19 @@ jobs:
     name: PR Gate — Contract Tests
     runs-on: ubuntu-latest
 
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: test-secret-key-for-ci-only
+      JWT_SECRET_KEY: test-jwt-secret-for-ci-only
+      # Mail settings — placeholders so app/config.py Settings() can instantiate.
+      # Tests must not actually send mail; smtp.example.com is unroutable on purpose.
+      MAIL_USERNAME: ci-test@example.com
+      MAIL_PASSWORD: ci-test-placeholder
+      MAIL_FROM: ci-test@example.com
+      MAIL_SERVER: smtp.example.com
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -57,12 +70,6 @@ jobs:
 
       - name: Backend — Lead assignment contract
         working-directory: Backend_FastAPI
-        env:
-          APP_ENV: test
-          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
-          REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: test-secret-key-for-ci-only
-          JWT_SECRET_KEY: test-jwt-secret-for-ci-only
         run: >-
           python -m pytest
           tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
@@ -70,12 +77,6 @@ jobs:
 
       - name: Backend — Admission workflow contract
         working-directory: Backend_FastAPI
-        env:
-          APP_ENV: test
-          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
-          REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: test-secret-key-for-ci-only
-          JWT_SECRET_KEY: test-jwt-secret-for-ci-only
         run: >-
           python -m pytest
           tests/api/test_admission_workflow_api.py
