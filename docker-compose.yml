@@ -91,7 +91,7 @@ services:
       context: ./Backend_FastAPI
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.celery_app worker -Q default,celery --loglevel=info --concurrency=2
     env_file:
       - .env.production
     environment:

@@ -22,7 +22,7 @@ services:
       - "8000:8000"
 
   celery-worker:
-    command: celery -A app.celery_app worker --loglevel=debug --concurrency=1
+    command: celery -A app.celery_app worker -Q default,celery --loglevel=debug --concurrency=1
     env_file:
       - ./Backend_FastAPI/.env
     environment:
