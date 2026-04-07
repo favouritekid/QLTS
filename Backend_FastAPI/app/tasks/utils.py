@@ -5,7 +5,10 @@ Provides shared infrastructure like database session management,
 result validation, and standardized error handling.
 """
 import asyncio
+import atexit
 import logging
+import os
+import threading
 from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
@@ -20,15 +23,103 @@ log = logging.getLogger(__name__)
 
 
 # ============================================================================
+# Celery task event loop management
+# ============================================================================
+
+_task_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_task_event_loop_pid: Optional[int] = None
+
+
+def _close_task_event_loop() -> None:
+    """Close the cached Celery task loop when the worker process exits."""
+    global _task_event_loop, _task_event_loop_pid
+
+    loop = _task_event_loop
+    _task_event_loop = None
+    _task_event_loop_pid = None
+
+    if loop is None or loop.is_closed():
+        return
+
+    try:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+    except Exception:
+        log.debug("Failed to shutdown cached task async generators", exc_info=True)
+
+    loop.close()
+
+
+def _get_task_event_loop() -> asyncio.AbstractEventLoop:
+    """
+    Return a stable event loop for the current Celery worker process.
+
+    Celery task code uses long-lived async resources such as Redis, Socket.IO,
+    and occasionally app-global SQLAlchemy session factories. Re-creating and
+    closing the event loop for every task leaves those resources bound to a
+    dead loop, which later surfaces as ``RuntimeError: Event loop is closed``.
+
+    Keeping one loop per worker process avoids that churn while still staying
+    isolated across Celery's prefork children.
+    """
+    global _task_event_loop, _task_event_loop_pid
+
+    current_pid = os.getpid()
+    if _task_event_loop_pid != current_pid:
+        _close_task_event_loop()
+
+    if _task_event_loop is None or _task_event_loop.is_closed():
+        _task_event_loop = asyncio.new_event_loop()
+        _task_event_loop_pid = current_pid
+        asyncio.set_event_loop(_task_event_loop)
+
+    return _task_event_loop
+
+
+def _run_async_task_in_fresh_thread(async_func: Callable) -> Dict:
+    """
+    Fallback for environments that already have a running event loop.
+
+    Celery tasks are synchronous entrypoints, but some unit tests may invoke
+    them from ``pytest.mark.asyncio`` contexts. In that case, we spin up a
+    temporary thread with its own loop instead of nesting loops in-place.
+    """
+    result_holder: Dict[str, Any] = {}
+    error_holder: Dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            result_holder["result"] = loop.run_until_complete(async_func())
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except BaseException as exc:  # pragma: no cover - re-raised below
+            error_holder["error"] = exc
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "error" in error_holder:
+        raise error_holder["error"]
+
+    return result_holder["result"]
+
+
+atexit.register(_close_task_event_loop)
+
+
+# ============================================================================
 # Database Session Management
 # ============================================================================
 
 def _create_task_async_engine():
     """
-    Create a new async engine for use within a task's event loop.
+    Create a new async engine for use within the current task event loop.
 
-    This must be called INSIDE asyncio.run() context to avoid the
-    "Future attached to a different loop" error with asyncpg.
+    This must be called while the per-worker task loop is running to avoid
+    binding asyncpg connections to the wrong event loop.
     """
     return create_async_engine(
         settings.DATABASE_URL,
@@ -179,7 +270,13 @@ def run_async_task(
         Exception: All other exceptions are logged and re-raised
     """
     try:
-        result = asyncio.run(async_func())
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = _get_task_event_loop()
+            result = loop.run_until_complete(async_func())
+        else:
+            result = _run_async_task_in_fresh_thread(async_func)
         
         # Validate result if keys provided
         if validate_keys:
