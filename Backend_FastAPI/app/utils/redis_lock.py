@@ -58,18 +58,16 @@ async def close_redis_client():
 
 def get_redis_client() -> aioredis.Redis:
     """
-    Get Redis client instance.
+    Get Redis client instance. Lazy-initializes on first call if not yet
+    created.
 
-    Returns:
-        Redis client
-
-    Raises:
-        RuntimeError: If Redis client not initialized
+    Safe to call from both contexts:
+    - FastAPI: pre-initialized at lifespan startup (main.py:449); this is a no-op.
+    - Celery worker: main.py is never imported, so first acquire_redis_lock
+      call here triggers init via init_redis_client() (idempotent).
     """
     if _redis_client is None:
-        raise RuntimeError(
-            "Redis client not initialized. Call init_redis_client() in main.py startup."
-        )
+        init_redis_client()
     return _redis_client
 
 
