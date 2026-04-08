@@ -403,6 +403,8 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
         }}
         feeId={feeId}
         feeType={fee.fee_type_label}
+        currentBaseAmount={fee.base_amount}
+        currentBaseAmountFormatted={fee.base_amount_formatted}
       />
     </div>
   )

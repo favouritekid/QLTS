@@ -280,34 +280,59 @@ api.interceptors.response.use(
     }
 
     // ========================================
-    // CSRF ERROR HANDLING
+    // CSRF ERROR HANDLING — Recovery via refresh
     // ========================================
-    // Handle CSRF token errors (403 with CSRF error codes)
-    // This can happen if:
-    // 1. User's session expired and cookie was cleared
-    // 2. Cookie was deleted manually
-    // 3. Cross-site request attempt (attack scenario)
+    // When csrf_token cookie expires (24h) but refresh_token (30d) is still valid,
+    // CSRF middleware blocks with 403 BEFORE auth can return 401.
+    // Fix: attempt /auth/refresh (CSRF-exempt) to get a new csrf_token cookie,
+    // then retry the original request once.
     if (error.response?.status === 403) {
       const errorData = error.response?.data as { error_code?: string; detail?: string } | undefined;
       const errorCode = errorData?.error_code;
 
-      if (isCSRFError(errorCode)) {
-        console.warn("[API Client] 🛡️ CSRF error detected:", errorCode);
+      if (isCSRFError(errorCode) && originalRequest && !originalRequest._retry) {
+        console.warn("[API Client] 🛡️ CSRF error detected:", errorCode, "— attempting recovery via refresh");
 
-        // For CSRF errors, the user likely needs to re-authenticate
-        // because the csrf_token cookie is tied to their session
+        // Skip recovery on public pages or during logout
         if (typeof window !== "undefined") {
           const currentPath = window.location.pathname;
           const publicPages = ["/login", "/register", "/forgot-password", "/reset-password"];
-
-          if (!publicPages.includes(currentPath)) {
-            console.log("[API Client] 🚪 CSRF token invalid - redirecting to login...");
-            window.location.href = "/login?reason=session_expired";
+          if (publicPages.includes(currentPath) || isApiLoggedOut()) {
+            return Promise.reject(error);
           }
         }
 
-        return Promise.reject(error);
+        // Try refresh — /auth/refresh is CSRF-exempt and sets a new csrf_token cookie
+        originalRequest._retry = true;
+        try {
+          await axios.post(
+            `${API_BASE_URL}/api/auth/refresh`,
+            {},
+            { withCredentials: true }
+          );
+
+          // Wait for browser to persist the new csrf_token cookie
+          await new Promise((resolve) => setTimeout(resolve, 100));
+
+          if (process.env.NODE_ENV === "development") {
+            console.log("[API Client] ✅ CSRF recovery: refresh succeeded, retrying original request");
+          }
+
+          // Retry original request — interceptor will re-read fresh csrf_token from document.cookie
+          return api(originalRequest);
+        } catch (refreshError) {
+          console.warn("[API Client] ❌ CSRF recovery failed (refresh rejected) — redirecting to login");
+
+          if (typeof window !== "undefined") {
+            setApiLoggedOut(true);
+            window.location.href = "/login?reason=session_expired";
+          }
+
+          return Promise.reject(refreshError);
+        }
       }
+
+      // Non-CSRF 403 errors (e.g., PASSWORD_CHANGE_REQUIRED already handled above)
     }
 
     // For non-401 errors, just reject

@@ -36,6 +36,7 @@ import { Badge } from "@/components/ui/badge"
 import { Wifi, Loader2, CreditCard, ExternalLink, AlertTriangle } from "lucide-react"
 import { useCreatePaymentIntent } from "@/hooks/finance/usePayments"
 import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
+import { parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { toast } from "sonner"
 
 // =============================================================================
@@ -90,8 +91,7 @@ export function OnlinePaymentDialog({
 
   // Parse max amount for default value
   const maxAmountNumber = React.useMemo(() => {
-    const parsed = parseFloat(maxAmount.replace(/[^0-9.-]/g, ""))
-    return isNaN(parsed) ? 0 : parsed
+    return parseVNDDisplayAmount(maxAmount)
   }, [maxAmount])
 
   const form = useForm<OnlinePaymentFormValues>({

@@ -12,6 +12,7 @@ import type {
   FeeDetail,
   FeeFilters,
   FeeCalculateRequest,
+  FeeRecalculateRequest,
   FeeWaiveRequest,
   ProfileFinanceSummary,
 } from "@/types/finance.types"
@@ -148,7 +149,9 @@ export async function waiveFee(feeId: number, data: FeeWaiveRequest): Promise<Fe
  * @throws {AxiosError} 403 if no permission
  */
 export async function cancelFee(feeId: number, reason: string): Promise<Fee> {
-  const response = await api.post<Fee>(API_ENDPOINTS.FINANCE.FEES.CANCEL(feeId), { reason })
+  const response = await api.post<Fee>(API_ENDPOINTS.FINANCE.FEES.CANCEL(feeId), undefined, {
+    params: { reason },
+  })
   return response.data
 }
 
@@ -157,13 +160,19 @@ export async function cancelFee(feeId: number, reason: string): Promise<Fee> {
  * Use with caution - may change invoice amounts
  *
  * @param feeId - The fee ID
+ * @param data - New base amount and recalculation reason
  * @returns Updated fee with recalculated amounts
  *
  * @throws {AxiosError} 400 if fee has verified payments
  * @throws {AxiosError} 403 if no permission
  */
-export async function recalculateFee(feeId: number): Promise<FeeDetail> {
-  const response = await api.post<FeeDetail>(API_ENDPOINTS.FINANCE.FEES.RECALCULATE(feeId))
+export async function recalculateFee(feeId: number, data: FeeRecalculateRequest): Promise<Fee> {
+  const response = await api.post<Fee>(API_ENDPOINTS.FINANCE.FEES.RECALCULATE(feeId), undefined, {
+    params: {
+      new_base_amount: data.new_base_amount,
+      reason: data.reason,
+    },
+  })
   return response.data
 }
 

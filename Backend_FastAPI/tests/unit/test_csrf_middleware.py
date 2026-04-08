@@ -102,7 +102,10 @@ class TestSetCSRFCookie:
     """Test CSRF cookie setting."""
 
     def test_sets_cookie_with_generated_token(self):
-        """Should set cookie with auto-generated token."""
+        """Should set cookie with auto-generated token. samesite is env-conditional:
+        'lax' in non-production (allows dev cross-origin 3000→8000), 'strict' in
+        production. Test env (APP_ENV='test') therefore expects 'lax'.
+        """
         response = MagicMock()
 
         token = set_csrf_cookie(response)
@@ -112,6 +115,20 @@ class TestSetCSRFCookie:
         assert call_kwargs["key"] == CSRF_COOKIE_NAME
         assert call_kwargs["value"] == token
         assert call_kwargs["httponly"] is False  # Must be readable by JS
+        assert call_kwargs["samesite"] == "lax"
+
+    def test_sets_cookie_samesite_strict_in_production(self):
+        """Production env must use samesite='strict' for stronger CSRF protection.
+        Covers the production branch of the env-conditional logic in
+        set_csrf_cookie() (csrf.py:303).
+        """
+        response = MagicMock()
+
+        with patch("app.middleware.csrf.settings") as mock_settings:
+            mock_settings.APP_ENV = "production"
+            set_csrf_cookie(response)
+
+        call_kwargs = response.set_cookie.call_args[1]
         assert call_kwargs["samesite"] == "strict"
 
     def test_sets_cookie_with_provided_token(self):

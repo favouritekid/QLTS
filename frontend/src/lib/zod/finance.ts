@@ -532,6 +532,19 @@ export const feeWaiveRequestSchema = z.object({
 
 export type FeeWaiveRequest = z.infer<typeof feeWaiveRequestSchema>
 
+export const feeRecalculateRequestSchema = z.object({
+  new_base_amount: z
+    .string()
+    .min(1, "Vui lòng nhập mức phí gốc mới")
+    .regex(/^\d+(\.\d{1,2})?$/, "Mức phí gốc không hợp lệ"),
+  reason: z
+    .string()
+    .min(10, "Lý do tính lại phải có ít nhất 10 ký tự")
+    .max(500, "Lý do không được quá 500 ký tự"),
+})
+
+export type FeeRecalculateRequest = z.infer<typeof feeRecalculateRequestSchema>
+
 export const paymentCreateRequestSchema = z.object({
   invoice_id: z.number().int().positive(),
   method_id: z.number().int().positive("Vui lòng chọn phương thức thanh toán"),
@@ -561,8 +574,8 @@ export const paymentIntentCreateRequestSchema = z.object({
 
 export type PaymentIntentCreateRequest = z.infer<typeof paymentIntentCreateRequestSchema>
 
-// Note: Backend uses PaymentVerifyRequest with approve: bool + rejection_reason
-// Frontend simplifies to separate verify (no body) and reject (with reason)
+// Backend exposes separate verify/reject actions.
+// Frontend maps the reject form payload to the backend query param in the API client.
 export const paymentRejectRequestSchema = z.object({
   rejection_reason: z
     .string()
@@ -586,7 +599,6 @@ export const invoicePenaltyRequestSchema = z.object({
     .string()
     .min(1, "Vui lòng nhập số tiền phạt")
     .regex(/^\d+(\.\d{1,2})?$/, "Số tiền không hợp lệ"),
-  reason: z.string().max(500).optional(),
 })
 
 export type InvoicePenaltyRequest = z.infer<typeof invoicePenaltyRequestSchema>
@@ -695,7 +707,6 @@ export type PaymentRejectFormValues = z.infer<typeof paymentRejectFormSchema>
 
 export const invoicePenaltyFormSchema = z.object({
   penalty_amount: z.string().min(1, "Vui lòng nhập số tiền phạt"),
-  reason: z.string().default(""),
 })
 
 export type InvoicePenaltyFormValues = z.infer<typeof invoicePenaltyFormSchema>
@@ -828,6 +839,14 @@ export function isValidAmount(amount: string): boolean {
  */
 export function parseAmount(amount: string): number {
   return parseFloat(amount) || 0
+}
+
+/**
+ * Parse a formatted VND string like "9.000.000 VND" into a whole-number amount.
+ */
+export function parseVNDDisplayAmount(amount: string): number {
+  const digitsOnly = amount.replace(/[^\d-]/g, "")
+  return digitsOnly ? parseInt(digitsOnly, 10) : 0
 }
 
 /**

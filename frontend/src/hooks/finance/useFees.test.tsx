@@ -306,15 +306,21 @@ describe("useFees Hooks", () => {
 
     describe("useRecalculateFee", () => {
       it("should recalculate fee successfully", async () => {
+        const recalculateData = {
+          new_base_amount: "15000000",
+          reason: "Recalculate after policy update",
+        };
+
         const { result } = renderHook(() => useRecalculateFee(), {
           wrapper: createWrapper(),
         });
 
-        result.current.mutate(1);
+        result.current.mutate({ feeId: 1, data: recalculateData });
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
         expect(result.current.data).toBeDefined();
+        expect(result.current.data?.base_amount).toBe(recalculateData.new_base_amount);
         expect(result.current.data?.version).toBeGreaterThan(0);
       });
 
@@ -332,7 +338,13 @@ describe("useFees Hooks", () => {
           wrapper: createWrapper(),
         });
 
-        result.current.mutate(2);
+        result.current.mutate({
+          feeId: 2,
+          data: {
+            new_base_amount: "20000000",
+            reason: "Cannot recalculate",
+          },
+        });
 
         await waitFor(() => expect(result.current.isError).toBe(true));
 

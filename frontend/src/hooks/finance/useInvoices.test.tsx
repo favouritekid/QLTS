@@ -160,7 +160,7 @@ describe("useInvoices Hooks", () => {
       it("should issue invoice successfully", async () => {
         // Override with a draft invoice that can be issued
         server.use(
-          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
+          http.put(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
             return HttpResponse.json({
               id: 1,
               fee_id: 1,
@@ -198,7 +198,7 @@ describe("useInvoices Hooks", () => {
 
       it("should handle issue error when invoice cannot be issued", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
+          http.put(`${API_BASE_URL}/api/invoices/:invoiceId/issue`, () => {
             return HttpResponse.json(
               { detail: "Invoice cannot be issued" },
               { status: 400 }
@@ -239,7 +239,7 @@ describe("useInvoices Hooks", () => {
 
       it("should handle cancel error when invoice cannot be cancelled", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/cancel`, () => {
+          http.put(`${API_BASE_URL}/api/invoices/:invoiceId/cancel`, () => {
             return HttpResponse.json(
               { detail: "Invoice cannot be cancelled" },
               { status: 400 }
@@ -267,8 +267,14 @@ describe("useInvoices Hooks", () => {
       it("should apply penalty successfully", async () => {
         // Override with an overdue invoice that can have penalty
         server.use(
-          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/penalty`, async ({ request }) => {
-            const body = (await request.json()) as InvoicePenaltyRequest;
+          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/apply-penalty`, ({ request }) => {
+            const url = new URL(request.url);
+            const penaltyAmount = url.searchParams.get("penalty_amount");
+
+            if (!penaltyAmount) {
+              return HttpResponse.json({ detail: "Penalty amount is required" }, { status: 400 });
+            }
+
             return HttpResponse.json({
               id: 1,
               fee_id: 1,
@@ -277,8 +283,8 @@ describe("useInvoices Hooks", () => {
               amount: "13500000",
               paid_amount: "0",
               remaining_amount: "13500000",
-              penalty_amount: body.penalty_amount,
-              total_due: (13500000 + parseFloat(body.penalty_amount)).toString(),
+              penalty_amount: penaltyAmount,
+              total_due: (13500000 + parseFloat(penaltyAmount)).toString(),
               due_date: "2025-03-01",
               status: "overdue",
               can_issue: false,
@@ -291,7 +297,6 @@ describe("useInvoices Hooks", () => {
 
         const penaltyData: InvoicePenaltyRequest = {
           penalty_amount: "500000",
-          reason: "30 days overdue",
         };
 
         const { result } = renderHook(() => useApplyPenalty(), {
@@ -312,7 +317,7 @@ describe("useInvoices Hooks", () => {
 
       it("should handle penalty error when cannot apply penalty", async () => {
         server.use(
-          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/penalty`, () => {
+          http.post(`${API_BASE_URL}/api/invoices/:invoiceId/apply-penalty`, () => {
             return HttpResponse.json(
               { detail: "Cannot apply penalty to this invoice" },
               { status: 400 }

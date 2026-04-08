@@ -245,7 +245,7 @@ export function useCancelInvoice() {
  * applyPenalty({
  *   invoiceId: 123,
  *   feeId: 456,
- *   data: { penalty_amount: '500000', reason: 'Quá hạn 30 ngày' }
+ *   data: { penalty_amount: '500000' }
  * })
  * ```
  */

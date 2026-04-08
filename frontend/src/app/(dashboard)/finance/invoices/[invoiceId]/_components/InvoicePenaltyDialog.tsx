@@ -22,32 +22,19 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form"
-import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import { useApplyPenalty } from "@/hooks/finance/useInvoices"
 import { toast } from "sonner"
 
-// =============================================================================
-// FORM SCHEMA
-// =============================================================================
-
 const penaltyFormSchema = z.object({
   penalty_amount: z
     .number({ message: "Vui lòng nhập số tiền phạt" })
     .positive("Số tiền phải lớn hơn 0"),
-  reason: z
-    .string()
-    .max(500, "Lý do không được quá 500 ký tự")
-    .optional(),
 })
 
 type PenaltyFormValues = z.infer<typeof penaltyFormSchema>
-
-// =============================================================================
-// TYPES
-// =============================================================================
 
 interface InvoicePenaltyDialogProps {
   open: boolean
@@ -58,25 +45,6 @@ interface InvoicePenaltyDialogProps {
   daysOverdue?: number
 }
 
-// =============================================================================
-// COMPONENT
-// =============================================================================
-
-/**
- * InvoicePenaltyDialog - Dialog to apply late payment penalty to an invoice
- *
- * @example
- * ```tsx
- * <InvoicePenaltyDialog
- *   open={isOpen}
- *   onOpenChange={setIsOpen}
- *   invoiceId={123}
- *   invoiceNumber="INV-2024-001"
- *   feeId={456}
- *   daysOverdue={15}
- * />
- * ```
- */
 export function InvoicePenaltyDialog({
   open,
   onOpenChange,
@@ -91,7 +59,6 @@ export function InvoicePenaltyDialog({
     resolver: zodResolver(penaltyFormSchema),
     defaultValues: {
       penalty_amount: undefined,
-      reason: "",
     },
   })
 
@@ -102,18 +69,16 @@ export function InvoicePenaltyDialog({
         feeId,
         data: {
           penalty_amount: values.penalty_amount.toString(),
-          reason: values.reason || undefined,
         },
       })
       toast.success("Đã áp dụng phí trễ hạn thành công")
       form.reset()
       onOpenChange(false)
-    } catch (error) {
+    } catch {
       // Error handled by mutation hook
     }
   }
 
-  // Reset form when dialog closes
   React.useEffect(() => {
     if (!open) {
       form.reset()
@@ -131,9 +96,7 @@ export function InvoicePenaltyDialog({
           <DialogDescription>
             Áp dụng phí trễ hạn cho hóa đơn <strong className="font-mono">{invoiceNumber}</strong>
             {daysOverdue !== undefined && daysOverdue > 0 && (
-              <span className="block mt-1 text-destructive">
-                Quá hạn {daysOverdue} ngày
-              </span>
+              <span className="mt-1 block text-destructive">Quá hạn {daysOverdue} ngày</span>
             )}
           </DialogDescription>
         </DialogHeader>
@@ -156,28 +119,7 @@ export function InvoicePenaltyDialog({
                       className="h-11"
                     />
                   </FormControl>
-                  <FormDescription>
-                    Số tiền phạt sẽ được cộng vào tổng tiền hóa đơn
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="reason"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Lý do (tùy chọn)</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      {...field}
-                      placeholder="Ví dụ: Quá hạn 15 ngày theo quy định..."
-                      rows={2}
-                      className="resize-none"
-                    />
-                  </FormControl>
+                  <FormDescription>Số tiền phạt sẽ được cộng vào tổng tiền hóa đơn</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -195,11 +137,9 @@ export function InvoicePenaltyDialog({
               <Button
                 type="submit"
                 disabled={penaltyMutation.isPending}
-                className="bg-warning-600 hover:bg-warning-700 text-white"
+                className="bg-warning-600 text-white hover:bg-warning-700"
               >
-                {penaltyMutation.isPending && (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                )}
+                {penaltyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Áp dụng phí trễ hạn
               </Button>
             </DialogFooter>
