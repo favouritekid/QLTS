@@ -4,7 +4,6 @@ Phase D3: Automated alerting for notification delivery health.
 
 4 check functions, Redis dedup to prevent alert storms, dispatches via SYSTEM_ALERT.
 """
-import asyncio
 import structlog
 from typing import Dict, List, Optional
 
@@ -83,20 +82,41 @@ async def check_breaker_alert() -> Optional[Dict]:
 
 
 async def run_all_checks(db: AsyncSession) -> List[Dict]:
-    """Run all alert checks in parallel and return fired alerts (after dedup)."""
-    # C3 fix: use asyncio.gather for parallel execution
-    results = await asyncio.gather(
-        check_failure_rate_alert(db),
-        check_backlog_alert(db),
-        check_webhook_lag_alert(db),
-        check_breaker_alert(),
-        return_exceptions=True,
-    )
+    """Run all alert checks and return fired alerts (after dedup).
 
-    alerts = []
-    for result in results:
-        if isinstance(result, Exception):
-            log.error("Alert check raised exception", error=str(result), exc_type=type(result).__name__)
+    The 3 DB-touching checks must run SEQUENTIALLY on the shared session.
+    SQLAlchemy AsyncSession is stateful and cannot be shared between
+    concurrent tasks — running `asyncio.gather(check_a(db), check_b(db), ...)`
+    on the same session raises `InvalidRequestError: This session is
+    provisioning a new connection; concurrent operations are not permitted`
+    (https://sqlalche.me/e/20/isce). See Issue #104.
+
+    Sequential cost is ~30ms total (3 × <10ms COUNT queries on a small
+    notification_delivery table); parallel execution would save ~20ms at
+    the price of correctness, which is not worth the trade-off.
+
+    Each check is wrapped in its own try/except so that a failure in one
+    check doesn't block the others. The circuit breaker check does not
+    touch the DB and runs after the DB checks.
+    """
+    alerts: List[Dict] = []
+
+    # 1. Sequential DB checks on the shared session (safe).
+    db_checks = [
+        ("failure_rate", check_failure_rate_alert),
+        ("backlog", check_backlog_alert),
+        ("webhook_lag", check_webhook_lag_alert),
+    ]
+    for name, check_fn in db_checks:
+        try:
+            result = await check_fn(db)
+        except Exception as e:
+            log.error(
+                "Alert check raised exception",
+                check=name,
+                error=str(e),
+                exc_type=type(e).__name__,
+            )
             continue
         if result is None:
             continue
@@ -104,6 +124,21 @@ async def run_all_checks(db: AsyncSession) -> List[Dict]:
         if not await _try_set_dedup(result["alert_type"]):
             continue  # Already fired within dedup window
         alerts.append(result)
+
+    # 2. Circuit breaker check — no DB access, runs after DB checks.
+    try:
+        breaker_result = await check_breaker_alert()
+    except Exception as e:
+        log.error(
+            "Alert check raised exception",
+            check="breaker",
+            error=str(e),
+            exc_type=type(e).__name__,
+        )
+        breaker_result = None
+    if breaker_result is not None:
+        if await _try_set_dedup(breaker_result["alert_type"]):
+            alerts.append(breaker_result)
 
     return alerts
 
