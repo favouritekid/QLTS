@@ -141,6 +141,32 @@ Event namespace `APPLICATION_*` and payload key `application_id` are retained
 for backward compatibility — they refer to `AdmissionProfile.id`, not the removed model.
 Do NOT rename these. See `APPLICATION_LEGACY_CLEANUP.md` for full context.
 
+### Mutation response contract
+
+Any service function that returns an `AdmissionProfile` destined for an API
+response with computed fields **must** call `_populate_response_fields()`
+after `await db.flush()` and before returning. This ensures `permissions`,
+`available_actions`, `step_status`, `eligibility_status`, `validation_errors`,
+`completion_percent`, `assigned_officer_name`, and `assigned_reviewer_name`
+are populated and consistent with what a subsequent `GET` response would
+return. Without this call, computed fields silently fall back to schema
+defaults (`permissions={}`, `eligibility_status="pending"`, etc.) and any
+client that trusts the mutation response will see broken state.
+
+The helper handles `current_user=None` (system callbacks) by skipping
+silently. For functions that delegate to `reload_profile_with_lead`, pass
+`documents=profile.documents` to reuse the eager-loaded list and avoid a
+redundant query. Mutation queries that return their own profile must use
+the nested eager-load pattern:
+```python
+.options(
+    selectinload(models.AdmissionProfile.lead)
+    .selectinload(models.Lead.assigned_officer),
+    selectinload(models.AdmissionProfile.assigned_reviewer),
+)
+```
+Otherwise denormalized name fields will be silently `null`.
+
 ---
 
 ## Common Commands

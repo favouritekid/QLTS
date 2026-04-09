@@ -435,6 +435,329 @@ class TestUpdateProfileCitizenId:
         assert update_response.status_code == 409, f"Expected 409 Conflict: {update_response.text}"
 
 
+class TestUpdateProfileLazyLoadRegression:
+    """Regression tests for MissingGreenlet / lazy-load bugs in update_profile.
+
+    Background: Before the fix, `_compute_frontend_fields()` (sync helper called at the
+    end of update_profile) accessed `profile.lead.assigned_officer.full_name`, but
+    the `update_profile` query only eager-loaded `lead` — not the nested
+    `lead.assigned_officer`. This triggered a lazy-load from a sync function inside
+    an async SQLAlchemy session, causing `sqlalchemy.exc.MissingGreenlet` and a 500
+    response with no CORS headers (which the browser reported as a misleading
+    "CORS policy blocked" error).
+
+    The fix does two things:
+    1. `update_profile` now eager-loads `lead.assigned_officer` and `assigned_reviewer`
+    2. `_compute_frontend_fields` uses `profile.__dict__.get(...)` instead of
+       `hasattr/getattr` to avoid triggering lazy-loads entirely
+    """
+
+    async def test_update_draft_profile_with_assigned_officer_does_not_crash(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        PUT /api/admissions/{id} must NOT raise MissingGreenlet when:
+        - The profile's lead has an assigned_officer_id set
+        - _compute_frontend_fields is called after the update
+
+        Before fix: returned 500 with SQLAlchemy MissingGreenlet traceback
+        After fix: returns 200 with updated profile including assigned_officer_name
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        # Create lead with assigned_officer_id pointing to officer_user_in_db
+        # This is the key condition that triggered the lazy-load bug
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2025,
+        )
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        # Create profile in draft state
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        profile_id = create_response.json()["id"]
+
+        # Update the draft profile — this call must NOT raise MissingGreenlet.
+        # Changing gender is sufficient; the bug triggers regardless of which field changes.
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nam", "version": 1},
+            headers=headers,
+        )
+
+        # Primary assertion: no 500 (no MissingGreenlet)
+        assert update_response.status_code == 200, (
+            f"Expected 200 but got {update_response.status_code}. "
+            f"Response: {update_response.text}. "
+            f"If this is a 500 with MissingGreenlet, the eager-load fix in "
+            f"update_profile() or the __dict__.get() fix in _compute_frontend_fields() "
+            f"regressed."
+        )
+
+        body = update_response.json()
+
+        # Secondary assertion: update actually applied
+        assert body.get("gender") == "Nam", f"Gender not updated: {body}"
+
+        # Tertiary assertion: _compute_frontend_fields ran and populated denormalized
+        # display names (proving the sync helper didn't crash on lazy-load).
+        # assigned_officer_name is set from profile.lead.assigned_officer.full_name
+        # via profile.__dict__.get("lead").__dict__.get("assigned_officer").
+        # Note: officer_user_in_db fixture may not set full_name, so we only assert
+        # the KEY exists (schema contract), not a specific value.
+        assert "assigned_officer_name" in body, (
+            "assigned_officer_name missing from response — _compute_frontend_fields "
+            "may not have run correctly"
+        )
+
+    async def test_update_draft_profile_without_assigned_officer_does_not_crash(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Edge case: lead has NO assigned_officer (officer_id=None).
+        The __dict__.get() fallback must return None without raising.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        # Note: setup_admission_api_data requires officer for consultation, so we still
+        # pass officer_id, but we then manually null out lead.assigned_officer_id below.
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2025,
+        )
+
+        # Null out the assigned_officer_id directly in DB
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                lead = await session.get(models.Lead, data["lead_id"])
+                lead.assigned_officer_id = None
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        profile_id = create_response.json()["id"]
+
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nữ", "version": 1},
+            headers=headers,
+        )
+
+        assert update_response.status_code == 200, (
+            f"Expected 200, got {update_response.status_code}: {update_response.text}"
+        )
+        body = update_response.json()
+        assert body.get("assigned_officer_name") is None, (
+            f"Expected None when lead has no assigned_officer, got {body.get('assigned_officer_name')!r}"
+        )
+
+
+class TestUpdateProfileDocumentsInResponse:
+    """Regression tests for MEDIUM #1: update_profile response must reflect actual document state.
+
+    Background: update_profile() used to call _compute_frontend_fields(profile, current_user)
+    without passing `documents`, causing _validate_documents() to short-circuit (it only runs
+    when `documents is not None`, per admission_service.py:283) and documents_checklist to be
+    rebuilt from applied_rules with all statuses = "missing" (per admission_service.py:640).
+
+    Result: PUT /api/admissions/{id} returned validation_errors=[] and eligibility="eligible"
+    even when mandatory documents were missing, and conversely reported documents_checklist
+    statuses as "missing" even when docs were already uploaded. This broke API contract
+    consistency — clients trusting the response of PUT would render wrong state.
+
+    The fix loads documents via admission_repo.get_all_documents() right before the
+    _compute_frontend_fields call, mirroring the pattern already used in get_profile
+    (admission_service.py:1759).
+
+    Note: these tests use a direct DB patch of `applied_rules` to inject mandatory_docs,
+    because setup_admission_api_data() does not seed an AdmissionPath with mandatory docs.
+    The bug is only observable when applied_rules.mandatory_docs is non-empty.
+    """
+
+    async def _create_draft_with_mandatory_docs(
+        self,
+        client: AsyncClient,
+        user_info: dict,
+        major_id: int,
+        unit_id: int,
+        mandatory_doc_codes: list[str],
+    ) -> tuple[int, dict]:
+        """Create a draft profile via API, then patch applied_rules in DB to add mandatory_docs.
+
+        Returns (profile_id, auth_headers).
+        """
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=user_info["id"],
+            academic_year=2025,
+        )
+        headers = await get_auth_headers(client, user_info)
+
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        profile_id = create_response.json()["id"]
+
+        # Directly patch applied_rules.mandatory_docs in DB so _validate_documents has
+        # something to report on
+        from sqlalchemy import update as sql_update
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(models.AdmissionProfile).where(
+                        models.AdmissionProfile.id == profile_id
+                    )
+                )
+                profile = result.scalar_one()
+                patched_rules = dict(profile.applied_rules or {})
+                patched_rules["mandatory_docs"] = mandatory_doc_codes
+                patched_rules["upload_required_docs"] = mandatory_doc_codes
+                await session.execute(
+                    sql_update(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == profile_id)
+                    .values(applied_rules=patched_rules)
+                )
+
+        return profile_id, headers
+
+    async def test_update_profile_response_reports_missing_mandatory_docs(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Profile's applied_rules requires ["hoc_ba_thpt", "cccd"] but no documents are
+        uploaded. PUT /api/admissions/{id} response MUST include these in validation_errors.
+
+        Before fix: validation_errors was [] (documents=None short-circuited _validate_documents).
+        After fix: validation_errors contains "Thiếu tài liệu bắt buộc: hoc_ba_thpt" and
+        "Thiếu tài liệu bắt buộc: cccd".
+        """
+        profile_id, headers = await self._create_draft_with_mandatory_docs(
+            client=client,
+            user_info=officer_user_in_db,
+            major_id=seed_lead_dependencies["major_program_id"],
+            unit_id=seed_lead_dependencies["unit_id"],
+            mandatory_doc_codes=["hoc_ba_thpt", "cccd"],
+        )
+
+        # PUT to update a trivial field. No documents uploaded.
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nam", "version": 1},
+            headers=headers,
+        )
+
+        assert update_response.status_code == 200, (
+            f"Expected 200, got {update_response.status_code}: {update_response.text}"
+        )
+        body = update_response.json()
+
+        validation_errors = body.get("validation_errors") or []
+        assert any("hoc_ba_thpt" in e for e in validation_errors), (
+            f"Expected validation_errors to report missing 'hoc_ba_thpt', "
+            f"got {validation_errors!r}. "
+            f"This indicates _compute_frontend_fields was called without `documents` — "
+            f"MEDIUM #1 regressed."
+        )
+        assert any("cccd" in e for e in validation_errors), (
+            f"Expected validation_errors to report missing 'cccd', got {validation_errors!r}"
+        )
+
+        # Eligibility should NOT be "eligible" when mandatory docs are missing
+        assert body.get("eligibility_status") == "ineligible", (
+            f"Expected eligibility_status='ineligible' when mandatory docs missing, "
+            f"got {body.get('eligibility_status')!r}. MEDIUM #1 regressed."
+        )
+
+    async def test_update_profile_response_consistent_with_get_profile(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Response of PUT /api/admissions/{id} must match a subsequent GET on key computed
+        fields. Before the fix, PUT returned validation_errors=[] and eligibility="eligible"
+        while GET returned validation_errors=[...missing docs] and eligibility="ineligible".
+        """
+        profile_id, headers = await self._create_draft_with_mandatory_docs(
+            client=client,
+            user_info=officer_user_in_db,
+            major_id=seed_lead_dependencies["major_program_id"],
+            unit_id=seed_lead_dependencies["unit_id"],
+            mandatory_doc_codes=["hoc_ba_thpt"],
+        )
+
+        update_response = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"gender": "Nam", "version": 1},
+            headers=headers,
+        )
+        assert update_response.status_code == 200
+        put_body = update_response.json()
+
+        get_response = await client.get(
+            f"/api/admissions/{profile_id}",
+            headers=headers,
+        )
+        assert get_response.status_code == 200
+        get_body = get_response.json()
+
+        # Key computed fields must agree between PUT and GET responses
+        assert put_body.get("validation_errors") == get_body.get("validation_errors"), (
+            f"PUT validation_errors {put_body.get('validation_errors')!r} != "
+            f"GET validation_errors {get_body.get('validation_errors')!r}. "
+            f"MEDIUM #1 regressed — update_profile is not loading documents before "
+            f"_compute_frontend_fields."
+        )
+        assert put_body.get("eligibility_status") == get_body.get("eligibility_status"), (
+            f"PUT eligibility {put_body.get('eligibility_status')!r} != "
+            f"GET eligibility {get_body.get('eligibility_status')!r}"
+        )
+        assert put_body.get("completion_percent") == get_body.get("completion_percent"), (
+            f"PUT completion {put_body.get('completion_percent')} != "
+            f"GET completion {get_body.get('completion_percent')}"
+        )
+
+
 # ==============================================================================
 # TEST: SUBMIT AND EVALUATE
 # ==============================================================================
@@ -793,3 +1116,612 @@ class TestAutoAssignOfficer:
             lead = result.scalar_one()
             assert lead.assigned_officer_id == officer_user_in_db["id"], \
                 f"Expected auto-assign to officer {officer_user_in_db['id']}, got {lead.assigned_officer_id}"
+
+
+# ==============================================================================
+# TEST: MEDIUM #2 — MUTATION RESPONSE CONTRACT
+# ==============================================================================
+#
+# Background: 10 admission mutation endpoints (approve/reject/request_revision/
+# resubmit/record_fee/override/finalize/claim/unclaim/mark_dropped) used to
+# return AdmissionProfileResponse with empty defaults for every computed field
+# (permissions={}, available_actions=[], eligibility_status="pending", etc.)
+# because the service functions never called _compute_frontend_fields() before
+# returning. The fix added a single helper `_populate_response_fields` that is
+# called after `await db.flush()` in each function.
+#
+# These tests assert the post-mutation response has populated computed fields,
+# proving the helper ran. They also cross-check key fields against a subsequent
+# GET response to lock in the contract that PUT/POST responses match GET.
+#
+# Test strength was verified across 3 patterns by reverting helper calls in
+# approve_profile (own-query), claim_review (dependency + idempotent), and
+# finalize_profile (delegated/reload). Each revert produced a clear FAIL.
+# ==============================================================================
+
+
+async def _create_profile_with_state(
+    client: AsyncClient,
+    setup_user: dict,
+    seed_lead_dependencies: dict,
+    target_status: str,
+    *,
+    mandatory_doc_codes: list = None,
+    assigned_reviewer_id: int = None,
+    rejection_reason: str = None,
+    requires_application_fee: bool = False,
+) -> tuple[int, int, dict]:
+    """Create a profile via API then patch its state directly in DB.
+
+    Bypasses state machine validation. State machine correctness is covered by
+    tests/integration/test_admission_state_transitions.py separately.
+
+    Returns:
+        (profile_id, version, setup_headers)
+    """
+    from sqlalchemy import update as sql_update
+
+    unit_id = seed_lead_dependencies["unit_id"]
+    major_id = seed_lead_dependencies["major_program_id"]
+
+    data = await setup_admission_api_data(
+        major_id=major_id,
+        unit_id=unit_id,
+        officer_id=setup_user["id"],
+        academic_year=2025,
+    )
+    headers = await get_auth_headers(client, setup_user)
+
+    create_response = await client.post(
+        "/api/admissions",
+        json={
+            "lead_id": data["lead_id"],
+            "admission_method_id": data["admission_method_id"],
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+    profile_id = create_response.json()["id"]
+
+    # Patch DB to put the profile into the requested state
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == profile_id
+                )
+            )
+            profile = result.scalar_one()
+            patched_rules = dict(profile.applied_rules or {})
+            if mandatory_doc_codes is not None:
+                patched_rules["mandatory_docs"] = mandatory_doc_codes
+                patched_rules["upload_required_docs"] = mandatory_doc_codes
+            if requires_application_fee:
+                patched_rules["requires_application_fee"] = True
+                patched_rules["fee_amount"] = 500000
+                patched_rules["fee_status"] = "pending"
+
+            update_values = {
+                "status": target_status,
+                "applied_rules": patched_rules,
+                "citizen_id": f"099{random.randint(100000000, 999999999)}",
+            }
+            if assigned_reviewer_id is not None:
+                update_values["assigned_reviewer_id"] = assigned_reviewer_id
+                update_values["assigned_at"] = datetime.now(timezone.utc)
+            if rejection_reason is not None:
+                update_values["rejection_reason"] = rejection_reason
+
+            await session.execute(
+                sql_update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == profile_id)
+                .values(**update_values)
+            )
+
+    # Return current version (always 1 right after create+patch since version is not bumped by sql_update)
+    return profile_id, 1, headers
+
+
+def _assert_computed_fields_populated(body: dict, context: str = "") -> None:
+    """Assert response body has populated computed fields (not schema defaults).
+
+    These three checks prove `_compute_frontend_fields` ran:
+    - permissions: dict, default={}, populated should have ≥1 key
+    - step_status: dict, default={}, populated should have keys "1".."7"
+    - eligibility_status: default="pending", populated should be "eligible"/"ineligible"
+    """
+    msg_prefix = f"[{context}] " if context else ""
+
+    permissions = body.get("permissions")
+    assert isinstance(permissions, dict) and len(permissions) > 0, (
+        f"{msg_prefix}permissions should be non-empty dict (computed by helper), "
+        f"got {permissions!r}. MEDIUM #2 regressed — _populate_response_fields "
+        f"call may be missing or didn't run."
+    )
+
+    step_status = body.get("step_status")
+    assert isinstance(step_status, dict) and len(step_status) > 0, (
+        f"{msg_prefix}step_status should be non-empty dict (computed by helper), "
+        f"got {step_status!r}"
+    )
+
+    eligibility = body.get("eligibility_status")
+    assert eligibility in ("eligible", "ineligible"), (
+        f"{msg_prefix}eligibility_status should be 'eligible' or 'ineligible' "
+        f"(computed), got {eligibility!r}. Default 'pending' indicates the "
+        f"helper didn't run."
+    )
+
+
+class TestApproveResponseFields:
+    """Mutation: POST /api/admissions/{id}/approve must populate computed fields."""
+
+    async def test_approve_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/approve",
+            json={"version": version, "notes": "Approved for test"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Approve failed: {response.text}"
+        body = response.json()
+        _assert_computed_fields_populated(body, context="approve")
+
+        # Cross-check with GET — PUT/POST response should match GET
+        get_response = await client.get(
+            f"/api/admissions/{profile_id}", headers=manager_headers
+        )
+        assert get_response.status_code == 200
+        get_body = get_response.json()
+        assert body.get("eligibility_status") == get_body.get("eligibility_status"), (
+            "approve response eligibility_status diverges from GET"
+        )
+
+
+class TestRejectResponseFields:
+    """Mutation: POST /api/admissions/{id}/reject must populate computed fields."""
+
+    async def test_reject_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/reject",
+            json={"version": version, "reason": "Missing required documents for test"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Reject failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="reject")
+
+
+class TestRequestRevisionResponseFields:
+    """Mutation: POST /api/admissions/{id}/request-revision must populate computed fields."""
+
+    async def test_request_revision_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/request-revision",
+            json={"version": version, "reason": "Please clarify the academic history section"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Request revision failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="request-revision")
+
+
+class TestResubmitResponseFields:
+    """Mutation: POST /api/admissions/{id}/resubmit must populate computed fields."""
+
+    async def test_resubmit_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, officer_headers = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="rejected",
+            rejection_reason="Previous rejection reason for test",
+        )
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/resubmit",
+            json={"version": version, "notes": "Fixed all issues"},
+            headers=officer_headers,
+        )
+        assert response.status_code in (200, 201), f"Resubmit failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="resubmit")
+
+
+class TestRecordFeePaymentResponseFields:
+    """Mutation: POST /api/admissions/{id}/record-fee-payment must populate computed fields."""
+
+    async def test_record_fee_payment_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+            requires_application_fee=True,
+        )
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/record-fee-payment"
+            f"?transaction_id=TXN-TEST-{random.randint(10000, 99999)}&amount=500000",
+            headers=admin_headers,
+        )
+        assert response.status_code in (200, 201), f"Record fee failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="record-fee-payment")
+
+
+class TestDropStudentResponseFields:
+    """Mutation: POST /api/admissions/{id}/drop must populate computed fields."""
+
+    async def test_drop_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="enrolled",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/drop",
+            json={"version": version, "reason": "Test drop: student transferred"},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Drop failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="drop")
+
+
+class TestOverrideResponseFields:
+    """Mutation: POST /api/admissions/{id}/override must populate computed fields."""
+
+    async def test_override_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="approved",
+        )
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/override",
+            json={"reason": "Special case for scholarship recipient", "bypass_rules": []},
+            headers=admin_headers,
+        )
+        assert response.status_code in (200, 201), f"Override failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="override")
+
+
+class TestFinalizeResponseFields:
+    """Mutation: POST /api/admissions/{id}/finalize must populate computed fields.
+
+    finalize_profile is the trickiest in-scope function: it delegates to
+    enroll_student (which creates a Student record) then calls
+    reload_profile_with_lead. The helper is called with pre-loaded documents
+    to avoid a redundant query.
+    """
+
+    async def test_finalize_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="confirmed",
+        )
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/finalize",
+            json={},
+            headers=admin_headers,
+        )
+        assert response.status_code in (200, 201), f"Finalize failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="finalize")
+
+
+class TestClaimResponseFields:
+    """Mutation: POST /api/admissions/{id}/claim must populate computed fields."""
+
+    async def test_claim_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/claim",
+            json={"version": version},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Claim failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="claim")
+
+
+class TestUnclaimResponseFields:
+    """Mutation: POST /api/admissions/{id}/unclaim must populate computed fields."""
+
+    async def test_unclaim_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+            assigned_reviewer_id=manager_user_in_db["id"],
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        response = await client.post(
+            f"/api/admissions/{profile_id}/unclaim",
+            json={"version": version},
+            headers=manager_headers,
+        )
+        assert response.status_code in (200, 201), f"Unclaim failed: {response.text}"
+        _assert_computed_fields_populated(response.json(), context="unclaim")
+
+
+# ==============================================================================
+# SPECIAL TESTS: edge cases highlighted by plan v3 evaluation
+# ==============================================================================
+
+
+class TestRecordFeePaymentNoneRecordedBy:
+    """Direct service-level call: helper must not crash when recorded_by=None.
+
+    Simulates a future payment-gateway callback that has no user context.
+    The helper signature accepts Optional[User] and skips silently when None,
+    preventing AttributeError at _compute_frontend_fields:419 (current_user.role).
+    """
+
+    async def test_record_fee_payment_with_none_recorded_by_does_not_crash(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        from app.services import admission_service
+
+        profile_id, _, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+            requires_application_fee=True,
+        )
+
+        # Direct service call with recorded_by=None — must not raise
+        async with AsyncSessionLocal() as session:
+            try:
+                profile, _callback = await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile_id,
+                    payment_data={
+                        "transaction_id": f"TXN-NONE-{random.randint(10000, 99999)}",
+                        "amount": 500000,
+                    },
+                    recorded_by=None,
+                )
+                await session.commit()
+            except AttributeError as exc:
+                pytest.fail(
+                    f"record_application_fee_payment crashed when recorded_by=None: {exc}. "
+                    f"_populate_response_fields may not be handling the None case."
+                )
+
+        # Status should be updated
+        assert profile is not None
+        assert profile.id == profile_id
+
+
+class TestClaimReviewIdempotent:
+    """Idempotent claim path: when same reviewer claims twice, the second call
+    must still return populated computed fields. The fix adds a helper call
+    BEFORE the early `return` in the idempotent branch of claim_review.
+    """
+
+    async def test_claim_review_idempotent_response_has_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        profile_id, version, _ = await _create_profile_with_state(
+            client, officer_user_in_db, seed_lead_dependencies,
+            target_status="submitted",
+        )
+        manager_headers = await get_auth_headers(client, manager_user_in_db)
+
+        # First claim — normal path (state mutation)
+        first_response = await client.post(
+            f"/api/admissions/{profile_id}/claim",
+            json={"version": version},
+            headers=manager_headers,
+        )
+        assert first_response.status_code in (200, 201), (
+            f"First claim failed: {first_response.text}"
+        )
+        first_body = first_response.json()
+        _assert_computed_fields_populated(first_body, context="claim-first")
+
+        # Second claim by SAME reviewer — idempotent early-return path.
+        # Use the version returned by the first claim (it was bumped).
+        second_version = first_body.get("version", version + 1)
+        second_response = await client.post(
+            f"/api/admissions/{profile_id}/claim",
+            json={"version": second_version},
+            headers=manager_headers,
+        )
+        assert second_response.status_code in (200, 201), (
+            f"Second (idempotent) claim failed: {second_response.text}"
+        )
+        _assert_computed_fields_populated(
+            second_response.json(),
+            context="claim-idempotent (proves helper ran in early-return path)",
+        )
+
+
+class TestCreateProfileResponseFields:
+    """Mutation: POST /api/admissions must populate computed fields in create response.
+
+    MEDIUM #2 followup: commit 1528bc89 fixed the 10 state-changing mutations
+    (approve/reject/update/resubmit/claim/etc.) but missed create_profile. Without
+    the _populate_response_fields call, the create response returns permissions={},
+    available_actions=[], step_status={}, and eligibility_status="pending", breaking
+    any frontend that renders edit/submit buttons based on the create response
+    without re-fetching.
+
+    Covers the first mutation a user hits in the admission workflow.
+    """
+
+    async def test_create_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """POST /api/admissions response body must have populated computed fields.
+
+        Uses the same 3-signal assertion as the other Test*ResponseFields classes:
+        - permissions non-empty dict
+        - step_status non-empty dict
+        - eligibility_status resolved to 'eligible' / 'ineligible' (not 'pending')
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2026,
+        )
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 201, f"Create failed: {response.text}"
+        body = response.json()
+        _assert_computed_fields_populated(body, context="create")
+
+    async def test_create_response_matches_subsequent_get(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """The create response must match what a fresh GET returns.
+
+        This is the core guarantee of the mutation response contract: a client
+        that uses the create response directly (without re-fetching) sees the
+        same computed state as a client that does re-fetch.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2026,
+        )
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        create_body = create_response.json()
+
+        get_response = await client.get(
+            f"/api/admissions/{create_body['id']}", headers=headers
+        )
+        assert get_response.status_code == 200, f"GET failed: {get_response.text}"
+        get_body = get_response.json()
+
+        # Cross-check computed fields between create response and GET response.
+        # These are the fields _populate_response_fields is responsible for.
+        for field in (
+            "permissions",
+            "available_actions",
+            "step_status",
+            "eligibility_status",
+            "completion_percent",
+            "assigned_officer_name",
+            "assigned_reviewer_name",
+        ):
+            assert create_body.get(field) == get_body.get(field), (
+                f"[create vs GET] field {field!r} diverges: "
+                f"create={create_body.get(field)!r}, get={get_body.get(field)!r}. "
+                f"_populate_response_fields may be missing from create_profile."
+            )

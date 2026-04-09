@@ -270,6 +270,9 @@ export const admissionProfileUpdateSchema = z.object({
   permanent_province: nullableString(100),
   permanent_district: nullableString(100),
   permanent_ward: nullableString(100),
+  // Sub-ward + street (free-text). See backend admission.py model comment.
+  permanent_residential_group: nullableString(150),
+  permanent_street_address: nullableString(255),
   place_of_birth: nullableString(255),
   native_place: nullableString(255),
   
@@ -416,6 +419,8 @@ export const admissionProfileResponseSchema = z.object({
   permanent_province: z.string().nullable(),
   permanent_district: z.string().nullable(),
   permanent_ward: z.string().nullable(),
+  permanent_residential_group: z.string().nullable(),
+  permanent_street_address: z.string().nullable(),
   place_of_birth: z.string().nullable(),
   native_place: z.string().nullable(),
   union_entry_date: z.string().datetime({ offset: true }).nullable(),

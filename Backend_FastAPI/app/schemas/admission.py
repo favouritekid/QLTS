@@ -325,6 +325,14 @@ class AdmissionProfileUpdate(BaseModel):
     permanent_province: Optional[str] = Field(None, max_length=100)
     permanent_district: Optional[str] = Field(None, max_length=100)
     permanent_ward: Optional[str] = Field(None, max_length=100)
+    permanent_residential_group: Optional[str] = Field(
+        None, max_length=150,
+        description="Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố — community sub-unit, free-text"
+    )
+    permanent_street_address: Optional[str] = Field(
+        None, max_length=255,
+        description="Số nhà, tên đường — street address line, free-text"
+    )
     place_of_birth: Optional[str] = Field(None, max_length=255)
     native_place: Optional[str] = Field(None, max_length=255)
     
@@ -360,9 +368,10 @@ class AdmissionProfileUpdate(BaseModel):
             return None
         return v
 
-    @field_validator('email', 'full_name', 'gender', 'social_insurance_number', 
+    @field_validator('email', 'full_name', 'gender', 'social_insurance_number',
                      'nationality', 'ethnicity', 'religion', 'disability_type',
                      'permanent_province', 'permanent_district', 'permanent_ward',
+                     'permanent_residential_group', 'permanent_street_address',
                      'place_of_birth', 'native_place', mode='before')
     @classmethod
     def empty_str_to_none_text(cls, v):
@@ -533,6 +542,8 @@ class AdmissionProfileResponse(BaseModel):
     permanent_province: Optional[str] = None
     permanent_district: Optional[str] = None
     permanent_ward: Optional[str] = None
+    permanent_residential_group: Optional[str] = None
+    permanent_street_address: Optional[str] = None
     place_of_birth: Optional[str] = None
     native_place: Optional[str] = None
 

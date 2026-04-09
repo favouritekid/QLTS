@@ -5,6 +5,7 @@ Track T: Extracted database management fixtures from conftest.py.
 Contains: safety check, schema init, table truncation.
 Uses NullPool to avoid asyncpg prepared-statement cache pollution.
 """
+import asyncio
 import logging
 
 from sqlalchemy import text
@@ -52,7 +53,42 @@ async def init_schema_once(settings, AppBase, CasbinBase=None):
 
     Uses a SEPARATE short-lived engine (NullPool) for DDL to avoid
     asyncpg prepared-statement cache pollution.
+
+    The pg_terminate_backend cleanup runs in its own short-lived engine and
+    transaction, BEFORE any DDL. Doing it inline with DROP SCHEMA / CREATE
+    SCHEMA inside the same transaction caused intermittent
+    ConnectionDoesNotExistError flakes — pg_terminate_backend is async at
+    PostgreSQL level (sends SIGTERM but doesn't wait for cleanup), so the
+    killed backends could still hold locks when the next DDL statement ran.
     """
+    # Phase 0: Kill orphaned backends from any previous test process /
+    # interrupted run, in its own dedicated engine + transaction. After this
+    # connection closes, PostgreSQL has time to actually reap the killed
+    # backends before the schema-reset engine opens its first connection.
+    kill_engine = _create_engine(
+        settings.DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={"command_timeout": 60},
+    )
+    try:
+        async with kill_engine.begin() as kill_conn:
+            await kill_conn.execute(text(
+                "SELECT pg_terminate_backend(pid) "
+                "FROM pg_stat_activity "
+                "WHERE datname = current_database() "
+                "AND pid <> pg_backend_pid()"
+            ))
+        log.info("[Schema Init] Phase 0: orphan backend cleanup complete")
+    finally:
+        await kill_engine.dispose()
+
+    # Brief pause so PostgreSQL can actually finish releasing the locks
+    # held by the just-killed backends. 200ms is empirically enough; without
+    # it, DROP SCHEMA in Phase 1 can race with backend teardown.
+    await asyncio.sleep(0.2)
+
+    # Phase 1: DROP + CREATE schema in a fresh engine + transaction.
+    # No more pg_terminate_backend mixed in here.
     setup_engine = _create_engine(
         settings.DATABASE_URL,
         poolclass=NullPool,
@@ -60,21 +96,14 @@ async def init_schema_once(settings, AppBase, CasbinBase=None):
     )
 
     try:
-        # Step 1: DROP SCHEMA CASCADE (clean slate)
         async with setup_engine.begin() as conn:
-            await conn.execute(text(
-                "SELECT pg_terminate_backend(pid) "
-                "FROM pg_stat_activity "
-                "WHERE datname = current_database() "
-                "AND pid <> pg_backend_pid()"
-            ))
             await conn.execute(text("DROP SCHEMA public CASCADE"))
             await conn.execute(text("CREATE SCHEMA public"))
-        log.info("[Schema Init] Step 1: DROP SCHEMA CASCADE complete")
+        log.info("[Schema Init] Phase 1: DROP SCHEMA CASCADE complete")
 
         await setup_engine.dispose()
 
-        # Step 2: Recreate with fresh engine
+        # Phase 2: Recreate tables with another fresh engine
         setup_engine = _create_engine(
             settings.DATABASE_URL,
             poolclass=NullPool,
@@ -130,7 +159,7 @@ async def init_schema_once(settings, AppBase, CasbinBase=None):
                 "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"
             ))
             table_count = tc.scalar()
-            log.info(f"[Schema Init] Step 2: Created {table_count} tables")
+            log.info(f"[Schema Init] Phase 2: Created {table_count} tables")
             if table_count == 0:
                 raise RuntimeError("Schema init produced 0 tables!")
     finally:
