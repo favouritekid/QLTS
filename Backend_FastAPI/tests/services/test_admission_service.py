@@ -1618,3 +1618,110 @@ class TestClaimReviewIdempotent:
             second_response.json(),
             context="claim-idempotent (proves helper ran in early-return path)",
         )
+
+
+class TestCreateProfileResponseFields:
+    """Mutation: POST /api/admissions must populate computed fields in create response.
+
+    MEDIUM #2 followup: commit 1528bc89 fixed the 10 state-changing mutations
+    (approve/reject/update/resubmit/claim/etc.) but missed create_profile. Without
+    the _populate_response_fields call, the create response returns permissions={},
+    available_actions=[], step_status={}, and eligibility_status="pending", breaking
+    any frontend that renders edit/submit buttons based on the create response
+    without re-fetching.
+
+    Covers the first mutation a user hits in the admission workflow.
+    """
+
+    async def test_create_response_has_populated_computed_fields(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """POST /api/admissions response body must have populated computed fields.
+
+        Uses the same 3-signal assertion as the other Test*ResponseFields classes:
+        - permissions non-empty dict
+        - step_status non-empty dict
+        - eligibility_status resolved to 'eligible' / 'ineligible' (not 'pending')
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2026,
+        )
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 201, f"Create failed: {response.text}"
+        body = response.json()
+        _assert_computed_fields_populated(body, context="create")
+
+    async def test_create_response_matches_subsequent_get(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """The create response must match what a fresh GET returns.
+
+        This is the core guarantee of the mutation response contract: a client
+        that uses the create response directly (without re-fetching) sees the
+        same computed state as a client that does re-fetch.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2026,
+        )
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, f"Create failed: {create_response.text}"
+        create_body = create_response.json()
+
+        get_response = await client.get(
+            f"/api/admissions/{create_body['id']}", headers=headers
+        )
+        assert get_response.status_code == 200, f"GET failed: {get_response.text}"
+        get_body = get_response.json()
+
+        # Cross-check computed fields between create response and GET response.
+        # These are the fields _populate_response_fields is responsible for.
+        for field in (
+            "permissions",
+            "available_actions",
+            "step_status",
+            "eligibility_status",
+            "completion_percent",
+            "assigned_officer_name",
+            "assigned_reviewer_name",
+        ):
+            assert create_body.get(field) == get_body.get(field), (
+                f"[create vs GET] field {field!r} diverges: "
+                f"create={create_body.get(field)!r}, get={get_body.get(field)!r}. "
+                f"_populate_response_fields may be missing from create_profile."
+            )

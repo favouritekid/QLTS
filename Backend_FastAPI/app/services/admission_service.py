@@ -1533,8 +1533,19 @@ async def create_profile(
     # Step 17: Reload with relationships for response
     new_profile = await admission_repo.reload_profile_with_lead(new_profile.id)
 
-    # Calculate totals for response
-    _calculate_and_update_totals(new_profile)
+    # Populate transient computed fields so the create response matches GET.
+    # Without this, permissions={}, available_actions=[], validation_errors=[],
+    # and assigned_officer_name=None leak to the client, breaking any frontend
+    # that trusts the create response without re-fetching (MEDIUM #2 followup —
+    # commit 1528bc89 fixed the 10 state-changing mutations but missed create).
+    # reload_profile_with_lead already eager-loads documents + lead.assigned_officer
+    # + assigned_reviewer + student + subject_scores, so pass the loaded documents
+    # to avoid a redundant get_all_documents() query inside the helper. The helper
+    # also calls _calculate_and_update_totals() internally, so we don't need a
+    # separate call here.
+    await _populate_response_fields(
+        db, new_profile, current_user, documents=new_profile.documents
+    )
 
     # ✅ SYNC: Update lead consultation status to match admission status
     from .lead_admission_sync import sync_lead_from_admission
