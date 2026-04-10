@@ -24,6 +24,16 @@
     - Use `selectinload` for relationships (Anti-N+1).
     - No direct SQL in Routers. Use Repository pattern.
 
+5.  **Notification Dispatch** (see `MASTER_ARCHITECTURE.md` PART 7 for full rules):
+    - **Four primitives**: `SystemEvents` enum + `EventDefinition` catalog + **`notification_rule` DB table row** + `dispatch()`/`safe_dispatch()`. A new event WITHOUT a seeded rule row silently fires zero notifications (fail-closed at `notification_dispatcher.py:~530`) — always pair catalog entry + rule row.
+    - **Service layer for atomic events**: Use `dispatch()`, return `(result, callback)` from service. Router commits then **MUST** await the callback.
+    - **Router post-commit fanout**: Use `safe_dispatch()` only AFTER `db.commit()`.
+    - **Atomic pairs on same business unit**: Wrap multiple dispatches in `async with db.begin_nested()` (ref: `lead_service.py:1163`).
+    - **Service-returned `post_commit` closures**: `safe_dispatch()` INSIDE such a closure is a valid pattern (ref: `payment_service.py:208/380`, `commission_service.py:156`). The rule is about which *transaction frame* the call runs in, not which *file* defines the closure.
+    - **Celery task with own session + commit**: `dispatch()` + explicit `await db.commit()` + `await notif_cb()` (ref: `tasks/notification_tasks.py:~247`).
+    - **Projections are NOT notifications**: In-transaction lead-state sync goes through `admission_event_mapping.py` + `lead_admission_sync.py`, NOT through `SystemEvents`.
+    - **No new event systems**: Use existing `SystemEvents` + `event_catalog.py` + `notification_rule` + dispatcher. See `docs/adr/ADR-001-remove-finance-events.md`.
+
 ---
 
 ## 📦 Quick Imports
@@ -83,6 +93,29 @@ async def update_lead(self, db, lead):
 async def get_lead_for_user(lead_id, user):
     if lead.owner_id != user.id:
         raise HTTPException(403)  # ❌ WRONG - should be 404
+
+# ❌ safe_dispatch in service body BEFORE router commits
+async def my_service(db):
+    db.add(Payment(...))
+    await db.flush()
+    await safe_dispatch(...)       # WRONG - notification references uncommitted data
+
+# ❌ Router forgets to await callback (silent notification loss)
+result, callback = await service(db)
+await db.commit()
+return result                      # WRONG - callback never awaited, zero notifications
+
+# ✅ Correct service + router pattern
+# Service side:
+notif_ids, notif_cb = await dispatch(db, event=..., payload=...)
+async def post_commit():
+    if notif_cb: await notif_cb()
+return result, post_commit
+# Router side:
+result, cb = await service(db)
+await db.commit()
+if cb: await cb()                  # DO NOT forget this line
+return result
 ```
 
 ---

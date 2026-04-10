@@ -29,6 +29,8 @@
 
 ## 1. Kiến trúc 3 hệ thống event
 
+> **Canonical architecture reference**: See `MASTER_ARCHITECTURE.md` PART 7 for rules + decision tree, `docs/EVENT_ARCHITECTURE.md` for deep-dive + worked examples, `CLAUDE.md` Section 5 for quick reference. This audit matrix tracks **gaps and findings** only.
+
 Hệ thống hiện tại có **3 event system chạy song song**:
 
 | Hệ thống | File gốc | Cơ chế | Mục đích | Runtime status |
@@ -334,18 +336,25 @@ Events có đầy đủ registry config (resolver, template, channels) nhưng **
 
 **Decision needed:** Wire up DomainEvent properly, hoặc chấp nhận inline calls và remove dead code.
 
-### Finding 2: `safe_dispatch()` trong service layer (architecture violation)
+### Finding 2: `safe_dispatch()` trong service layer — ~~architecture violation~~ **WONTFIX — accepted pattern** (reclassified 2026-04-09)
+
+> **Reclassification rationale (v6 verification, 2026-04-09)**: 4 parallel sub-agents read all 3 sites and verified they are ALL inside `async def post_commit()` closures returned as `(result, callback)` tuples to the router, and executed AFTER the router's `db.commit()`. This IS the `safe_dispatch()` contract per `notification_dispatcher.py:1612-1614` docstring. The fact that the closure is defined in a service file is a code-layout detail; the execution frame is post-commit. Additionally, `commission_service.py:156` loops over N commission records needing independent best-effort — bundling into `dispatch()` would break the per-row failure isolation semantic. See `MASTER_ARCHITECTURE.md` PART 7 Section 7.2, decision tree row #5.
+>
+> **No Phase C fix needed for Arch-2.** Phase C scope is now **Arch-3 only** (admission paired dispatch atomicity).
 
 `payment_service.py` dùng `safe_dispatch()` trong `post_commit()` callback:
 ```python
 # payment_service.py:207-213
 async def post_commit():
-    from app.services.notification_dispatcher import safe_dispatch  # ← Service import router-level function
+    from app.services.notification_dispatcher import safe_dispatch
     await safe_dispatch(db=_db, event=SystemEvents.PAYMENT_RECEIVED, ...)
+# Closure is returned as: return payment, post_commit
+# Router awaits post_commit() AFTER db.commit() → safe_dispatch contract holds
 ```
 
-**Đúng pattern V3:** Service dùng `dispatch()` + trả callback cho router.
-**Ảnh hưởng:** `PAYMENT_RECEIVED` (F1) và `PAYMENT_VERIFIED` (F2). Hoạt động đúng vì nằm trong post_commit, nhưng vi phạm separation of concerns.
+**Previously classified as** "Vi phạm V3 separation of concerns" (v1-v5). **Now classified as** accepted pattern (v6, decision tree row #5): the closure runs in the router's post-commit frame, which is the valid context for `safe_dispatch()`.
+
+**Ảnh hưởng:** `PAYMENT_RECEIVED` (F1) và `PAYMENT_VERIFIED` (F2). Hoạt động đúng VÀ kiến trúc đúng. Xem thêm: `commission_service.py:156` (`CTV_COMMISSION_CREATED`) cùng pattern.
 
 ### Finding 3: Admission cặp đôi dispatch không atomic
 
@@ -412,7 +421,7 @@ Cùng event, cùng registry config, **khác ngữ cảnh và payload format**. R
 | ID | Gap | Impact | Effort |
 |---|---|---|---|
 | Arch-1 | `finance_events.py` DomainEvent dead code | Kiến trúc mơ hồ, inline calls fragile | Decision: wire up hoặc remove |
-| Arch-2 | `payment_service` dùng `safe_dispatch()` | Vi phạm V3 separation, hoạt động nhưng không clean | Low — refactor về `dispatch()` |
+| Arch-2 | `payment_service` dùng `safe_dispatch()` trong post_commit closure | **WONTFIX — accepted pattern** (reclassified 2026-04-09). Closure runs post-commit, matches safe_dispatch contract. See decision tree row #5 in PART 7. | ~~Low — refactor về `dispatch()`~~ No action needed |
 | Arch-3 | Admission cặp đôi dispatch không atomic | Rare failure case: partial notification | Medium — bundle vào savepoint |
 | ~~A13~~ | ~~`application_documents_updated` legacy~~ | **RESOLVED** — event retired, file xóa (PR #93) | — |
 | F4 | `dorm_fee_created` ownership sai domain | Finance registry chứa Dorm event | Low — move khi build Dorm module |
@@ -454,7 +463,7 @@ Cùng event, cùng registry config, **khác ngữ cảnh và payload format**. R
 **Sprint 3: P3 — Kiến trúc cleanup**
 
 9. **Arch-1** — Quyết định số phận `finance_events.py`: wire up hoặc remove
-10. **Arch-2** — Refactor `payment_service` về `dispatch()` pattern
+10. ~~**Arch-2** — Refactor `payment_service` về `dispatch()` pattern~~ **WONTFIX** (2026-04-09) — accepted pattern, see decision tree row #5
 11. **Arch-3** — Bundle admission cặp đôi dispatch vào savepoint
 
 ---
