@@ -17,8 +17,8 @@ QLTS has two distinct event paths, each serving a different purpose:
 These are NOT interchangeable. See `MASTER_ARCHITECTURE.md` PART 7 Section 7.5 for why.
 
 **Four primitives** of the notification path (see PART 7 Section 7.1):
-1. `SystemEvents` enum (`app/core/events.py`) — 55 event names
-2. `EventDefinition` catalog (`app/core/event_catalog.py`) — 44 code-owned metadata entries
+1. `SystemEvents` enum (`app/core/events.py`) — event name namespace
+2. `EventDefinition` catalog (`app/core/event_catalog.py`) — code-owned metadata entries
 3. `notification_rule` DB table — admin-mutable routing rules
 4. `dispatch()` / `safe_dispatch()` (`app/services/notification_dispatcher.py`) — the only publish APIs
 
@@ -35,7 +35,7 @@ These are NOT interchangeable. See `MASTER_ARCHITECTURE.md` PART 7 Section 7.5 f
 │  events.py              event_catalog.py          notification_      │
 │  ┌─────────────┐        ┌─────────────────┐       dispatcher.py      │
 │  │ SystemEvents │        │ EventDefinition  │       ┌─────────────┐   │
-│  │ enum (55)    │───────>│ catalog (44)     │──────>│ dispatch()   │   │
+│  │ enum         │───────>│ catalog          │──────>│ dispatch()   │   │
 │  └─────────────┘        │ classification   │       │ safe_dispatch│   │
 │                         │ resolvers        │       └──────┬───────┘   │
 │                         │ channels         │              │           │
@@ -71,14 +71,14 @@ These are NOT interchangeable. See `MASTER_ARCHITECTURE.md` PART 7 Section 7.5 f
 
 | File | Role | Key line |
 |------|------|----------|
-| `app/core/events.py` | SystemEvents enum | 55 members |
-| `app/core/event_catalog.py` | EventDefinition metadata | 44 entries |
+| `app/core/events.py` | SystemEvents enum | All cross-module event names |
+| `app/core/event_catalog.py` | EventDefinition metadata | Code-owned half of each event |
 | `app/services/notification_dispatcher.py` | `dispatch()` + `safe_dispatch()` | L447, L1602 |
 | `app/services/notification_rule_loader.py` | DB rule lookup (cached) | `get_rule_for_event()` L560 |
 | `app/services/notification_resolvers.py` | Recipient resolution | `BaseResolver` L34 |
 | `app/services/notification_channels/` | Channel delivery (browser/email/Zalo/SMS) | directory |
 | `app/services/notification_rule_crud_service.py` | Admin CRUD for rules | import catalog L17 |
-| `app/core/admission_event_mapping.py` | Lead projection definitions | 20 projections |
+| `app/core/admission_event_mapping.py` | Lead projection definitions | Admission → Lead state mappings |
 | `app/services/lead_admission_sync.py` | Lead projection executor | inline sync |
 
 ---
@@ -239,4 +239,4 @@ If event sourcing becomes a real requirement, build with proper infrastructure (
 | `app/services/NOTIFICATION_ARCHITECTURE.md` | Deep-dive internals (guardrail table, phase history) |
 | `NOTIFICATION_PHASE_WORKLOG.md` | Historical worklog (do NOT update) |
 | `docs/adr/ADR-001-remove-finance-events.md` | Decision record for DomainEvent removal |
-| `docs/FINANCE_MODULE_DESIGN.md` | **HISTORICAL** — original finance module design. Drifted at 6 layers from current code. See doc-level banner. |
+| `docs/FINANCE_MODULE_DESIGN.md` | **HISTORICAL** — original finance module design. Drifted at 6 layers from current code (event architecture, data contracts, business flow, module structure, project status, tooling). Useful for business vocabulary only. A doc-level historical banner will be added in Phase B1. |

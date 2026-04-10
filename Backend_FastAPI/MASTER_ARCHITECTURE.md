@@ -412,9 +412,9 @@ These rules are designed to be enforced by:
 
 Every notification in QLTS flows through exactly these four components:
 
-1.  **`SystemEvents` enum** (`app/core/events.py`) — single namespace for all cross-module events. 55 members. Each member has a payload schema documented as a docstring. Adding a new enum member is step 1 of the "add new event" checklist.
+1.  **`SystemEvents` enum** (`app/core/events.py`) — single namespace for all cross-module events. Each member has a payload schema documented as a docstring. Adding a new enum member is step 1 of the "add new event" checklist.
 
-2.  **`EventDefinition` catalog** (`app/core/event_catalog.py`) — code-owned half of event metadata. Defines: notification classification (`user` / `broadcast_only` / `internal_future`), allowed resolvers (who should receive), default channels (browser/email/Zalo/SMS), dedup-key template, link strategy. 44 entries. Adding a catalog entry is step 2.
+2.  **`EventDefinition` catalog** (`app/core/event_catalog.py`) — code-owned half of event metadata. Defines: notification classification (`user` / `broadcast_only` / `internal_future`), allowed resolvers (who should receive), default channels (browser/email/Zalo/SMS), dedup-key template, link strategy. Adding a catalog entry is step 2.
 
 3.  **`notification_rule` DB table row** (managed via `notification_rule_crud_service.py` + seed script `app/scripts/sync_notification_rules.py`) — DB-owned half of event metadata. Controls: which users / channels / conditions this event should notify. Admins can mutate rules without code deploy.
 
@@ -476,7 +476,7 @@ Rules:
 
 ### 7.5 Lead Pipeline Projection (NOT a Parallel Event Bus)
 
-- `AdmissionEventProjection` defined in `app/core/admission_event_mapping.py` — 20 projection definitions.
+- `AdmissionEventProjection` defined in `app/core/admission_event_mapping.py`.
 - `lead_admission_sync.py` is a pure mapper, called inline from admission service mutations.
 - **Intentionally NOT wired into the notification dispatcher** because lead pipeline state change is part of the same transaction as the admission write — must be atomic.
 - Clear separation: dispatcher path = post-commit best-effort; projection path = in-transaction atomic.

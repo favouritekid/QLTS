@@ -20,8 +20,11 @@ Finding 1 / Arch-1):
 
 - **0 production `emit_event()` calls** outside the dead files themselves
 - **0 `@event_handler` registrations** in any production code path
-- **0 rows** in the `processed_event` table (all environments, verified)
-- **0 consumers** (BI, ETL, replication, external systems)
+- **0 rows** in the `processed_event` table on **dev** (verified 2026-04-07).
+  Staging and production must be verified separately before Phase B2 ships —
+  see B2 preflight checklist in the execution plan.
+- **0 consumers** (BI, ETL, replication, external systems) — dev-verified;
+  staging/prod consumer scan pending B2 preflight
 
 The notification dispatch needs these events were meant to serve are fulfilled
 by the `SystemEvents` enum + `notification_dispatcher.py` path, which has been
