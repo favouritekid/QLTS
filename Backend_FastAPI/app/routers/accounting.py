@@ -27,7 +27,7 @@ from app.core import deps
 from app.core.deps import CasbinAuth, require_admin
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
-from app.services.accounting_service import AccountingPeriodService, EventIdempotencyService
+from app.services.accounting_service import AccountingPeriodService
 from app.models.finance import AccountingPeriod
 from app.utils.exceptions import (
     ResourceNotFoundError,
