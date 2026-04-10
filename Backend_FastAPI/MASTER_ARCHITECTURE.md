@@ -398,3 +398,120 @@ These rules are designed to be enforced by:
 
 **Any code violating these rules MUST be rejected, even if it "works".**
 "It runs" is not an excuse for "It violates architecture".
+
+---
+
+## PART 7: NOTIFICATION & EVENT LAYER
+
+> Canonical reference for how QLTS dispatches cross-module notifications.
+> For deep-dive internals: `app/services/NOTIFICATION_ARCHITECTURE.md`.
+> For worked examples + troubleshooting: `docs/EVENT_ARCHITECTURE.md`.
+> For audit gaps + finding tracker: `EVENT_AUDIT_MATRIX.md`.
+
+### 7.1 Four Primitives
+
+Every notification in QLTS flows through exactly these four components:
+
+1.  **`SystemEvents` enum** (`app/core/events.py`) — single namespace for all cross-module events. Each member has a payload schema documented as a docstring. Adding a new enum member is step 1 of the "add new event" checklist.
+
+2.  **`EventDefinition` catalog** (`app/core/event_catalog.py`) — code-owned half of event metadata. Defines: notification classification (`user` / `broadcast_only` / `internal_future`), allowed resolvers (who should receive), default channels (browser/email/Zalo/SMS), dedup-key template, link strategy. Adding a catalog entry is step 2.
+
+3.  **`notification_rule` DB table row** (managed via `notification_rule_crud_service.py` + seed script `app/scripts/sync_notification_rules.py`) — DB-owned half of event metadata. Controls: which users / channels / conditions this event should notify. Admins can mutate rules without code deploy.
+
+    **CRITICAL**: An event without a seeded rule row is a **silent no-op**. The dispatcher's fail-closed branch at `notification_dispatcher.py:~530` logs `"No enabled DB rule for active user event"` and emits zero notifications — no error, no exception, just a `log.error`. Always pair a catalog entry with a DB rule row.
+
+4.  **`dispatch()` and `safe_dispatch()`** (`app/services/notification_dispatcher.py`) — the only two ways to publish:
+
+    | Function | Signature | Transaction ownership | Returns |
+    |---|---|---|---|
+    | `dispatch()` (line 447) | `(db, event, payload, dedupe_key?, skip_preference_check?) → (List[int], Optional[Callable])` | **Caller** owns transaction. Service flushes, caller commits. | `(notification_ids, post_commit_callback)` |
+    | `safe_dispatch()` (line 1602) | Same params → `List[int]` | **Dispatcher** owns its own short transaction. Commits + runs callback internally. Swallows ALL exceptions. | `notification_ids` (empty list on failure) |
+
+Rule of thumb: **code-owned catalog + DB-owned rule row = one event unit**. Adding a catalog entry without a rule row is a broken event.
+
+### 7.2 Decision Tree
+
+When writing new code that needs to emit a notification, use this table to choose the right function:
+
+| # | Context | Use | Reason |
+|---|---|---|---|
+| 1 | **Service mutation in atomic flow** — the notification rows must commit or rollback with the business write | `dispatch()` → return `(result, callback)` from service → router calls `await db.commit()` → router awaits callback | V3 architecture: service flushes, router commits. Notification rows participate in same transaction as business data. |
+| 2 | **Router after-commit best-effort fanout** — fire notification after business data is already committed | `safe_dispatch()` after `await db.commit()` | Owns its own commit, swallows exceptions, never crashes the request. |
+| 3 | **Multiple events on same business unit** (e.g. `APPLICATION_STATUS_CHANGED` + `LEAD_STATUS_CHANGED` must both succeed or both rollback) | `async with db.begin_nested()` wrapping `dispatch()` calls, then one commit, then one combined callback | Atomic across the group via savepoint. If event #2 fails, event #1 is rolled back to the savepoint. Reference: `lead_service.py:1163`. |
+| 4a | **Cron / beat task with no own session** — short-lived fire-and-forget | `safe_dispatch()` with `skip_preference_check=True` if needed | No HTTP request to fail. Best-effort is the correct shape. |
+| 4b | **Celery task that owns its own `AsyncSession`** and commits its own business work (e.g. consultation reminder) | `dispatch()` → explicit `await db.commit()` → `await notif_cb()` | Task owns the transaction window, so the dispatch-then-commit-then-callback pattern from row #1 applies. Reference: `tasks/notification_tasks.py:~247`. |
+| 5 | **Service returns a `post_commit` closure** that runs fire-and-forget work AFTER the router commits (typical shape: multi-row loop, or single cross-entity notification) | `safe_dispatch()` **inside the closure** — this is NOT an anti-pattern | Closure runs in the router's post-commit frame (business data already committed). The fact that the closure is *defined* in a service file is a code-layout detail, not a transactional concern. Examples: `payment_service.py:208/380`, `commission_service.py:156`. |
+| 6 | **New in-transaction lead-state sync** (NOT a notification — e.g. a new pipeline state that mirrors an admission event) | Add `EventProjection` to `app/core/admission_event_mapping.py` + sync call in `app/services/lead_admission_sync.py` | Projection path is a deliberate sibling layer — in-transaction atomic, inline sync, no notification rows. Do NOT route through `SystemEvents`. See Section 7.5. |
+
+### 7.3 Lifetime of Post-Commit Callback
+
+```
+Service:   notif_ids, notif_cb = await dispatch(db, event=..., payload=...)
+           return (business_result, notif_cb)     # or wrap in a post_commit closure
+
+Router:    result, callback = await service.do_something(db, ...)
+           await db.commit()                       # 1. business data + notification rows committed
+           if callback:
+               await callback()                    # 2. post-commit: socket.io, email, worker enqueue
+           return result                           # 3. HTTP response
+```
+
+Rules:
+- Service creates the callback via `dispatch()`.
+- Service returns the callback as part of its return tuple — NEVER awaits it internally.
+- Router calls `await db.commit()` FIRST — this commits both business data and notification rows.
+- Router awaits the callback EXACTLY ONCE, after commit.
+- Callback is never called inside a nested transaction.
+- Callback never recursively dispatches (deadlock + infinite loop risk).
+- **If the router forgets to await the callback**, zero notifications fire silently — no error, no log. This is a real silent-failure trap.
+
+### 7.4 Atomic Guarantees
+
+| Pattern | Atomicity | Commit ownership |
+|---|---|---|
+| Single `dispatch()` | Atomic with caller's transaction | Caller commits. `dispatch()` code path MUST NOT call `db.commit()`. |
+| `begin_nested()` group | Atomic across the savepoint group | Caller commits the outer transaction. Savepoint provides rollback boundary within. |
+| `safe_dispatch()` | **NOT** atomic with caller's prior commit | `safe_dispatch()` owns its own short transaction. **Intentionally calls `db.commit()` internally** (line ~1650). This is by design — do NOT "fix" it. |
+| `safe_dispatch()` failure | Best-effort | Rolls back its own transaction, logs warning, returns empty list. Never raises. Never affects business data. |
+
+### 7.5 Lead Pipeline Projection (NOT a Parallel Event Bus)
+
+- `AdmissionEventProjection` defined in `app/core/admission_event_mapping.py`.
+- `lead_admission_sync.py` is a pure mapper, called inline from admission service mutations.
+- **Intentionally NOT wired into the notification dispatcher** because lead pipeline state change is part of the same transaction as the admission write — must be atomic.
+- Clear separation: dispatcher path = post-commit best-effort; projection path = in-transaction atomic.
+- This is by design, not a missing bridge.
+- **To add a new projection**: add an `EventProjection` row in `admission_event_mapping.py` + a sync call in `lead_admission_sync.py`. Do NOT create a `SystemEvents` member for this — you would lose the atomic guarantee.
+
+### 7.6 Target-State Rules
+
+The rule is about **which transaction frame** a call runs in, NOT which file the import statement lives in.
+
+**MUST follow for new code**:
+1.  Any `safe_dispatch()` call must run in a frame where the caller's business commit has ALREADY happened. Valid frames: router after-commit block; service-returned `post_commit` closure; Celery task body after its own `db.commit()`. Invalid frame: a synchronous service-body line that runs BEFORE the router commits.
+2.  Service mutation flows that need to emit a single atomic event should use `dispatch()` and return `(result, callback)` to the router (decision tree row #1).
+3.  Recursive dispatch from inside a callback is forbidden (deadlock + infinite loop risk).
+4.  Hardcoded notification logic is forbidden — use `dispatch()` + DB rules (admin needs runtime mutation without code deploy).
+5.  New domain event systems are forbidden — use existing `SystemEvents` + `event_catalog.py` + `notification_rule` table. See `docs/adr/ADR-001-remove-finance-events.md`.
+6.  **Router MUST await the callback** from `(result, callback)` tuples — forgetting this line silently drops all notifications.
+
+**Accepted patterns that LOOK like "service-layer safe_dispatch" but are actually correct**:
+
+| Site | Pattern | Why it's correct |
+|---|---|---|
+| `payment_service.py:208` | `safe_dispatch()` inside `async def post_commit()` closure, returned as `(payment, post_commit)` | Closure runs AFTER router commit. `safe_dispatch` contract holds. |
+| `payment_service.py:380` | Same shape | Same reasoning |
+| `commission_service.py:156` | `safe_dispatch()` in loop inside `async def _notify()` closure, returned as `(records, _notify)` | Each commission record fires independently. Per-row best-effort is required — bundling into `dispatch()` would break "row 3 fails doesn't block rows 4..N". |
+
+These match **decision tree row #5**. They are documented because `git grep "safe_dispatch" Backend_FastAPI/app/services/` returns these hits, and a reader unfamiliar with this section would flag them as violations.
+
+### 7.7 How to Add a New Event (Checklist)
+
+1.  Add a new member to `SystemEvents` enum in `app/core/events.py` with a payload schema docstring.
+2.  Add an `EventDefinition` entry to `app/core/event_catalog.py` (classification, resolvers, channels, dedup-key template, link strategy).
+3.  Add a seed `notification_rule` row via `app/scripts/sync_notification_rules.py` or equivalent seed script. **Without this step, the event is a silent no-op.**
+4.  Call `dispatch()` (service, row #1) or `safe_dispatch()` (router/closure, row #2/#5) at the appropriate site. Consult the decision tree in Section 7.2.
+5.  Add a unit test asserting dispatch is invoked with expected event + payload.
+6.  Verify end-to-end: check `notification_delivery` rows created, check channel delivery logs.
+
+For troubleshooting missing notifications, see `docs/EVENT_ARCHITECTURE.md` Section 7.
