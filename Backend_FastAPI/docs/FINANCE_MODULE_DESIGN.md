@@ -1,9 +1,32 @@
+> **HISTORICAL DESIGN DOCUMENT — NOT CANONICAL**
+>
+> This document reflects the **original design intent** of the QLTS finance module
+> (2026-01-30). It has drifted from the current codebase at multiple layers:
+> event architecture, DB schema contracts, service/notification flow, module
+> structure, and project direction. See `docs/EVENT_ARCHITECTURE.md` and
+> `MASTER_ARCHITECTURE.md` PART 7 for canonical architecture.
+>
+> **Still useful for**: understanding business vocabulary (fee, invoice, payment,
+> accounting_period) and the design rationale behind the finance scaffold.
+>
+> **NOT reliable for**: event system design (now SystemEvents + dispatcher),
+> exact schema (verify against models + migrations), service flow (verify
+> against `payment_service.py`, `accounting_service.py`), or module layout
+> (verify against actual `app/` directory).
+>
+> Canonical implementation references:
+> - Notification/event: `notification_dispatcher.py`, `events.py`, `event_catalog.py`
+> - Payment flow: `payment_service.py`, `payment_router.py`
+> - Accounting: `accounting_service.py`, `accounting.py` (model)
+> - Architecture: `MASTER_ARCHITECTURE.md` PART 7, `docs/EVENT_ARCHITECTURE.md`
+> - Dead code removal: `docs/adr/ADR-001-remove-finance-events.md`
+
 # Finance Module Design - QLTS
 
 > **Author**: Senior Software Architect
 > **Version**: 1.2
 > **Date**: 2026-01-30
-> **Status**: Design Proposal (Updated)
+> **Status**: ~~Design Proposal (Updated)~~ **HISTORICAL** (see banner above)
 > **Changelog**:
 > - v1.2 - Integrated with implemented application_fee, updated status mapping, added migration strategy
 > - v1.1 - Added multi-fee, accounting period, idempotent events, payment intent
@@ -622,7 +645,7 @@ CREATE INDEX idx_payment_transaction_created ON payment_transaction(created_at);
 CREATE INDEX idx_payment_transaction_idempotency ON payment_transaction(idempotency_key);
 ```
 
-#### 3.2.10 `processed_event` - Event Idempotency (v1.1 NEW)
+#### 3.2.10 `processed_event` - Event Idempotency (v1.1 NEW) — [HISTORICAL: ORM model removed per ADR-001; DB table pending B2 drop]
 
 ```sql
 CREATE TABLE processed_event (
@@ -3058,7 +3081,7 @@ async def soft_delete_profile(
 │      │                           │                              │           │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-IDEMPOTENCY HANDLING:
+IDEMPOTENCY HANDLING: [HISTORICAL — processed_event flow never wired up; see ADR-001]
 
 ┌─────────────────────────────────────────────────────────────────┐
 │  If callback received twice (duplicate IPN):                    │
@@ -3066,6 +3089,9 @@ IDEMPOTENCY HANDLING:
 │  1. Check processed_event table for event_id                    │
 │  2. If exists → return 200 OK, skip processing                  │
 │  3. If not exists → process, then insert to processed_event     │
+│                                                                 │
+│  NOTE: This flow was designed but never implemented.             │
+│  Current payment uses maker-checker pattern in payment_service.  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3334,6 +3360,13 @@ async def calculate_fee(
 ---
 
 ## 5. Domain Events (v1.1 - Idempotent)
+
+> **[HISTORICAL — CODE REMOVED]** The DomainEvent + ProcessedEvent + IdempotentEventHandler
+> system described in this section was scaffolded but never wired up in production.
+> All source code was removed per ADR-001 (`docs/adr/ADR-001-remove-finance-events.md`).
+> Finance notification needs are served by the SystemEvents + dispatcher path.
+> See `docs/EVENT_ARCHITECTURE.md` for current architecture.
+> The `processed_event` DB table still exists pending Phase B2 drop migration.
 
 ### 5.1 Event Schema (Enhanced)
 
@@ -3852,7 +3885,7 @@ INSERT INTO installment_plan (...);
 
 ---
 
-## 8. File Structure (Updated)
+## 8. File Structure (Updated) — [HISTORICAL: actual structure has diverged; verify against `app/` directory]
 
 ```
 Backend_FastAPI/
@@ -3867,10 +3900,10 @@ Backend_FastAPI/
 │   │       ├── installment_plan.py
 │   │       ├── accounting_period.py
 │   │       ├── refund.py
-│   │       └── processed_event.py
+│   │       └── processed_event.py   ← [REMOVED: model in accounting.py, deleted per ADR-001]
 │   ├── schemas/
 │   │   ├── finance.py
-│   │   └── finance_events.py
+│   │   └── finance_events.py       ← [REMOVED: deleted per ADR-001]
 │   ├── repositories/
 │   │   ├── fee_repository.py
 │   │   ├── invoice_repository.py
@@ -3895,8 +3928,8 @@ Backend_FastAPI/
 │   │   ├── vnpay.py
 │   │   └── momo.py
 │   └── core/
-│       ├── finance_events.py
-│       └── idempotent_handler.py
+│       ├── finance_events.py       ← [REMOVED: deleted per ADR-001]
+│       └── idempotent_handler.py   ← [REMOVED: deleted per ADR-001]
 ├── alembic/
 │   └── versions/
 │       ├── fin20260201001_create_finance_tables.py
