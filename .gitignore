@@ -229,7 +229,14 @@ Documents/Seeding data/GitHistory/
 .agent/
 .agents/
 .claude/
-docs/
+# Previously a single `docs/` rule ignored every `docs/` directory in the
+# tree. That swept up `Backend_FastAPI/docs/` too, which is where real
+# backend design docs (ADRs, specs) live. Scope the rule to the specific
+# paths that should stay ignored so `Backend_FastAPI/docs/**` remains
+# trackable for new files. Existing tracked files are unaffected either way.
+/docs/
+frontend/docs/
+Backend_FastAPI/docs/CTV_ORIGINAL_*.md
 
 # Debug scripts
 Backend_FastAPI/debug_*.py
