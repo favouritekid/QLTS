@@ -325,14 +325,14 @@ Events có đầy đủ registry config (resolver, template, channels) nhưng **
 
 ### Finding 1: `finance_events.py` DomainEvent system là dead code
 
-| Component | Defined | Runtime | Evidence |
-|---|---|---|---|
-| 18 DomainEvent classes | Yes | **Dead** | 0 `emit_event()` calls trong service layer |
-| `emit_event()` function | Yes | **Never called** | `fee_calculation_service.py:193` có `# TODO: Emit FeeCalculated domain event` |
-| Handler registry | Yes | **Always empty** | 0 `register_handler()` hoặc `@event_handler` trong production code |
-| `ProcessedEvent` table | Defined | **Never populated** | Idempotency tracking, chỉ dùng trong test |
+| Component | Defined | Runtime | Evidence (at audit time 2026-03-31) | Post-cleanup status |
+|---|---|---|---|---|
+| 18 DomainEvent classes | Yes | **Dead** | 0 `emit_event()` calls trong service layer | **Removed** (B1) |
+| `emit_event()` function | Yes | **Never called** | ~~`fee_calculation_service.py:193` có `# TODO`~~ | **Removed** (B1 — file deleted, TODO deleted) |
+| Handler registry | Yes | **Always empty** | 0 `register_handler()` hoặc `@event_handler` | **Removed** (B1) |
+| `ProcessedEvent` table | Defined | **Never populated** | Idempotency tracking, chỉ dùng trong test | **Dropped** (B2) |
 
-**Impact:** 3 inline sync calls (`sync_lead_tuition_calculated`, `sync_lead_tuition_paid`, `sync_lead_tuition_refunded`) làm việc mà DomainEvent system lẽ ra phải làm. Nếu miss inline call ở flow nào → lead pipeline lệch, không có safety net.
+**Impact (historical — no longer applicable after B1+B2):** 3 inline sync calls (`sync_lead_tuition_calculated`, `sync_lead_tuition_paid`, `sync_lead_tuition_refunded`) làm việc mà DomainEvent system lẽ ra phải làm. Post-cleanup: inline calls remain as the canonical path; DomainEvent scaffold fully removed.
 
 **~~Decision needed:~~ RESOLVED (Phase B1 PR #107 + Phase B2 PR #110, 2026-04-11):** Decision = remove dead code. Source cluster deleted in B1 (`finance_events.py`, `idempotent_handler.py`, `schemas/finance_events.py`, `EventIdempotencyService`, `ProcessedEvent` ORM model). Table `processed_event` dropped in B2 (migration `b2_drop_processed_event`, rev `5448988f1a77` → `b2_drop_processed_event`). See `docs/adr/ADR-001-remove-finance-events.md`.
 
