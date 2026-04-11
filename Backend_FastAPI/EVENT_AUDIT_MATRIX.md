@@ -334,7 +334,7 @@ Events có đầy đủ registry config (resolver, template, channels) nhưng **
 
 **Impact:** 3 inline sync calls (`sync_lead_tuition_calculated`, `sync_lead_tuition_paid`, `sync_lead_tuition_refunded`) làm việc mà DomainEvent system lẽ ra phải làm. Nếu miss inline call ở flow nào → lead pipeline lệch, không có safety net.
 
-**~~Decision needed:~~ PARTIALLY RESOLVED (Phase B1, PR #107, 2026-04-11):** Decision = remove dead code. Source cluster deleted (`finance_events.py`, `idempotent_handler.py`, `schemas/finance_events.py`, `EventIdempotencyService`, `ProcessedEvent` ORM model). Table `processed_event` still exists in DB — pending Phase B2 drop migration after staging/prod preflight. See `docs/adr/ADR-001-remove-finance-events.md`.
+**~~Decision needed:~~ RESOLVED (Phase B1 PR #107 + Phase B2 PR #110, 2026-04-11):** Decision = remove dead code. Source cluster deleted in B1 (`finance_events.py`, `idempotent_handler.py`, `schemas/finance_events.py`, `EventIdempotencyService`, `ProcessedEvent` ORM model). Table `processed_event` dropped in B2 (migration `b2_drop_processed_event`, rev `5448988f1a77` → `b2_drop_processed_event`). See `docs/adr/ADR-001-remove-finance-events.md`.
 
 ### Finding 2: `safe_dispatch()` trong service layer — ~~architecture violation~~ **WONTFIX — accepted pattern** (reclassified 2026-04-09)
 
@@ -420,7 +420,7 @@ Cùng event, cùng registry config, **khác ngữ cảnh và payload format**. R
 
 | ID | Gap | Impact | Effort |
 |---|---|---|---|
-| Arch-1 | `finance_events.py` DomainEvent dead code | ~~Kiến trúc mơ hồ~~ Source removed in B1 (PR #107), table drop pending B2 | **PARTIALLY RESOLVED** — ADR-001 accepted, source deleted, table pending |
+| Arch-1 | `finance_events.py` DomainEvent dead code | ~~Kiến trúc mơ hồ~~ Source removed B1, table dropped B2 | **RESOLVED** (B1 PR #107 + B2 PR #110) |
 | Arch-2 | `payment_service` dùng `safe_dispatch()` trong post_commit closure | **WONTFIX — accepted pattern** (reclassified 2026-04-09). Closure runs post-commit, matches safe_dispatch contract. See decision tree row #5 in PART 7. | ~~Low — refactor về `dispatch()`~~ No action needed |
 | Arch-3 | Admission cặp đôi dispatch không atomic | Rare failure case: partial notification | Medium — bundle vào savepoint |
 | ~~A13~~ | ~~`application_documents_updated` legacy~~ | **RESOLVED** — event retired, file xóa (PR #93) | — |
@@ -462,7 +462,7 @@ Cùng event, cùng registry config, **khác ngữ cảnh và payload format**. R
 
 **Sprint 3: P3 — Kiến trúc cleanup**
 
-9. ~~**Arch-1** — Quyết định số phận `finance_events.py`: wire up hoặc remove~~ **PARTIALLY RESOLVED** (B1 PR #107) — source removed, table drop pending B2
+9. ~~**Arch-1** — Quyết định số phận `finance_events.py`: wire up hoặc remove~~ **RESOLVED** (B1 PR #107 + B2 PR #110) — source removed, table dropped
 10. ~~**Arch-2** — Refactor `payment_service` về `dispatch()` pattern~~ **WONTFIX** (2026-04-09) — accepted pattern, see decision tree row #5
 11. **Arch-3** — Bundle admission cặp đôi dispatch vào savepoint
 
