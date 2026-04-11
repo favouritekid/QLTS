@@ -137,6 +137,16 @@ class OfferingAcademicInfo(Base):
         cascade="all, delete-orphan"
     )
 
+    # PR 1 (ADR-002): canonical per-semester tuition catalog.
+    # Replaces tuition_fee_per_year as source of truth during the epic.
+    # The legacy scalar is retained as a deprecated compatibility field.
+    semester_tuitions = relationship(
+        "OfferingSemesterTuition",
+        back_populates="academic_info",
+        cascade="all, delete-orphan",
+        order_by="OfferingSemesterTuition.semester_no",
+    )
+
     __table_args__ = (
         UniqueConstraint('offering_id', 'academic_year', name='uq_offering_academic_year'),
     )
