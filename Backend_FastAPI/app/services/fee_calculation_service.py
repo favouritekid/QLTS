@@ -133,10 +133,25 @@ class FeeCalculationService:
             academic_year_int = academic_year
 
         # Create fee record
+        # PR 1 (ADR-002) compat patch: tuition rows MUST carry a positive
+        # semester_no to satisfy chk_fee_tuition_semester_no_required and
+        # the new uq_fee_profile_type_semester_tuition partial unique
+        # index. PR 1 does not introduce semester-aware logic anywhere
+        # else — existing callers still pass academic_year, and the
+        # duplicate check at check_duplicate() is still year-based. The
+        # only thing PR 1 guarantees is that every new tuition fee
+        # created by this service lands with semester_no=1 (HK1), which
+        # matches the backfill of pre-existing tuition rows. Non-tuition
+        # fees leave semester_no NULL, matching the non-tuition partial
+        # index (keyed on academic_year, not semester_no).
+        # PR 3 will replace this compat patch with proper semester-aware
+        # tuition creation driven by offering_semester_tuition rows.
+        fee_semester_no = 1 if fee_type == FeeTypeEnum.tuition else None
         fee = Fee(
             admission_profile_id=admission_profile_id,
             fee_type=fee_type.value,
             academic_year=academic_year_int,
+            semester_no=fee_semester_no,
             installment_plan_id=installment_plan_id,
             base_amount=base_amount,
             total_discount=total_discount,
