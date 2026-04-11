@@ -16,8 +16,18 @@ Security Features:
 - Audit Trail: calculated_by_id, timestamps
 - Amount Validation: CHECK constraints ensure amounts >= 0
 
-Unique Constraint:
-- (admission_profile_id, fee_type, academic_year) - One fee per type per year
+Uniqueness (PR 1 of the semester_tuition epic, ADR-002):
+- Non-tuition fees: one row per (admission_profile_id, fee_type,
+  academic_year). Enforced by partial unique index
+  `uq_fee_profile_type_year_nontuition` WHERE fee_type <> 'tuition'.
+  Preserves pre-PR1 behavior exactly.
+- Tuition fees: one row per (admission_profile_id, fee_type,
+  semester_no). Enforced by partial unique index
+  `uq_fee_profile_type_semester_tuition` WHERE fee_type = 'tuition'.
+  Allows HK1/HK2/... to coexist on the same profile in the same
+  academic_year.
+- The legacy constraint `uq_fee_profile_type_year` was dropped in
+  migration `st20260412001_semester_tuition_schema.py`.
 """
 import enum
 from datetime import datetime, timezone, date
@@ -25,8 +35,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
-    CheckConstraint, Date, DateTime, ForeignKey,
-    Integer, Numeric, String, Text, UniqueConstraint
+    CheckConstraint, Date, DateTime, ForeignKey, Index,
+    Integer, Numeric, String, Text, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -68,17 +78,34 @@ class Fee(Base):
     Main fee record for a student's admission profile.
 
     Business Rules:
-    - One fee per (profile, type, year) combination
+    - Non-tuition fees: one row per (profile, fee_type, academic_year).
+    - Tuition fees: one row per (profile, fee_type, semester_no). HK1/HK2
+      may coexist in the same academic_year. `semester_no` is NULL for
+      non-tuition rows; tuition rows require a positive value.
     - final_amount = base_amount - total_discount
     - remaining = final_amount - paid_amount - waived_amount
     - Status transitions follow FINANCE_MODULE_DESIGN.md Section 4.1
+      (historical — see docs/adr/ADR-002-semester-tuition-refactor.md
+      for the current model direction).
     """
     __tablename__ = "fee"
 
     __table_args__ = (
-        UniqueConstraint(
+        # Partial unique index: preserve pre-PR1 non-tuition behavior.
+        # Matches fee_repository.check_duplicate() semantics exactly.
+        Index(
+            'uq_fee_profile_type_year_nontuition',
             'admission_profile_id', 'fee_type', 'academic_year',
-            name='uq_fee_profile_type_year'
+            unique=True,
+            postgresql_where=text("fee_type <> 'tuition'"),
+        ),
+        # Partial unique index: new per-semester uniqueness for tuition.
+        # Allows HK1/HK2/HK3/... on the same profile in the same year.
+        Index(
+            'uq_fee_profile_type_semester_tuition',
+            'admission_profile_id', 'fee_type', 'semester_no',
+            unique=True,
+            postgresql_where=text("fee_type = 'tuition'"),
         ),
         CheckConstraint(
             'base_amount >= 0 AND total_discount >= 0 AND final_amount >= 0 '
@@ -98,6 +125,26 @@ class Fee(Base):
             "status IN ('pending', 'calculated', 'invoiced', 'partial', "
             "'paid', 'overdue', 'waived', 'cancelled')",
             name='chk_fee_status_valid'
+        ),
+        # PR 1: tuition fees must carry a positive semester_no. Non-tuition
+        # fees leave semester_no NULL (no semantic). The partial index
+        # above would also block invalid rows, but this CHECK is a second
+        # line of defense against bugs inserting tuition rows with NULL
+        # semester_no that would silently escape the index predicate.
+        CheckConstraint(
+            "fee_type <> 'tuition' "
+            "OR (semester_no IS NOT NULL AND semester_no >= 1)",
+            name='chk_fee_tuition_semester_no_required'
+        ),
+        # PR 1 hardening: non-tuition fees must leave semester_no NULL.
+        # The partial index uq_fee_profile_type_year_nontuition keys on
+        # academic_year (not semester_no), so a non-tuition row with a
+        # stray semester_no value would not cause uniqueness corruption
+        # but would break the "non-tuition = NULL" invariant that PR 3+
+        # relies on. This CHECK closes the slack before it becomes a bug.
+        CheckConstraint(
+            "fee_type = 'tuition' OR semester_no IS NULL",
+            name='chk_fee_nontuition_semester_no_null'
         ),
     )
 
@@ -133,6 +180,16 @@ class Fee(Base):
         nullable=False,
         index=True,
         comment="Academic year (e.g., 2026)"
+    )
+    semester_no: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
+        comment="Semester index (1..N) for tuition fees (HK1=1, HK2=2, ...). "
+                "NULL for non-tuition fee types. See ADR-002 Gap A (v2 "
+                "partial-index strategy). Enforced by partial unique index "
+                "uq_fee_profile_type_semester_tuition and CHECK "
+                "chk_fee_tuition_semester_no_required."
     )
 
     # Amount Calculation
