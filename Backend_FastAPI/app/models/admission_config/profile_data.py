@@ -8,7 +8,7 @@ Replaces JSON fields in AdmissionProfile:
 """
 
 from sqlalchemy import CheckConstraint, Column, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
 
@@ -337,7 +337,14 @@ class DocumentAuditLog(Base):
     )
 
     # Relationships
-    profile_document = relationship("ProfileDocument", backref="audit_logs")
+    # passive_deletes=True: let the DB-level ondelete="CASCADE" on the FK
+    # handle deletion. Without this, SQLAlchemy walks the backref and tries
+    # UPDATE SET NULL on profile_document_id — which violates the NOT NULL
+    # constraint and crashes with IntegrityError. See Issue #108.
+    profile_document = relationship(
+        "ProfileDocument",
+        backref=backref("audit_logs", passive_deletes=True),
+    )
     actor = relationship("User", foreign_keys=[actor_user_id])
 
     __table_args__ = (
