@@ -515,3 +515,21 @@ These match **decision tree row #5**. They are documented because `git grep "saf
 6.  Verify end-to-end: check `notification_delivery` rows created, check channel delivery logs.
 
 For troubleshooting missing notifications, see `docs/EVENT_ARCHITECTURE.md` Section 7.
+
+---
+
+## PART 8: DOMAIN SEMANTICS POINTERS
+
+These documents lock business semantics that this architecture file does
+not restate. When the rules differ, the domain document is authoritative
+for its area.
+
+- **Finance — Semester Tuition Refactor** (active epic): canonical source
+  of truth for tuition is per-semester. HK1 is the admission fee. The
+  admission finance gate becomes HK1 financial clearance under a mode
+  switch. See `docs/adr/ADR-002-semester-tuition-refactor.md` and
+  `docs/SEMESTER_TUITION_SPEC.md`. Until this epic lands, the current
+  `tuition_fee_per_year` path remains in place; new code must not rely on
+  it as canonical.
+- **Finance — Dead event cluster removal** (shipped): no `DomainEvent` /
+  `emit_event()`. See `docs/adr/ADR-001-remove-finance-events.md`.

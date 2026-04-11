@@ -20,6 +20,13 @@
 > - Accounting: `accounting_service.py`, `accounting.py` (model)
 > - Architecture: `MASTER_ARCHITECTURE.md` PART 7, `docs/EVENT_ARCHITECTURE.md`
 > - Dead code removal: `docs/adr/ADR-001-remove-finance-events.md`
+> - **Tuition model refactor (active epic, 2026-04-11)**:
+>   `docs/adr/ADR-002-semester-tuition-refactor.md` and
+>   `docs/SEMESTER_TUITION_SPEC.md`. This epic moves the canonical tuition
+>   unit from `tuition_fee_per_year` to per-semester `semester_tuition`.
+>   The year-based modeling anywhere in this historical document is
+>   superseded by that ADR/spec. Do not implement against the year-based
+>   description below without first reading ADR-002.
 
 # Finance Module Design - QLTS
 
