@@ -362,7 +362,6 @@ class FinanceModuleValidator:
         'installment_plan',
         'payment_method',
         'accounting_period',
-        'processed_event',
         'fee',
         'fee_applied_discount',
         'invoice',
@@ -391,7 +390,6 @@ class FinanceModuleValidator:
         'installment_plan': ['id', 'code', 'name', 'installment_count', 'schedule'],
         'payment_method': ['id', 'code', 'name', 'is_online', 'is_active'],
         'accounting_period': ['id', 'period_month', 'period_year', 'is_closed'],
-        'processed_event': ['id', 'event_id', 'consumer_id', 'processed_at', 'processing_result'],
         'fee_applied_discount': ['id', 'fee_id', 'policy_id', 'discount_amount', 'discount_percent'],
     }
 

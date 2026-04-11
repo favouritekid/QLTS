@@ -30,7 +30,7 @@ from app.services.fee_calculation_service import FeeCalculationService
 from app.services.invoice_service import InvoiceService
 from app.services.payment_service import PaymentService, RefundService
 from app.services.payment_intent_service import PaymentIntentService
-from app.services.accounting_service import AccountingPeriodService, EventIdempotencyService
+from app.services.accounting_service import AccountingPeriodService
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -817,64 +817,3 @@ class TestAccountingPeriod:
 
         assert "not closed" in str(exc_info.value).lower()
 
-
-# =============================================================================
-# EVENT IDEMPOTENCY TESTS
-# =============================================================================
-
-class TestEventIdempotency:
-    """Test event idempotency service."""
-
-    @pytest.mark.asyncio
-    async def test_mark_event_processed(
-        self,
-        db: AsyncSession,
-    ):
-        """Test marking event as processed."""
-        service = EventIdempotencyService(db)
-
-        # Mark event
-        event = await service.mark_processed(
-            event_id="vnpay-txn-123",
-            event_type="vnpay_callback",
-            consumer_id="payment_service",
-            result="success",
-            payload={"amount": 500000},
-        )
-        await db.commit()
-
-        assert event.id is not None
-        assert event.event_id == "vnpay-txn-123"
-        assert event.processing_result == "success"
-
-        # Check is_processed
-        is_processed = await service.is_processed("vnpay-txn-123", "payment_service")
-        assert is_processed is True
-
-    @pytest.mark.asyncio
-    async def test_duplicate_event_raises_conflict(
-        self,
-        db: AsyncSession,
-    ):
-        """Test duplicate event processing is blocked."""
-        service = EventIdempotencyService(db)
-
-        # First processing
-        await service.mark_processed(
-            event_id="vnpay-txn-456",
-            event_type="vnpay_callback",
-            consumer_id="payment_service",
-            result="success",
-        )
-        await db.commit()
-
-        # Duplicate should raise ConflictError
-        with pytest.raises(ConflictError) as exc_info:
-            await service.mark_processed(
-                event_id="vnpay-txn-456",
-                event_type="vnpay_callback",
-                consumer_id="payment_service",
-                result="success",
-            )
-
-        assert "already processed" in str(exc_info.value).lower()

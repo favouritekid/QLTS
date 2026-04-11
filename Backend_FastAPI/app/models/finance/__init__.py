@@ -8,7 +8,6 @@ Tables:
 - InstallmentPlan: Payment schedule configurations
 - PaymentMethod: Payment method definitions
 - AccountingPeriod: Ledger period tracking
-- ProcessedEvent: Idempotency tracking for event processing
 - Fee: Main fee record (application, tuition, enrollment, etc.)
 - FeeAppliedDiscount: Discount application snapshots
 - Invoice: Invoice records with installment support
@@ -26,7 +25,7 @@ Architecture:
 
 from .installment_plan import InstallmentPlan
 from .payment_method import PaymentMethod
-from .accounting import AccountingPeriod, ProcessedEvent
+from .accounting import AccountingPeriod
 from .fee import Fee, FeeAppliedDiscount, FeeTypeEnum, FeeStatusEnum
 from .invoice import Invoice, InvoiceStatusEnum
 from .payment_intent import PaymentIntent, PaymentIntentStatusEnum, GatewayStatusEnum
@@ -55,7 +54,6 @@ __all__ = [
     "PaymentMethod",
     # Models - Accounting
     "AccountingPeriod",
-    "ProcessedEvent",
     # Models - Core Finance
     "Fee",
     "FeeAppliedDiscount",

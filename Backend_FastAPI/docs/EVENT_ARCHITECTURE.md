@@ -239,4 +239,4 @@ If event sourcing becomes a real requirement, build with proper infrastructure (
 | `app/services/NOTIFICATION_ARCHITECTURE.md` | Deep-dive internals (guardrail table, phase history) |
 | `NOTIFICATION_PHASE_WORKLOG.md` | Historical worklog (do NOT update) |
 | `docs/adr/ADR-001-remove-finance-events.md` | Decision record for DomainEvent removal |
-| `docs/FINANCE_MODULE_DESIGN.md` | **HISTORICAL** — original finance module design. Drifted at 6 layers from current code (event architecture, data contracts, business flow, module structure, project status, tooling). Useful for business vocabulary only. A doc-level historical banner will be added in Phase B1. |
+| `docs/FINANCE_MODULE_DESIGN.md` | **HISTORICAL** — original finance module design, marked with doc-level banner + inline `[HISTORICAL]` / `[REMOVED]` markers. Drifted at 6 layers from current code. Useful for business vocabulary only. |

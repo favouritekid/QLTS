@@ -1991,6 +1991,8 @@ async def update_profile(
     if "permanent_province" in data: profile.permanent_province = data["permanent_province"]
     if "permanent_district" in data: profile.permanent_district = data["permanent_district"]
     if "permanent_ward" in data: profile.permanent_ward = data["permanent_ward"]
+    if "permanent_residential_group" in data: profile.permanent_residential_group = data["permanent_residential_group"]
+    if "permanent_street_address" in data: profile.permanent_street_address = data["permanent_street_address"]
     if "place_of_birth" in data: profile.place_of_birth = data["place_of_birth"]
     if "native_place" in data: profile.native_place = data["native_place"]
     if "social_insurance_number" in data: profile.social_insurance_number = data["social_insurance_number"]

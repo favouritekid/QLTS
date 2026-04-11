@@ -189,9 +189,9 @@ class FeeCalculationService:
                 reason=f"Tuition fee calculated: {final_amount:,.0f} VND",
             )
 
-        # Post-commit callback for event emission
+        # Post-commit callback (no events to emit — fee calculation is a
+        # pure service-internal flow, not a cross-module notification. See ADR-001.)
         async def post_commit():
-            # TODO: Emit FeeCalculated domain event
             pass
 
         return fee, post_commit
