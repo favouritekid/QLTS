@@ -273,11 +273,6 @@ class TestCreateIntent:
 class TestProcessCallback:
     """Tests for gateway callback processing without adapter (mock path)."""
 
-    @pytest.mark.xfail(
-        reason="Service bug: _create_payment_from_intent uses created_by_id=1, "
-               "verified_by_id=1, violating chk_payment_no_self_approval constraint",
-        raises=Exception,
-    )
     async def test_process_callback_success(self, db, intent_fixtures, admin_user):
         """Successful callback creates payment and updates invoice."""
         service = PaymentIntentService(db)

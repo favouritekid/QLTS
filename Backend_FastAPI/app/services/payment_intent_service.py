@@ -31,6 +31,7 @@ import structlog
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app import models
 from app.models.finance import (
@@ -389,10 +390,14 @@ class PaymentIntentService:
         intent.gateway_response = callback_data
 
         payment = None
+        fee = None
+        profile = None
 
         if gateway_status == GatewayStatusEnum.success:
-            # Create verified payment
-            payment = await self._create_payment_from_intent(intent, unit_id)
+            # Create verified payment (returns payment, fee, profile)
+            payment, fee, profile = await self._create_payment_from_intent(
+                intent, unit_id
+            )
             intent.status = PaymentIntentStatusEnum.completed.value
             intent.completed_at = datetime.now(timezone.utc)
         elif gateway_status in [GatewayStatusEnum.failed, GatewayStatusEnum.expired]:
@@ -410,10 +415,49 @@ class PaymentIntentService:
             payment_id=payment.id if payment else None,
         )
 
-        # Post-commit: notify payment status
+        # Build PAYMENT_VERIFIED notification payload while the session is
+        # still active. Dispatched from the post-commit closure below,
+        # mirroring the manual verify_payment path at
+        # payment_service.py:358-387. Only dispatched when an officer is
+        # resolved for the lead — otherwise SpecificUsersResolver returns
+        # an empty recipient list and zero notifications are silently
+        # suppressed.
+        _notify_payload: Optional[Dict[str, Any]] = None
+        if payment is not None and fee is not None:
+            _officer_id: Optional[int] = None
+            if profile is not None and getattr(profile, "lead", None) is not None:
+                _officer_id = profile.lead.assigned_officer_id
+            _notify_payload = {
+                "payment_id": payment.id,
+                "invoice_id": intent.invoice_id,
+                "fee_id": fee.id,
+                "amount": str(intent.amount),
+                "verified_by_id": None,  # auto-verified by gateway
+                "verified_at": (
+                    payment.verified_at.isoformat()
+                    if payment.verified_at
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+                "admission_profile_id": fee.admission_profile_id,
+                "lead_id": profile.lead_id if profile is not None else None,
+                "unit_id": unit_id,
+                "user_id": _officer_id,  # SpecificUsersResolver recipient
+            }
+        _db = self.db
+
         async def post_commit():
-            # TODO: Emit PaymentCompleted/PaymentFailed event
-            pass
+            # Dispatched AFTER router commits (gateway callback path).
+            # Skip silently if no recipient could be resolved — an empty
+            # dispatch would look like success but send nothing.
+            if _notify_payload is None or not _notify_payload.get("user_id"):
+                return
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.PAYMENT_VERIFIED,
+                payload=_notify_payload,
+            )
 
         return intent, payment, post_commit
 
@@ -421,22 +465,25 @@ class PaymentIntentService:
         self,
         gateway_code: str,
         callback_data: Dict[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> Tuple[Dict[str, Any], Optional[Callable]]:
         """
-        Process gateway callback and return result dict.
+        Process gateway callback and return (result dict, post_commit callback).
 
         This is a simplified wrapper around process_callback for router use.
-        Returns a dict suitable for JSON response.
+        The router must await the returned callback AFTER committing the
+        business transaction, otherwise the PAYMENT_VERIFIED notification
+        is silently dropped.
 
         Args:
             gateway_code: Gateway identifier (e.g., 'vnpay', 'momo')
             callback_data: Raw callback data from gateway
 
         Returns:
-            Dict with success status, message, and relevant IDs
+            Tuple of (result_dict, post_commit_callback_or_None). On error
+            paths the callback is None because no dispatch is owed.
         """
         try:
-            intent, payment, _ = await self.process_callback(
+            intent, payment, post_commit = await self.process_callback(
                 gateway_code=gateway_code,
                 callback_data=callback_data,
             )
@@ -447,30 +494,36 @@ class PaymentIntentService:
                 "intent_id": intent.id,
                 "payment_id": payment.id if payment else None,
                 "status": intent.status,
-            }
+            }, post_commit
 
         except ResourceNotFoundError as e:
             return {
                 "success": False,
                 "message": str(e),
                 "intent_id": None,
-            }
+            }, None
         except BusinessRuleViolation as e:
             return {
                 "success": False,
                 "message": str(e),
                 "intent_id": None,
-            }
+            }, None
 
     async def _create_payment_from_intent(
         self,
         intent: PaymentIntent,
         unit_id: Optional[int] = None,
-    ) -> Payment:
+    ) -> Tuple[Payment, "Fee", Optional["models.AdmissionProfile"]]:
         """
         Create Payment record from successful intent.
 
         Online payments are auto-verified (no maker-checker).
+
+        Returns:
+            Tuple of (payment, fee, profile_or_None). Profile is None when the
+            fee has no admission_profile_id linkage. Callers use `fee` and
+            `profile` for post-commit dispatch payload construction and lead
+            pipeline sync (for tuition fees).
         """
         # Get invoice and fee with locks
         invoice = await self.invoice_repo.get_for_update(intent.invoice_id, unit_id)
@@ -484,7 +537,10 @@ class PaymentIntentService:
         # Capture balance before
         fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount
 
-        # Create payment (auto-verified for online payments)
+        # Create payment (auto-verified for online payments).
+        # Issue C fix: verified_by_id must be NULL, not the same as created_by_id,
+        # otherwise chk_payment_no_self_approval fires. For the online path
+        # there is no human checker — the gateway callback IS the verification.
         payment = Payment(
             invoice_id=intent.invoice_id,
             method_id=intent.method_id,
@@ -494,8 +550,8 @@ class PaymentIntentService:
             status=PaymentStatusEnum.verified.value,  # Auto-verified
             payment_date=datetime.now(timezone.utc),
             verified_at=datetime.now(timezone.utc),
-            created_by_id=1,  # System user for online payments
-            verified_by_id=1,  # System user
+            created_by_id=1,   # System user for online payments
+            verified_by_id=None,  # NULL: auto-verified by gateway, no human checker
         )
 
         self.db.add(payment)
@@ -539,7 +595,36 @@ class PaymentIntentService:
         await self.db.flush()
         await self.db.refresh(payment)
 
-        return payment
+        # Resolve admission profile (with lead eager-loaded) for post-commit
+        # payload + lead sync. Mirrors payment_service._get_profile_for_fee
+        # pattern; inlined here to avoid cross-service dependency.
+        profile: Optional[models.AdmissionProfile] = None
+        if fee.admission_profile_id:
+            result = await self.db.execute(
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == fee.admission_profile_id)
+                .options(selectinload(models.AdmissionProfile.lead))
+            )
+            profile = result.scalar_one_or_none()
+
+        # Sync lead pipeline for tuition payments (mirrors manual verify path
+        # at payment_service.py:322-333). Only fires when the tuition fee is
+        # fully paid after this online payment.
+        if (
+            fee_remaining <= 0
+            and fee.fee_type == "tuition"
+            and profile is not None
+        ):
+            from app.services.lead_admission_sync import sync_lead_tuition_paid
+            await sync_lead_tuition_paid(
+                db=self.db,
+                profile=profile,
+                transaction_id=payment.reference_code or f"PAY-{payment.id}",
+                changed_by_user_id=1,  # system user
+                reason=f"Online tuition payment via {intent.method.code}",
+            )
+
+        return payment, fee, profile
 
     # ==========================================================================
     # INTENT LIFECYCLE

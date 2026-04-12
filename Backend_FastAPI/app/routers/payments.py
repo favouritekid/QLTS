@@ -615,13 +615,19 @@ async def payment_callback(
     intent_service = PaymentIntentService(db)
 
     try:
-        # Process callback (verify signature, create payment)
-        result = await intent_service.process_gateway_callback(
+        # Process callback (verify signature, create payment).
+        # process_gateway_callback returns (result_dict, post_commit_callback).
+        # The callback carries the PAYMENT_VERIFIED dispatch — we MUST await
+        # it after db.commit(), otherwise the notification is silently lost.
+        result, callback = await intent_service.process_gateway_callback(
             gateway_code=gateway_code,
             callback_data=callback_data,
         )
 
         await db.commit()
+
+        if callback is not None:
+            await callback()
 
         log.info(
             "payment_callback_processed",

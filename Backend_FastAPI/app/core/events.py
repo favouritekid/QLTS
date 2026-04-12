@@ -380,6 +380,59 @@ class SystemEvents(str, Enum):
     Recipients: Finance staff, the applicant (external via Zalo ZNS phase 1)
     """
 
+    PAYMENT_REJECTED = "payment_rejected"
+    """
+    Triggered when a checker rejects a pending payment.
+
+    Payload Schema:
+        {
+            "payment_id": int,            # Required: ID of the rejected payment
+            "invoice_id": int,            # Required: ID of the invoice
+            "fee_id": int,                # Required: ID of the fee
+            "amount": str,                # Payment amount (Decimal as string)
+            "rejection_reason": str,      # Required: Why the payment was rejected
+            "rejected_by_id": int,        # Required: Checker who rejected
+            "created_by_id": int,         # Required: Maker who recorded the payment
+            "admission_profile_id": int,  # Admission profile linked to fee
+            "lead_id": int,               # Lead linked to admission profile
+            "unit_id": int,               # Unit for scoping
+            "user_id": int                # Recipient (== created_by_id) for SpecificUsersResolver
+        }
+
+    Recipients: The maker (created_by_id) who recorded the payment
+    """
+
+    REFUND_PROCESSED = "refund_processed"
+    """
+    Triggered when an approved refund is processed (funds returned).
+
+    Payload Schema:
+        {
+            "refund_id": int,             # Required: ID of the refund request
+            "payment_id": int,            # Required: Original payment being refunded
+            "invoice_id": int,            # Required: Invoice affected
+            "fee_id": int,                # Required: Fee affected
+            "amount": str,                # Refund amount (Decimal as string)
+            "reason": str,                # Refund reason
+            "processor_id": int,          # User who processed the refund
+            "admission_profile_id": int,  # Admission profile linked to fee
+            "lead_id": int,               # Lead linked to admission profile
+            "unit_id": int,               # Unit for scoping
+            "user_ids": list[int]         # Resolved recipients (officer + processor)
+        }
+
+    Recipients: Assigned officer, processor (internal only — PR A scope).
+    Finance staff group deferred to PR B (needs dedicated resolver/action group).
+    External applicant notification deferred to Zalo ZNS Phase 2.
+
+    Status: DORMANT as of PR A. The dispatch site lives in
+    payment_service.process_approved_refund(), but RefundService has no
+    router endpoint — the request/approve/process flow is service-layer
+    only. Catalog tags this event notification_class="internal_future"
+    until the refund router ships. No live API path can fire this event
+    today.
+    """
+
     # =========================================================================
     # DORM EVENTS (Future)
     # =========================================================================

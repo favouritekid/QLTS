@@ -483,6 +483,32 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         priority=60,
     ),
 
+    SystemEvents.PAYMENT_REJECTED: NotificationConfig(
+        group=NotificationEventGroup.FINANCE,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Thanh toán bị từ chối",
+            "Khoản thanh toán ${amount} đã bị từ chối. Lý do: ${rejection_reason}"
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.WARNING,
+        link_template="/finance/payments/${payment_id}",
+        priority=65,
+    ),
+
+    SystemEvents.REFUND_PROCESSED: NotificationConfig(
+        group=NotificationEventGroup.FINANCE,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Hoàn tiền đã xử lý",
+            "Khoản hoàn tiền ${amount} đã được xử lý thành công."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.INFO,
+        link_template="/finance/payments/${payment_id}",
+        priority=55,
+    ),
+
     # =========================================================================
     # 🏠 DORM EVENTS
     # =========================================================================
