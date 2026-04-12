@@ -1066,3 +1066,87 @@ class TestSemesterTuitionRecalculation:
         await db.refresh(fee)
         assert fee.base_amount == original_base
 
+
+# =============================================================================
+# HK1 CLEARED-STATE PIPELINE GATE TESTS (PR 5 — ADR-002)
+# =============================================================================
+
+class TestHK1ClearedStatePipelineGate:
+    """Test that admission pipeline projections use HK1 cleared-state
+    semantics: fires once on first HK1 clearance, never for HK2+."""
+
+    @pytest.mark.asyncio
+    async def test_is_hk1_cleared_helper(self):
+        """Unit test for the shared is_hk1_cleared helper."""
+        from app.services.fee_calculation_service import is_hk1_cleared
+
+        # Cleared states for HK1
+        assert is_hk1_cleared("tuition", 1, "paid", Decimal("10000000")) is True
+        assert is_hk1_cleared("tuition", 1, "waived", Decimal("0")) is True
+        assert is_hk1_cleared("tuition", 1, "partial", Decimal("100000")) is True
+
+        # Not cleared
+        assert is_hk1_cleared("tuition", 1, "partial", Decimal("0")) is False
+        assert is_hk1_cleared("tuition", 1, "pending", Decimal("0")) is False
+        assert is_hk1_cleared("tuition", 1, "calculated", Decimal("0")) is False
+        assert is_hk1_cleared("tuition", 1, "invoiced", Decimal("0")) is False
+        assert is_hk1_cleared("tuition", 1, "overdue", Decimal("0")) is False
+        assert is_hk1_cleared("tuition", 1, "cancelled", Decimal("0")) is False
+
+        # Wrong semester / wrong type
+        assert is_hk1_cleared("tuition", 2, "paid", Decimal("10000000")) is False
+        assert is_hk1_cleared("tuition", 3, "paid", Decimal("10000000")) is False
+        assert is_hk1_cleared("application", 1, "paid", Decimal("10000000")) is False
+        assert is_hk1_cleared("tuition", None, "paid", Decimal("10000000")) is False
+
+    @pytest.mark.asyncio
+    async def test_hk1_first_partial_triggers_transition(self):
+        """First partial HK1 payment: False -> True transition = sync fires."""
+        from app.services.fee_calculation_service import is_hk1_cleared
+
+        was = is_hk1_cleared("tuition", 1, "calculated", Decimal("0"))
+        assert was is False
+
+        now = is_hk1_cleared("tuition", 1, "partial", Decimal("3000000"))
+        assert now is True
+        assert not was and now  # Transition detected
+
+    @pytest.mark.asyncio
+    async def test_hk1_second_payment_no_retrigger(self):
+        """Second payment on already-cleared HK1: True -> True = no sync."""
+        from app.services.fee_calculation_service import is_hk1_cleared
+
+        was = is_hk1_cleared("tuition", 1, "partial", Decimal("3000000"))
+        assert was is True
+
+        now = is_hk1_cleared("tuition", 1, "partial", Decimal("6000000"))
+        assert now is True
+        assert not (not was and now)  # No transition
+
+    @pytest.mark.asyncio
+    async def test_hk2_payment_never_triggers(self):
+        """HK2 payment: always False, no sync regardless of state."""
+        from app.services.fee_calculation_service import is_hk1_cleared
+
+        assert is_hk1_cleared("tuition", 2, "paid", Decimal("10000000")) is False
+        assert is_hk1_cleared("tuition", 2, "partial", Decimal("5000000")) is False
+        assert is_hk1_cleared("tuition", 2, "waived", Decimal("0")) is False
+
+    @pytest.mark.asyncio
+    async def test_hk1_waiver_triggers_transition(self):
+        """HK1 waiver: False -> True transition = sync fires."""
+        from app.services.fee_calculation_service import is_hk1_cleared
+
+        was = is_hk1_cleared("tuition", 1, "calculated", Decimal("0"))
+        now = is_hk1_cleared("tuition", 1, "waived", Decimal("0"))
+        assert not was and now
+
+    @pytest.mark.asyncio
+    async def test_hk1_full_payment_triggers_transition(self):
+        """HK1 full payment: False -> True transition = sync fires."""
+        from app.services.fee_calculation_service import is_hk1_cleared
+
+        was = is_hk1_cleared("tuition", 1, "invoiced", Decimal("0"))
+        now = is_hk1_cleared("tuition", 1, "paid", Decimal("10000000"))
+        assert not was and now
+

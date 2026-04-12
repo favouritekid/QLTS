@@ -565,6 +565,12 @@ class PaymentIntentService:
         elif invoice.paid_amount > 0:
             invoice.status = InvoiceStatusEnum.partial.value
 
+        # ADR-002 PR 5: snapshot cleared state BEFORE fee mutation
+        from app.services.fee_calculation_service import is_hk1_cleared
+        was_hk1_cleared = is_hk1_cleared(
+            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+        )
+
         # Update fee paid_amount
         fee.paid_amount = fee.paid_amount + intent.amount
         fee.last_payment_at = datetime.now(timezone.utc)
@@ -607,21 +613,18 @@ class PaymentIntentService:
             )
             profile = result.scalar_one_or_none()
 
-        # Sync lead pipeline for tuition payments (mirrors manual verify path
-        # at payment_service.py:322-333). Only fires when the tuition fee is
-        # fully paid after this online payment.
-        if (
-            fee_remaining <= 0
-            and fee.fee_type == "tuition"
-            and profile is not None
-        ):
+        # ADR-002 PR 5: Sync lead only on HK1 cleared-state transition.
+        now_hk1_cleared = is_hk1_cleared(
+            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+        )
+        if not was_hk1_cleared and now_hk1_cleared and profile is not None:
             from app.services.lead_admission_sync import sync_lead_tuition_paid
             await sync_lead_tuition_paid(
                 db=self.db,
                 profile=profile,
                 transaction_id=payment.reference_code or f"PAY-{payment.id}",
-                changed_by_user_id=1,  # system user
-                reason=f"Online tuition payment via {intent.method.code}",
+                changed_by_user_id=1,
+                reason=f"HK1 tuition cleared via online payment ({intent.method.code})",
             )
 
         return payment, fee, profile

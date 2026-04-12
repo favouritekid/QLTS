@@ -321,7 +321,17 @@ class Fee(Base):
 
     @property
     def is_fully_paid(self) -> bool:
-        """Check if fee is fully paid or waived."""
+        """Check if fee is fully paid or waived.
+
+        Under the per-semester model (ADR-002), each Fee row represents
+        one semester. This property means "this semester's fee is fully
+        settled", not "all tuition across all semesters is paid".
+
+        Note: admission pipeline projection uses is_hk1_cleared() from
+        fee_calculation_service instead of this property, because the
+        pipeline fires on first partial payment (cleared state), not
+        only on full payment.
+        """
         return self.remaining_amount <= Decimal("0")
 
     @property

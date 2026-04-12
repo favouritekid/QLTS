@@ -274,8 +274,12 @@ class PaymentService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
-        # Capture balance before
+        # Capture balance + cleared state BEFORE mutation (PR 5 transition detection)
         fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount
+        from app.services.fee_calculation_service import is_hk1_cleared
+        was_hk1_cleared = is_hk1_cleared(
+            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+        )
 
         # Update payment status
         payment.status = PaymentStatusEnum.verified.value
@@ -318,9 +322,13 @@ class PaymentService:
 
         await self.db.flush()
 
-        # ✅ SYNC LEAD STATUS: If tuition fee is now fully paid, move lead to sts10
-        if fee_remaining <= 0 and fee.fee_type == "tuition":
-            # Load profile with lead for sync
+        # ADR-002 PR 5: Sync lead only on HK1 cleared-state transition.
+        # "Cleared" = paid OR waived OR (partial + paid_amount > 0).
+        # Only fires once: pre=not-cleared -> post=cleared.
+        now_hk1_cleared = is_hk1_cleared(
+            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+        )
+        if not was_hk1_cleared and now_hk1_cleared:
             profile = await self._get_profile_for_fee(fee)
             if profile:
                 from app.services.lead_admission_sync import sync_lead_tuition_paid
@@ -329,7 +337,7 @@ class PaymentService:
                     profile=profile,
                     transaction_id=payment.reference_code or f"PAY-{payment.id}",
                     changed_by_user_id=verifier_id,
-                    reason=f"Tuition fee fully paid. Amount: {payment.amount:,.0f} VND",
+                    reason=f"HK1 tuition cleared. Payment: {payment.amount:,.0f} VND",
                 )
 
         log.info(
@@ -351,10 +359,11 @@ class PaymentService:
         if profile and hasattr(profile, 'lead') and profile.lead:
             _officer_id = profile.lead.assigned_officer_id
 
-        # Capture data for post-commit closure
-        # Recipient: the officer who owns the lead (not the verifier)
-        # Phase 1 internal: notify officer about payment confirmation
-        # Phase 2 external (Zalo ZNS): will also notify applicant via lead phone
+        # ADR-002 D10: Under the per-semester model, each Fee is one semester.
+        # fee_remaining <= 0 means "this semester's fee is fully paid", not
+        # "all tuition fully paid". The lead sync above (gated via
+        # is_hk1_cleared transition) handles the pipeline projection;
+        # this notification payload is semester-scoped by construction.
         _notify_payload = {
             "payment_id": payment.id,
             "invoice_id": invoice.id,
@@ -888,14 +897,8 @@ class RefundService:
         # payload. Same query is used by the inline lead sync below.
         profile = await self._get_profile_for_fee(fee)
 
-        # ✅ SYNC LEAD STATUS: If tuition fee refund, move lead to sts18 (Đã hoàn học phí)
-        # Only sync if this is a tuition fee refund.
-        # NOTE (ADR-002 PR 5 follow-up): this projection currently fires
-        # unconditionally for any tuition refund. After the semester
-        # tuition epic lands, it must be gated to fee.semester_no == 1 so
-        # HK2+ refunds do not drag the admission pipeline backwards.
-        # Tracked in PR 5 checklist.
-        if fee.fee_type == "tuition" and profile is not None:
+        # ADR-002 PR 5 (D9): Only HK1 refund projects into admission pipeline.
+        if fee.fee_type == "tuition" and fee.semester_no == 1 and profile is not None:
             from app.services.lead_admission_sync import sync_lead_tuition_refunded
             await sync_lead_tuition_refunded(
                 db=self.db,
