@@ -393,7 +393,17 @@ async def create_notification_rule(
         await db.commit()
         await callback()
 
-        return rule
+        # Reload with actions relationship to avoid MissingGreenlet on
+        # response serialization. db.refresh() only refreshes scalars;
+        # we need selectinload for the actions collection.
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload
+        reloaded = (await db.execute(
+            sa_select(models.NotificationRule)
+            .where(models.NotificationRule.id == rule.id)
+            .options(selectinload(models.NotificationRule.actions))
+        )).scalar_one()
+        return reloaded
 
     except BadRequest as e:
         raise HTTPException(

@@ -342,18 +342,26 @@ class SystemEvents(str, Enum):
 
     PAYMENT_OVERDUE = "payment_overdue"
     """
-    Triggered when a payment becomes overdue.
+    Triggered when an invoice becomes overdue (PR 8 — invoice-level).
 
     Payload Schema:
         {
-            "fee_id": int,                # Required: ID of the overdue fee
-            "user_id": int,               # Required: User with overdue payment
-            "amount": int,                # Overdue amount
-            "days_overdue": int,          # Number of days overdue
-            "fee_type": str               # Type: tuition, dorm, etc.
+            "invoice_id": int,            # Required: the overdue invoice
+            "invoice_number": str,        # Invoice display number
+            "fee_id": int,                # Parent fee
+            "fee_type": str,              # tuition, application, etc.
+            "semester_no": int | None,    # Semester context (tuition only)
+            "amount": str,                # Invoice remaining amount (Decimal as string)
+            "due_date": str,              # ISO date of the due date
+            "days_overdue": int,          # Days past due
+            "installment_no": int,        # Installment sequence number
+            "admission_profile_id": int,  # Profile linked to fee
+            "lead_id": int,               # Lead linked to profile
+            "unit_id": int,               # Unit for scoping
+            "user_id": int                # Recipient (officer)
         }
 
-    Recipients: The user with overdue payment, finance staff
+    Recipients: Assigned officer, finance staff
     """
 
     PAYMENT_VERIFIED = "payment_verified"
@@ -431,6 +439,47 @@ class SystemEvents(str, Enum):
     only. Catalog tags this event notification_class="internal_future"
     until the refund router ships. No live API path can fire this event
     today.
+    """
+
+    FEE_FULLY_PAID = "fee_fully_paid"
+    """
+    Triggered when a semester fee is fully paid (remaining_amount <= 0).
+
+    Distinct from PAYMENT_VERIFIED (which fires on every payment verification).
+    FEE_FULLY_PAID fires once when the fee reaches zero balance.
+
+    Payload Schema:
+        {
+            "fee_id": int,
+            "amount": str,                # Total fee amount (Decimal as string)
+            "semester_no": int | None,    # Semester context
+            "admission_profile_id": int,
+            "lead_id": int,
+            "unit_id": int,
+            "user_id": int                # Recipient (officer)
+        }
+
+    Recipients: Assigned officer
+    """
+
+    INVOICE_ISSUED = "invoice_issued"
+    """
+    Triggered when an invoice transitions to issued status.
+
+    Payload Schema:
+        {
+            "invoice_id": int,
+            "invoice_number": str,
+            "fee_id": int,
+            "amount": str,                # Invoice amount (Decimal as string)
+            "due_date": str | None,       # ISO date
+            "admission_profile_id": int,
+            "lead_id": int,
+            "unit_id": int,
+            "user_id": int                # Recipient (officer)
+        }
+
+    Recipients: Assigned officer
     """
 
     # =========================================================================

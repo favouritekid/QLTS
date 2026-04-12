@@ -461,13 +461,39 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         group=NotificationEventGroup.FINANCE,
         resolver=SpecificUsersResolver(),
         template=(
-            "Payment Overdue",
-            "Your ${fee_type} payment of ${amount} is ${days_overdue} days overdue. Please settle immediately."
+            "Thanh toán quá hạn",
+            "Hóa đơn ${invoice_number} với số tiền ${amount} đã quá hạn ${days_overdue} ngày."
         ),
         channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.ERROR,
         link_template="/finance/fees/${fee_id}",
-        priority=20,  # Very high priority for overdue
+        priority=20,
+    ),
+
+    SystemEvents.FEE_FULLY_PAID: NotificationConfig(
+        group=NotificationEventGroup.FINANCE,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Học phí thanh toán đủ",
+            "Học phí kỳ ${semester_no} với số tiền ${amount} đã được thanh toán đầy đủ."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.SUCCESS,
+        link_template="/finance/fees/${fee_id}",
+        priority=50,
+    ),
+
+    SystemEvents.INVOICE_ISSUED: NotificationConfig(
+        group=NotificationEventGroup.FINANCE,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "Hóa đơn được phát hành",
+            "Hóa đơn ${invoice_number} với số tiền ${amount} đã được phát hành. Hạn: ${due_date}."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.INFO,
+        link_template="/finance/invoices/${invoice_id}",
+        priority=55,
     ),
 
     SystemEvents.PAYMENT_VERIFIED: NotificationConfig(
