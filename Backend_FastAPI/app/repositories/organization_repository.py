@@ -12,7 +12,7 @@ Benefits:
 - Separates SQL from business logic
 """
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -826,6 +826,30 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_hk1_tuition_by_academic_info_id(
+        self,
+        academic_year: int,
+    ) -> Dict[int, "Decimal"]:
+        """Return {academic_info_id: HK1_amount} for published info in the given year."""
+        from decimal import Decimal as _Decimal
+        query = (
+            select(
+                models.OfferingSemesterTuition.academic_info_id,
+                models.OfferingSemesterTuition.amount,
+            )
+            .join(
+                models.OfferingAcademicInfo,
+                models.OfferingSemesterTuition.academic_info_id == models.OfferingAcademicInfo.id,
+            )
+            .where(
+                models.OfferingAcademicInfo.academic_year == academic_year,
+                models.OfferingAcademicInfo.is_published == True,
+                models.OfferingSemesterTuition.semester_no == 1,
+            )
+        )
+        result = await self.db.execute(query)
+        return {row[0]: _Decimal(str(row[1])) for row in result.fetchall()}
 
     async def get_descendant_unit_ids(self, unit_id: int) -> List[int]:
         """

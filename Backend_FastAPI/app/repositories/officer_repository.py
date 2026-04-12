@@ -491,15 +491,20 @@ class OfficerRepository(BaseRepository[models.User]):
         if end_date:
             conditions.append(func.date(models.Lead.created_at) <= end_date)
 
-        # Query: Group lost leads by stage with tuition info
-        # JOIN: Lead -> ProgramOffering -> OfferingAcademicInfo
+        # PR 7: Use HK1 semester tuition with COALESCE fallback to annual.
+        # JOIN chain: Lead -> ProgramOffering -> OfferingAcademicInfo
+        #   -> OfferingSemesterTuition (semester_no=1)
+        tuition_source = func.coalesce(
+            models.OfferingSemesterTuition.amount,
+            models.OfferingAcademicInfo.tuition_fee_per_year,
+        )
         query = (
             select(
                 models.Lead.pipeline_stage_id.label("stage_id"),
                 func.count(models.Lead.id).label("lost_leads_count"),
-                func.avg(models.OfferingAcademicInfo.tuition_fee_per_year).label("avg_tuition"),
-                func.sum(models.OfferingAcademicInfo.tuition_fee_per_year).label("total_lost_revenue"),
-                func.count(models.OfferingAcademicInfo.tuition_fee_per_year).label("leads_with_tuition"),
+                func.avg(tuition_source).label("avg_tuition"),
+                func.sum(tuition_source).label("total_lost_revenue"),
+                func.count(tuition_source).label("leads_with_tuition"),
             )
             .join(
                 models.ConsultationStatus,
@@ -516,6 +521,13 @@ class OfficerRepository(BaseRepository[models.User]):
                     models.OfferingAcademicInfo.academic_year == academic_year,
                     models.OfferingAcademicInfo.is_published == True,
                     models.OfferingAcademicInfo.is_deleted == False,
+                )
+            )
+            .outerjoin(
+                models.OfferingSemesterTuition,
+                and_(
+                    models.OfferingSemesterTuition.academic_info_id == models.OfferingAcademicInfo.id,
+                    models.OfferingSemesterTuition.semester_no == 1,
                 )
             )
             .where(*conditions)

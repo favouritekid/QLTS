@@ -973,7 +973,7 @@ export function FunnelChart({
                   <TooltipContent side="top" className="max-w-[200px]">
                     <div className="text-xs space-y-1">
                       <p className="font-medium">Doanh thu mất ước tính</p>
-                      <p className="text-white/80">Dựa trên học phí TB ngành đăng ký</p>
+                      <p className="text-white/80">Dựa trên học phí HK1 TB ngành đăng ký</p>
                       <p className="text-white/50 text-[10px]">Xem chi tiết giai đoạn bên dưới</p>
                     </div>
                   </TooltipContent>
@@ -1000,7 +1000,7 @@ export function FunnelChart({
                       <tr className="border-b text-muted-foreground">
                         <th className="text-left py-1.5 pr-3 font-medium">Giai đoạn</th>
                         <th className="text-right py-1.5 px-2 font-medium">TB ngày</th>
-                        <th className="text-right py-1.5 px-2 font-medium">Doanh thu mất</th>
+                        <th className="text-right py-1.5 px-2 font-medium">DT mất (HK1)</th>
                         <th className="text-right py-1.5 px-2 font-medium">Rời bỏ</th>
                         <th className="text-left py-1.5 pl-2 font-medium">Lý do chính</th>
                       </tr>

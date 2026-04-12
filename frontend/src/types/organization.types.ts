@@ -263,9 +263,9 @@ export interface MajorProgramWithStats {
   name: string;
   code: string;
   degree_level: string;
-  total_admission_quota?: number | null; // Aggregated from all offerings
-  avg_tuition_fee?: number | null; // Average tuition across offerings
-  offerings_count?: number; // Number of active offerings
+  total_admission_quota?: number | null;
+  tuition_fee?: number | null; // HK1 semester tuition (falls back to annual)
+  offerings_count?: number;
 }
 
 /**
@@ -276,9 +276,9 @@ export interface UnitAggregatedStats {
   direct_programs: number; // Direct MajorPrograms only
   total_offerings: number; // Total ProgramOfferings
   total_admission_quota?: number | null;
-  avg_tuition_fee?: number | null;
-  min_tuition_fee?: number | null;
-  max_tuition_fee?: number | null;
+  avg_tuition_fee?: number | null; // HK1 semester tuition average
+  min_tuition_fee?: number | null; // HK1 semester tuition min
+  max_tuition_fee?: number | null; // HK1 semester tuition max
 }
 
 /**
@@ -291,7 +291,7 @@ export interface OrganizationTreeNodeWithAggregation {
   description?: string | null;
   parent_id: number | null;
   is_active: boolean;
-  major_programs: MajorProgramWithStats[]; // ⬅ Changed from 'majors'
+  majors: MajorProgramWithStats[];
   stats: UnitAggregatedStats;
   children: OrganizationTreeNodeWithAggregation[];
 }

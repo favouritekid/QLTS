@@ -372,7 +372,7 @@ class MajorWithStats(BaseModel):
     code: str
     degree_level: str
     total_admission_quota: Optional[int] = Field(None, description="Total admission quota for current year")
-    tuition_fee: Optional[Decimal] = Field(None, description="Tuition fee per year")
+    tuition_fee: Optional[Decimal] = Field(None, description="HK1 semester tuition (falls back to annual if HK1 unavailable)")
 
     model_config = ConfigDict(from_attributes=True)
 
