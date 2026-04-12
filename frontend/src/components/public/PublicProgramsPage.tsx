@@ -257,7 +257,10 @@ export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps)
 
                             <div className="mt-5 space-y-3">
                               {program.offerings.map((offering) => {
-                                const tuitionLabel = formatCurrency(offering.academic_info.tuition_fee_per_year)
+                                const hasHK1 = offering.academic_info.semester_1_tuition != null
+                                const tuitionLabel = hasHK1
+                                  ? formatCurrency(offering.academic_info.semester_1_tuition)
+                                  : formatCurrency(offering.academic_info.tuition_fee_per_year)
                                 const quotaLabel =
                                   offering.academic_info.annual_admission_quota !== null
                                     ? `${offering.academic_info.annual_admission_quota} chỉ tiêu`
@@ -281,7 +284,7 @@ export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps)
                                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
                                       <div>
                                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                                          Học phí
+                                          {hasHK1 ? "Học phí HK1" : "Học phí"}
                                         </p>
                                         <p className="mt-1 text-sm font-medium text-foreground">
                                           {tuitionLabel ?? "Đang cập nhật"}
@@ -316,6 +319,22 @@ export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps)
                                         {offering.academic_info.target_audience}
                                       </p>
                                     ) : null}
+
+                                    {offering.academic_info.semester_tuitions && offering.academic_info.semester_tuitions.length > 0 && (
+                                      <div className="mt-4">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground mb-2">
+                                          Bảng học phí toàn khóa theo từng học kỳ
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-1 text-xs sm:grid-cols-4">
+                                          {offering.academic_info.semester_tuitions.map((st) => (
+                                            <div key={st.semester_no} className="rounded bg-muted/50 px-2 py-1">
+                                              <span className="font-medium">HK{st.semester_no}:</span>{" "}
+                                              {formatCurrency(st.amount)}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {offering.admission_methods.length > 0 ? (
                                       <div className="mt-4 space-y-2">

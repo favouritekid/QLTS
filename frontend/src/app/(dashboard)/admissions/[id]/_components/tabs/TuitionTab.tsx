@@ -218,9 +218,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                     <FileText className="h-4 w-4 text-primary" />
                   </div>
                   <div>
-                    <p className="font-medium">{FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type}</p>
+                    <p className="font-medium">
+                      {FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type}
+                      {fee.semester_no ? ` — HK${fee.semester_no}` : ""}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       Năm học: {fee.academic_year}
+                      {fee.semester_no ? ` | HK${fee.semester_no}` : ""}
                     </p>
                   </div>
                 </div>

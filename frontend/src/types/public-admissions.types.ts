@@ -1,5 +1,10 @@
 export type PublicAdmissionsMoney = number | string | null
 
+export interface PublicSemesterTuitionItem {
+  semester_no: number
+  amount: PublicAdmissionsMoney
+}
+
 export interface PublicAdmissionsMethodTag {
   id: number
   code: string
@@ -14,6 +19,8 @@ export interface PublicAdmissionsAcademicInfoSummary {
   cutoff_score_previous_year: PublicAdmissionsMoney
   target_audience: string | null
   applied_discount_policy_ids: number[]
+  semester_tuitions?: PublicSemesterTuitionItem[]
+  semester_1_tuition?: PublicAdmissionsMoney
 }
 
 export interface PublicAdmissionsOfferingSummary {
@@ -35,6 +42,8 @@ export interface PublicAdmissionsProgramSummary {
   academic_years: number[]
   tuition_min: PublicAdmissionsMoney
   tuition_max: PublicAdmissionsMoney
+  semester_1_tuition_min?: PublicAdmissionsMoney
+  semester_1_tuition_max?: PublicAdmissionsMoney
   offerings: PublicAdmissionsOfferingSummary[]
 }
 
@@ -46,6 +55,8 @@ export interface PublicAdmissionsDegreeLevelGroup {
   academic_years: number[]
   tuition_min: PublicAdmissionsMoney
   tuition_max: PublicAdmissionsMoney
+  semester_1_tuition_min?: PublicAdmissionsMoney
+  semester_1_tuition_max?: PublicAdmissionsMoney
   programs: PublicAdmissionsProgramSummary[]
 }
 
@@ -168,6 +179,8 @@ export interface PublicAdmissionsTuitionOffering {
   tuition_fee_per_year: PublicAdmissionsMoney
   annual_admission_quota: number | null
   applied_discount_policy_ids: number[]
+  semester_tuitions?: PublicSemesterTuitionItem[]
+  semester_1_tuition?: PublicAdmissionsMoney
 }
 
 export interface PublicAdmissionsTuitionBand {
@@ -176,6 +189,8 @@ export interface PublicAdmissionsTuitionBand {
   academic_years: number[]
   tuition_min: PublicAdmissionsMoney
   tuition_max: PublicAdmissionsMoney
+  semester_1_tuition_min?: PublicAdmissionsMoney
+  semester_1_tuition_max?: PublicAdmissionsMoney
 }
 
 export interface PublicAdmissionsTuitionMeta {
