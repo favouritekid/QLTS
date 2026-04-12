@@ -12,7 +12,7 @@ Dependencies: organization_service (from PHASE 1)
 
 Complexity: MEDIUM (hierarchical CRUD, 3-tier architecture)
 """
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
@@ -550,3 +550,112 @@ async def restore_deleted_academic_info(
     await db.commit()
     await post_commit()
     return academic_info
+
+
+# =============================================================================
+# OfferingSemesterTuition CRUD — PR 2 (ADR-002)
+# =============================================================================
+
+@limiter.limit(RateLimits.ADMIN_READ)
+@router.get(
+    "/academic-info/{academic_info_id}/semester-tuitions",
+    response_model=List[schemas.SemesterTuitionResponse],
+)
+async def list_semester_tuitions(
+    request: Request,
+    academic_info_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """(Admin only) Danh sách học phí theo học kỳ cho một bản ghi tuyển sinh."""
+    return await organization_service.list_semester_tuitions(
+        db, academic_info_id, current_admin
+    )
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
+@router.post(
+    "/academic-info/{academic_info_id}/semester-tuitions",
+    response_model=schemas.SemesterTuitionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_semester_tuition(
+    request: Request,
+    academic_info_id: int,
+    data: schemas.SemesterTuitionCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """(Admin only) Tạo học phí cho một học kỳ cụ thể."""
+    row, post_commit = await organization_service.create_semester_tuition(
+        db, academic_info_id, data, current_admin
+    )
+    await db.commit()
+    await post_commit()
+    return row
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
+@router.patch(
+    "/semester-tuitions/{semester_tuition_id}",
+    response_model=schemas.SemesterTuitionResponse,
+)
+async def update_semester_tuition(
+    request: Request,
+    semester_tuition_id: int,
+    data: schemas.SemesterTuitionUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """(Admin only) Cập nhật học phí một học kỳ."""
+    row, post_commit = await organization_service.update_semester_tuition(
+        db, semester_tuition_id, data, current_admin
+    )
+    await db.commit()
+    await post_commit()
+    return row
+
+
+@limiter.limit(RateLimits.ADMIN_DELETE)
+@router.delete(
+    "/semester-tuitions/{semester_tuition_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_semester_tuition(
+    request: Request,
+    semester_tuition_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """(Admin only) Xóa học phí một học kỳ."""
+    _, post_commit = await organization_service.delete_semester_tuition(
+        db, semester_tuition_id, current_admin
+    )
+    await db.commit()
+    await post_commit()
+    return None
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
+@router.put(
+    "/academic-info/{academic_info_id}/semester-tuitions",
+    response_model=List[schemas.SemesterTuitionResponse],
+)
+async def bulk_upsert_semester_tuitions(
+    request: Request,
+    academic_info_id: int,
+    data: schemas.SemesterTuitionBulkUpsert,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """(Admin only) Thay thế toàn bộ bảng học phí theo học kỳ.
+
+    Gửi danh sách đầy đủ [{semester_no, amount, notes?}, ...].
+    Danh sách rỗng = xóa toàn bộ (quay về chỉ dùng học phí/năm cũ).
+    """
+    rows, post_commit = await organization_service.bulk_upsert_semester_tuitions(
+        db, academic_info_id, data, current_admin
+    )
+    await db.commit()
+    await post_commit()
+    return rows

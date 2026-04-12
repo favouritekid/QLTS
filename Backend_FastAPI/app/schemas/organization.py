@@ -104,12 +104,72 @@ class OfferingAcademicInfo(OfferingAcademicInfoBase):
     updated_at: Optional[datetime] = None
     created_by_user_id: Optional[int] = None
     updated_by_user_id: Optional[int] = None
-    
+
     # Computed fields
     path_count: Optional[int] = Field(default=0, description="Số lượng đợt tuyển sinh")
     admission_status: Optional[AdmissionStatus] = Field(default=None, description="Trạng thái cấu hình")
 
+    # PR 2 (ADR-002): per-semester tuition catalog nested in response.
+    semester_tuitions: List["SemesterTuitionResponse"] = Field(
+        default_factory=list,
+        description="Bảng học phí theo từng học kỳ"
+    )
+
     model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# CẤP 3.5: OfferingSemesterTuition (PR 2 — ADR-002)
+# =============================================================================
+
+class SemesterTuitionBase(BaseModel):
+    semester_no: int = Field(..., ge=1, description="Số học kỳ (HK1=1)")
+    amount: Decimal = Field(..., ge=0, description="Học phí học kỳ (VND)")
+    notes: Optional[str] = Field(None, max_length=500, description="Ghi chú")
+
+
+class SemesterTuitionCreate(SemesterTuitionBase):
+    """Single row creation. academic_info_id comes from path."""
+    pass
+
+
+class SemesterTuitionUpdate(BaseModel):
+    amount: Optional[Decimal] = Field(None, ge=0, description="Học phí (VND)")
+    notes: Optional[str] = Field(None, max_length=500, description="Ghi chú")
+
+
+class SemesterTuitionResponse(SemesterTuitionBase):
+    id: int
+    academic_info_id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    created_by_user_id: Optional[int] = None
+    updated_by_user_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SemesterTuitionBulkUpsertItem(BaseModel):
+    semester_no: int = Field(..., ge=1)
+    amount: Decimal = Field(..., ge=0)
+    notes: Optional[str] = Field(None, max_length=500)
+
+
+class SemesterTuitionBulkUpsert(BaseModel):
+    items: List[SemesterTuitionBulkUpsertItem] = Field(
+        default_factory=list, max_length=20,
+        description="Danh sách học phí theo học kỳ. Rỗng = xóa toàn bộ."
+    )
+
+    @field_validator('items')
+    @classmethod
+    def validate_unique_semesters(cls, v):
+        if not v:
+            return v
+        semester_nos = [item.semester_no for item in v]
+        if len(semester_nos) != len(set(semester_nos)):
+            raise ValueError("Số học kỳ không được trùng lặp")
+        return v
 
 
 # =============================================================================

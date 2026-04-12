@@ -1944,3 +1944,290 @@ async def get_all_academic_infos(
 
     return response
 
+
+# =============================================================================
+# OfferingSemesterTuition CRUD — PR 2 (ADR-002)
+# =============================================================================
+
+async def _resolve_academic_info_for_semester_tuition(
+    db: AsyncSession,
+    academic_info_id: int,
+    current_user: models.User,
+) -> models.OfferingAcademicInfo:
+    """Load academic info + verify IDOR access + reject soft-deleted.
+
+    Shared by all semester tuition CRUD. Returns 404 for soft-deleted
+    parents so that callers cannot accidentally edit semester tuition on
+    an academic info that the admin has "deleted" (soft). Consistent
+    with the plan's "404 if not found/soft-deleted" rule.
+    """
+    db_info = await get_academic_info_by_id(db, academic_info_id)
+    if db_info.is_deleted:
+        raise ResourceNotFoundError(
+            "Thông tin tuyển sinh đã bị xóa. Vui lòng khôi phục trước "
+            "khi chỉnh sửa học phí học kỳ."
+        )
+    offering = await get_program_offering_by_id(db, db_info.offering_id)
+    program = await get_major_program_by_id(db, offering.program_id)
+    await _check_unit_access(db, program.unit_id, current_user)
+    return db_info
+
+
+def _check_semester_tuition_immutability(
+    db_info: models.OfferingAcademicInfo,
+) -> None:
+    """Block semester tuition edits for past academic years."""
+    current_year = datetime.now(timezone.utc).year
+    if db_info.academic_year < current_year:
+        raise BadRequest(
+            detail=f"Không thể thay đổi học phí học kỳ của năm học "
+                   f"{db_info.academic_year} (năm trong quá khứ). Dữ liệu "
+                   f"tài chính lịch sử phải bất biến để đảm bảo tính toàn "
+                   f"vẹn của báo cáo tài chính."
+        )
+
+
+async def _invalidate_semester_tuition_dependents(
+    academic_info_id: int,
+    academic_year: int,
+    operation: str,
+    semester_info: str = "",
+) -> None:
+    """Post-commit: invalidate caches + emit Socket.IO event.
+
+    This is the ADR-002 Decision 4 hook point. PR 2 does cache
+    invalidation + Socket.IO only. PR 3 will extend this to trigger
+    discount recalculation on FeeAppliedDiscount rows.
+    """
+    await invalidate_org_cache()
+    await emit_organization_updated(
+        operation=operation,
+        resource_type="semester_tuition",
+        resource_id=academic_info_id,
+        resource_name=f"Năm {academic_year} — {semester_info}",
+    )
+
+
+async def list_semester_tuitions(
+    db: AsyncSession,
+    academic_info_id: int,
+    current_user: models.User,
+) -> List[models.OfferingSemesterTuition]:
+    """List all semester tuition rows for an academic info, ordered by semester_no.
+
+    Uses the shared IDOR + soft-delete check so that the list endpoint
+    is consistent with the write endpoints.
+    """
+    await _resolve_academic_info_for_semester_tuition(
+        db, academic_info_id, current_user
+    )
+    result = await db.execute(
+        select(models.OfferingSemesterTuition)
+        .where(models.OfferingSemesterTuition.academic_info_id == academic_info_id)
+        .order_by(models.OfferingSemesterTuition.semester_no)
+    )
+    return list(result.scalars().all())
+
+
+async def create_semester_tuition(
+    db: AsyncSession,
+    academic_info_id: int,
+    data: schemas.SemesterTuitionCreate,
+    current_user: models.User,
+) -> Tuple[models.OfferingSemesterTuition, Callable]:
+    """Create a single semester tuition row."""
+    db_info = await _resolve_academic_info_for_semester_tuition(
+        db, academic_info_id, current_user
+    )
+    _check_semester_tuition_immutability(db_info)
+
+    existing = await db.execute(
+        select(models.OfferingSemesterTuition)
+        .where(
+            models.OfferingSemesterTuition.academic_info_id == academic_info_id,
+            models.OfferingSemesterTuition.semester_no == data.semester_no,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise DuplicateResourceError(
+            f"Học phí HK{data.semester_no} đã tồn tại cho năm học "
+            f"{db_info.academic_year}"
+        )
+
+    row = models.OfferingSemesterTuition(
+        academic_info_id=academic_info_id,
+        semester_no=data.semester_no,
+        amount=data.amount,
+        notes=data.notes,
+        created_by_user_id=current_user.id,
+        updated_by_user_id=current_user.id,
+    )
+    db.add(row)
+    await db.flush()
+    await db.refresh(row)
+
+    _year = db_info.academic_year
+
+    async def _post_commit():
+        log.info("semester_tuition_created",
+                 academic_info_id=academic_info_id,
+                 semester_no=data.semester_no,
+                 amount=str(data.amount))
+        await _invalidate_semester_tuition_dependents(
+            academic_info_id, _year, "create",
+            f"HK{data.semester_no}",
+        )
+
+    return row, _post_commit
+
+
+async def update_semester_tuition(
+    db: AsyncSession,
+    semester_tuition_id: int,
+    data: schemas.SemesterTuitionUpdate,
+    current_user: models.User,
+) -> Tuple[models.OfferingSemesterTuition, Callable]:
+    """Update a single semester tuition row."""
+    result = await db.execute(
+        select(models.OfferingSemesterTuition)
+        .where(models.OfferingSemesterTuition.id == semester_tuition_id)
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise ResourceNotFoundError("Không tìm thấy bản ghi học phí học kỳ")
+
+    db_info = await _resolve_academic_info_for_semester_tuition(
+        db, row.academic_info_id, current_user
+    )
+    _check_semester_tuition_immutability(db_info)
+
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(row, key, value)
+    row.updated_by_user_id = current_user.id
+
+    await db.flush()
+    await db.refresh(row)
+
+    _year = db_info.academic_year
+    _sem = row.semester_no
+
+    async def _post_commit():
+        log.info("semester_tuition_updated",
+                 semester_tuition_id=semester_tuition_id,
+                 semester_no=_sem)
+        await _invalidate_semester_tuition_dependents(
+            row.academic_info_id, _year, "update", f"HK{_sem}",
+        )
+
+    return row, _post_commit
+
+
+async def delete_semester_tuition(
+    db: AsyncSession,
+    semester_tuition_id: int,
+    current_user: models.User,
+) -> Tuple[None, Callable]:
+    """Delete a single semester tuition row (hard delete — catalog row, not financial)."""
+    result = await db.execute(
+        select(models.OfferingSemesterTuition)
+        .where(models.OfferingSemesterTuition.id == semester_tuition_id)
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise ResourceNotFoundError("Không tìm thấy bản ghi học phí học kỳ")
+
+    db_info = await _resolve_academic_info_for_semester_tuition(
+        db, row.academic_info_id, current_user
+    )
+    _check_semester_tuition_immutability(db_info)
+
+    _year = db_info.academic_year
+    _sem = row.semester_no
+    _info_id = row.academic_info_id
+
+    await db.delete(row)
+    await db.flush()
+
+    async def _post_commit():
+        log.info("semester_tuition_deleted",
+                 academic_info_id=_info_id,
+                 semester_no=_sem)
+        await _invalidate_semester_tuition_dependents(
+            _info_id, _year, "delete", f"HK{_sem}",
+        )
+
+    return None, _post_commit
+
+
+async def bulk_upsert_semester_tuitions(
+    db: AsyncSession,
+    academic_info_id: int,
+    data: schemas.SemesterTuitionBulkUpsert,
+    current_user: models.User,
+) -> Tuple[List[models.OfferingSemesterTuition], Callable]:
+    """Replace-all semester tuition rows for an academic info.
+
+    Empty items list = clear all rows (fall back to legacy tuition_fee_per_year).
+    Non-empty list = upsert matching semester_no, delete rows not in the list.
+    """
+    db_info = await _resolve_academic_info_for_semester_tuition(
+        db, academic_info_id, current_user
+    )
+    _check_semester_tuition_immutability(db_info)
+
+    existing_result = await db.execute(
+        select(models.OfferingSemesterTuition)
+        .where(models.OfferingSemesterTuition.academic_info_id == academic_info_id)
+    )
+    existing_rows = {row.semester_no: row for row in existing_result.scalars().all()}
+
+    incoming_semesters = {item.semester_no for item in data.items}
+
+    # Delete rows not in the incoming list
+    for sem_no, row in existing_rows.items():
+        if sem_no not in incoming_semesters:
+            await db.delete(row)
+
+    # Upsert: update existing or create new
+    for item in data.items:
+        if item.semester_no in existing_rows:
+            row = existing_rows[item.semester_no]
+            row.amount = item.amount
+            row.notes = item.notes
+            row.updated_by_user_id = current_user.id
+        else:
+            row = models.OfferingSemesterTuition(
+                academic_info_id=academic_info_id,
+                semester_no=item.semester_no,
+                amount=item.amount,
+                notes=item.notes,
+                created_by_user_id=current_user.id,
+                updated_by_user_id=current_user.id,
+            )
+            db.add(row)
+
+    await db.flush()
+
+    # Re-query for the final ordered list
+    final_result = await db.execute(
+        select(models.OfferingSemesterTuition)
+        .where(models.OfferingSemesterTuition.academic_info_id == academic_info_id)
+        .order_by(models.OfferingSemesterTuition.semester_no)
+    )
+    final_rows = list(final_result.scalars().all())
+
+    _year = db_info.academic_year
+    _count = len(final_rows)
+
+    async def _post_commit():
+        log.info("semester_tuitions_bulk_upserted",
+                 academic_info_id=academic_info_id,
+                 count=_count)
+        await _invalidate_semester_tuition_dependents(
+            academic_info_id, _year, "bulk_upsert",
+            f"{_count} học kỳ",
+        )
+
+    return final_rows, _post_commit
+
