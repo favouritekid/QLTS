@@ -94,7 +94,7 @@ const TreeNode = memo(function TreeNode({ node, level, onNodeClick }: TreeNodePr
   const [isExpanded, setIsExpanded] = useState(level === 0); // Root nodes expanded by default
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const hasChildren = node.children && node.children.length > 0;
-  const hasMajors = node.major_programs && node.major_programs.length > 0;
+  const hasMajors = node.majors && node.majors.length > 0;
 
   // ⚡ PERFORMANCE: Memoize event handlers to prevent child re-renders
   const handleNodeClick = useCallback(() => {
@@ -200,7 +200,7 @@ const TreeNode = memo(function TreeNode({ node, level, onNodeClick }: TreeNodePr
               {node.stats.avg_tuition_fee && (
                 <div className="flex items-center gap-1">
                   <DollarSign className="h-3 w-3" />
-                  <span>TB: {formatCurrency(Number(node.stats.avg_tuition_fee))}</span>
+                  <span>HK1 TB: {formatCurrency(Number(node.stats.avg_tuition_fee))}</span>
                 </div>
               )}
             </div>
@@ -208,7 +208,7 @@ const TreeNode = memo(function TreeNode({ node, level, onNodeClick }: TreeNodePr
             {/* Program List (if direct programs exist) */}
             {hasMajors && isExpanded && (
               <div className="mt-2 space-y-1">
-                {node.major_programs.map((program) => (
+                {node.majors.map((program) => (
                   <div
                     key={program.id}
                     className="flex items-center gap-2 p-2 rounded bg-muted/50 text-xs"
@@ -225,9 +225,9 @@ const TreeNode = memo(function TreeNode({ node, level, onNodeClick }: TreeNodePr
                         {program.total_admission_quota} chỉ tiêu
                       </Badge>
                     )}
-                    {program.avg_tuition_fee && (
+                    {program.tuition_fee && (
                       <div className="text-muted-foreground flex-shrink-0">
-                        {formatCurrency(Number(program.avg_tuition_fee))}
+                        {formatCurrency(Number(program.tuition_fee))}
                       </div>
                     )}
                   </div>
@@ -304,9 +304,9 @@ export function OrganizationTreeView({
       }
 
       // Collect tuition fees from direct programs
-      (node.major_programs ?? []).forEach((program) => {
-        if (program.avg_tuition_fee) {
-          allTuitionFees.push(Number(program.avg_tuition_fee));
+      (node.majors ?? []).forEach((program) => {
+        if (program.tuition_fee) {
+          allTuitionFees.push(Number(program.tuition_fee));
         }
       });
 
@@ -391,19 +391,19 @@ export function OrganizationTreeView({
                 <div className="text-2xl font-bold tabular-nums">{overallStats.totalQuota}</div>
               </div>
               <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">Học phí TB</div>
+                <div className="text-xs text-muted-foreground">Học phí HK1 TB</div>
                 <div className="text-sm font-semibold tabular-nums">
                   {formatCurrency(overallStats.avgTuition)}
                 </div>
               </div>
               <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">Học phí thấp nhất</div>
+                <div className="text-xs text-muted-foreground">HP HK1 thấp nhất</div>
                 <div className="text-sm font-semibold text-success-600 tabular-nums">
                   {formatCurrency(overallStats.minTuition)}
                 </div>
               </div>
               <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">Học phí cao nhất</div>
+                <div className="text-xs text-muted-foreground">HP HK1 cao nhất</div>
                 <div className="text-sm font-semibold text-error-600 tabular-nums">
                   {formatCurrency(overallStats.maxTuition)}
                 </div>

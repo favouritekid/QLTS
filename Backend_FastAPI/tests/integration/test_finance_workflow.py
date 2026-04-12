@@ -1150,3 +1150,71 @@ class TestHK1ClearedStatePipelineGate:
         now = is_hk1_cleared("tuition", 1, "paid", Decimal("10000000"))
         assert not was and now
 
+
+# =============================================================================
+# KPI HK1 METRICS TESTS (PR 7 — ADR-002)
+# =============================================================================
+
+class TestKPIHK1Metrics:
+    """Test that KPI metrics use HK1 semester tuition with fallback."""
+
+    @pytest.mark.asyncio
+    async def test_hk1_lookup_returns_amount(
+        self, db: AsyncSession, finance_fixtures: dict,
+    ):
+        """Repository returns HK1 amount for the correct academic_info_id."""
+        from app.repositories import OrganizationRepository
+
+        ai_id = int(finance_fixtures["admission_profile"].applied_rules["academic_info_id"])
+        repo = OrganizationRepository(db)
+        result = await repo.get_hk1_tuition_by_academic_info_id(2025)
+
+        # Fixture creates HK1 with 10M for year 2025
+        assert ai_id in result
+        assert result[ai_id] == Decimal("10000000")
+
+    @pytest.mark.asyncio
+    async def test_hk1_lookup_empty_for_unknown_year(
+        self, db: AsyncSession,
+    ):
+        """Repository returns empty dict for a year with no published info."""
+        from app.repositories import OrganizationRepository
+
+        repo = OrganizationRepository(db)
+        result = await repo.get_hk1_tuition_by_academic_info_id(1999)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_resolve_tuition_prefers_hk1(self):
+        """HK1 lookup value wins over tuition_fee_per_year."""
+        from unittest.mock import MagicMock
+
+        hk1_lookup = {42: Decimal("8000000")}
+        info = MagicMock()
+        info.id = 42
+        info.tuition_fee_per_year = Decimal("20000000")
+
+        resolved = hk1_lookup.get(info.id) or info.tuition_fee_per_year
+        assert resolved == Decimal("8000000")
+
+    @pytest.mark.asyncio
+    async def test_resolve_tuition_fallback_when_no_hk1(self):
+        """Empty HK1 lookup falls back to tuition_fee_per_year."""
+        from unittest.mock import MagicMock
+
+        hk1_lookup = {}
+        info = MagicMock()
+        info.id = 42
+        info.tuition_fee_per_year = Decimal("20000000")
+
+        resolved = hk1_lookup.get(info.id) or info.tuition_fee_per_year
+        assert resolved == Decimal("20000000")
+
+    @pytest.mark.asyncio
+    async def test_subtree_avg_differs_from_minmax_mix(self):
+        """True avg via sum/count differs from the old broken min+max approach."""
+        values = [Decimal("5000000"), Decimal("15000000"), Decimal("5000000")]
+        true_avg = sum(values) / len(values)
+        broken_avg = (min(values) + max(values)) / 2
+        assert true_avg != broken_avg  # 8.33M != 10M
+

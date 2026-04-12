@@ -108,7 +108,7 @@ describe("FunnelChart expandable detail", () => {
 
     // Table headers visible
     expect(screen.getByText("TB ngày")).toBeInTheDocument();
-    expect(screen.getByText("Doanh thu mất")).toBeInTheDocument();
+    expect(screen.getByText("DT mất (HK1)")).toBeInTheDocument();
 
     // Stage names in table
     expect(screen.getAllByText("Tiếp nhận").length).toBeGreaterThanOrEqual(2); // chart + table

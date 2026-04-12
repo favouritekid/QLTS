@@ -1623,99 +1623,108 @@ async def get_organization_tree_with_aggregation(
     # Step 1: Query all units with programs and offerings (without academic info history)
     all_units = await repo.get_tree_for_aggregation(include_inactive)
 
-    # Step 2: Query academic info for ONLY the specified year (much more efficient)
+    # Step 2: Query academic info for ONLY the specified year
     all_academic_info = await repo.get_academic_info_for_year(academic_year)
+
+    # PR 7: HK1 semester tuition lookup for KPI metrics
+    hk1_by_info_id = await repo.get_hk1_tuition_by_academic_info_id(academic_year)
 
     # Build lookup dict: offering_id -> academic_info
     academic_info_by_offering = {
         info.offering_id: info for info in all_academic_info
     }
 
-    # Build tree with aggregation
+    def _resolve_tuition(academic_info) -> Optional[Decimal]:
+        """HK1 with fallback to legacy annual."""
+        if academic_info is None:
+            return None
+        return hk1_by_info_id.get(academic_info.id) or academic_info.tuition_fee_per_year
+
+    # Build tree with aggregation. Each call returns
+    # (node, tuition_sum, tuition_count, tuition_min, tuition_max)
+    # so parent nodes compute true subtree averages.
     def build_node_with_aggregation(
         unit: models.OrganizationUnit
-    ) -> schemas.OrganizationTreeNodeWithAggregation:
-        """Recursively build node with aggregated statistics for 3-tier structure."""
+    ) -> tuple:
+        """Recursively build node with aggregated statistics."""
 
-        # Collect majors with stats from programs → offerings → academic info
         majors_with_stats = []
         direct_total_quota = 0
-        tuition_fees = []
+        direct_tuition_sum = Decimal("0")
+        direct_tuition_count = 0
+        direct_tuition_values: list = []
 
         for program in unit.major_programs:
             if not program.is_active and not include_inactive:
                 continue
 
-            # For each program, iterate through offerings to find academic info
             for offering in program.offerings:
                 if not offering.is_active and not include_inactive:
                     continue
 
-                # ✅ FIX: Use lookup dict instead of looping (O(1) vs O(n))
                 academic_info = academic_info_by_offering.get(offering.id)
+                resolved = _resolve_tuition(academic_info)
 
-                # Build MajorWithStats (represents program at offering level)
                 major_stats = schemas.MajorWithStats(
                     id=program.id,
                     name=program.name,
                     code=program.code,
                     degree_level=program.degree_level,
                     total_admission_quota=academic_info.annual_admission_quota if academic_info else None,
-                    tuition_fee=academic_info.tuition_fee_per_year if academic_info else None
+                    tuition_fee=resolved,
                 )
                 majors_with_stats.append(major_stats)
 
-                # Collect for aggregation
                 if academic_info:
                     if academic_info.annual_admission_quota:
                         direct_total_quota += academic_info.annual_admission_quota
-                    if academic_info.tuition_fee_per_year:
-                        tuition_fees.append(academic_info.tuition_fee_per_year)
+                    if resolved:
+                        direct_tuition_sum += resolved
+                        direct_tuition_count += 1
+                        direct_tuition_values.append(resolved)
 
         # Recursively build children
-        children_nodes = []
+        children_results = []
         for child_unit in all_units:
             if child_unit.parent_id == unit.id:
                 if not include_inactive and not child_unit.is_active:
                     continue
-                child_node = build_node_with_aggregation(child_unit)
-                children_nodes.append(child_node)
+                children_results.append(build_node_with_aggregation(child_unit))
 
-        # Aggregate statistics from this unit and all descendants
+        # Aggregate across subtree
         total_majors = len(majors_with_stats)
         total_quota = direct_total_quota
-        all_tuition_fees = tuition_fees.copy()
+        subtree_sum = direct_tuition_sum
+        subtree_count = direct_tuition_count
+        all_values = direct_tuition_values.copy()
 
-        for child in children_nodes:
-            total_majors += child.stats.total_majors
-            if child.stats.total_admission_quota:
-                total_quota += child.stats.total_admission_quota
-            if child.stats.min_tuition_fee:
-                all_tuition_fees.append(child.stats.min_tuition_fee)
-            if child.stats.max_tuition_fee:
-                all_tuition_fees.append(child.stats.max_tuition_fee)
+        children_nodes = []
+        for child_node, c_sum, c_count, c_min, c_max in children_results:
+            children_nodes.append(child_node)
+            total_majors += child_node.stats.total_majors
+            if child_node.stats.total_admission_quota:
+                total_quota += child_node.stats.total_admission_quota
+            subtree_sum += c_sum
+            subtree_count += c_count
+            if c_min is not None:
+                all_values.append(c_min)
+            if c_max is not None and c_max != c_min:
+                all_values.append(c_max)
 
-        # Calculate tuition fee statistics
-        avg_tuition = None
-        min_tuition = None
-        max_tuition = None
-        if all_tuition_fees:
-            avg_tuition = sum(all_tuition_fees) / len(all_tuition_fees)
-            min_tuition = min(all_tuition_fees)
-            max_tuition = max(all_tuition_fees)
+        avg_tuition = (subtree_sum / subtree_count) if subtree_count > 0 else None
+        min_tuition = min(all_values) if all_values else None
+        max_tuition = max(all_values) if all_values else None
 
-        # Build aggregated stats
         stats = schemas.UnitAggregatedStats(
             total_majors=total_majors,
             direct_majors=len(majors_with_stats),
             total_admission_quota=total_quota if total_quota > 0 else None,
             avg_tuition_fee=avg_tuition,
             min_tuition_fee=min_tuition,
-            max_tuition_fee=max_tuition
+            max_tuition_fee=max_tuition,
         )
 
-        # Build node
-        return schemas.OrganizationTreeNodeWithAggregation(
+        node = schemas.OrganizationTreeNodeWithAggregation(
             id=unit.id,
             name=unit.name,
             type=unit.type,
@@ -1724,8 +1733,9 @@ async def get_organization_tree_with_aggregation(
             is_active=unit.is_active,
             majors=majors_with_stats,
             stats=stats,
-            children=children_nodes
+            children=children_nodes,
         )
+        return node, subtree_sum, subtree_count, min_tuition, max_tuition
 
     # Build root nodes
     root_nodes = []
@@ -1733,7 +1743,7 @@ async def get_organization_tree_with_aggregation(
         if unit.parent_id is None:
             if not include_inactive and not unit.is_active:
                 continue
-            root_node = build_node_with_aggregation(unit)
+            root_node, _, _, _, _ = build_node_with_aggregation(unit)
             root_nodes.append(root_node)
 
     log.info(

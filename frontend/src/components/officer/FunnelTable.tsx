@@ -272,7 +272,7 @@ export function FunnelTable({
                 <TableHead className="text-center w-[100px]">Conversion</TableHead>
                 <TableHead className="text-center w-[100px]">Velocity</TableHead>
                 <TableHead className="text-center w-[100px]">Early Exit</TableHead>
-                <TableHead className="text-right w-[120px]">Lost Revenue</TableHead>
+                <TableHead className="text-right w-[120px]">Lost Revenue (HK1)</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
