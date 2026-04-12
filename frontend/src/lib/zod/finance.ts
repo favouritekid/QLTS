@@ -209,6 +209,7 @@ export const feeSummarySchema = z.object({
   id: z.number().int().positive(),
   fee_type: feeTypeSchema,
   academic_year: z.string(),
+  semester_no: z.number().int().positive().nullable().optional(),
   final_amount: z.string(),
   paid_amount: z.string(),
   remaining_amount: z.string(),

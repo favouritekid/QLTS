@@ -130,6 +130,7 @@ export interface FeeSummary {
   id: number
   fee_type: FeeType
   academic_year: string
+  semester_no?: number | null
   final_amount: string
   paid_amount: string
   remaining_amount: string
