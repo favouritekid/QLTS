@@ -641,7 +641,7 @@ _FINANCE_USER_EVENTS: tuple = (
             _var("amount", "string", "Số tiền còn nợ"),
             _var("due_date", "datetime", "Hạn thanh toán"),
             _var("days_overdue", "integer", "Số ngày quá hạn"),
-            _var("days_overdue_bucket", "string", "Mốc quá hạn (1/7/14/30/30+)"),
+            _var("days_overdue_bucket", "string", "Khung quá hạn: 1/7/14/30/30+ (window, not exact day)"),
             _var("installment_no", "integer", "Đợt thanh toán"),
             _var("admission_profile_id", "integer", "ID hồ sơ"),
             _var("lead_id", "integer", "ID lead"),

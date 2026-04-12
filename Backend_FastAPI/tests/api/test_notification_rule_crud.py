@@ -34,11 +34,12 @@ class TestNotificationRuleCrudApi:
     async def test_create_rule_blocked_for_internal_future_event(
         self, client: AsyncClient, admin_token_headers: dict,
     ):
-        """internal_future events must be rejected."""
+        """internal_future events must be rejected. Use dorm_fee_created
+        which is still internal_future (payment_overdue was promoted in PR 8)."""
         resp = await client.post(
             "/api/notification-rules",
             json={
-                "event": "payment_overdue",
+                "event": "dorm_fee_created",
                 "title_template": "Test",
                 "message_template": "Test",
                 "channels": ["browser"],
@@ -64,9 +65,11 @@ class TestNotificationRuleCrudApi:
         # broadcast_only excluded
         assert "lead_updated" not in event_keys
         assert "unit_created" not in event_keys
-        # internal_future excluded
-        assert "payment_overdue" not in event_keys
+        # internal_future excluded (payment_overdue promoted to user in PR 8)
+        assert "dorm_fee_created" not in event_keys
         assert "ctv_lead_converted" not in event_keys
+        # payment_overdue should now be present (user class)
+        assert "payment_overdue" in event_keys
         # user events present
         assert "lead_assigned" in event_keys
         assert "lead_created" in event_keys

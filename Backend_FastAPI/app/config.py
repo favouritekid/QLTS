@@ -1,6 +1,6 @@
 # app/config.py
 import os
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import ConfigDict, Field  # Thêm Field
 
@@ -379,6 +379,11 @@ class Settings(BaseSettings):
     ADMISSION_FEE_GATE_MODE: Literal["legacy", "semester_hk1"] = Field(
         default="legacy", validation_alias="ADMISSION_FEE_GATE_MODE"
     )  # ADR-002: 'legacy' = paid/waived; 'semester_hk1' = HK1 financial clearance (partial passes)
+    OVERDUE_NOTIFY_SINCE: Optional[str] = Field(
+        default=None, validation_alias="OVERDUE_NOTIFY_SINCE"
+    )  # PR 8: ISO date (YYYY-MM-DD). Only dispatch PAYMENT_OVERDUE for invoices
+    # with due_date >= this value. None = notify all overdue. Set explicitly
+    # in env at rollout to prevent first-run notification burst.
     ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT: bool = Field(
         default=False, validation_alias="ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT"
     )  # Phase P2-2: Use fairness-weighted scoring instead of pure round-robin

@@ -445,10 +445,19 @@ class PaymentIntentService:
             }
         _db = self.db
 
+        _fee_fully_paid_payload: Optional[Dict[str, Any]] = None
+        if fee is not None and fee.is_fully_paid:
+            _fee_fully_paid_payload = {
+                "fee_id": fee.id,
+                "amount": str(fee.final_amount),
+                "semester_no": fee.semester_no,
+                "admission_profile_id": fee.admission_profile_id,
+                "lead_id": profile.lead_id if profile is not None else None,
+                "unit_id": unit_id,
+                "user_id": _officer_id,
+            }
+
         async def post_commit():
-            # Dispatched AFTER router commits (gateway callback path).
-            # Skip silently if no recipient could be resolved — an empty
-            # dispatch would look like success but send nothing.
             if _notify_payload is None or not _notify_payload.get("user_id"):
                 return
             from app.services.notification_dispatcher import safe_dispatch
@@ -458,6 +467,12 @@ class PaymentIntentService:
                 event=SystemEvents.PAYMENT_VERIFIED,
                 payload=_notify_payload,
             )
+            if _fee_fully_paid_payload:
+                await safe_dispatch(
+                    db=_db,
+                    event=SystemEvents.FEE_FULLY_PAID,
+                    payload=_fee_fully_paid_payload,
+                )
 
         return intent, payment, post_commit
 

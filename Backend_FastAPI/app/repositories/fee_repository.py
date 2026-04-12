@@ -686,6 +686,10 @@ class InvoiceRepository(BaseRepository[Invoice]):
         """
         check_date = as_of_date or date.today()
 
+        # Include overdue status so the beat task can revisit for
+        # milestone re-notifications (7/14/30 day buckets). The service
+        # layer handles dedup via bucket keys + skips already-notified
+        # invoices at the current milestone.
         query = (
             select(Invoice)
             .join(Fee)
@@ -699,7 +703,8 @@ class InvoiceRepository(BaseRepository[Invoice]):
                     Invoice.due_date < check_date,
                     Invoice.status.in_([
                         InvoiceStatusEnum.draft.value,
-                        InvoiceStatusEnum.issued.value
+                        InvoiceStatusEnum.issued.value,
+                        InvoiceStatusEnum.overdue.value,
                     ])
                 )
             )
