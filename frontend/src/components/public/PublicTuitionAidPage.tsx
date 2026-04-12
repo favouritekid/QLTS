@@ -185,7 +185,7 @@ export default function PublicTuitionAidPage({ catalog }: PublicTuitionAidPagePr
                         <WalletCards className="size-5" />
                       </div>
                       <span className="rounded-full bg-warning-50 px-3 py-1 text-xs font-semibold text-warning-700">
-                        {formatRange(band.tuition_min, band.tuition_max) ?? "Đang cập nhật"}
+                        {formatRange(band.semester_1_tuition_min ?? band.tuition_min, band.semester_1_tuition_max ?? band.tuition_max) ?? "Đang cập nhật"}
                       </span>
                     </div>
 
@@ -198,7 +198,7 @@ export default function PublicTuitionAidPage({ catalog }: PublicTuitionAidPagePr
                       <li className="flex items-start gap-3 text-sm text-foreground">
                         <span className="mt-1 size-2 rounded-full bg-success" />
                         <span className="leading-6">
-                          Khoảng học phí hiện có: {formatRange(band.tuition_min, band.tuition_max) ?? "Đang cập nhật"}
+                          Khoảng học phí hiện có: {formatRange(band.semester_1_tuition_min ?? band.tuition_min, band.semester_1_tuition_max ?? band.tuition_max) ?? "Đang cập nhật"}
                         </span>
                       </li>
                       <li className="flex items-start gap-3 text-sm text-foreground">
