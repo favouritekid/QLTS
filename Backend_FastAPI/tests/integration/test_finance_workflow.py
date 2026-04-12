@@ -94,14 +94,60 @@ async def finance_fixtures(db: AsyncSession, seeded_dependencies: dict) -> dict:
 
     await db.flush()
 
+    # Create academic info + semester tuition for the tuition fee lookup
+    # chain (PR 3 — ADR-002). The profile references this via
+    # applied_rules["academic_info_id"] (legacy fallback path).
+    from app.models.offering_academic_info import OfferingAcademicInfo
+    from app.models.offering_semester_tuition import OfferingSemesterTuition
+
+    # We need a ProgramOffering to attach academic info to. Use the first
+    # seeded offering if available, otherwise create a minimal one.
+    from sqlalchemy import select as sa_select
+    offering_result = await db.execute(
+        sa_select(models.ProgramOffering).limit(1)
+    )
+    offering = offering_result.scalar_one_or_none()
+    if not offering:
+        program = models.MajorProgram(
+            name="Test Program",
+            code="TEST-FW",
+            degree_level="Đại học",
+            unit_id=seeded_dependencies["unit_id"],
+        )
+        db.add(program)
+        await db.flush()
+        offering = models.ProgramOffering(
+            program_id=program.id,
+            offering_type="Chính quy",
+        )
+        db.add(offering)
+        await db.flush()
+
+    academic_info = OfferingAcademicInfo(
+        offering_id=offering.id,
+        academic_year=2025,
+        tuition_fee_per_year=10000000,  # Legacy field, still used by non-tuition path
+        is_published=True,
+    )
+    db.add(academic_info)
+    await db.flush()
+
+    semester_tuition = OfferingSemesterTuition(
+        academic_info_id=academic_info.id,
+        semester_no=1,
+        amount=10000000,  # HK1 amount (matches tuition_fee_per_year for test consistency)
+    )
+    db.add(semester_tuition)
+    await db.flush()
+
     # Create test lead with admission profile
     lead = models.Lead(
         full_name="Finance Test Student",
         email="finance_test@example.com",
         phone="0901234567",
-        source="test",  # Required field
+        source="test",
         unit_id=seeded_dependencies["unit_id"],
-        consultation_status_id=seeded_dependencies["initial_status_id"],  # FK to ConsultationStatus
+        consultation_status_id=seeded_dependencies["initial_status_id"],
     )
     db.add(lead)
     await db.flush()
@@ -109,8 +155,8 @@ async def finance_fixtures(db: AsyncSession, seeded_dependencies: dict) -> dict:
     admission_profile = models.AdmissionProfile(
         lead_id=lead.id,
         status="submitted",
-        academic_year=2025,  # Required field
-        applied_rules={},  # Required JSONB field - snapshot of rules at creation
+        academic_year=2025,
+        applied_rules={"academic_info_id": academic_info.id},
     )
     db.add(admission_profile)
     await db.flush()
@@ -235,7 +281,8 @@ class TestFeeCalculation:
                 unit_id=finance_fixtures["unit_id"],
             )
 
-        assert "already exists" in str(exc_info.value)
+        error_msg = str(exc_info.value)
+        assert "already exists" in error_msg or "đã được tính" in error_msg
 
     @pytest.mark.asyncio
     async def test_recalculate_fee_blocked_after_payment(
@@ -368,11 +415,15 @@ class TestInvoiceGeneration:
         profile = finance_fixtures["admission_profile"]
         plan = finance_fixtures["installment_plan"]
 
-        # Create fee with installment plan
+        # Create fee with installment plan.
+        # PR 3: tuition base_amount is now looked up from
+        # offering_semester_tuition (10M in fixture), so the explicit
+        # base_amount here is ignored for tuition. Use enrollment type
+        # instead for a clean installment-amount test with known base.
         fee, _ = await fee_service.calculate_fee(
             admission_profile_id=profile.id,
-            fee_type=FeeTypeEnum.tuition,
-            base_amount=Decimal("9000000"),  # Divisible by 3
+            fee_type=FeeTypeEnum.enrollment,
+            base_amount=Decimal("9000000"),
             academic_year=2025,
             installment_plan_id=plan.id,
             user_id=maker_user.id,
@@ -391,7 +442,7 @@ class TestInvoiceGeneration:
         await db.commit()
 
         assert len(invoices) == 3
-        # Amounts based on 34%/33%/33% split of 9000000
+        # Amounts based on 34%/33%/33% split of 9,000,000
         assert invoices[0].amount == Decimal("3060000")  # 34%
         assert invoices[1].amount == Decimal("2970000")  # 33%
         assert invoices[2].amount == Decimal("2970000")  # 33%

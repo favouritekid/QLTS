@@ -68,6 +68,54 @@ class FeeCalculationService:
     # FEE CALCULATION
     # ==========================================================================
 
+    async def _resolve_academic_info_id(
+        self, profile: models.AdmissionProfile,
+    ) -> int:
+        """Resolve academic_info_id from profile via 2-step fallback.
+
+        Step 1: profile.offering_admission_config.academic_info_id (modern)
+        Step 2: profile.applied_rules["academic_info_id"] (legacy, matches
+                current fees.py:203-211)
+        """
+        oac = getattr(profile, "offering_admission_config", None)
+        if oac is not None and getattr(oac, "academic_info_id", None):
+            return oac.academic_info_id
+
+        applied = profile.applied_rules or {}
+        ai_id = applied.get("academic_info_id")
+        if ai_id is not None:
+            return int(ai_id)
+
+        raise BadRequest(
+            "Không tìm được thông tin tuyển sinh cho hồ sơ này. "
+            "Profile thiếu cả offering_admission_config lẫn "
+            "applied_rules.academic_info_id."
+        )
+
+    async def _lookup_semester_tuition_amount(
+        self, profile: models.AdmissionProfile, semester_no: int,
+    ) -> Decimal:
+        """Look up canonical tuition amount from offering_semester_tuition.
+
+        Direct query — does NOT navigate ORM relationships to avoid
+        async lazy-load issues.
+        """
+        academic_info_id = await self._resolve_academic_info_id(profile)
+        result = await self.db.execute(
+            select(models.OfferingSemesterTuition.amount).where(
+                models.OfferingSemesterTuition.academic_info_id == academic_info_id,
+                models.OfferingSemesterTuition.semester_no == semester_no,
+            )
+        )
+        amount = result.scalar_one_or_none()
+        if amount is None:
+            raise BadRequest(
+                f"Chưa cấu hình học phí cho HK{semester_no} "
+                f"(academic_info_id={academic_info_id}). "
+                "Vui lòng nhập học phí theo học kỳ trong quản trị trước."
+            )
+        return Decimal(str(amount))
+
     async def calculate_fee(
         self,
         admission_profile_id: int,
@@ -78,39 +126,70 @@ class FeeCalculationService:
         installment_plan_id: Optional[int] = None,
         user_id: Optional[int] = None,
         unit_id: Optional[int] = None,
+        semester_no: Optional[int] = None,
     ) -> Tuple[Fee, Optional[Callable]]:
         """
         Calculate fee for an admission profile.
 
+        For tuition fees (PR 3 — ADR-002): the canonical amount is looked
+        up from ``offering_semester_tuition`` based on ``semester_no``. The
+        ``base_amount`` parameter is ignored for tuition — the caller need
+        not provide it. For non-tuition fees, ``base_amount`` is used as
+        before and ``semester_no`` stays None.
+
         Args:
             admission_profile_id: Profile to create fee for
             fee_type: Type of fee (application, tuition, etc.)
-            base_amount: Base fee amount before discounts
+            base_amount: Base fee amount before discounts (ignored for tuition)
             academic_year: Academic year (e.g., "2024-2025")
             discount_policy_ids: List of discount policy IDs to apply
             installment_plan_id: Installment plan for payment scheduling
             user_id: User performing calculation (for audit)
             unit_id: Unit ID for IDOR protection
+            semester_no: Semester number for tuition fees (None for non-tuition).
+                Defaults to 1 for tuition if not provided — lives in service
+                so both HTTP callers and direct callers get the default.
 
         Returns:
             Tuple of (Fee, post_commit_callback)
 
         Raises:
             ResourceNotFoundError: If profile not found
-            BadRequest: If fee already exists for this profile/type/year
+            BadRequest: If fee already exists or semester tuition not configured
         """
+        # Normalize semester_no: tuition defaults to HK1, non-tuition
+        # MUST be None (the DB CHECK chk_fee_nontuition_semester_no_null
+        # rejects non-tuition rows with a non-NULL semester_no). Lives in
+        # service so both HTTP callers and direct callers get it.
+        if fee_type == FeeTypeEnum.tuition and semester_no is None:
+            semester_no = 1
+        elif fee_type != FeeTypeEnum.tuition:
+            semester_no = None
+
         # Validate profile exists and is accessible
         profile = await self._get_profile(admission_profile_id, unit_id)
         if not profile:
             raise ResourceNotFoundError("Admission profile not found")
 
-        # Check for duplicate fee
+        # For tuition: look up canonical amount from offering_semester_tuition
+        if fee_type == FeeTypeEnum.tuition:
+            base_amount = await self._lookup_semester_tuition_amount(
+                profile, semester_no
+            )
+
+        # Semester-aware duplicate check for tuition, year-based for others
         existing = await self.fee_repo.check_duplicate(
-            admission_profile_id, fee_type.value, academic_year
+            admission_profile_id, fee_type.value, academic_year,
+            semester_no=semester_no,
         )
         if existing:
+            if fee_type == FeeTypeEnum.tuition:
+                raise BadRequest(
+                    f"Học phí HK{semester_no} đã được tính cho hồ sơ này."
+                )
             raise BadRequest(
-                f"Fee of type '{fee_type.value}' already exists for academic year {academic_year}"
+                f"Fee of type '{fee_type.value}' already exists for "
+                f"academic year {academic_year}"
             )
 
         # Calculate discounts
@@ -132,26 +211,13 @@ class FeeCalculationService:
         else:
             academic_year_int = academic_year
 
-        # Create fee record
-        # PR 1 (ADR-002) compat patch: tuition rows MUST carry a positive
-        # semester_no to satisfy chk_fee_tuition_semester_no_required and
-        # the new uq_fee_profile_type_semester_tuition partial unique
-        # index. PR 1 does not introduce semester-aware logic anywhere
-        # else — existing callers still pass academic_year, and the
-        # duplicate check at check_duplicate() is still year-based. The
-        # only thing PR 1 guarantees is that every new tuition fee
-        # created by this service lands with semester_no=1 (HK1), which
-        # matches the backfill of pre-existing tuition rows. Non-tuition
-        # fees leave semester_no NULL, matching the non-tuition partial
-        # index (keyed on academic_year, not semester_no).
-        # PR 3 will replace this compat patch with proper semester-aware
-        # tuition creation driven by offering_semester_tuition rows.
-        fee_semester_no = 1 if fee_type == FeeTypeEnum.tuition else None
+        # Create fee record. semester_no is set from the service-level
+        # default or caller-provided value (tuition) / None (non-tuition).
         fee = Fee(
             admission_profile_id=admission_profile_id,
             fee_type=fee_type.value,
             academic_year=academic_year_int,
-            semester_no=fee_semester_no,
+            semester_no=semester_no,
             installment_plan_id=installment_plan_id,
             base_amount=base_amount,
             total_discount=total_discount,
@@ -186,14 +252,14 @@ class FeeCalculationService:
             fee_id=fee.id,
             profile_id=admission_profile_id,
             fee_type=fee_type.value,
+            semester_no=semester_no,
             base_amount=str(base_amount),
             total_discount=str(total_discount),
             final_amount=str(final_amount),
             user_id=user_id,
         )
 
-        # ✅ SYNC LEAD STATUS: For tuition fee, move lead to sts14 (Chờ học phí)
-        # This keeps Lead consultation status in sync with Finance phase
+        # SYNC LEAD STATUS: For tuition fee, move lead to sts14 (Chờ học phí)
         if fee_type == FeeTypeEnum.tuition:
             from app.services.lead_admission_sync import sync_lead_tuition_calculated
             await sync_lead_tuition_calculated(
@@ -201,11 +267,9 @@ class FeeCalculationService:
                 profile=profile,
                 fee_amount=str(final_amount),
                 changed_by_user_id=user_id,
-                reason=f"Tuition fee calculated: {final_amount:,.0f} VND",
+                reason=f"Tuition fee calculated: {final_amount:,.0f} VND (HK{semester_no})",
             )
 
-        # Post-commit callback (no events to emit — fee calculation is a
-        # pure service-internal flow, not a cross-module notification. See ADR-001.)
         async def post_commit():
             pass
 
