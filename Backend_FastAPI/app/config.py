@@ -376,6 +376,9 @@ class Settings(BaseSettings):
     ENABLE_FEE_VERIFICATION: bool = Field(
         default=False, validation_alias="ENABLE_FEE_VERIFICATION"
     )  # Block enrollment if tuition fee not paid/waived (Phase 6)
+    ADMISSION_FEE_GATE_MODE: Literal["legacy", "semester_hk1"] = Field(
+        default="legacy", validation_alias="ADMISSION_FEE_GATE_MODE"
+    )  # ADR-002: 'legacy' = paid/waived; 'semester_hk1' = HK1 financial clearance (partial passes)
     ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT: bool = Field(
         default=False, validation_alias="ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT"
     )  # Phase P2-2: Use fairness-weighted scoring instead of pure round-robin

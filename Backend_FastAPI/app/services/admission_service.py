@@ -123,42 +123,50 @@ async def check_enrollment_fee_eligibility(
     profile_id: int,
 ) -> None:
     """
-    Fee Gate: Verify tuition fee is paid/waived before enrollment.
+    Fee Gate: Verify tuition fee clearance before enrollment.
 
-    Per FINANCE_MODULE_DESIGN.md Section 5.3 (Gate 2):
-    - Enrollment MUST be blocked if tuition fee not cleared
-    - Fee is "cleared" if status == 'paid' OR status == 'waived'
-    - This check is ONLY enforced when ENABLE_FEE_VERIFICATION=True
+    Dispatches to one of two modes based on ADMISSION_FEE_GATE_MODE
+    (ADR-002 Decision 2):
+    - 'legacy': status must be paid or waived (pre-PR4 behavior, unchanged)
+    - 'semester_hk1': HK1 financial clearance — partial payment with
+      any non-zero amount also passes (SPEC §4.2)
 
-    Args:
-        db: Database session
-        profile_id: AdmissionProfile ID
-
-    Raises:
-        BadRequest: If tuition fee not paid/waived
-
-    Note:
-        - Feature flag check should be done by caller
-        - This function ONLY checks tuition fee, not application fee
-          (application fee is Gate 1, enforced in approve_profile)
+    The caller (enroll_profile) checks ENABLE_FEE_VERIFICATION first;
+    this function is only called when verification is enabled.
     """
     from app.config import settings
+
+    mode = settings.ADMISSION_FEE_GATE_MODE
+
+    if mode == "semester_hk1":
+        await _check_fee_gate_semester_hk1(db, profile_id)
+    else:
+        await _check_fee_gate_legacy(db, profile_id)
+
+
+async def _check_fee_gate_legacy(
+    db: AsyncSession,
+    profile_id: int,
+) -> None:
+    """Legacy gate: tuition fee must be paid or waived.
+
+    Extracted from the pre-PR4 check_enrollment_fee_eligibility body.
+    Pinned to semester_no=1 so that HK2+ fees (which can now be
+    created via PR 3's semester-aware API) do not contaminate the
+    enrollment gate check.
+    """
     from app.repositories.fee_repository import FeeRepository
     from app.models.finance.fee import FeeTypeEnum, FeeStatusEnum
 
     fee_repo = FeeRepository(db)
 
-    # Get tuition fee for this profile
     fees = await fee_repo.get_by_profile_id(
         profile_id=profile_id,
-        fee_type=FeeTypeEnum.tuition.value
+        fee_type=FeeTypeEnum.tuition.value,
+        semester_no=1,
     )
 
     if not fees:
-        # No tuition fee record found - this could mean:
-        # 1. Fee hasn't been calculated yet
-        # 2. Fee module is not enabled for this profile
-        # For now, we block enrollment if no fee record exists
         log.warning(
             "Fee gate check failed: No tuition fee record found",
             profile_id=profile_id,
@@ -168,10 +176,8 @@ async def check_enrollment_fee_eligibility(
             "Please calculate the fee before proceeding with enrollment."
         )
 
-    # Check the most recent tuition fee (should only be one per year)
     fee = fees[0]
 
-    # Fee must be paid or waived to proceed
     if fee.status not in (FeeStatusEnum.paid.value, FeeStatusEnum.waived.value):
         remaining = fee.remaining_amount
         log.warning(
@@ -192,6 +198,79 @@ async def check_enrollment_fee_eligibility(
         profile_id=profile_id,
         fee_id=fee.id,
         fee_status=fee.status,
+    )
+
+
+async def _check_fee_gate_semester_hk1(
+    db: AsyncSession,
+    profile_id: int,
+) -> None:
+    """HK1 Financial Clearance gate (ADMISSION_FEE_GATE_MODE=semester_hk1).
+
+    Per SEMESTER_TUITION_SPEC §4.2 and ADR-002:
+    - Fee must exist: fee_type='tuition', semester_no=1 for this profile
+    - Cleared if: status='paid' OR status='waived' OR
+      (status='partial' AND paid_amount > 0)
+    - No minimum payment threshold — any non-zero payment passes
+    - Partial payment: remainder stays as HK1 debt, does NOT block
+    """
+    from app.repositories.fee_repository import FeeRepository
+    from app.models.finance.fee import FeeTypeEnum, FeeStatusEnum
+
+    fee_repo = FeeRepository(db)
+
+    fees = await fee_repo.get_by_profile_id(
+        profile_id=profile_id,
+        fee_type=FeeTypeEnum.tuition.value,
+        semester_no=1,
+    )
+
+    if not fees:
+        log.warning(
+            "HK1 fee gate check failed: No HK1 tuition fee record found",
+            profile_id=profile_id,
+        )
+        raise BadRequest(
+            "Không thể nhập học: Chưa có phí học kỳ 1 (HK1). "
+            "Vui lòng tính phí trước khi tiến hành nhập học."
+        )
+
+    fee = fees[0]
+
+    if fee.status in (FeeStatusEnum.paid.value, FeeStatusEnum.waived.value):
+        log.info(
+            "HK1 fee gate check passed",
+            profile_id=profile_id,
+            fee_id=fee.id,
+            fee_status=fee.status,
+        )
+        return
+
+    if fee.status == FeeStatusEnum.partial.value and fee.paid_amount > 0:
+        log.info(
+            "HK1 fee gate check passed: partial payment accepted",
+            profile_id=profile_id,
+            fee_id=fee.id,
+            fee_status=fee.status,
+            paid_amount=str(fee.paid_amount),
+            remaining=str(fee.remaining_amount),
+        )
+        return
+
+    remaining = fee.remaining_amount
+    log.warning(
+        "HK1 fee gate check failed: HK1 tuition fee not cleared",
+        profile_id=profile_id,
+        fee_id=fee.id,
+        fee_status=fee.status,
+        paid_amount=str(fee.paid_amount),
+        remaining=str(remaining),
+    )
+    raise BadRequest(
+        f"Không thể nhập học: Phí HK1 chưa được thanh toán. "
+        f"Trạng thái hiện tại: {fee.status}, Còn lại: {remaining:,.0f} VND. "
+        "Vui lòng thanh toán (một phần hoặc toàn bộ) hoặc xin miễn phí "
+        "trước khi nhập học."
     )
 
 

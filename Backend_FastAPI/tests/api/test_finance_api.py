@@ -1129,3 +1129,139 @@ class TestFeeGateEnrollment:
         assert passing_statuses | blocking_statuses == all_statuses, (
             "Fee gate test must cover all FeeStatusEnum values"
         )
+
+
+class TestFeeGateHK1Mode:
+    """Tests for HK1 financial clearance gate (ADMISSION_FEE_GATE_MODE=semester_hk1).
+
+    PR 4 (ADR-002 Decision 2): when mode=semester_hk1, the gate checks
+    fee_type=tuition + semester_no=1 and accepts paid/waived/partial
+    with paid_amount > 0. No minimum threshold.
+    """
+
+    def _make_mock_fee(self, status, paid_amount=Decimal("0"), semester_no=1):
+        from unittest.mock import MagicMock
+        fee = MagicMock()
+        fee.id = 1
+        fee.status = status
+        fee.fee_type = "tuition"
+        fee.semester_no = semester_no
+        fee.paid_amount = paid_amount
+        fee.remaining_amount = Decimal("10000000") - paid_amount
+        return fee
+
+    @pytest.mark.asyncio
+    async def test_hk1_gate_passes_paid(self):
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_profile_id = AsyncMock(
+            return_value=[self._make_mock_fee("paid", Decimal("10000000"))]
+        )
+
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_repo), \
+             patch("app.config.settings") as mock_settings:
+            mock_settings.ADMISSION_FEE_GATE_MODE = "semester_hk1"
+            await check_enrollment_fee_eligibility(MagicMock(), profile_id=1)
+
+    @pytest.mark.asyncio
+    async def test_hk1_gate_passes_waived(self):
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_profile_id = AsyncMock(
+            return_value=[self._make_mock_fee("waived")]
+        )
+
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_repo), \
+             patch("app.config.settings") as mock_settings:
+            mock_settings.ADMISSION_FEE_GATE_MODE = "semester_hk1"
+            await check_enrollment_fee_eligibility(MagicMock(), profile_id=1)
+
+    @pytest.mark.asyncio
+    async def test_hk1_gate_passes_partial_with_payment(self):
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_profile_id = AsyncMock(
+            return_value=[self._make_mock_fee("partial", Decimal("100000"))]
+        )
+
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_repo), \
+             patch("app.config.settings") as mock_settings:
+            mock_settings.ADMISSION_FEE_GATE_MODE = "semester_hk1"
+            await check_enrollment_fee_eligibility(MagicMock(), profile_id=1)
+
+    @pytest.mark.asyncio
+    async def test_hk1_gate_blocks_partial_zero_payment(self):
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_profile_id = AsyncMock(
+            return_value=[self._make_mock_fee("partial", Decimal("0"))]
+        )
+
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_repo), \
+             patch("app.config.settings") as mock_settings:
+            mock_settings.ADMISSION_FEE_GATE_MODE = "semester_hk1"
+            from app.utils.exceptions import BadRequest as _BadRequest
+            with pytest.raises(_BadRequest):
+                await check_enrollment_fee_eligibility(MagicMock(), profile_id=1)
+
+    @pytest.mark.asyncio
+    async def test_hk1_gate_blocks_pending(self):
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_profile_id = AsyncMock(
+            return_value=[self._make_mock_fee("pending")]
+        )
+
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_repo), \
+             patch("app.config.settings") as mock_settings:
+            mock_settings.ADMISSION_FEE_GATE_MODE = "semester_hk1"
+            from app.utils.exceptions import BadRequest as _BadRequest
+            with pytest.raises(_BadRequest):
+                await check_enrollment_fee_eligibility(MagicMock(), profile_id=1)
+
+    @pytest.mark.asyncio
+    async def test_hk1_gate_blocks_no_hk1_fee(self):
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_profile_id = AsyncMock(return_value=[])
+
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_repo), \
+             patch("app.config.settings") as mock_settings:
+            mock_settings.ADMISSION_FEE_GATE_MODE = "semester_hk1"
+            from app.utils.exceptions import BadRequest as _BadRequest
+            with pytest.raises(_BadRequest) as exc_info:
+                await check_enrollment_fee_eligibility(MagicMock(), profile_id=1)
+            assert "HK1" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_hk1_gate_blocks_overdue(self):
+        from app.services.admission_service import check_enrollment_fee_eligibility
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_profile_id = AsyncMock(
+            return_value=[self._make_mock_fee("overdue")]
+        )
+
+        with patch("app.repositories.fee_repository.FeeRepository", return_value=mock_repo), \
+             patch("app.config.settings") as mock_settings:
+            mock_settings.ADMISSION_FEE_GATE_MODE = "semester_hk1"
+            from app.utils.exceptions import BadRequest as _BadRequest
+            with pytest.raises(_BadRequest):
+                await check_enrollment_fee_eligibility(MagicMock(), profile_id=1)
+
+    def test_config_default_is_legacy(self):
+        from app.config import settings
+        assert settings.ADMISSION_FEE_GATE_MODE == "legacy"
