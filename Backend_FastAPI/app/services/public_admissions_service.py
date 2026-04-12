@@ -81,6 +81,24 @@ def _money_range(values: Iterable[Optional[Decimal]]) -> Tuple[Optional[Decimal]
     return min(valid_values), max(valid_values)
 
 
+def _extract_semester_data(
+    academic_info,
+) -> Tuple[List["PublicSemesterTuitionItem"], Optional[Decimal]]:
+    """Extract per-semester tuition items + HK1 amount from a loaded academic info.
+
+    Returns (items_ordered_by_semester_no, hk1_amount_or_None).
+    """
+    from app.schemas.public_admissions import PublicSemesterTuitionItem
+
+    items = []
+    hk1_amount = None
+    for st in getattr(academic_info, "semester_tuitions", None) or []:
+        items.append(PublicSemesterTuitionItem(semester_no=st.semester_no, amount=st.amount))
+        if st.semester_no == 1:
+            hk1_amount = st.amount
+    return items, hk1_amount
+
+
 async def _load_public_program_snapshot(
     db: AsyncSession,
 ) -> Tuple[
@@ -266,6 +284,7 @@ async def get_public_programs_catalog(
     for program in programs:
         program_offerings: List[PublicAdmissionsOfferingSummary] = []
         program_tuition_values: List[Optional[Decimal]] = []
+        program_hk1_values: List[Optional[Decimal]] = []
         program_years: Set[int] = set()
 
         ordered_offerings = sorted(
@@ -282,6 +301,9 @@ async def get_public_programs_catalog(
             program_years.add(academic_info.academic_year)
             program_tuition_values.append(academic_info.tuition_fee_per_year)
 
+            sem_items, hk1_amount = _extract_semester_data(academic_info)
+            program_hk1_values.append(hk1_amount)
+
             program_offerings.append(
                 PublicAdmissionsOfferingSummary(
                     id=offering.id,
@@ -296,6 +318,8 @@ async def get_public_programs_catalog(
                         cutoff_score_previous_year=academic_info.cutoff_score_previous_year,
                         target_audience=academic_info.target_audience,
                         applied_discount_policy_ids=academic_info.applied_discount_policy_ids or [],
+                        semester_tuitions=sem_items,
+                        semester_1_tuition=hk1_amount,
                     ),
                     admission_methods=method_tags_by_info_id.get(academic_info.id, []),
                 )
@@ -305,6 +329,7 @@ async def get_public_programs_catalog(
             continue
 
         tuition_min, tuition_max = _money_range(program_tuition_values)
+        hk1_min, hk1_max = _money_range(program_hk1_values)
         degree_groups[program.degree_level].append(
             PublicAdmissionsProgramSummary(
                 id=program.id,
@@ -316,6 +341,8 @@ async def get_public_programs_catalog(
                 academic_years=sorted(program_years, reverse=True),
                 tuition_min=tuition_min,
                 tuition_max=tuition_max,
+                semester_1_tuition_min=hk1_min,
+                semester_1_tuition_max=hk1_max,
                 offerings=program_offerings,
             )
         )
@@ -331,6 +358,11 @@ async def get_public_programs_catalog(
             for program in programs_in_group
             for offering in program.offerings
         ]
+        group_hk1_values = [
+            offering.academic_info.semester_1_tuition
+            for program in programs_in_group
+            for offering in program.offerings
+        ]
         group_years = sorted(
             {year for program in programs_in_group for year in program.academic_years},
             reverse=True,
@@ -340,6 +372,7 @@ async def get_public_programs_catalog(
             key=_sort_offering_type,
         )
         tuition_min, tuition_max = _money_range(group_tuition_values)
+        hk1_min, hk1_max = _money_range(group_hk1_values)
         degree_level_items.append(
             PublicAdmissionsDegreeLevelGroup(
                 degree_level=degree_level,
@@ -349,6 +382,8 @@ async def get_public_programs_catalog(
                 academic_years=group_years,
                 tuition_min=tuition_min,
                 tuition_max=tuition_max,
+                semester_1_tuition_min=hk1_min,
+                semester_1_tuition_max=hk1_max,
                 programs=programs_in_group,
             )
         )
@@ -620,6 +655,7 @@ async def get_public_tuition_catalog(
             for policy_id in academic_info.applied_discount_policy_ids or []:
                 policy_ids.add(policy_id)
 
+            sem_items, hk1_amount = _extract_semester_data(academic_info)
             item = PublicAdmissionsTuitionOffering(
                 program_id=program.id,
                 program_name=program.name,
@@ -632,6 +668,8 @@ async def get_public_tuition_catalog(
                 tuition_fee_per_year=academic_info.tuition_fee_per_year,
                 annual_admission_quota=academic_info.annual_admission_quota,
                 applied_discount_policy_ids=academic_info.applied_discount_policy_ids or [],
+                semester_tuitions=sem_items,
+                semester_1_tuition=hk1_amount,
             )
             tuition_offerings.append(item)
             degree_level_bands[program.degree_level].append(item)
@@ -670,6 +708,7 @@ async def get_public_tuition_catalog(
     for degree_level in sorted(degree_level_bands.keys(), key=_sort_degree_level):
         items = degree_level_bands[degree_level]
         tuition_min, tuition_max = _money_range(item.tuition_fee_per_year for item in items)
+        hk1_min, hk1_max = _money_range(item.semester_1_tuition for item in items)
         degree_levels.append(
             PublicAdmissionsTuitionBand(
                 degree_level=degree_level,
@@ -677,6 +716,8 @@ async def get_public_tuition_catalog(
                 academic_years=sorted({item.academic_year for item in items}, reverse=True),
                 tuition_min=tuition_min,
                 tuition_max=tuition_max,
+                semester_1_tuition_min=hk1_min,
+                semester_1_tuition_max=hk1_max,
             )
         )
 

@@ -18,6 +18,12 @@ class PublicAdmissionsMethodTag(BaseModel):
     name: str
 
 
+class PublicSemesterTuitionItem(BaseModel):
+    """Per-semester tuition row for public display (PR 6 — ADR-002)."""
+    semester_no: int = Field(..., ge=1)
+    amount: Decimal = Field(..., ge=0)
+
+
 class PublicAdmissionsAcademicInfoSummary(BaseModel):
     id: int
     academic_year: int = Field(..., ge=2000, le=2100)
@@ -26,6 +32,9 @@ class PublicAdmissionsAcademicInfoSummary(BaseModel):
     cutoff_score_previous_year: Optional[Decimal] = Field(default=None, ge=0)
     target_audience: Optional[str] = None
     applied_discount_policy_ids: List[int] = Field(default_factory=list)
+    # PR 6 (ADR-002 Decision 5): additive semester tuition fields
+    semester_tuitions: List[PublicSemesterTuitionItem] = Field(default_factory=list)
+    semester_1_tuition: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class PublicAdmissionsOfferingSummary(BaseModel):
@@ -47,6 +56,8 @@ class PublicAdmissionsProgramSummary(BaseModel):
     academic_years: List[int] = Field(default_factory=list)
     tuition_min: Optional[Decimal] = Field(default=None, ge=0)
     tuition_max: Optional[Decimal] = Field(default=None, ge=0)
+    semester_1_tuition_min: Optional[Decimal] = Field(default=None, ge=0)
+    semester_1_tuition_max: Optional[Decimal] = Field(default=None, ge=0)
     offerings: List[PublicAdmissionsOfferingSummary] = Field(default_factory=list)
 
 
@@ -58,6 +69,8 @@ class PublicAdmissionsDegreeLevelGroup(BaseModel):
     academic_years: List[int] = Field(default_factory=list)
     tuition_min: Optional[Decimal] = Field(default=None, ge=0)
     tuition_max: Optional[Decimal] = Field(default=None, ge=0)
+    semester_1_tuition_min: Optional[Decimal] = Field(default=None, ge=0)
+    semester_1_tuition_max: Optional[Decimal] = Field(default=None, ge=0)
     programs: List[PublicAdmissionsProgramSummary] = Field(default_factory=list)
 
 
@@ -180,6 +193,8 @@ class PublicAdmissionsTuitionOffering(BaseModel):
     tuition_fee_per_year: Optional[Decimal] = Field(default=None, ge=0)
     annual_admission_quota: Optional[int] = Field(default=None, ge=0)
     applied_discount_policy_ids: List[int] = Field(default_factory=list)
+    semester_tuitions: List[PublicSemesterTuitionItem] = Field(default_factory=list)
+    semester_1_tuition: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class PublicAdmissionsTuitionBand(BaseModel):
@@ -188,6 +203,8 @@ class PublicAdmissionsTuitionBand(BaseModel):
     academic_years: List[int] = Field(default_factory=list)
     tuition_min: Optional[Decimal] = Field(default=None, ge=0)
     tuition_max: Optional[Decimal] = Field(default=None, ge=0)
+    semester_1_tuition_min: Optional[Decimal] = Field(default=None, ge=0)
+    semester_1_tuition_max: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class PublicAdmissionsTuitionMeta(BaseModel):
