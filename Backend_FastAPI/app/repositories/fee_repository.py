@@ -77,7 +77,8 @@ class FeeRepository(BaseRepository[Fee]):
         self,
         profile_id: int,
         unit_id: Optional[int] = None,
-        fee_type: Optional[str] = None
+        fee_type: Optional[str] = None,
+        semester_no: Optional[int] = None,
     ) -> List[Fee]:
         """
         Get all fees for an admission profile.
@@ -86,6 +87,7 @@ class FeeRepository(BaseRepository[Fee]):
             profile_id: Admission profile ID
             unit_id: Filter by lead.unit_id (for IDOR protection)
             fee_type: Optional filter by fee type
+            semester_no: Optional filter by semester number (PR 4)
 
         Returns:
             List of fees
@@ -107,6 +109,9 @@ class FeeRepository(BaseRepository[Fee]):
 
         if fee_type is not None:
             query = query.where(Fee.fee_type == fee_type)
+
+        if semester_no is not None:
+            query = query.where(Fee.semester_no == semester_no)
 
         query = query.order_by(Fee.created_at.desc())
 
