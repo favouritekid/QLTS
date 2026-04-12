@@ -48,6 +48,31 @@ from app.config import settings
 log = structlog.get_logger(__name__)
 
 
+def is_hk1_cleared(
+    fee_type: str,
+    semester_no: Optional[int],
+    status: str,
+    paid_amount: Decimal,
+) -> bool:
+    """Check if a fee is in HK1 cleared state.
+
+    Cleared = tuition + semester_no=1 + one of:
+      - status in (paid, waived)
+      - status == partial AND paid_amount > 0
+
+    Used by PR 5 (ADR-002) to detect transition into cleared state
+    at payment/waiver call sites. Callers snapshot pre-state, apply
+    mutation, then check post-state: sync only on False -> True.
+    """
+    if fee_type != "tuition" or semester_no != 1:
+        return False
+    if status in ("paid", "waived"):
+        return True
+    if status == "partial" and paid_amount > 0:
+        return True
+    return False
+
+
 class FeeCalculationService:
     """
     Service for fee calculation and lifecycle management.
@@ -260,8 +285,8 @@ class FeeCalculationService:
             user_id=user_id,
         )
 
-        # SYNC LEAD STATUS: For tuition fee, move lead to sts14 (Chờ học phí)
-        if fee_type == FeeTypeEnum.tuition:
+        # ADR-002 PR 5: Only HK1 fee creation projects into admission pipeline.
+        if fee_type == FeeTypeEnum.tuition and semester_no == 1:
             from app.services.lead_admission_sync import sync_lead_tuition_calculated
             await sync_lead_tuition_calculated(
                 db=self.db,
@@ -409,8 +434,8 @@ class FeeCalculationService:
 
         await self.db.flush()
 
-        # ✅ SYNC LEAD STATUS: If tuition fee is now fully waived, move lead to sts10
-        if fee_became_paid and fee.fee_type == FeeTypeEnum.tuition.value:
+        # ADR-002 PR 5: Only HK1 waiver projects into admission pipeline.
+        if fee_became_paid and fee.fee_type == FeeTypeEnum.tuition.value and fee.semester_no == 1:
             # Need to load profile with lead for sync
             profile = await self._get_profile(fee.admission_profile_id, unit_id)
             if profile:

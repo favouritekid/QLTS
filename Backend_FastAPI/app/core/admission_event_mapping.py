@@ -179,48 +179,53 @@ ADMISSION_EVENT_PROJECTIONS = {
     # -------------------------------------------------------------------------
     # TUITION FEE CALCULATED (Finance Phase - Gate 1)
     # -------------------------------------------------------------------------
-    # Triggers when tuition fee is calculated for approved profile
-    # Lead moves to "Chờ học phí" - waiting for payment
+    # ADR-002 PR 5: HK1-only. Callers gate to semester_no == 1.
+    # Triggers when HK1 tuition fee is calculated for approved profile.
+    # Lead moves to "Chờ học phí" - waiting for payment.
     "tuition_fee_calculated": AdmissionEventProjection(
         event="tuition_fee_calculated",
-        admission_status="approved",  # Profile is approved, waiting for fee payment
+        admission_status="approved",
         consultation_status_id="sts14",
         consultation_name="Chưa hoàn tất học phí",
-        pipeline_stage_id="stg05",  # Move to "Xử lý học phí" stage (fee phase)
+        pipeline_stage_id="stg05",
         stage_name="Xử lý học phí",
-        system_note_template="[HỆ THỐNG] Học phí đã được tính toán - Profile #{profile_id}, Số tiền: {amount} VND",
+        system_note_template="[HỆ THỐNG] Học phí HK1 đã được tính toán - Profile #{profile_id}, Số tiền: {amount} VND",
         skip_if_converted=True,
     ),
 
     # -------------------------------------------------------------------------
     # TUITION FEE PAID (Finance Phase - Gate 2 Passed)
     # -------------------------------------------------------------------------
-    # Triggers when tuition fee is fully paid or waived
-    # Lead moves to "Đã hoàn tất học phí" - ready for enrollment
+    # ADR-002 PR 5: HK1-only, cleared-state semantics. Callers fire this
+    # when HK1 reaches cleared state for the first time:
+    # paid, waived, or partial with paid_amount > 0.
+    # "Cleared" does NOT require full payment — any non-zero HK1 payment
+    # qualifies. Lead moves to "Đã hoàn tất học phí" once.
     "tuition_fee_paid": AdmissionEventProjection(
         event="tuition_fee_paid",
-        admission_status="confirmed",  # Profile is confirmed, fee cleared
+        admission_status="confirmed",
         consultation_status_id="sts10",
         consultation_name="Đã hoàn tất học phí",
-        pipeline_stage_id="stg05",  # Stay in "Xử lý học phí" stage
+        pipeline_stage_id="stg05",
         stage_name="Xử lý học phí",
-        system_note_template="[HỆ THỐNG] Học phí đã được thanh toán đầy đủ - Profile #{profile_id}, Mã GD: {transaction_id}",
+        system_note_template="[HỆ THỐNG] Học phí HK1 đã được xử lý - Profile #{profile_id}, Mã GD: {transaction_id}",
         skip_if_converted=True,
     ),
 
     # -------------------------------------------------------------------------
     # TUITION FEE REFUNDED (Finance Phase - Withdrawal)
     # -------------------------------------------------------------------------
-    # Triggers when tuition fee is refunded (full or partial leading to withdrawal)
+    # ADR-002 PR 5: HK1-only. Callers gate to semester_no == 1.
+    # HK2+ refunds do not project into the admission pipeline.
     "tuition_fee_refunded": AdmissionEventProjection(
         event="tuition_fee_refunded",
-        admission_status="confirmed",  # Was confirmed but withdrew
+        admission_status="confirmed",
         consultation_status_id="sts18",
         consultation_name="Đã hoàn học phí",
-        pipeline_stage_id="stg05",  # Stay in "Xử lý học phí" stage
+        pipeline_stage_id="stg05",
         stage_name="Xử lý học phí",
-        system_note_template="[HỆ THỐNG] Học phí đã được hoàn trả - Profile #{profile_id}, Số tiền hoàn: {amount} VND",
-        skip_if_converted=False,  # Allow transition even if converted (dropout)
+        system_note_template="[HỆ THỐNG] Học phí HK1 đã được hoàn trả - Profile #{profile_id}, Số tiền hoàn: {amount} VND",
+        skip_if_converted=False,
     ),
 
     # -------------------------------------------------------------------------

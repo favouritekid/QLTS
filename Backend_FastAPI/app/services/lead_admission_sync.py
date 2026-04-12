@@ -322,11 +322,13 @@ async def sync_lead_tuition_calculated(
     reason: Optional[str] = None,
 ) -> bool:
     """
-    Sync lead consultation status when tuition fee is calculated.
+    Sync lead consultation status when HK1 tuition fee is calculated.
 
     Moves lead to sts14 (Chưa hoàn tất học phí / Chờ đóng học phí).
 
-    This indicates the profile is approved and waiting for tuition payment.
+    ADR-002 PR 5: This function is for HK1 only. Callers MUST gate
+    invocation to semester_no == 1 before calling. HK2+ fee creation
+    must not project into the admission pipeline.
 
     Args:
         db: Database session (same transaction as caller)
@@ -419,11 +421,15 @@ async def sync_lead_tuition_paid(
     reason: Optional[str] = None,
 ) -> bool:
     """
-    Sync lead consultation status when tuition fee is fully paid or waived.
+    Sync lead consultation status when HK1 tuition reaches cleared state.
 
     Moves lead to sts10 (Đã hoàn tất học phí).
 
-    This indicates the profile is ready for enrollment (fee gate passed).
+    ADR-002 PR 5: "Cleared" means paid, waived, or partial with
+    paid_amount > 0. Does NOT require full payment. Callers MUST:
+    1. Gate invocation to semester_no == 1 (HK1 only)
+    2. Fire only on the first transition into cleared state (use
+       is_hk1_cleared pre/post pattern to avoid duplicate syncs)
 
     Args:
         db: Database session (same transaction as caller)
@@ -516,9 +522,12 @@ async def sync_lead_tuition_refunded(
     reason: Optional[str] = None,
 ) -> bool:
     """
-    Sync lead consultation status when tuition fee is refunded.
+    Sync lead consultation status when HK1 tuition fee is refunded.
 
     Moves lead to sts18 (Đã hoàn học phí).
+
+    ADR-002 PR 5: HK1-only. Callers MUST gate invocation to
+    semester_no == 1. HK2+ refunds must not affect the admission pipeline.
 
     This is a terminal state indicating the student has withdrawn after payment.
 
