@@ -18,7 +18,7 @@ from decimal import Decimal
 from typing import List, Optional, Dict, Any
 import html
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
 from app.models.finance import (
     FeeTypeEnum,
@@ -245,10 +245,25 @@ class FeeCreate(FeeBase):
 
 
 class FeeCalculateRequest(BaseModel):
-    """Request schema for fee calculation."""
+    """Request schema for fee calculation.
+
+    For tuition fees, `semester_no` defaults to 1 (HK1) if not provided.
+    The service looks up the canonical amount from `offering_semester_tuition`.
+    For non-tuition fees, `semester_no` must be None (the service ignores it).
+    """
     admission_profile_id: int
     fee_type: FeeTypeEnum = FeeTypeEnum.tuition
     installment_plan_code: str = Field(default="FULL", max_length=50)
+    semester_no: Optional[int] = Field(
+        None, ge=1,
+        description="Số học kỳ (HK1=1). Mặc định 1 cho tuition, None cho non-tuition."
+    )
+
+    @model_validator(mode="after")
+    def default_semester_for_tuition(self):
+        if self.fee_type == FeeTypeEnum.tuition and self.semester_no is None:
+            self.semester_no = 1
+        return self
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -259,6 +274,9 @@ class FeeResponse(FeeBase):
     admission_profile_id: int
     installment_plan_id: Optional[int]
     academic_year: str  # Formatted as "YYYY-YYYY" by router
+
+    # Semester (PR 3 — ADR-002)
+    semester_no: Optional[int] = None
 
     # Amounts
     base_amount: Decimal
@@ -281,9 +299,6 @@ class FeeResponse(FeeBase):
     applied_discounts: List[FeeAppliedDiscountResponse] = []
 
     # P1: Permission flags - computed in router based on status and amounts
-    # can_waive: status not in terminal states AND remaining_amount > 0
-    # can_cancel: status not in terminal states AND paid_amount == 0
-    # can_recalculate: status not in terminal states AND paid_amount == 0
     can_waive: bool = False
     can_cancel: bool = False
     can_recalculate: bool = False
@@ -299,6 +314,7 @@ class FeeSummaryResponse(BaseModel):
     id: int
     fee_type: FeeTypeEnum
     academic_year: int
+    semester_no: Optional[int] = None
     final_amount: Decimal
     paid_amount: Decimal
     remaining_amount: Decimal

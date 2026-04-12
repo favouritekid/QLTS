@@ -289,37 +289,57 @@ class FeeRepository(BaseRepository[Fee]):
         profile_id: int,
         fee_type: str,
         academic_year: Union[str, int],
-        exclude_id: Optional[int] = None
+        semester_no: Optional[int] = None,
+        exclude_id: Optional[int] = None,
     ) -> bool:
         """
-        Check if a fee already exists for profile/type/year.
+        Check if a fee already exists.
+
+        For tuition fees (when ``semester_no`` is provided), checks the
+        semester-aware tuple ``(profile, fee_type, semester_no)`` which
+        matches the partial unique index ``uq_fee_profile_type_semester_tuition``.
+
+        For non-tuition fees (``semester_no=None``), keeps the legacy
+        year-based tuple ``(profile, fee_type, academic_year)`` which
+        matches ``uq_fee_profile_type_year_nontuition``.
 
         Args:
             profile_id: Admission profile ID
             fee_type: Fee type
             academic_year: Academic year (e.g., "2025" or 2025)
+            semester_no: Semester number for tuition fees (None for non-tuition)
             exclude_id: Exclude this fee ID from check (for updates)
 
         Returns:
             True if duplicate exists
         """
-        # Convert string academic_year to int (model stores as Integer)
-        if isinstance(academic_year, str):
-            # Handle formats like "2024-2025" by taking the first year
-            academic_year_int = int(academic_year.split("-")[0])
-        else:
-            academic_year_int = academic_year
-
-        query = (
-            select(func.count(Fee.id))
-            .where(
-                and_(
-                    Fee.admission_profile_id == profile_id,
-                    Fee.fee_type == fee_type,
-                    Fee.academic_year == academic_year_int,
+        if fee_type == "tuition" and semester_no is not None:
+            query = (
+                select(func.count(Fee.id))
+                .where(
+                    and_(
+                        Fee.admission_profile_id == profile_id,
+                        Fee.fee_type == fee_type,
+                        Fee.semester_no == semester_no,
+                    )
                 )
             )
-        )
+        else:
+            if isinstance(academic_year, str):
+                academic_year_int = int(academic_year.split("-")[0])
+            else:
+                academic_year_int = academic_year
+
+            query = (
+                select(func.count(Fee.id))
+                .where(
+                    and_(
+                        Fee.admission_profile_id == profile_id,
+                        Fee.fee_type == fee_type,
+                        Fee.academic_year == academic_year_int,
+                    )
+                )
+            )
 
         if exclude_id is not None:
             query = query.where(Fee.id != exclude_id)

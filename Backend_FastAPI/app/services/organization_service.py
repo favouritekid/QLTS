@@ -2109,13 +2109,22 @@ async def update_semester_tuition(
     await db.flush()
     await db.refresh(row)
 
+    # PR 3: recalculate affected tuition fees (pre-commit)
+    from app.services.fee_calculation_service import (
+        recalculate_fees_for_semester_tuition_change,
+    )
+    recalc_count = await recalculate_fees_for_semester_tuition_change(
+        db, row.academic_info_id
+    )
+
     _year = db_info.academic_year
     _sem = row.semester_no
 
     async def _post_commit():
         log.info("semester_tuition_updated",
                  semester_tuition_id=semester_tuition_id,
-                 semester_no=_sem)
+                 semester_no=_sem,
+                 fees_recalculated=recalc_count)
         await _invalidate_semester_tuition_dependents(
             row.academic_info_id, _year, "update", f"HK{_sem}",
         )
@@ -2209,6 +2218,15 @@ async def bulk_upsert_semester_tuitions(
 
     await db.flush()
 
+    # PR 3 (ADR-002 Decision 4): recalculate affected tuition fees
+    # pre-commit so the new amounts are part of the same transaction.
+    from app.services.fee_calculation_service import (
+        recalculate_fees_for_semester_tuition_change,
+    )
+    recalc_count = await recalculate_fees_for_semester_tuition_change(
+        db, academic_info_id
+    )
+
     # Re-query for the final ordered list
     final_result = await db.execute(
         select(models.OfferingSemesterTuition)
@@ -2223,7 +2241,8 @@ async def bulk_upsert_semester_tuitions(
     async def _post_commit():
         log.info("semester_tuitions_bulk_upserted",
                  academic_info_id=academic_info_id,
-                 count=_count)
+                 count=_count,
+                 fees_recalculated=recalc_count)
         await _invalidate_semester_tuition_dependents(
             academic_info_id, _year, "bulk_upsert",
             f"{_count} học kỳ",

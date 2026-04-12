@@ -130,6 +130,7 @@ async def list_fees(
             id=fee.id,
             fee_type=fee.fee_type,
             academic_year=f"{fee.academic_year}-{fee.academic_year + 1}",
+            semester_no=fee.semester_no,
             final_amount=fee.final_amount,
             paid_amount=fee.paid_amount,
             remaining_amount=fee.remaining_amount,
@@ -193,33 +194,61 @@ async def calculate_fee(
         if not profile:
             raise ResourceNotFoundError("Admission profile not found")
 
-        # Get base amount from offering's tuition fee
+        # Resolve base_amount + discount_policy_ids depending on fee type.
+        # For tuition: service looks up amount from offering_semester_tuition
+        # (PR 3 — ADR-002). Router only needs discount policy IDs.
+        # For non-tuition: keep existing path via academic_info.tuition_fee_per_year.
         base_amount = Decimal("0")
+        discount_policy_ids: list = []
         academic_info = None
-        oac = profile.offering_admission_config
-        if oac and oac.academic_info:
-            academic_info = oac.academic_info
 
-        # Fallback: lookup via applied_rules.academic_info_id (for profiles created before OAC linkage)
-        if not academic_info and profile.applied_rules:
-            ai_id = profile.applied_rules.get("academic_info_id")
-            if ai_id:
-                from app.models.offering_academic_info import OfferingAcademicInfo
-                ai_result = await db.execute(
-                    sa.select(OfferingAcademicInfo).where(OfferingAcademicInfo.id == int(ai_id))
+        if data.fee_type != FeeTypeEnum.tuition:
+            # Non-tuition: existing path — look up from academic_info
+            oac = profile.offering_admission_config
+            if oac and oac.academic_info:
+                academic_info = oac.academic_info
+
+            if not academic_info and profile.applied_rules:
+                ai_id = profile.applied_rules.get("academic_info_id")
+                if ai_id:
+                    from app.models.offering_academic_info import OfferingAcademicInfo
+                    ai_result = await db.execute(
+                        sa.select(OfferingAcademicInfo).where(
+                            OfferingAcademicInfo.id == int(ai_id)
+                        )
+                    )
+                    academic_info = ai_result.scalars().first()
+
+            if academic_info:
+                base_amount = academic_info.tuition_fee_per_year or Decimal("0")
+
+            if base_amount <= 0:
+                raise BadRequest(
+                    "Cannot calculate fee: No fee amount configured for this offering"
                 )
-                academic_info = ai_result.scalars().first()
 
-        if academic_info:
-            base_amount = academic_info.tuition_fee_per_year or Decimal("0")
+            if academic_info:
+                discount_policy_ids = academic_info.applied_discount_policy_ids or []
+        else:
+            # Tuition: service will look up amount from offering_semester_tuition.
+            # Router still resolves discount policy IDs from academic_info.
+            oac = profile.offering_admission_config
+            if oac and oac.academic_info:
+                academic_info = oac.academic_info
 
-        if base_amount <= 0:
-            raise BadRequest("Cannot calculate fee: No tuition fee configured for this offering")
+            if not academic_info and profile.applied_rules:
+                ai_id = profile.applied_rules.get("academic_info_id")
+                if ai_id:
+                    from app.models.offering_academic_info import OfferingAcademicInfo
+                    ai_result = await db.execute(
+                        sa.select(OfferingAcademicInfo).where(
+                            OfferingAcademicInfo.id == int(ai_id)
+                        )
+                    )
+                    academic_info = ai_result.scalars().first()
 
-        # Get applicable discount policy IDs
-        discount_policy_ids = []
-        if academic_info:
-            discount_policy_ids = academic_info.applied_discount_policy_ids or []
+            if academic_info:
+                discount_policy_ids = academic_info.applied_discount_policy_ids or []
 
         # Calculate fee
         fee, post_commit = await fee_service.calculate_fee(
@@ -231,15 +260,28 @@ async def calculate_fee(
             installment_plan_id=plan_id,
             user_id=current_user.id,
             unit_id=unit_id,
+            semester_no=data.semester_no,
         )
 
-        # Generate invoices based on installment plan
+        # Generate invoices based on installment plan.
+        # For tuition fees (PR 3): anchor installment due dates to the
+        # profile's approval timestamp when available, so HK1 payment
+        # schedules align with the admission timeline rather than the
+        # fee-creation date. Non-tuition fees keep the legacy
+        # due_date_base = today + 30 days.
+        invoice_anchor: date | None = None
+        if data.fee_type == FeeTypeEnum.tuition and hasattr(profile, "approved_at"):
+            approved_at = getattr(profile, "approved_at", None)
+            if approved_at is not None:
+                invoice_anchor = approved_at.date() if hasattr(approved_at, "date") else approved_at
+
         invoices, _ = await invoice_service.generate_invoices_for_fee(
             fee_id=fee.id,
             due_date_base=date.today() + timedelta(days=30),
             user_id=current_user.id,
             unit_id=unit_id,
             auto_issue=False,
+            anchor_date=invoice_anchor,
         )
 
         await db.commit()
@@ -345,6 +387,7 @@ async def get_fees_by_profile(
             id=f.id,
             fee_type=f.fee_type,
             academic_year=f.academic_year,
+            semester_no=f.semester_no,
             final_amount=f.final_amount,
             paid_amount=f.paid_amount,
             remaining_amount=f.remaining_amount,
@@ -399,6 +442,7 @@ async def get_profile_finance_summary(
                 id=f.id,
                 fee_type=f.fee_type,
                 academic_year=f.academic_year,
+                semester_no=f.semester_no,
                 final_amount=f.final_amount,
                 paid_amount=f.paid_amount,
                 remaining_amount=f.remaining_amount,
@@ -637,6 +681,7 @@ def _build_fee_response(
         installment_plan_id=fee.installment_plan_id,
         fee_type=fee.fee_type,
         academic_year=f"{fee.academic_year}-{fee.academic_year + 1}",
+        semester_no=fee.semester_no,
         base_amount=fee.base_amount,
         total_discount=fee.total_discount,
         final_amount=fee.final_amount,
@@ -649,11 +694,9 @@ def _build_fee_response(
         created_at=fee.created_at,
         updated_at=fee.updated_at,
         applied_discounts=applied_discounts,
-        # P1: Permission flags
         can_waive=can_waive,
         can_cancel=can_cancel,
         can_recalculate=can_recalculate,
-        # P3: First invoice due date
         due_date=first_due_date,
     )
 

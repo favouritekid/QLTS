@@ -76,6 +76,7 @@ class InvoiceService:
         user_id: int,
         unit_id: Optional[int] = None,
         auto_issue: bool = False,
+        anchor_date: Optional[date] = None,
     ) -> Tuple[List[Invoice], Optional[Callable]]:
         """
         Generate all invoices for a fee based on its installment plan.
@@ -131,16 +132,24 @@ class InvoiceService:
         # Get installment schedule
         if fee.installment_plan:
             # Use plan's schedule with proper due_days_offset per installment
-            installment_schedule = fee.installment_plan.get_installment_schedule(amount_to_invoice)
+            installment_schedule = fee.installment_plan.get_installment_schedule(
+                amount_to_invoice, anchor_date=anchor_date
+            )
         else:
-            # Single payment fallback
-            installment_schedule = [{
+            # Single payment fallback. When anchor_date is provided
+            # (tuition HK1 anchored to approval date), set due_date so
+            # the invoice loop picks it up instead of falling back to
+            # due_date_base + offset.
+            entry: dict = {
                 "installment_no": 1,
                 "amount": amount_to_invoice,
                 "due_days_offset": 0,
                 "percent": Decimal("100.0"),
-                "description": "Thanh toán một lần"
-            }]
+                "description": "Thanh toán một lần",
+            }
+            if anchor_date is not None:
+                entry["due_date"] = anchor_date.isoformat()
+            installment_schedule = [entry]
 
         # Generate invoices
         invoices = []
@@ -149,8 +158,13 @@ class InvoiceService:
             amount = item["amount"]
             due_days_offset = item.get("due_days_offset", 0)
 
-            # Calculate due date based on offset from base date
-            installment_due = due_date_base + timedelta(days=due_days_offset)
+            # Due date: prefer pre-computed date from anchor_date path
+            # (when get_installment_schedule was called with anchor_date).
+            # Fall back to due_date_base + offset (legacy path).
+            if "due_date" in item and item["due_date"] is not None:
+                installment_due = date.fromisoformat(item["due_date"])
+            else:
+                installment_due = due_date_base + timedelta(days=due_days_offset)
 
             # Generate unique invoice number
             invoice_number = await self._generate_invoice_number()
