@@ -13,6 +13,15 @@ vi.mock("@/hooks/admissions/useProgramData", () => ({
   useDeleteOfferingAcademicInfo: vi.fn(),
 }));
 
+// Mock semester tuition bulk upsert hook (PR 2 — ADR-002)
+const mockBulkUpsertMutate = vi.fn().mockResolvedValue([]);
+vi.mock("@/hooks/useOrganization", () => ({
+  useBulkUpsertSemesterTuitions: () => ({
+    mutateAsync: mockBulkUpsertMutate,
+    isPending: false,
+  }),
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -63,8 +72,8 @@ describe("AcademicInfoPanel", () => {
     },
   ];
 
-  const mockCreateMutate = vi.fn();
-  const mockUpdateMutate = vi.fn();
+  const mockCreateMutate = vi.fn().mockResolvedValue({ id: 99 });
+  const mockUpdateMutate = vi.fn().mockResolvedValue({ id: 1 });
   const mockDeleteMutate = vi.fn();
 
   beforeEach(() => {

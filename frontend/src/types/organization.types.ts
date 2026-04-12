@@ -16,7 +16,7 @@ export interface OfferingAcademicInfo {
   id: number;
   offering_id: number; // Foreign key to ProgramOffering (Tier 2)
   academic_year: number; // Năm học (vd: 2025)
-  tuition_fee_per_year?: number | null; // Học phí/năm
+  tuition_fee_per_year?: number | null; // Học phí/năm (deprecated compat — ADR-002)
   annual_admission_quota?: number | null; // Chỉ tiêu tuyển sinh
   is_published: boolean; // Trạng thái công khai
   is_deleted: boolean; // Soft delete flag - NEVER hard delete financial/historical data
@@ -25,11 +25,35 @@ export interface OfferingAcademicInfo {
   cutoff_score_previous_year?: number | null; // Điểm chuẩn năm trước
   applied_discount_policy_ids?: number[] | null; // Danh sách ID chính sách ưu đãi áp dụng
 
+  // PR 2 (ADR-002): per-semester tuition, nested from backend response
+  semester_tuitions?: SemesterTuition[];
+
   // Audit trail
   created_at?: string | null;
   updated_at?: string | null;
   created_by_user_id?: number | null;
   updated_by_user_id?: number | null;
+}
+
+/**
+ * Semester tuition row — per-semester tuition catalog (PR 2, ADR-002)
+ */
+export interface SemesterTuition {
+  id: number;
+  academic_info_id: number;
+  semester_no: number;
+  amount: number;
+  notes?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  created_by_user_id?: number | null;
+  updated_by_user_id?: number | null;
+}
+
+export interface SemesterTuitionBulkUpsertItem {
+  semester_no: number;
+  amount: number;
+  notes?: string | null;
 }
 
 /**

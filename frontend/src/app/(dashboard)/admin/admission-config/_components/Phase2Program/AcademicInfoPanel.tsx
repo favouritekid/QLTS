@@ -40,13 +40,16 @@ import {
   useDeleteOfferingAcademicInfo,
 } from "@/hooks/admissions/useProgramData";
 import { useProgramOfferings } from "@/hooks/admissions/useProgramData";
+import { useBulkUpsertSemesterTuitions } from "@/hooks/useOrganization";
 import { useAdmissionConfigState } from "@/hooks/admissions/useAdmissionConfigState";
+import { SemesterTuitionEditor } from "@/components/admin/organization/SemesterTuitionEditor";
 import type {
   OfferingAcademicInfo,
   OfferingAcademicInfoCreate,
   OfferingAcademicInfoUpdate,
-  ProgramOffering
+  ProgramOffering,
 } from "../shared/types";
+import type { SemesterTuitionBulkUpsertItem } from "@/types/organization.types";
 
 // ============================================
 // TYPES
@@ -70,11 +73,18 @@ export function AcademicInfoPanel() {
   const createMutation = useCreateOfferingAcademicInfo();
   const updateMutation = useUpdateOfferingAcademicInfo();
   const deleteMutation = useDeleteOfferingAcademicInfo();
+  const bulkUpsertMutation = useBulkUpsertSemesterTuitions();
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [editingItem, setEditingItem] = useState<OfferingAcademicInfo | null>(null);
+  const [semesterTuitions, setSemesterTuitions] = useState<
+    SemesterTuitionBulkUpsertItem[]
+  >([]);
+  // After step-1 create succeeds but step-2 fails, remember the id so
+  // retry only re-runs semester upsert, not a duplicate create.
+  const [pendingCreatedId, setPendingCreatedId] = useState<number | null>(null);
   const [formData, setFormData] = useState<AcademicInfoFormData>({
     offering_id: null,
     academic_year: new Date().getFullYear(),
@@ -92,6 +102,8 @@ export function AcademicInfoPanel() {
       is_published: false,
     });
     setEditingItem(null);
+    setSemesterTuitions([]);
+    setPendingCreatedId(null);
   };
 
   const openCreateDialog = () => {
@@ -108,6 +120,13 @@ export function AcademicInfoPanel() {
       annual_admission_quota: item.annual_admission_quota || 0,
       is_published: item.is_published,
     });
+    setSemesterTuitions(
+      (item.semester_tuitions ?? []).map((st) => ({
+        semester_no: st.semester_no,
+        amount: Number(st.amount),
+        notes: st.notes ?? null,
+      }))
+    );
     setIsDialogOpen(true);
   };
 
@@ -128,8 +147,9 @@ export function AcademicInfoPanel() {
       return;
     }
 
-    // Check for duplicate year + offering combination (only on create)
-    if (!editingItem) {
+    // Check for duplicate year + offering combination (only on fresh create,
+    // NOT on retry after partial create where step-1 already succeeded).
+    if (!editingItem && !pendingCreatedId) {
       const duplicate = data.find(
         (item: OfferingAcademicInfo) =>
           item.offering_id === formData.offering_id &&
@@ -144,18 +164,24 @@ export function AcademicInfoPanel() {
     }
 
     try {
-      if (editingItem) {
+      // Step 1: Save academic info (skip if retrying after a prior
+      // step-2 failure — the record already exists).
+      let academicInfoId: number;
+
+      if (pendingCreatedId) {
+        academicInfoId = pendingCreatedId;
+      } else if (editingItem) {
         const updateData: OfferingAcademicInfoUpdate = {
           tuition_fee_per_year: formData.tuition_fee_per_year,
           annual_admission_quota: formData.annual_admission_quota,
           is_published: formData.is_published,
         };
-        await updateMutation.mutateAsync({
+        const result = await updateMutation.mutateAsync({
           id: editingItem.id,
           data: updateData,
         });
+        academicInfoId = result.id;
       } else {
-        // Validate required fields
         if (!formData.offering_id) {
           toast.error("Vui lòng chọn chương trình tuyển sinh");
           return;
@@ -168,8 +194,26 @@ export function AcademicInfoPanel() {
           annual_admission_quota: formData.annual_admission_quota,
           is_published: formData.is_published,
         };
-        await createMutation.mutateAsync(createData);
+        const result = await createMutation.mutateAsync(createData);
+        academicInfoId = result.id;
+        setPendingCreatedId(academicInfoId);
       }
+
+      // Step 2: Bulk upsert semester tuitions
+      try {
+        await bulkUpsertMutation.mutateAsync({
+          academicInfoId,
+          items: semesterTuitions,
+        });
+      } catch {
+        toast.error(
+          "Thông tin tuyển sinh đã lưu, nhưng học phí học kỳ chưa cập nhật. " +
+            "Vui lòng thử lại."
+        );
+        return;
+      }
+
+      setPendingCreatedId(null);
       setIsDialogOpen(false);
       resetForm();
     } catch {
@@ -362,7 +406,22 @@ export function AcademicInfoPanel() {
                         <Badge variant="outline">{item.academic_year}</Badge>
                       </TableCell>
                       <TableCell className="text-sm">
-                        {formatCurrency(item.tuition_fee_per_year)}
+                        {item.semester_tuitions && item.semester_tuitions.length > 0 ? (
+                          <>
+                            <span className="text-muted-foreground line-through text-xs">
+                              {formatCurrency(item.tuition_fee_per_year)}
+                            </span>
+                            <div className="text-xs mt-0.5">
+                              {item.semester_tuitions.map((st: { semester_no: number; amount: number }) => (
+                                <span key={st.semester_no} className="mr-1.5">
+                                  HK{st.semester_no}: {formatCurrency(st.amount)}
+                                </span>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          formatCurrency(item.tuition_fee_per_year)
+                        )}
                       </TableCell>
                       <TableCell>
                         <span className="text-sm font-medium">
@@ -505,7 +564,9 @@ export function AcademicInfoPanel() {
 
               <div className="space-y-2">
                 <Label htmlFor="tuition_fee_per_year">
-                  Học phí / Năm (VND)
+                  {semesterTuitions.length > 0
+                    ? "Học phí / Năm (giá trị cũ — tham khảo)"
+                    : "Học phí / Năm (VND)"}
                 </Label>
                 <Input
                   id="tuition_fee_per_year"
@@ -519,10 +580,27 @@ export function AcademicInfoPanel() {
                   }
                   placeholder="e.g., 25000000"
                   min={0}
+                  disabled={semesterTuitions.length > 0}
+                  className={semesterTuitions.length > 0 ? "bg-muted cursor-not-allowed" : ""}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Mức học phí niêm yết theo năm (VNĐ)
+                  {semesterTuitions.length > 0
+                    ? "Giá trị tham khảo. Học phí chính thức được nhập theo từng học kỳ bên dưới."
+                    : "Mức học phí niêm yết theo năm (VNĐ)"}
                 </p>
+              </div>
+
+              <div className="col-span-full rounded-lg border p-4">
+                <SemesterTuitionEditor
+                  value={semesterTuitions}
+                  onChange={setSemesterTuitions}
+                  durationSemesters={
+                    formData.offering_id
+                      ? offerings.find((o: ProgramOffering) => o.id === formData.offering_id)?.duration_semesters
+                      : null
+                  }
+                  disabled={createMutation.isPending || updateMutation.isPending || bulkUpsertMutation.isPending}
+                />
               </div>
 
               <div className="space-y-2">

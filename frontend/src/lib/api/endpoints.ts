@@ -112,6 +112,12 @@ export const API_ENDPOINTS = {
       RESTORE_ACADEMIC_INFO: (academicInfoId: number) =>
         `/api/admin/academic-info/${academicInfoId}/restore`,
 
+      // Tier 3.5: OfferingSemesterTuition (PR 2 — ADR-002)
+      LIST_SEMESTER_TUITIONS: (academicInfoId: number) =>
+        `/api/admin/academic-info/${academicInfoId}/semester-tuitions`,
+      BULK_UPSERT_SEMESTER_TUITIONS: (academicInfoId: number) =>
+        `/api/admin/academic-info/${academicInfoId}/semester-tuitions`,
+
       // === LEGACY (DEPRECATED) ===
     },
     // System Configuration

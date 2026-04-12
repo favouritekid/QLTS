@@ -22,6 +22,8 @@ import type {
   OfferingAcademicInfo,
   OfferingAcademicInfoCreate,
   OfferingAcademicInfoUpdate,
+  SemesterTuition,
+  SemesterTuitionBulkUpsertItem,
 
   // System Configuration
   ConfigDegreeLevel,
@@ -74,6 +76,11 @@ export const organizationKeys = {
     [...organizationKeys.academicInfo(), "list", offeringId, { publishedOnly }] as const,
   academicInfoByYear: (offeringId: number, year: number) =>
     [...organizationKeys.academicInfo(), "year", offeringId, year] as const,
+
+  // Tier 3.5: SemesterTuition (PR 2 — ADR-002)
+  semesterTuitions: () => [...organizationKeys.all, "semesterTuitions"] as const,
+  semesterTuitionList: (academicInfoId: number) =>
+    [...organizationKeys.semesterTuitions(), "list", academicInfoId] as const,
 };
 
 // =====================================================================
@@ -1108,6 +1115,67 @@ export function useDeleteSkillRule() {
         ? detail.map((item) => item.msg).join(", ")
         : detail || "Failed to delete skill rule";
       toast.error(message);
+    },
+  });
+}
+
+// =====================================================================
+// SEMESTER TUITION — PR 2 (ADR-002)
+// =====================================================================
+
+export function useSemesterTuitions(academicInfoId: number | null) {
+  return useQuery<SemesterTuition[], AxiosError<ApiErrorResponse>>({
+    queryKey: organizationKeys.semesterTuitionList(academicInfoId!),
+    queryFn: async () => {
+      const { data } = await api.get<SemesterTuition[]>(
+        API_ENDPOINTS.ADMIN.ORGANIZATION.LIST_SEMESTER_TUITIONS(academicInfoId!)
+      );
+      return data;
+    },
+    enabled: !!academicInfoId,
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+export function useBulkUpsertSemesterTuitions() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    SemesterTuition[],
+    AxiosError<ApiErrorResponse>,
+    { academicInfoId: number; items: SemesterTuitionBulkUpsertItem[] }
+  >({
+    mutationFn: async ({ academicInfoId, items }) => {
+      const { data } = await api.put<SemesterTuition[]>(
+        API_ENDPOINTS.ADMIN.ORGANIZATION.BULK_UPSERT_SEMESTER_TUITIONS(
+          academicInfoId
+        ),
+        { items }
+      );
+      return data;
+    },
+    onSuccess: (_, variables) => {
+      toast.success("Đã lưu học phí theo học kỳ!");
+      queryClient.invalidateQueries({
+        queryKey: organizationKeys.semesterTuitionList(variables.academicInfoId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: organizationKeys.academicInfo(),
+      });
+      // AcademicInfoPanel (admission-config route) reads from a
+      // separate query tree ["academic-infos"] via useProgramData.ts.
+      // Invalidate that family too so the table refreshes with the
+      // latest nested semester_tuitions after save.
+      queryClient.invalidateQueries({
+        queryKey: ["academic-infos"],
+      });
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : "Lưu học phí học kỳ thất bại";
+      toast.error("Lỗi", { description: message });
     },
   });
 }

@@ -1,7 +1,7 @@
 // src/components/admin/organization/OfferingAcademicInfoDialog.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -33,11 +33,16 @@ import { Loader2, Save, SaveAll, Percent } from "lucide-react";
 import {
   useCreateOfferingAcademicInfo,
   useUpdateOfferingAcademicInfo,
+  useBulkUpsertSemesterTuitions,
 } from "@/hooks/useOrganization";
 import { useTuitionDiscountPolicies } from "@/hooks/useTuitionDiscount";
+import { SemesterTuitionEditor } from "./SemesterTuitionEditor";
+import { api } from "@/lib/api/client";
+import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import type {
   OfferingAcademicInfo,
   ProgramOffering,
+  SemesterTuitionBulkUpsertItem,
 } from "@/types/organization.types";
 // NOTE: AdmissionCriterion removed - use Admission Configuration Console for criteria management
 // See: /admin/admission-config for the new admin UI
@@ -115,6 +120,17 @@ export function OfferingAcademicInfoDialog({
 
   const createMutation = useCreateOfferingAcademicInfo();
   const updateMutation = useUpdateOfferingAcademicInfo();
+  const bulkUpsertMutation = useBulkUpsertSemesterTuitions();
+
+  const [semesterTuitions, setSemesterTuitions] = useState<
+    SemesterTuitionBulkUpsertItem[]
+  >([]);
+  const [semesterSaveError, setSemesterSaveError] = useState<string | null>(null);
+  // After step-1 create succeeds but step-2 bulk upsert fails, we need
+  // to remember the created academic_info id so the retry only re-runs
+  // the semester upsert instead of creating a duplicate record.
+  const [pendingAcademicInfoId, setPendingAcademicInfoId] = useState<number | null>(null);
+  const hasSemesterTuitions = semesterTuitions.length > 0;
 
   const form = useForm<AcademicInfoFormValues>({
     resolver: zodResolver(academicInfoFormSchema),
@@ -135,63 +151,102 @@ export function OfferingAcademicInfoDialog({
     includeExpired: false,
   });
 
-  // NOTE: useFieldArray for admission_criteria REMOVED
-  // Use Admission Configuration Console for criteria management
+  // Initialize form + local state when dialog opens. Called from
+  // handleOpenChange on true transitions only — NOT from useEffect,
+  // to satisfy react-hooks/set-state-in-effect lint rule and to
+  // prevent query-invalidation re-renders from wiping retry state.
+  const initializeDialog = React.useCallback(() => {
+    form.clearErrors();
+    setSemesterSaveError(null);
+    setPendingAcademicInfoId(null);
 
-  // --- DATA LOADING & PARSING ---
-  useEffect(() => {
-    if (open) {
-      form.clearErrors(); // Reset lỗi cũ khi mở lại form
-
-      if (isEditMode && academicInfo) {
-        // --- EDIT MODE ---
-        // NOTE: admission_criteria parsing REMOVED - use Admission Config Console
-
-        // 🛡️ CRITICAL FIX: Ép kiểu dữ liệu từ API (Decimal/String -> Number)
-        form.reset({
-          academic_year: Number(academicInfo.academic_year),
-          tuition_fee_per_year:
-            academicInfo.tuition_fee_per_year !== null
-              ? Number(academicInfo.tuition_fee_per_year)
-              : null,
-          annual_admission_quota:
-            academicInfo.annual_admission_quota !== null
-              ? Number(academicInfo.annual_admission_quota)
-              : null,
-          cutoff_score_previous_year:
-            academicInfo.cutoff_score_previous_year !== null
-              ? Number(academicInfo.cutoff_score_previous_year)
-              : null,
-          target_audience: academicInfo.target_audience || "",
-          applied_discount_policy_ids: academicInfo.applied_discount_policy_ids || [],
-          is_published: academicInfo.is_published,
-        });
-      } else {
-        // --- CREATE MODE ---
-        // Gợi ý năm tiếp theo chưa có trong danh sách
-        let nextYear = currentYear;
-        while (existingYears.includes(nextYear)) {
-          nextYear++;
-        }
-
-        form.reset({
-          academic_year: nextYear,
-          tuition_fee_per_year: null,
-          annual_admission_quota: null,
-          target_audience: "",
-          cutoff_score_previous_year: null,
-          applied_discount_policy_ids: [],
-          is_published: false,
-        });
-      }
+    if (isEditMode && academicInfo?.semester_tuitions) {
+      setSemesterTuitions(
+        academicInfo.semester_tuitions.map((st) => ({
+          semester_no: st.semester_no,
+          amount: Number(st.amount),
+          notes: st.notes ?? null,
+        }))
+      );
+    } else {
+      setSemesterTuitions([]);
     }
-  }, [open, isEditMode, academicInfo, form, existingYears, currentYear]);
+
+    if (isEditMode && academicInfo) {
+      form.reset({
+        academic_year: Number(academicInfo.academic_year),
+        tuition_fee_per_year:
+          academicInfo.tuition_fee_per_year !== null
+            ? Number(academicInfo.tuition_fee_per_year)
+            : null,
+        annual_admission_quota:
+          academicInfo.annual_admission_quota !== null
+            ? Number(academicInfo.annual_admission_quota)
+            : null,
+        cutoff_score_previous_year:
+          academicInfo.cutoff_score_previous_year !== null
+            ? Number(academicInfo.cutoff_score_previous_year)
+            : null,
+        target_audience: academicInfo.target_audience || "",
+        applied_discount_policy_ids: academicInfo.applied_discount_policy_ids || [],
+        is_published: academicInfo.is_published,
+      });
+    } else {
+      let nextYear = currentYear;
+      while (existingYears.includes(nextYear)) {
+        nextYear++;
+      }
+      form.reset({
+        academic_year: nextYear,
+        tuition_fee_per_year: null,
+        annual_admission_quota: null,
+        target_audience: "",
+        cutoff_score_previous_year: null,
+        applied_discount_policy_ids: [],
+        is_published: false,
+      });
+    }
+  }, [isEditMode, academicInfo, form, existingYears, currentYear]);
+
+  // Intercept dialog open/close to run initialization on open
+  // transitions without using useEffect + setState (which violates
+  // react-hooks/set-state-in-effect). The parent controls `open` via
+  // onOpenChange; we wrap it to run init on the true→ path.
+  const prevOpenRef = React.useRef(false);
+  const handleOpenChange = React.useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen && !prevOpenRef.current) {
+        initializeDialog();
+      }
+      prevOpenRef.current = nextOpen;
+      onOpenChange(nextOpen);
+    },
+    [initializeDialog, onOpenChange]
+  );
+
+  // Also init on mount if dialog starts open (parent opens it by
+  // setting open=true before this component mounts).
+  React.useEffect(() => {
+    if (open && !prevOpenRef.current) {
+      prevOpenRef.current = true;
+      // Defer to next microtask so React commits current render first,
+      // avoiding synchronous setState during render.
+      queueMicrotask(initializeDialog);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [saveAction, setSaveAction] = useState<"close" | "continue">("close");
 
   const onSubmit = async (values: AcademicInfoFormValues) => {
-    // 🛡️ CLIENT-SIDE VALIDATION: Unique Year Constraint
-    if (!isEditMode && existingYears.includes(values.academic_year)) {
+    // Skip duplicate-year check when retrying after a partial create
+    // (step-1 succeeded, step-2 failed). The record already exists
+    // and query invalidation may have added it to existingYears.
+    if (
+      !isEditMode &&
+      !pendingAcademicInfoId &&
+      existingYears.includes(values.academic_year)
+    ) {
       form.setError("academic_year", {
         type: "manual",
         message: `Thông tin tuyển sinh năm ${values.academic_year} đã tồn tại. Vui lòng chọn năm khác hoặc chỉnh sửa bản ghi cũ.`,
@@ -199,47 +254,98 @@ export function OfferingAcademicInfoDialog({
       return;
     }
 
-    try {
-      let resultData: OfferingAcademicInfo;
+    setSemesterSaveError(null);
 
-      if (isEditMode && academicInfo) {
-        // Update logic
-        resultData = await updateMutation.mutateAsync({
+    try {
+      // Step 1: Save academic info (skip if we already created it on a
+      // previous attempt and only the semester upsert failed).
+      let academicInfoId: number;
+
+      if (pendingAcademicInfoId) {
+        // Retry path: step 1 already succeeded on a prior submit, the
+        // record exists with this id. Only re-run step 2.
+        academicInfoId = pendingAcademicInfoId;
+      } else if (isEditMode && academicInfo) {
+        const resultData = await updateMutation.mutateAsync({
           id: academicInfo.id,
           data: values,
         });
+        academicInfoId = resultData.id;
       } else {
-        // Create logic
-        resultData = await createMutation.mutateAsync({
+        const resultData = await createMutation.mutateAsync({
           offeringId: offering.id,
           offering_id: offering.id,
           ...values,
         });
+        academicInfoId = resultData.id;
+        // Remember the created id in case step 2 fails and we need to
+        // retry without re-creating.
+        setPendingAcademicInfoId(academicInfoId);
       }
 
-      // ✅ Gọi callback thay vì tự đóng
-      if (onSaveSuccess) {
-        onSaveSuccess(resultData, saveAction === "close");
-      } else {
-        // Fallback nếu không có callback (logic cũ)
-        onOpenChange(false);
+      // Step 2: Bulk upsert semester tuitions
+      try {
+        await bulkUpsertMutation.mutateAsync({
+          academicInfoId,
+          items: semesterTuitions,
+        });
+      } catch (semError) {
+        setSemesterSaveError(
+          "Thông tin tuyển sinh đã lưu, nhưng học phí học kỳ chưa cập nhật. " +
+            "Vui lòng thử lại."
+        );
+        console.error("Semester tuition save failed:", semError);
+        return;
       }
-      // Nếu "Lưu & Tiếp tục", ta reset form với dữ liệu mới nhất từ Server
-      // để đảm bảo form clean (isDirty = false)
-      if (saveAction === "continue") {
-        // Logic reset form sẽ được useEffect xử lý khi prop `academicInfo` thay đổi
-        // nhờ hàm handleSaveSuccess ở component cha.
+
+      // Step 2 succeeded — clear the pending id so it does not leak
+      // into a subsequent dialog open.
+      setPendingAcademicInfoId(null);
+
+      // Step 3: Refetch the academic info with nested semester_tuitions
+      // so onSaveSuccess receives a complete object.
+      let freshData: OfferingAcademicInfo | undefined;
+      try {
+        const { data: infos } = await api.get<OfferingAcademicInfo[]>(
+          API_ENDPOINTS.ORGANIZATION.LIST_ACADEMIC_INFO(offering.id)
+        );
+        freshData = infos.find((i) => i.id === academicInfoId);
+      } catch {
+        // Refetch failed — parent will pick up fresh data on next
+        // query invalidation cycle.
+      }
+
+      // Step 4: Notify parent with fresh data (or minimal fallback)
+      const dataForCallback: OfferingAcademicInfo = freshData ?? {
+        id: academicInfoId,
+        offering_id: offering.id,
+        academic_year: values.academic_year,
+        is_published: values.is_published,
+        is_deleted: false,
+        semester_tuitions: semesterTuitions.map((st, i) => ({
+          id: -(i + 1),
+          academic_info_id: academicInfoId,
+          ...st,
+        })),
+      };
+
+      if (onSaveSuccess) {
+        onSaveSuccess(dataForCallback, saveAction === "close");
+      } else {
+        handleOpenChange(false);
       }
     } catch (error) {
       console.error("Form submission failed:", error);
-      // Error toast handled in hooks
     }
   };
 
-  const isSubmitting = createMutation.isPending || updateMutation.isPending;
+  const isSubmitting =
+    createMutation.isPending ||
+    updateMutation.isPending ||
+    bulkUpsertMutation.isPending;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[800px]">
         <DialogHeader>
           <DialogTitle>
@@ -290,25 +396,41 @@ export function OfferingAcademicInfoDialog({
             />
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              {/* Tuition Fee */}
+              {/* Tuition Fee (legacy — read-only when semester tuitions exist) */}
               <FormField
                 control={form.control}
                 name="tuition_fee_per_year"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Học phí/năm</FormLabel>
+                    <FormLabel>
+                      {hasSemesterTuitions
+                        ? "Học phí/năm (giá trị cũ — tham khảo)"
+                        : "Học phí/năm"}
+                    </FormLabel>
                     <FormControl>
                       <CurrencyInput
                         value={field.value}
                         onChange={field.onChange}
                         placeholder="VD: 15.000.000"
-                        // 🛡️ Disable nếu là năm quá khứ
-                        disabled={isSubmitting || (isEditMode && isPastYear)}
+                        disabled={
+                          isSubmitting ||
+                          (isEditMode && isPastYear) ||
+                          hasSemesterTuitions
+                        }
                         currency="VND"
                         locale="vi-VN"
-                        className={isEditMode && isPastYear ? "bg-muted cursor-not-allowed" : ""}
+                        className={
+                          (isEditMode && isPastYear) || hasSemesterTuitions
+                            ? "bg-muted cursor-not-allowed"
+                            : ""
+                        }
                       />
                     </FormControl>
+                    {hasSemesterTuitions && (
+                      <FormDescription>
+                        Giá trị tham khảo. Học phí chính thức được nhập theo từng học kỳ bên dưới.
+                      </FormDescription>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -407,6 +529,19 @@ export function OfferingAcademicInfoDialog({
               )}
             />
 
+            {/* Semester Tuition Editor (PR 2 — ADR-002) */}
+            <div className="rounded-lg border p-4">
+              <SemesterTuitionEditor
+                value={semesterTuitions}
+                onChange={setSemesterTuitions}
+                durationSemesters={offering.duration_semesters}
+                disabled={isSubmitting || (isEditMode && isPastYear)}
+              />
+              {semesterSaveError && (
+                <p className="mt-2 text-sm text-destructive">{semesterSaveError}</p>
+              )}
+            </div>
+
             {/* Target Audience */}
             <FormField
               control={form.control}
@@ -487,7 +622,7 @@ export function OfferingAcademicInfoDialog({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                onClick={() => handleOpenChange(false)}
                 disabled={isSubmitting}
               >
                 Hủy
