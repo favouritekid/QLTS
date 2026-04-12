@@ -18,6 +18,7 @@ import pytest_asyncio
 from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -867,4 +868,201 @@ class TestAccountingPeriod:
             await service.create_period(month=2, year=2026, user_id=maker_user.id)
 
         assert "not closed" in str(exc_info.value).lower()
+
+
+# =============================================================================
+# SEMESTER TUITION RECALCULATION TESTS (PR 3 — ADR-002 Decision 4)
+# =============================================================================
+
+class TestSemesterTuitionRecalculation:
+    """Test discount recalculation when admin edits semester tuition amounts."""
+
+    @pytest.mark.asyncio
+    async def test_recalc_updates_draft_fee_and_invoices(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """When semester tuition amount changes, draft fees and their draft
+        invoices should be rewritten to match the new amount."""
+        from app.services.fee_calculation_service import (
+            recalculate_fees_for_semester_tuition_change,
+        )
+
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        profile = finance_fixtures["admission_profile"]
+        plan = finance_fixtures["installment_plan"]
+
+        # Create tuition fee (reads 10M from semester_tuition fixture)
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("0"),  # ignored for tuition
+            academic_year=2025,
+            installment_plan_id=plan.id,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        assert fee.base_amount == Decimal("10000000")
+
+        # Generate draft invoices (3 installments)
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+        assert len(invoices) == 3
+
+        # Change semester tuition from 10M to 12M
+        from app.models.offering_semester_tuition import OfferingSemesterTuition
+        ai_id = profile.applied_rules["academic_info_id"]
+        sem_result = await db.execute(
+            select(OfferingSemesterTuition).where(
+                OfferingSemesterTuition.academic_info_id == ai_id,
+                OfferingSemesterTuition.semester_no == 1,
+            )
+        )
+        sem_row = sem_result.scalar_one()
+        sem_row.amount = Decimal("12000000")
+        await db.flush()
+
+        # Recalculate
+        count = await recalculate_fees_for_semester_tuition_change(db, int(ai_id))
+        await db.commit()
+
+        assert count == 1, f"Expected 1 fee recalculated, got {count}. ai_id={ai_id}, fee.id={fee.id}"
+
+        # Verify fee updated
+        await db.refresh(fee)
+        assert fee.base_amount == Decimal("12000000")
+        assert fee.final_amount == Decimal("12000000")
+
+        # Verify invoices rewritten (34%/33%/33% of 12M).
+        # Use raw SQL text query to bypass ORM identity map caching.
+        from sqlalchemy import text
+        inv_rows = (await db.execute(
+            text("SELECT installment_no, amount FROM invoice WHERE fee_id = :fid ORDER BY installment_no"),
+            {"fid": fee.id},
+        )).fetchall()
+        assert len(inv_rows) == 3
+        assert inv_rows[0][1] == Decimal("4080000")  # 34% of 12M
+        assert inv_rows[1][1] == Decimal("3960000")  # 33%
+        assert inv_rows[2][1] == Decimal("3960000")  # 33%
+
+    @pytest.mark.asyncio
+    async def test_recalc_skips_paid_fee(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Fees with paid_amount > 0 must not be recalculated."""
+        from app.services.fee_calculation_service import (
+            recalculate_fees_for_semester_tuition_change,
+        )
+
+        fee_service = FeeCalculationService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("0"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        # Simulate partial payment
+        fee.paid_amount = Decimal("5000000")
+        fee.status = FeeStatusEnum.partial.value
+        await db.flush()
+        await db.commit()
+
+        original_base = fee.base_amount
+
+        # Change semester tuition
+        from app.models.offering_semester_tuition import OfferingSemesterTuition
+        ai_id = profile.applied_rules["academic_info_id"]
+        sem_result = await db.execute(
+            select(OfferingSemesterTuition).where(
+                OfferingSemesterTuition.academic_info_id == ai_id,
+                OfferingSemesterTuition.semester_no == 1,
+            )
+        )
+        sem_row = sem_result.scalar_one()
+        sem_row.amount = Decimal("15000000")
+        await db.flush()
+
+        count = await recalculate_fees_for_semester_tuition_change(db, ai_id)
+        await db.commit()
+
+        assert count == 0
+
+        await db.refresh(fee)
+        assert fee.base_amount == original_base  # Unchanged
+
+    @pytest.mark.asyncio
+    async def test_recalc_skips_non_draft_invoices(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Fees with issued invoices must not be recalculated."""
+        from app.services.fee_calculation_service import (
+            recalculate_fees_for_semester_tuition_change,
+        )
+
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        profile = finance_fixtures["admission_profile"]
+
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("0"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Generate + issue invoices
+        invoices, _ = await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+            auto_issue=True,  # Issues immediately
+        )
+        await db.commit()
+
+        original_base = fee.base_amount
+
+        # Change semester tuition
+        from app.models.offering_semester_tuition import OfferingSemesterTuition
+        ai_id = profile.applied_rules["academic_info_id"]
+        sem_result = await db.execute(
+            select(OfferingSemesterTuition).where(
+                OfferingSemesterTuition.academic_info_id == ai_id,
+                OfferingSemesterTuition.semester_no == 1,
+            )
+        )
+        sem_row = sem_result.scalar_one()
+        sem_row.amount = Decimal("20000000")
+        await db.flush()
+
+        count = await recalculate_fees_for_semester_tuition_change(db, ai_id)
+        await db.commit()
+
+        assert count == 0  # Skipped because invoices are issued
+
+        await db.refresh(fee)
+        assert fee.base_amount == original_base
 

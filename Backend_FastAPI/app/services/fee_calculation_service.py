@@ -25,6 +25,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Tuple, Callable, Any
 import structlog
 
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -690,3 +691,166 @@ def calculate_installment_amounts(
         f"Installment sum {sum(amounts)} != total {total_amount}"
 
     return amounts
+
+
+# =============================================================================
+# Discount recalculation on semester tuition change — PR 3 (ADR-002 Decision 4)
+# =============================================================================
+
+async def recalculate_fees_for_semester_tuition_change(
+    db: AsyncSession,
+    academic_info_id: int,
+) -> int:
+    """Recalculate tuition fees when admin edits a semester tuition amount.
+
+    Finds tuition Fee rows linked to the affected academic_info_id,
+    re-reads the canonical amount from offering_semester_tuition, and
+    updates base_amount / total_discount / final_amount.
+
+    **Safety invariants** (mirrors M10 rule from recalculate_fee):
+    - Only recalculates fees with ``paid_amount == 0``. Any fee that
+      has received partial or full payment is left untouched — editing
+      a live receivable after money has been collected is forbidden.
+    - Only recalculates fees whose invoices are all in draft status
+      (or no invoices at all). If any invoice has been issued/partial/
+      paid, the fee is skipped to avoid fee↔invoice total mismatch.
+    - Skips terminal status fees (paid, waived, cancelled).
+    - Skips fees whose semester_tuition row was deleted (clear-all).
+
+    Returns the count of fees recalculated.
+    """
+    from sqlalchemy.orm import selectinload
+
+    # Single query: join Fee -> AdmissionProfile to resolve
+    # academic_info_id linkage in SQL rather than per-fee Python loop.
+    # Uses applied_rules->>'academic_info_id' for legacy path and
+    # offering_admission_config.academic_info_id for modern path.
+    # Step 1: Find eligible fee IDs via JOIN query (no selectinload
+    # here — selectinload doesn't work reliably with multi-table JOINs
+    # in async SQLAlchemy).
+    id_result = await db.execute(
+        select(Fee.id)
+        .join(
+            models.AdmissionProfile,
+            models.AdmissionProfile.id == Fee.admission_profile_id,
+        )
+        .outerjoin(
+            models.OfferingAdmissionConfig,
+            models.OfferingAdmissionConfig.id == models.AdmissionProfile.offering_admission_config_id,
+        )
+        .where(
+            Fee.fee_type == "tuition",
+            Fee.status.notin_(["paid", "waived", "cancelled"]),
+            Fee.paid_amount == 0,
+            sa.or_(
+                models.OfferingAdmissionConfig.academic_info_id == academic_info_id,
+                models.AdmissionProfile.applied_rules["academic_info_id"].as_string().cast(sa.Integer) == academic_info_id,
+            ),
+        )
+    )
+    eligible_fee_ids = [row[0] for row in id_result.fetchall()]
+
+    if not eligible_fee_ids:
+        return 0
+
+    # Step 2: Re-load fees with relationships. Use populate_existing=True
+    # to force SQLAlchemy to refresh cached Fee objects and their
+    # selectinload'd relationships (invoices may have been generated
+    # after the fee was first loaded into the session's identity map).
+    fee_result = await db.execute(
+        select(Fee)
+        .where(Fee.id.in_(eligible_fee_ids))
+        .options(
+            selectinload(Fee.applied_discounts),
+            selectinload(Fee.invoices),
+            selectinload(Fee.installment_plan),
+        )
+        .execution_options(populate_existing=True)
+    )
+    eligible_fees = fee_result.scalars().all()
+
+    recalc_count = 0
+    for fee in eligible_fees:
+        # Skip if any invoice is beyond draft — recalculating would
+        # leave fee.final_amount out of sync with issued invoice totals.
+        if fee.invoices:
+            has_non_draft = any(
+                inv.status != "draft" for inv in fee.invoices
+            )
+            if has_non_draft:
+                log.info(
+                    "fee_recalc_skipped_non_draft_invoices",
+                    fee_id=fee.id,
+                    semester_no=fee.semester_no,
+                )
+                continue
+
+        # Look up new semester tuition amount
+        sem_result = await db.execute(
+            select(models.OfferingSemesterTuition.amount).where(
+                models.OfferingSemesterTuition.academic_info_id == academic_info_id,
+                models.OfferingSemesterTuition.semester_no == fee.semester_no,
+            )
+        )
+        new_amount = sem_result.scalar_one_or_none()
+        if new_amount is None:
+            continue
+
+        new_base = Decimal(str(new_amount))
+        if new_base == fee.base_amount:
+            continue
+
+        # Recalculate: re-apply existing discount percentages
+        total_discount = Decimal("0")
+        for ad in fee.applied_discounts:
+            if ad.discount_percent is not None:
+                disc = (new_base * ad.discount_percent / 100).quantize(Decimal("1"))
+            else:
+                disc = ad.discount_amount
+            ad.discount_amount = disc
+            total_discount += disc
+
+        old_final = fee.final_amount
+        fee.base_amount = new_base
+        fee.total_discount = min(total_discount, new_base)
+        fee.final_amount = max(Decimal("0"), new_base - fee.total_discount)
+        fee.version += 1
+
+        # If fee has draft invoices, rewrite their amounts to match
+        # the new final_amount so fee↔invoice totals stay in sync.
+        # Uses direct UPDATE statements to avoid ORM identity-map issues
+        # where selectinload'd Invoice objects may not be dirty-tracked.
+        if fee.invoices and fee.installment_plan:
+            new_schedule = fee.installment_plan.get_installment_schedule(
+                fee.final_amount
+            )
+            for inv, sched in zip(
+                sorted(fee.invoices, key=lambda x: x.installment_no),
+                new_schedule,
+            ):
+                await db.execute(
+                    sa.update(Invoice)
+                    .where(Invoice.id == inv.id)
+                    .values(amount=sched["amount"])
+                )
+        elif fee.invoices and len(fee.invoices) == 1:
+            await db.execute(
+                sa.update(Invoice)
+                .where(Invoice.id == fee.invoices[0].id)
+                .values(amount=fee.final_amount)
+            )
+
+        recalc_count += 1
+        log.info(
+            "fee_recalculated_by_semester_change",
+            fee_id=fee.id,
+            semester_no=fee.semester_no,
+            old_final=str(old_final),
+            new_base=str(new_base),
+            new_final=str(fee.final_amount),
+        )
+
+    if recalc_count > 0:
+        await db.flush()
+
+    return recalc_count
