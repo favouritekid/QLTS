@@ -344,9 +344,24 @@ export function OfferingAcademicInfoManagement({
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <DollarSign className="text-muted-foreground h-4 w-4" />
-                                <span className="text-sm">
-                                  {formatCurrency(info.tuition_fee_per_year)}
-                                </span>
+                                <div className="text-sm">
+                                  {info.semester_tuitions && info.semester_tuitions.length > 0 ? (
+                                    <>
+                                      <span className="text-muted-foreground line-through">
+                                        {formatCurrency(info.tuition_fee_per_year)}
+                                      </span>
+                                      <div className="mt-0.5 text-xs">
+                                        {info.semester_tuitions.map((st) => (
+                                          <span key={st.semester_no} className="mr-2">
+                                            HK{st.semester_no}: {formatCurrency(st.amount)}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <span>{formatCurrency(info.tuition_fee_per_year)}</span>
+                                  )}
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell>

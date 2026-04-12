@@ -51,6 +51,13 @@ from .organization import (
     OfferingAcademicInfoBase,
     OfferingAcademicInfoCreate,
     OfferingAcademicInfoUpdate,
+    # Semester Tuition (PR 2 — ADR-002)
+    SemesterTuitionBase,
+    SemesterTuitionCreate,
+    SemesterTuitionUpdate,
+    SemesterTuitionResponse,
+    SemesterTuitionBulkUpsert,
+    SemesterTuitionBulkUpsertItem,
 
     ScoringRules,  # Fit Score configuration schema
     # Organization Unit schemas

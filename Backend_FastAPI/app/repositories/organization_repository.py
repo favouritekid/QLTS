@@ -67,6 +67,8 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
                     models.MajorProgram.offerings
                 ).selectinload(
                     models.ProgramOffering.academic_info_history
+                ).selectinload(
+                    models.OfferingAcademicInfo.semester_tuitions
                 ),
             )
             .where(self.model.id == unit_id)
@@ -97,10 +99,10 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         query = (
             select(models.MajorProgram)
             .options(
-                selectinload(models.MajorProgram.offerings).selectinload(
-                    models.ProgramOffering.academic_info_history
-                ),
-                selectinload(models.MajorProgram.unit)
+                selectinload(models.MajorProgram.offerings)
+                .selectinload(models.ProgramOffering.academic_info_history)
+                .selectinload(models.OfferingAcademicInfo.semester_tuitions),
+                selectinload(models.MajorProgram.unit),
             )
             .where(models.MajorProgram.id == program_id)
         )
@@ -130,12 +132,13 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         query = (
             select(models.ProgramOffering)
             .options(
-                selectinload(models.ProgramOffering.academic_info_history),
-                selectinload(models.ProgramOffering.program)
+                selectinload(models.ProgramOffering.academic_info_history)
+                .selectinload(models.OfferingAcademicInfo.semester_tuitions),
+                selectinload(models.ProgramOffering.program),
             )
             .where(models.ProgramOffering.id == offering_id)
         )
-        
+
         result = await self.db.execute(query)
         return result.scalars().unique().first()
 
@@ -602,8 +605,10 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         academic_info_id: int
     ) -> Optional[models.OfferingAcademicInfo]:
         """Get academic info by ID."""
-        query = select(models.OfferingAcademicInfo).where(
-            models.OfferingAcademicInfo.id == academic_info_id
+        query = (
+            select(models.OfferingAcademicInfo)
+            .where(models.OfferingAcademicInfo.id == academic_info_id)
+            .options(selectinload(models.OfferingAcademicInfo.semester_tuitions))
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -614,9 +619,13 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         academic_year: int
     ) -> Optional[models.OfferingAcademicInfo]:
         """Get academic info for a specific offering and year."""
-        query = select(models.OfferingAcademicInfo).where(
-            models.OfferingAcademicInfo.offering_id == offering_id,
-            models.OfferingAcademicInfo.academic_year == academic_year
+        query = (
+            select(models.OfferingAcademicInfo)
+            .where(
+                models.OfferingAcademicInfo.offering_id == offering_id,
+                models.OfferingAcademicInfo.academic_year == academic_year,
+            )
+            .options(selectinload(models.OfferingAcademicInfo.semester_tuitions))
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -627,11 +636,16 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         current_year: int
     ) -> Optional[models.OfferingAcademicInfo]:
         """Get current year's published academic info for an offering."""
-        query = select(models.OfferingAcademicInfo).where(
-            models.OfferingAcademicInfo.offering_id == offering_id,
-            models.OfferingAcademicInfo.academic_year == current_year,
-            models.OfferingAcademicInfo.is_published == True
-        ).limit(1)
+        query = (
+            select(models.OfferingAcademicInfo)
+            .where(
+                models.OfferingAcademicInfo.offering_id == offering_id,
+                models.OfferingAcademicInfo.academic_year == current_year,
+                models.OfferingAcademicInfo.is_published == True,
+            )
+            .options(selectinload(models.OfferingAcademicInfo.semester_tuitions))
+            .limit(1)
+        )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
@@ -641,15 +655,17 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         published_only: bool = False
     ) -> List[models.OfferingAcademicInfo]:
         """Get all academic info history for an offering, ordered by year (newest first)."""
-        query = select(models.OfferingAcademicInfo).where(
-            models.OfferingAcademicInfo.offering_id == offering_id
+        query = (
+            select(models.OfferingAcademicInfo)
+            .where(models.OfferingAcademicInfo.offering_id == offering_id)
+            .options(selectinload(models.OfferingAcademicInfo.semester_tuitions))
         )
-        
+
         if published_only:
             query = query.where(models.OfferingAcademicInfo.is_published == True)
-        
+
         query = query.order_by(models.OfferingAcademicInfo.academic_year.desc())
-        
+
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
@@ -852,7 +868,9 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
             return []
         
         query = select(models.MajorProgram).options(
-            selectinload(models.MajorProgram.offerings).selectinload(models.ProgramOffering.academic_info_history)
+            selectinload(models.MajorProgram.offerings)
+            .selectinload(models.ProgramOffering.academic_info_history)
+            .selectinload(models.OfferingAcademicInfo.semester_tuitions)
         ).filter(
             models.MajorProgram.unit_id.in_(unit_ids),
             models.MajorProgram.is_active == True
@@ -888,7 +906,9 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         """
         # ✅ FIX: Eager load offerings to prevent MissingGreenlet error during response validation
         query = select(models.MajorProgram).options(
-            selectinload(models.MajorProgram.offerings).selectinload(models.ProgramOffering.academic_info_history)
+            selectinload(models.MajorProgram.offerings)
+            .selectinload(models.ProgramOffering.academic_info_history)
+            .selectinload(models.OfferingAcademicInfo.semester_tuitions)
         )
         
         if is_active:
@@ -929,8 +949,9 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         query = (
             select(models.ProgramOffering)
             .options(
-                selectinload(models.ProgramOffering.program),  # Eager load for display
+                selectinload(models.ProgramOffering.program),
                 selectinload(models.ProgramOffering.academic_info_history)
+                .selectinload(models.OfferingAcademicInfo.semester_tuitions),
             )
         )
 
@@ -973,6 +994,9 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
                 models.AdmissionPath,
                 (models.AdmissionPath.academic_info_id == models.OfferingAcademicInfo.id) &
                 (models.AdmissionPath.status == "active")
+            )
+            .options(
+                selectinload(models.OfferingAcademicInfo.semester_tuitions)
             )
             .group_by(models.OfferingAcademicInfo.id)
         )

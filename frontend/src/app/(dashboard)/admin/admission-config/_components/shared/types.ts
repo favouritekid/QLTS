@@ -334,6 +334,14 @@ export interface ScoringRules {
   required_education?: string; // "thpt", "cao_dang", "dai_hoc"
 }
 
+export interface SemesterTuition {
+  id: number;
+  academic_info_id: number;
+  semester_no: number;
+  amount: number;
+  notes?: string | null;
+}
+
 export interface OfferingAcademicInfo {
   id: number;
   offering_id: number;
@@ -344,6 +352,7 @@ export interface OfferingAcademicInfo {
   target_audience?: string;
   cutoff_score_previous_year?: number;
   applied_discount_policy_ids?: number[];
+  semester_tuitions?: SemesterTuition[];
   created_at: string;
   updated_at: string;
   // Computed fields from backend
