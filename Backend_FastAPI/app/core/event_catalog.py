@@ -555,9 +555,66 @@ _FINANCE_USER_EVENTS: tuple = (
         priority=60,
         link_strategy="/finance/payments/${payment_id}",
     ),
+    EventDefinition(
+        event=SystemEvents.PAYMENT_REJECTED,
+        category="finance",
+        display_name="Thanh toán bị từ chối",
+        description="Khi checker từ chối một khoản thanh toán đang chờ",
+        variables=(
+            _var("payment_id", "integer", "ID thanh toán"),
+            _var("invoice_id", "integer", "ID hóa đơn"),
+            _var("fee_id", "integer", "ID phí"),
+            _var("amount", "string", "Số tiền"),
+            _var("rejection_reason", "string", "Lý do từ chối"),
+            _var("rejected_by_id", "integer", "ID người từ chối"),
+            _var("created_by_id", "integer", "ID người ghi nhận"),
+            _var("admission_profile_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("unit_id", "integer", "ID đơn vị"),
+            _var("user_id", "integer", "ID maker (recipient)"),
+        ),
+        default_resolver="specific_users",  # resolves via payload["user_id"] → maker
+        allowed_resolvers=_FINANCE_RESOLVERS,
+        default_channels=("browser", "email"),
+        priority=65,
+        dedup_key_template="payment:${payment_id}:rejected",
+        link_strategy="/finance/payments/${payment_id}",
+    ),
 )
 
 _FINANCE_FUTURE_EVENTS: tuple = (
+    EventDefinition(
+        event=SystemEvents.REFUND_PROCESSED,
+        category="finance",
+        display_name="Hoàn tiền đã xử lý",
+        description="Khi yêu cầu hoàn tiền đã được thực hiện (funds returned)",
+        variables=(
+            _var("refund_id", "integer", "ID yêu cầu hoàn tiền"),
+            _var("payment_id", "integer", "ID thanh toán gốc"),
+            _var("invoice_id", "integer", "ID hóa đơn"),
+            _var("fee_id", "integer", "ID phí"),
+            _var("amount", "string", "Số tiền hoàn"),
+            _var("reason", "string", "Lý do hoàn tiền"),
+            _var("processor_id", "integer", "ID người xử lý"),
+            _var("admission_profile_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("unit_id", "integer", "ID đơn vị"),
+            _var("user_ids", "array", "Recipients (officer + processor)"),
+        ),
+        default_resolver="specific_users",  # resolves via payload["user_ids"] → [officer, processor]
+        allowed_resolvers=_FINANCE_RESOLVERS,
+        default_channels=("browser", "email"),
+        priority=55,
+        dedup_key_template="refund:${refund_id}:processed",
+        link_strategy="/finance/payments/${payment_id}",
+        # PR A: dispatch site is wired in payment_service.process_approved_refund()
+        # but RefundService has no router endpoint yet — the entire refund
+        # flow (request, approve, process) is service-layer-only as of this
+        # commit. Mark internal_future so the user-event contract test does
+        # not require a reachable production caller. Promote to "user" class
+        # when the refund router ships (tracked as PR B or later follow-up).
+        notification_class="internal_future",
+    ),
     EventDefinition(
         event=SystemEvents.DORM_FEE_CREATED,
         category="dorm",   # D: F4 fix — wrong domain → dorm

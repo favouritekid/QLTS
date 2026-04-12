@@ -54,6 +54,23 @@ def _get_template(defn) -> tuple:
     title = defn.display_name
     var_names = {v.name for v in defn.variables} if defn.variables else set()
 
+    # Curated templates for specific events that need richer messaging than
+    # the generic category fallback. Added in PR A (finance payment event
+    # parity): PAYMENT_REJECTED surfaces rejection reason to the maker so
+    # they can act on it.
+    #
+    # REFUND_PROCESSED is intentionally not curated here — it is tagged
+    # notification_class="internal_future" because the refund flow has no
+    # router endpoint yet. sync_notification_rules only seeds rules for
+    # user-class events (via get_notifiable_events), so a curated template
+    # here would be unreachable. Restore + promote when the refund router
+    # ships.
+    if defn.event == SystemEvents.PAYMENT_REJECTED:
+        return (
+            "Thanh toán bị từ chối",
+            "Khoản thanh toán $amount đã bị từ chối. Lý do: $rejection_reason",
+        )
+
     # Build message from available variables — safe fallback per category
     cat = defn.category
     if cat == "lead" and "lead_id" in var_names:

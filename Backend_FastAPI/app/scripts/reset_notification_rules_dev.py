@@ -196,6 +196,20 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         link_template="/finance/payments/$payment_id",
         groups=[_internal_group("specific_users", ["browser", "email"])],
     ),
+    "payment_rejected": _build_rule(
+        event="payment_rejected",
+        title_template="Thanh toán bị từ chối",
+        message_template="Khoản thanh toán $amount đã bị từ chối. Lý do: $rejection_reason",
+        notification_type="warning",
+        link_template="/finance/payments/$payment_id",
+        groups=[_internal_group("specific_users", ["browser", "email"])],
+    ),
+    # refund_processed is intentionally absent from CURATED_RULES: the event
+    # is notification_class="internal_future" (catalog tag) because the
+    # refund flow has no router endpoint yet. The dispatch site exists in
+    # payment_service.process_approved_refund() but cannot be reached from
+    # any live API path. Restore this entry + promote catalog tag to "user"
+    # when refund endpoints ship.
     "system_alert": _build_rule(
         event="system_alert",
         title_template="[${severity}] Cảnh báo hệ thống",

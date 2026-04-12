@@ -436,6 +436,11 @@ class TestUserEventsHaveDispatchCallers:
         "consultation_deleted", "consultation_reminder",
         "application_created", "application_status_changed", "application_deleted",
         "payment_received", "payment_verified",
+        "payment_rejected",
+        # refund_processed is notification_class="internal_future" — dispatch
+        # site wired in payment_service.process_approved_refund() but refund
+        # flow has no router endpoint yet. Promote to user-class when the
+        # refund router ships. See event_catalog.py _FINANCE_FUTURE_EVENTS.
         "ctv_claim_submitted", "ctv_claim_approved", "ctv_claim_rejected",
         "ctv_approved", "ctv_suspended", "ctv_commission_created",
         "ctv_attribution_expiring", "ctv_attribution_expired", "ctv_weekly_summary",

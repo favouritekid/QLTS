@@ -543,6 +543,50 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         category="finance"
     ),
 
+    SystemEvents.PAYMENT_REJECTED: EventMetadata(
+        event=SystemEvents.PAYMENT_REJECTED,
+        display_name="Thanh toán bị từ chối",
+        description="Khi checker từ chối một khoản thanh toán đang chờ",
+        variables=[
+            EventVariable("payment_id", "integer", "ID thanh toán"),
+            EventVariable("invoice_id", "integer", "ID hóa đơn"),
+            EventVariable("fee_id", "integer", "ID phí"),
+            EventVariable("amount", "string", "Số tiền thanh toán"),
+            EventVariable("rejection_reason", "string", "Lý do từ chối"),
+            EventVariable("rejected_by_id", "integer", "ID người từ chối"),
+            EventVariable("created_by_id", "integer", "ID người ghi nhận (maker)"),
+            EventVariable("admission_profile_id", "integer", "ID hồ sơ tuyển sinh"),
+            EventVariable("lead_id", "integer", "ID lead"),
+            EventVariable("unit_id", "integer", "ID đơn vị"),
+            EventVariable("user_id", "integer", "ID maker (recipient)"),
+        ],
+        filter_fields=["payment_id", "fee_id", "amount", "admission_profile_id", "rejected_by_id"],
+        default_channels=["browser", "email"],
+        category="finance"
+    ),
+
+    SystemEvents.REFUND_PROCESSED: EventMetadata(
+        event=SystemEvents.REFUND_PROCESSED,
+        display_name="Hoàn tiền đã xử lý",
+        description="Khi yêu cầu hoàn tiền đã được thực hiện (funds returned)",
+        variables=[
+            EventVariable("refund_id", "integer", "ID yêu cầu hoàn tiền"),
+            EventVariable("payment_id", "integer", "ID thanh toán gốc"),
+            EventVariable("invoice_id", "integer", "ID hóa đơn"),
+            EventVariable("fee_id", "integer", "ID phí"),
+            EventVariable("amount", "string", "Số tiền hoàn"),
+            EventVariable("reason", "string", "Lý do hoàn tiền"),
+            EventVariable("processor_id", "integer", "ID người xử lý"),
+            EventVariable("admission_profile_id", "integer", "ID hồ sơ tuyển sinh"),
+            EventVariable("lead_id", "integer", "ID lead"),
+            EventVariable("unit_id", "integer", "ID đơn vị"),
+            EventVariable("user_ids", "array", "Recipients (officer + processor)"),
+        ],
+        filter_fields=["refund_id", "payment_id", "fee_id", "amount", "admission_profile_id"],
+        default_channels=["browser", "email"],
+        category="finance"
+    ),
+
     # =========================================================================
     # DORM EVENTS (2 events)
     # =========================================================================

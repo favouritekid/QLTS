@@ -438,10 +438,40 @@ class PaymentService:
             rejector_id=rejector_id,
         )
 
-        # Post-commit: notify rejection
+        # Build PAYMENT_REJECTED notification payload while session is
+        # still active. payment.invoice.fee is joinedloaded by
+        # get_by_id_with_relations (payment_repository.py:64-86), so no
+        # extra queries are needed to reach the fee. The profile lookup
+        # gives us the lead_id for scoping and admission_profile_id for
+        # the payload.
+        _fee = payment.invoice.fee if payment.invoice else None
+        _profile = await self._get_profile_for_fee(_fee) if _fee else None
+        _lead_id = _profile.lead_id if _profile else None
+
+        _notify_payload = {
+            "payment_id": payment.id,
+            "invoice_id": payment.invoice_id,
+            "fee_id": _fee.id if _fee else None,
+            "amount": str(payment.amount),
+            "rejection_reason": reason,
+            "rejected_by_id": rejector_id,
+            "created_by_id": payment.created_by_id,
+            "admission_profile_id": _fee.admission_profile_id if _fee else None,
+            "lead_id": _lead_id,
+            "unit_id": unit_id,
+            # SpecificUsersResolver: notify the maker who recorded the payment
+            "user_id": payment.created_by_id,
+        }
+        _db = self.db
+
         async def post_commit():
-            # TODO: Emit PaymentRejected event for notifications
-            pass
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.PAYMENT_REJECTED,
+                payload=_notify_payload,
+            )
 
         return payment, post_commit
 
@@ -850,20 +880,30 @@ class RefundService:
 
         await self.db.flush()
 
+        # Hoist profile resolution BEFORE the tuition-only branch.
+        # The notification payload below needs lead_id/admission_profile_id
+        # regardless of fee_type; scoping the profile lookup inside the
+        # tuition branch would leave `profile` unbound for non-tuition
+        # refunds and crash with UnboundLocalError when we build the
+        # payload. Same query is used by the inline lead sync below.
+        profile = await self._get_profile_for_fee(fee)
+
         # ✅ SYNC LEAD STATUS: If tuition fee refund, move lead to sts18 (Đã hoàn học phí)
-        # Only sync if this is a tuition fee refund
-        if fee.fee_type == "tuition":
-            # Load profile with lead for sync
-            profile = await self._get_profile_for_fee(fee)
-            if profile:
-                from app.services.lead_admission_sync import sync_lead_tuition_refunded
-                await sync_lead_tuition_refunded(
-                    db=self.db,
-                    profile=profile,
-                    refund_amount=str(refund.amount),
-                    changed_by_user_id=processor_id,
-                    reason=f"Tuition fee refunded: {refund.amount:,.0f} VND. Reason: {refund.reason}",
-                )
+        # Only sync if this is a tuition fee refund.
+        # NOTE (ADR-002 PR 5 follow-up): this projection currently fires
+        # unconditionally for any tuition refund. After the semester
+        # tuition epic lands, it must be gated to fee.semester_no == 1 so
+        # HK2+ refunds do not drag the admission pipeline backwards.
+        # Tracked in PR 5 checklist.
+        if fee.fee_type == "tuition" and profile is not None:
+            from app.services.lead_admission_sync import sync_lead_tuition_refunded
+            await sync_lead_tuition_refunded(
+                db=self.db,
+                profile=profile,
+                refund_amount=str(refund.amount),
+                changed_by_user_id=processor_id,
+                reason=f"Tuition fee refunded: {refund.amount:,.0f} VND. Reason: {refund.reason}",
+            )
 
         log.info(
             "refund_processed",
@@ -873,7 +913,43 @@ class RefundService:
             processor_id=processor_id,
         )
 
-        return refund, None
+        # Build REFUND_PROCESSED notification payload. Recipients are the
+        # assigned officer (when resolved) plus the processor. Finance
+        # staff group and external applicant notification are deferred
+        # (PR B + Zalo ZNS Phase 2 respectively — see events.py docstring).
+        _officer_id: Optional[int] = None
+        if profile is not None and getattr(profile, "lead", None) is not None:
+            _officer_id = profile.lead.assigned_officer_id
+        _recipient_ids = list({
+            uid for uid in [_officer_id, processor_id] if uid
+        })
+
+        _notify_payload = {
+            "refund_id": refund.id,
+            "payment_id": payment.id,
+            "invoice_id": invoice.id,
+            "fee_id": fee.id,
+            "amount": str(refund.amount),
+            "reason": refund.reason,
+            "processor_id": processor_id,
+            "admission_profile_id": fee.admission_profile_id,
+            "lead_id": profile.lead_id if profile is not None else None,
+            "unit_id": unit_id,
+            # SpecificUsersResolver: notify officer + processor.
+            "user_ids": _recipient_ids,
+        }
+        _db = self.db
+
+        async def post_commit():
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.REFUND_PROCESSED,
+                payload=_notify_payload,
+            )
+
+        return refund, post_commit
 
     async def _get_profile_for_fee(
         self,
