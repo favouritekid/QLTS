@@ -182,7 +182,10 @@ export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps)
               </div>
 
               {liveCatalog.degree_levels.map((group) => {
-                const groupTuitionRange = formatTuitionRange(group.tuition_min, group.tuition_max)
+                const groupTuitionRange = formatTuitionRange(
+                  group.semester_1_tuition_min ?? group.tuition_min,
+                  group.semester_1_tuition_max ?? group.tuition_max,
+                )
                 const groupAcademicYears = formatAcademicYears(group.academic_years)
 
                 return (
@@ -214,7 +217,10 @@ export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps)
 
                     <div className="mt-6 grid gap-4 xl:grid-cols-2">
                       {group.programs.map((program) => {
-                        const programTuitionRange = formatTuitionRange(program.tuition_min, program.tuition_max)
+                        const programTuitionRange = formatTuitionRange(
+                          program.semester_1_tuition_min ?? program.tuition_min,
+                          program.semester_1_tuition_max ?? program.tuition_max,
+                        )
                         const programAcademicYears = formatAcademicYears(program.academic_years)
 
                         return (
@@ -257,9 +263,10 @@ export default function PublicProgramsPage({ catalog }: PublicProgramsPageProps)
 
                             <div className="mt-5 space-y-3">
                               {program.offerings.map((offering) => {
-                                const hasHK1 = offering.academic_info.semester_1_tuition != null
+                                const hk1 = offering.academic_info.semester_1_tuition ?? null
+                                const hasHK1 = hk1 != null
                                 const tuitionLabel = hasHK1
-                                  ? formatCurrency(offering.academic_info.semester_1_tuition)
+                                  ? formatCurrency(hk1)
                                   : formatCurrency(offering.academic_info.tuition_fee_per_year)
                                 const quotaLabel =
                                   offering.academic_info.annual_admission_quota !== null
