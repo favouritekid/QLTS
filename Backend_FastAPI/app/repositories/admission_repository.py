@@ -223,6 +223,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                     selectinload(models.Lead.assigned_officer),
                     selectinload(models.Lead.offering).options(
                         selectinload(models.ProgramOffering.program),
+                        selectinload(models.ProgramOffering.academic_info_history)
+                        .selectinload(models.OfferingAcademicInfo.semester_tuitions),
                     ),
                 ),
                 selectinload(models.AdmissionProfile.student),
@@ -574,6 +576,11 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .options(
                 joinedload(models.AdmissionProfile.lead).options(
                     selectinload(models.Lead.assigned_officer),
+                    selectinload(models.Lead.offering).options(
+                        selectinload(models.ProgramOffering.program),
+                        selectinload(models.ProgramOffering.academic_info_history)
+                        .selectinload(models.OfferingAcademicInfo.semester_tuitions),
+                    ),
                 ),
                 selectinload(models.AdmissionProfile.assigned_reviewer),
                 selectinload(models.AdmissionProfile.student),
@@ -603,7 +610,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
             .options(
-                joinedload(models.AdmissionProfile.lead).joinedload(models.Lead.assigned_officer),
+                joinedload(models.AdmissionProfile.lead).options(
+                    joinedload(models.Lead.assigned_officer),
+                    selectinload(models.Lead.offering).options(
+                        selectinload(models.ProgramOffering.program),
+                        selectinload(models.ProgramOffering.academic_info_history)
+                        .selectinload(models.OfferingAcademicInfo.semester_tuitions),
+                    ),
+                ),
                 selectinload(models.AdmissionProfile.assigned_reviewer),
                 selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),

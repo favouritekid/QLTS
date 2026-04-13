@@ -74,7 +74,9 @@ class LeadRepository(BaseRepository[models.Lead]):
                 # Direct 1-1 relationships
                 selectinload(models.Lead.offering).options(
                     selectinload(models.ProgramOffering.program),
-                    selectinload(models.ProgramOffering.academic_info_history),
+                    selectinload(models.ProgramOffering.academic_info_history).selectinload(
+                        models.OfferingAcademicInfo.semester_tuitions
+                    ),
                 ),
                 selectinload(models.Lead.unit).options(
                     selectinload(models.OrganizationUnit.parent),
@@ -139,7 +141,9 @@ class LeadRepository(BaseRepository[models.Lead]):
             .options(
                 selectinload(models.Lead.offering).options(
                     selectinload(models.ProgramOffering.program),
-                    selectinload(models.ProgramOffering.academic_info_history),
+                    selectinload(models.ProgramOffering.academic_info_history).selectinload(
+                        models.OfferingAcademicInfo.semester_tuitions
+                    ),
                 ),
                 selectinload(models.Lead.unit),
                 selectinload(models.Lead.assigned_officer),
@@ -445,7 +449,9 @@ class LeadRepository(BaseRepository[models.Lead]):
             leads_query.options(
                 selectinload(models.Lead.offering).options(
                     selectinload(models.ProgramOffering.program),
-                    selectinload(models.ProgramOffering.academic_info_history),
+                    selectinload(models.ProgramOffering.academic_info_history).selectinload(
+                        models.OfferingAcademicInfo.semester_tuitions
+                    ),
                 ),
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.unit),
