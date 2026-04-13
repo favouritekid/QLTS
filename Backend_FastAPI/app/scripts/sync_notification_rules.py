@@ -70,6 +70,21 @@ def _get_template(defn) -> tuple:
             "Thanh toán bị từ chối",
             "Khoản thanh toán $amount đã bị từ chối. Lý do: $rejection_reason",
         )
+    if defn.event == SystemEvents.FEE_FULLY_PAID:
+        return (
+            "Học phí thanh toán đủ",
+            "Học phí kỳ $semester_no với số tiền $amount đã được thanh toán đầy đủ.",
+        )
+    if defn.event == SystemEvents.INVOICE_ISSUED:
+        return (
+            "Hóa đơn được phát hành",
+            "Hóa đơn $invoice_number với số tiền $amount đã phát hành. Hạn: $due_date.",
+        )
+    if defn.event == SystemEvents.PAYMENT_OVERDUE:
+        return (
+            "Thanh toán quá hạn",
+            "Hóa đơn $invoice_number với số tiền $amount đã quá hạn $days_overdue ngày.",
+        )
 
     # Build message from available variables — safe fallback per category
     cat = defn.category

@@ -156,6 +156,13 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- Overdue Invoice Check (PR 8 — ADR-002) ---
+    "check-overdue-invoices-daily": {
+        "task": "check_overdue_invoices_task",
+        "schedule": crontab(hour=5, minute=0),  # Runs at 05:00 daily
+        "options": {"queue": "default"},
+    },
+
     # --- Holiday Calendar Yearly Check (Phase A9) ---
     "check-next-year-holidays": {
         "task": "check_next_year_holidays_task",

@@ -86,11 +86,11 @@ class TestCatalogClassification:
         assert defn is not None
         assert defn.notification_class == "internal_future"
 
-    def test_payment_overdue_is_internal_future(self):
-        """F3 decision: payment_overdue must be internal_future."""
+    def test_payment_overdue_is_user_class(self):
+        """PR 8: payment_overdue promoted to user class."""
         defn = get_event(SystemEvents.PAYMENT_OVERDUE)
         assert defn is not None
-        assert defn.notification_class == "internal_future"
+        assert defn.notification_class == "user"
 
     def test_get_event_by_key_returns_correct_definition(self):
         defn = get_event_by_key("lead_assigned")
@@ -437,10 +437,8 @@ class TestUserEventsHaveDispatchCallers:
         "application_created", "application_status_changed", "application_deleted",
         "payment_received", "payment_verified",
         "payment_rejected",
-        # refund_processed is notification_class="internal_future" — dispatch
-        # site wired in payment_service.process_approved_refund() but refund
-        # flow has no router endpoint yet. Promote to user-class when the
-        # refund router ships. See event_catalog.py _FINANCE_FUTURE_EVENTS.
+        "fee_fully_paid", "invoice_issued", "payment_overdue",
+        # refund_processed stays internal_future (no refund router yet)
         "ctv_claim_submitted", "ctv_claim_approved", "ctv_claim_rejected",
         "ctv_approved", "ctv_suspended", "ctv_commission_created",
         "ctv_attribution_expiring", "ctv_attribution_expired", "ctv_weekly_summary",

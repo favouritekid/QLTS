@@ -212,7 +212,54 @@ class InvoiceService:
             user_id=user_id,
         )
 
-        return invoices, None
+        # Build post_commit for auto-issued invoices (INVOICE_ISSUED dispatch).
+        # Resolve profile/lead/officer once for all invoices in this fee.
+        _post_commit_cb = None
+        if auto_issue and invoices:
+            _lead_id = None
+            _officer_id = None
+            if fee.admission_profile_id:
+                from sqlalchemy.orm import selectinload as _sil
+                _prof_result = await self.db.execute(
+                    select(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == fee.admission_profile_id)
+                    .options(_sil(models.AdmissionProfile.lead))
+                )
+                _prof = _prof_result.scalar_one_or_none()
+                if _prof:
+                    _lead_id = _prof.lead_id
+                    if getattr(_prof, "lead", None):
+                        _officer_id = _prof.lead.assigned_officer_id
+
+            _issued_payloads = []
+            for inv in invoices:
+                _issued_payloads.append({
+                    "invoice_id": inv.id,
+                    "invoice_number": inv.invoice_number,
+                    "fee_id": inv.fee_id,
+                    "amount": str(inv.amount),
+                    "due_date": inv.due_date.isoformat() if inv.due_date else None,
+                    "admission_profile_id": fee.admission_profile_id,
+                    "lead_id": _lead_id,
+                    "unit_id": unit_id,
+                    "user_id": _officer_id,
+                })
+            _db = self.db
+
+            async def _post_commit_cb_fn():
+                from app.services.notification_dispatcher import safe_dispatch
+                from app.core.events import SystemEvents
+                for payload in _issued_payloads:
+                    if payload.get("user_id"):
+                        await safe_dispatch(
+                            db=_db,
+                            event=SystemEvents.INVOICE_ISSUED,
+                            payload=payload,
+                        )
+
+            _post_commit_cb = _post_commit_cb_fn
+
+        return invoices, _post_commit_cb
 
     async def create_single_invoice(
         self,
@@ -359,10 +406,47 @@ class InvoiceService:
             user_id=user_id,
         )
 
-        # Post-commit: send notification to student
+        # Resolve profile + lead for notification payload
+        _profile = None
+        _lead_id = None
+        _officer_id = None
+        fee = await self.fee_repo.get_by_id_with_relations(invoice.fee_id, unit_id) if invoice.fee_id else None
+        if fee:
+            from sqlalchemy.orm import selectinload
+            result = await self.db.execute(
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == fee.admission_profile_id)
+                .options(selectinload(models.AdmissionProfile.lead))
+            )
+            _profile = result.scalar_one_or_none()
+            if _profile:
+                _lead_id = _profile.lead_id
+                if hasattr(_profile, "lead") and _profile.lead:
+                    _officer_id = _profile.lead.assigned_officer_id
+
+        _invoice_payload = {
+            "invoice_id": invoice.id,
+            "invoice_number": invoice.invoice_number,
+            "fee_id": invoice.fee_id,
+            "amount": str(invoice.amount),
+            "due_date": invoice.due_date.isoformat() if invoice.due_date else None,
+            "admission_profile_id": fee.admission_profile_id if fee else None,
+            "lead_id": _lead_id,
+            "unit_id": unit_id,
+            "user_id": _officer_id,
+        }
+        _db = self.db
+
         async def post_commit():
-            # TODO: Emit InvoiceIssued event for notification
-            pass
+            if not _invoice_payload.get("user_id"):
+                return
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.INVOICE_ISSUED,
+                payload=_invoice_payload,
+            )
 
         return invoice, post_commit
 
@@ -481,24 +565,44 @@ class InvoiceService:
     # OVERDUE PROCESSING
     # ==========================================================================
 
+    @staticmethod
+    def _overdue_bucket(days: int) -> str:
+        """Compute window bucket for overdue dedup key.
+
+        Groups overdue days into windows: 1, 2-7, 8-14, 15-30, 30+.
+        One notification fires per window (not per exact milestone day).
+        The dedup key ``overdue:{invoice_id}:{bucket}`` prevents daily
+        spam within each window while allowing re-notification when the
+        invoice crosses into a new window.
+        """
+        for threshold in (1, 7, 14, 30):
+            if days <= threshold:
+                return str(threshold)
+        return "30+"
+
     async def mark_overdue_invoices(
         self,
         unit_id: Optional[int] = None,
         as_of_date: Optional[date] = None,
-    ) -> List[Invoice]:
+    ) -> Tuple[List[Invoice], Optional[Callable]]:
         """
-        Mark all overdue invoices as overdue.
+        Mark all overdue invoices as overdue + dispatch PAYMENT_OVERDUE.
 
-        This should be called by a scheduled job (e.g., daily).
-
-        Args:
-            unit_id: Filter by unit (for multi-tenant isolation)
-            as_of_date: Date to check against (default: today)
+        Called by a scheduled Celery beat task (daily).
 
         Returns:
-            List of invoices marked as overdue
+            Tuple of (marked_invoices, post_commit_callback)
         """
+        from app.config import settings
+        from sqlalchemy.orm import selectinload as _sil
+
         check_date = as_of_date or date.today()
+
+        # OVERDUE_NOTIFY_SINCE gate: only dispatch for invoices whose
+        # due_date >= this threshold to prevent first-run burst.
+        notify_since = None
+        if settings.OVERDUE_NOTIFY_SINCE:
+            notify_since = date.fromisoformat(settings.OVERDUE_NOTIFY_SINCE)
 
         overdue_invoices = await self.invoice_repo.get_overdue_invoices(
             unit_id=unit_id,
@@ -506,13 +610,55 @@ class InvoiceService:
         )
 
         marked = []
-        for invoice in overdue_invoices:
-            # Skip if already overdue
-            if invoice.status == InvoiceStatusEnum.overdue.value:
-                continue
+        overdue_payloads = []
 
-            invoice.status = InvoiceStatusEnum.overdue.value
-            marked.append(invoice)
+        for invoice in overdue_invoices:
+            newly_overdue = invoice.status != InvoiceStatusEnum.overdue.value
+            if newly_overdue:
+                invoice.status = InvoiceStatusEnum.overdue.value
+                marked.append(invoice)
+
+            # Build notification payload if within rollout window
+            if notify_since and invoice.due_date and invoice.due_date < notify_since:
+                continue  # Pre-rollout invoice, skip notification
+
+            days = (check_date - invoice.due_date).days if invoice.due_date else 0
+            bucket = self._overdue_bucket(days)
+
+            # Resolve fee + profile + lead for payload
+            fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+            _officer_id = None
+            _lead_id = None
+            _profile_id = None
+            if fee and fee.admission_profile_id:
+                _profile_id = fee.admission_profile_id
+                prof_result = await self.db.execute(
+                    select(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == fee.admission_profile_id)
+                    .options(_sil(models.AdmissionProfile.lead))
+                )
+                _prof = prof_result.scalar_one_or_none()
+                if _prof:
+                    _lead_id = _prof.lead_id
+                    if getattr(_prof, "lead", None):
+                        _officer_id = _prof.lead.assigned_officer_id
+
+            overdue_payloads.append({
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.invoice_number,
+                "fee_id": invoice.fee_id,
+                "fee_type": fee.fee_type if fee else None,
+                "semester_no": fee.semester_no if fee else None,
+                "amount": str(invoice.amount - invoice.paid_amount),
+                "due_date": invoice.due_date.isoformat() if invoice.due_date else None,
+                "days_overdue": days,
+                "days_overdue_bucket": bucket,
+                "installment_no": invoice.installment_no,
+                "admission_profile_id": _profile_id,
+                "lead_id": _lead_id,
+                "unit_id": unit_id,
+                "user_id": _officer_id,
+            })
 
         await self.db.flush()
 
@@ -520,11 +666,25 @@ class InvoiceService:
             log.info(
                 "invoices_marked_overdue",
                 count=len(marked),
+                notify_count=len(overdue_payloads),
                 as_of_date=str(check_date),
                 unit_id=unit_id,
             )
 
-        return marked
+        _db = self.db
+
+        async def _post_commit():
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+            for payload in overdue_payloads:
+                if payload.get("user_id"):
+                    await safe_dispatch(
+                        db=_db,
+                        event=SystemEvents.PAYMENT_OVERDUE,
+                        payload=payload,
+                    )
+
+        return marked, _post_commit
 
     # ==========================================================================
     # INVOICE RETRIEVAL

@@ -204,12 +204,32 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         link_template="/finance/payments/$payment_id",
         groups=[_internal_group("specific_users", ["browser", "email"])],
     ),
-    # refund_processed is intentionally absent from CURATED_RULES: the event
-    # is notification_class="internal_future" (catalog tag) because the
-    # refund flow has no router endpoint yet. The dispatch site exists in
-    # payment_service.process_approved_refund() but cannot be reached from
-    # any live API path. Restore this entry + promote catalog tag to "user"
-    # when refund endpoints ship.
+    # refund_processed stays internal_future (no refund router yet)
+    # PR 8: 3 new finance events
+    "fee_fully_paid": _build_rule(
+        event="fee_fully_paid",
+        title_template="Học phí thanh toán đủ",
+        message_template="Học phí kỳ $semester_no với số tiền $amount đã được thanh toán đầy đủ.",
+        notification_type="success",
+        link_template="/finance/fees/$fee_id",
+        groups=[_internal_group("specific_users", ["browser", "email"])],
+    ),
+    "invoice_issued": _build_rule(
+        event="invoice_issued",
+        title_template="Hóa đơn được phát hành",
+        message_template="Hóa đơn $invoice_number với số tiền $amount đã phát hành. Hạn: $due_date.",
+        notification_type="info",
+        link_template="/finance/invoices/$invoice_id",
+        groups=[_internal_group("specific_users", ["browser", "email"])],
+    ),
+    "payment_overdue": _build_rule(
+        event="payment_overdue",
+        title_template="Thanh toán quá hạn",
+        message_template="Hóa đơn $invoice_number với số tiền $amount đã quá hạn $days_overdue ngày.",
+        notification_type="error",
+        link_template="/finance/fees/$fee_id",
+        groups=[_internal_group("specific_users", ["browser", "email"])],
+    ),
     "system_alert": _build_rule(
         event="system_alert",
         title_template="[${severity}] Cảnh báo hệ thống",

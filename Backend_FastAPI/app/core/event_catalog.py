@@ -511,7 +511,7 @@ _ADMISSION_EVENTS: tuple = (
 )
 
 # -------------------------------------------------------------------
-# 4. Finance events — user (2) + internal_future (2)
+# 4. Finance events — user (6) + internal_future (2)
 # -------------------------------------------------------------------
 
 _FINANCE_USER_EVENTS: tuple = (
@@ -580,6 +580,81 @@ _FINANCE_USER_EVENTS: tuple = (
         dedup_key_template="payment:${payment_id}:rejected",
         link_strategy="/finance/payments/${payment_id}",
     ),
+    # PR 8: FEE_FULLY_PAID — fires when fee reaches zero balance
+    EventDefinition(
+        event=SystemEvents.FEE_FULLY_PAID,
+        category="finance",
+        display_name="Học phí thanh toán đủ",
+        description="Khi toàn bộ học phí của một kỳ đã được thanh toán đủ",
+        variables=(
+            _var("fee_id", "integer", "ID phí"),
+            _var("amount", "string", "Tổng học phí"),
+            _var("semester_no", "integer", "Số kỳ học", False),
+            _var("admission_profile_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("unit_id", "integer", "ID đơn vị"),
+            _var("user_id", "integer", "ID officer (recipient)"),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=_FINANCE_RESOLVERS,
+        default_channels=("browser", "email"),
+        priority=50,
+        dedup_key_template="fee:${fee_id}:fully_paid",
+        link_strategy="/finance/fees/${fee_id}",
+    ),
+    # PR 8: INVOICE_ISSUED — fires when invoice transitions to issued
+    EventDefinition(
+        event=SystemEvents.INVOICE_ISSUED,
+        category="finance",
+        display_name="Hóa đơn được phát hành",
+        description="Khi hóa đơn chuyển sang trạng thái phát hành",
+        variables=(
+            _var("invoice_id", "integer", "ID hóa đơn"),
+            _var("invoice_number", "string", "Số hóa đơn"),
+            _var("fee_id", "integer", "ID phí"),
+            _var("amount", "string", "Số tiền"),
+            _var("due_date", "datetime", "Hạn thanh toán", False),
+            _var("admission_profile_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("unit_id", "integer", "ID đơn vị"),
+            _var("user_id", "integer", "ID officer (recipient)"),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=_FINANCE_RESOLVERS,
+        default_channels=("browser", "email"),
+        priority=55,
+        dedup_key_template="invoice:${invoice_id}:issued",
+        link_strategy="/finance/invoices/${invoice_id}",
+    ),
+    # PR 8: PAYMENT_OVERDUE promoted from internal_future to user
+    EventDefinition(
+        event=SystemEvents.PAYMENT_OVERDUE,
+        category="finance",
+        display_name="Thanh toán quá hạn",
+        description="Khi hóa đơn quá hạn thanh toán (invoice-level)",
+        variables=(
+            _var("invoice_id", "integer", "ID hóa đơn"),
+            _var("invoice_number", "string", "Số hóa đơn"),
+            _var("fee_id", "integer", "ID phí"),
+            _var("fee_type", "string", "Loại phí"),
+            _var("semester_no", "integer", "Số kỳ học", False),
+            _var("amount", "string", "Số tiền còn nợ"),
+            _var("due_date", "datetime", "Hạn thanh toán"),
+            _var("days_overdue", "integer", "Số ngày quá hạn"),
+            _var("days_overdue_bucket", "string", "Khung quá hạn: 1/7/14/30/30+ (window, not exact day)"),
+            _var("installment_no", "integer", "Đợt thanh toán"),
+            _var("admission_profile_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("unit_id", "integer", "ID đơn vị"),
+            _var("user_id", "integer", "ID officer (recipient)"),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=_FINANCE_RESOLVERS,
+        default_channels=("browser", "email"),
+        priority=20,
+        dedup_key_template="overdue:${invoice_id}:${days_overdue_bucket}",
+        link_strategy="/finance/fees/${fee_id}",
+    ),
 )
 
 _FINANCE_FUTURE_EVENTS: tuple = (
@@ -634,25 +709,7 @@ _FINANCE_FUTURE_EVENTS: tuple = (
         link_strategy="/finance/fees/${fee_id}",
         notification_class="internal_future",
     ),
-    EventDefinition(
-        event=SystemEvents.PAYMENT_OVERDUE,
-        category="finance",
-        display_name="Thanh toán quá hạn",
-        description="Khi thanh toán quá hạn — promote khi beat task implemented",
-        variables=(
-            _var("fee_id", "integer", "ID phí"),
-            _var("user_id", "integer", "ID user"),
-            _var("amount", "integer", "Số tiền"),
-            _var("days_overdue", "integer", "Số ngày quá hạn"),
-            _var("fee_type", "string", "Loại phí"),
-        ),
-        default_resolver="specific_users",
-        allowed_resolvers=_FINANCE_RESOLVERS,
-        default_channels=("browser", "email"),
-        priority=20,
-        link_strategy="/finance/fees/${fee_id}",
-        notification_class="internal_future",
-    ),
+    # PAYMENT_OVERDUE promoted to _FINANCE_USER_EVENTS in PR 8
 )
 
 # -------------------------------------------------------------------

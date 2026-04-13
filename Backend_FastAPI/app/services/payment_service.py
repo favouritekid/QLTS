@@ -383,9 +383,18 @@ class PaymentService:
         }
         _db = self.db
 
+        _fee_fully_paid = fee_remaining <= 0
+        _fee_fully_paid_payload = {
+            "fee_id": fee.id,
+            "amount": str(fee.final_amount),
+            "semester_no": fee.semester_no,
+            "admission_profile_id": fee.admission_profile_id,
+            "lead_id": _lead_id,
+            "unit_id": unit_id,
+            "user_id": _officer_id or verifier_id,
+        } if _fee_fully_paid else None
+
         async def post_commit():
-            # safe_dispatch handles commit + callback + error suppression
-            # Called AFTER router has committed business data
             from app.services.notification_dispatcher import safe_dispatch
             from app.core.events import SystemEvents
 
@@ -394,6 +403,13 @@ class PaymentService:
                 event=SystemEvents.PAYMENT_VERIFIED,
                 payload=_notify_payload,
             )
+
+            if _fee_fully_paid_payload:
+                await safe_dispatch(
+                    db=_db,
+                    event=SystemEvents.FEE_FULLY_PAID,
+                    payload=_fee_fully_paid_payload,
+                )
 
         return payment, post_commit
 
