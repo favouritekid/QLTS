@@ -182,7 +182,7 @@ async function loginViaAPI(
     throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
   }
 
-  let loginBody = await loginResp.json();
+  const loginBody = await loginResp.json();
   let authResp = loginResp;
 
   if (loginBody.mfa_required) {

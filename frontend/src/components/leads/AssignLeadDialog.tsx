@@ -1,7 +1,7 @@
 // src/components/leads/AssignLeadDialog.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -89,13 +89,13 @@ export function AssignLeadDialog({
     },
   });
 
-  // Reset form when dialog opens
-  useEffect(() => {
-    if (!open) {
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
       form.reset();
       setShowFallback(false);
     }
-  }, [open, form]);
+    onOpenChange(nextOpen);
+  };
 
   const onSubmit = async (data: AssignFormValues) => {
     const officerId = parseInt(data.officer_id, 10);
@@ -111,7 +111,7 @@ export function AssignLeadDialog({
         },
         {
           onSuccess: () => {
-            onOpenChange(false);
+            handleOpenChange(false);
             onSuccess?.();
           },
           onError: (error) => {
@@ -132,7 +132,7 @@ export function AssignLeadDialog({
         },
         {
           onSuccess: () => {
-            onOpenChange(false);
+            handleOpenChange(false);
             onSuccess?.();
           },
         }
@@ -146,7 +146,7 @@ export function AssignLeadDialog({
   const officers = usersData?.users || [];
 
   return (
-    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+    <ResponsiveDialog open={open} onOpenChange={handleOpenChange}>
       <ResponsiveDialogContent className="sm:max-w-[500px]">
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle>
@@ -249,7 +249,7 @@ export function AssignLeadDialog({
                         },
                         {
                           onSuccess: () => {
-                            onOpenChange(false);
+                            handleOpenChange(false);
                             onSuccess?.();
                           },
                         },
@@ -271,7 +271,7 @@ export function AssignLeadDialog({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                onClick={() => handleOpenChange(false)}
                 disabled={isSubmitting}
               >
                 Hủy

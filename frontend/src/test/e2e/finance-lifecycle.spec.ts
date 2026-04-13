@@ -155,7 +155,7 @@ async function loginViaAPI(
       if (!opts?.totpSecret) {
         throw new Error(`MFA required for ${username} but no TOTP secret provided`);
       }
-      let mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
+      const mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
         data: { mfa_token: loginBody.mfa_token, code: generateTOTP(opts.totpSecret) },
       });
       if (!mfaResp.ok()) {

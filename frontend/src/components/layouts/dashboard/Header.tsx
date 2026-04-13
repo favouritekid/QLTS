@@ -1,7 +1,7 @@
 // src/components/layouts/dashboard/Header.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useUIStore } from "@/lib/stores/ui.store";
 import { cn } from "@/lib/utils";
 import { Menu, Search } from "lucide-react";
@@ -46,11 +46,11 @@ export function Header() {
   const { isSidebarCollapsed, toggleSidebar } = useUIStore();
   const { open } = useCommandPalette();
   const showSecurityBanner = useShouldShowSecurityBanner();
-  const [isMac, setIsMac] = useState(false);
-
-  useEffect(() => {
-    setIsMac(/Mac|iPod|iPhone|iPad/.test(navigator.platform));
-  }, []);
+  const [isMac, setIsMac] = useState(() =>
+    typeof navigator !== "undefined"
+      ? /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+      : false
+  );
 
   return (
     <header
@@ -106,7 +106,7 @@ export function Header() {
             "rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-100 md:inline-flex",
             "transition-colors duration-200 group-hover:bg-accent"
           )}>
-            <span className="text-xs">{isMac ? "⌘" : "Ctrl+"}</span>K
+            <span className="text-xs" suppressHydrationWarning>{isMac ? "⌘" : "Ctrl+"}</span>K
           </kbd>
         </Button>
 

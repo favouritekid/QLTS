@@ -52,6 +52,7 @@ const COLLABORATOR_STALE_TIME_MS = 1000 * 60 * 5
 export function useCollaborators(params?: Record<string, unknown>) {
   return useQuery<CollaboratorsPage>({
     queryKey: collaboratorKeys.list(params),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queryFn: () => collaboratorsApi.getCollaborators(params as any),
     staleTime: COLLABORATOR_STALE_TIME_MS,
   })
@@ -68,6 +69,7 @@ export function useCollaborator(id: number) {
 export function useClaims(params?: Record<string, unknown>) {
   return useQuery<LeadClaimsPage>({
     queryKey: claimKeys.list(params),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queryFn: () => collaboratorsApi.getClaims(params as any),
     staleTime: COLLABORATOR_STALE_TIME_MS,
   })
@@ -166,6 +168,7 @@ export function useCTVProfile() {
 export function useCTVLeads(params?: Record<string, unknown>) {
   return useQuery<{ total_count: number; leads: LeadForCTV[] }>({
     queryKey: ctvKeys.leads(params),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queryFn: () => collaboratorsApi.getMyLeads(params as any),
     staleTime: COLLABORATOR_STALE_TIME_MS,
   })
@@ -174,6 +177,7 @@ export function useCTVLeads(params?: Record<string, unknown>) {
 export function useCTVClaims(params?: Record<string, unknown>) {
   return useQuery<LeadClaimsPage>({
     queryKey: ctvKeys.claims(params),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queryFn: () => collaboratorsApi.getMyClaims(params as any),
     staleTime: COLLABORATOR_STALE_TIME_MS,
   })
