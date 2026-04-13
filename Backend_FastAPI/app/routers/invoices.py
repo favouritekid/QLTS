@@ -452,7 +452,7 @@ def _build_invoice_detail_response(
         fee_summary = finance_schemas.FeeSummaryResponse(
             id=fee.id,
             fee_type=fee.fee_type,
-            academic_year=fee.academic_year,
+            academic_year=f"{fee.academic_year}-{fee.academic_year + 1}",
             final_amount=fee.final_amount,
             paid_amount=fee.paid_amount,
             remaining_amount=fee.remaining_amount,

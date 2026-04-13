@@ -313,7 +313,7 @@ class FeeSummaryResponse(BaseModel):
     """Summary response for fee list."""
     id: int
     fee_type: FeeTypeEnum
-    academic_year: int
+    academic_year: str
     semester_no: Optional[int] = None
     final_amount: Decimal
     paid_amount: Decimal

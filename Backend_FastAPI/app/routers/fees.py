@@ -386,7 +386,7 @@ async def get_fees_by_profile(
         finance_schemas.FeeSummaryResponse(
             id=f.id,
             fee_type=f.fee_type,
-            academic_year=f.academic_year,
+            academic_year=f"{f.academic_year}-{f.academic_year + 1}",
             semester_no=f.semester_no,
             final_amount=f.final_amount,
             paid_amount=f.paid_amount,
@@ -441,7 +441,7 @@ async def get_profile_finance_summary(
             finance_schemas.FeeSummaryResponse(
                 id=f.id,
                 fee_type=f.fee_type,
-                academic_year=f.academic_year,
+                academic_year=f"{f.academic_year}-{f.academic_year + 1}",
                 semester_no=f.semester_no,
                 final_amount=f.final_amount,
                 paid_amount=f.paid_amount,
