@@ -75,8 +75,8 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
 log "Step 5/8: Backing up database..."
 mkdir -p "$BACKUP_DIR"
 
-if docker compose -f docker-compose.yml ps postgres | grep -q "running"; then
-    docker compose -f docker-compose.yml exec -T postgres pg_dump \
+if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
+    docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_dump \
         -U "${POSTGRES_USER:-qlts}" \
         "${POSTGRES_DB:-qlts_production}" \
         > "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" 2>/dev/null \
@@ -103,7 +103,7 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
     || {
         warn "Migration failed! Rolling back..."
         if [ -f "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" ]; then
-            docker compose -f docker-compose.yml exec -T postgres psql \
+            docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql \
                 -U "${POSTGRES_USER:-qlts}" \
                 "${POSTGRES_DB:-qlts_production}" \
                 < "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
