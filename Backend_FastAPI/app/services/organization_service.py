@@ -64,6 +64,8 @@ def create_recursive_unit_loader(depth: int):
             models.MajorProgram.offerings
         ).selectinload(
             models.ProgramOffering.academic_info_history
+        ).selectinload(
+            models.OfferingAcademicInfo.semester_tuitions
         )  # Base case: just load programs
 
     return selectinload(models.OrganizationUnit.children).options(
@@ -71,6 +73,8 @@ def create_recursive_unit_loader(depth: int):
             models.MajorProgram.offerings
         ).selectinload(
             models.ProgramOffering.academic_info_history
+        ).selectinload(
+            models.OfferingAcademicInfo.semester_tuitions
         ),
         create_recursive_unit_loader(depth - 1)
     )

@@ -701,13 +701,15 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
                     models.MajorProgram.offerings
                 ).selectinload(
                     models.ProgramOffering.academic_info_history
+                ).selectinload(
+                    models.OfferingAcademicInfo.semester_tuitions
                 ),
                 recursive_loader,
                 selectinload(models.OrganizationUnit.parent)
             )
             .order_by(self.model.name)
         )
-        
+
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
 
