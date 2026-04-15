@@ -4309,9 +4309,9 @@ async def override_profile(
     # (e.g. {"new_status": "overridden"}) targeting compliance-team users.
     # This closure remains as a hook for future service-level side effects.
     async def post_commit():
-        """Side effects after transaction commit."""
-        log.info(
-            "Post-commit: Override audit notification sent",
+        """No-op hook; compliance alerting runs in the router after commit."""
+        log.debug(
+            "Post-commit hook: override (alerting handled by router dispatch)",
             profile_id=profile.id,
         )
 
