@@ -178,6 +178,7 @@ from .admission import (
     ResubmitRequest,
     ConfirmRequest,
     OverrideRequest,
+    WithdrawRequest,
     FinalizeRequest,
     DropStudentRequest,
     # Confirmation token schemas (Magic Link)

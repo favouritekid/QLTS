@@ -1931,6 +1931,109 @@ async def override_admission(
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
+    "/{profile_id}/withdraw",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Withdraw admission profile",
+)
+async def withdraw_admission(
+    request: Request,
+    profile_id: int,
+    data: schemas.WithdrawRequest,
+    current_user: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Withdraw an admission profile.
+
+    **State Transition:**
+    - Allowed from: DRAFT, SUBMITTED, REJECTED, RESUBMITTED
+    - Target: WITHDRAWN (terminal)
+
+    **Lead pipeline sync:** lead moves to sts08 (Từ chối tư vấn) per
+    ``lead_admission_sync``, handled by the service.
+
+    **Security:**
+    - RBAC: ``CasbinAuth`` — /withdraw is granted to the officer
+      template; manager/admin inherit via diamond inheritance. Regular
+      users without a staff role are rejected with 403 by Casbin.
+    - IDOR: Service's ``_check_idor_access`` validates the actor can
+      act on this specific profile's lead (assigned officer within unit,
+      manager within unit, admin unrestricted).
+
+    **Validation:**
+    - reason: required, min 5 chars
+    - version: optimistic-locking check (409 on mismatch)
+
+    **Errors:**
+    - 400: invalid state transition or missing reason
+    - 404: profile not found (or IDOR denial)
+    - 409: version conflict
+    """
+    try:
+        # Capture pre-transition status for accurate notification payload
+        pre_profile = await db.get(models.AdmissionProfile, profile_id)
+        pre_status = pre_profile.status if pre_profile else None
+
+        # 1. DELEGATE to Service (service handles lock + IDOR + sync)
+        result, callback = await admission_service.withdraw_profile(
+            db=db,
+            profile_id=profile_id,
+            actor=current_user,
+            data=data.model_dump(),
+        )
+
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(result)
+
+        # 3. POST-COMMIT Side Effects
+        await callback()
+
+        # 4. Dispatch notifications if the lead is still attached
+        if result.lead_id:
+            # 4a. APPLICATION_STATUS_CHANGED — admission-level notification
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": result.lead_id,
+                    "old_status": pre_status,
+                    "new_status": "withdrawn",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_withdrawn:{profile_id}",
+            )
+
+            # 4b. LEAD_STATUS_CHANGED — pipeline notification (sts08)
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": result.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": pre_status,
+                    "new_status": "sts08",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{result.lead_id}:sts08",
+            )
+
+        # 5. RETURN Pydantic Model
+        return result
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
     "/{profile_id}/finalize",
     response_model=schemas.AdmissionProfileResponse,
     summary="Finalize to enrolled (Admin only)",

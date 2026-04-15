@@ -135,6 +135,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}", "action": "PUT"},   # Update profile
         {"subject": "{role}", "object": "/api/admissions/{id}/submit", "action": "POST"},  # Submit
         {"subject": "{role}", "object": "/api/admissions/{id}/resubmit", "action": "POST"},  # Resubmit after rejection
+        {"subject": "{role}", "object": "/api/admissions/{id}/withdraw", "action": "POST"},  # Withdraw applicant-initiated
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
         # REMOVED: enroll is ADMIN-ONLY per Decision 10 (Admission State ≠ Authorization)
         # {"subject": "{role}", "object": "/api/admissions/{id}/enroll", "action": "POST"},
@@ -289,6 +290,7 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/reject", "action": "POST"},  # Reject profile
         {"subject": "{role}", "object": "/api/admissions/{id}/request-revision", "action": "POST"},  # Request revision
         {"subject": "{role}", "object": "/api/admissions/{id}/override", "action": "POST"},  # Override decision
+        # NOTE: /withdraw lives in OFFICER_TEMPLATE — manager inherits via diamond.
         {"subject": "{role}", "object": "/api/admissions/{id}/claim", "action": "POST"},  # Claim profile for review
         {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile
         {"subject": "{role}", "object": "/api/admissions/{id}/drop", "action": "POST"},  # Drop enrolled student

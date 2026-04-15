@@ -1071,6 +1071,40 @@ class ConfirmRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
+class WithdrawRequest(BaseModel):
+    """
+    Schema for withdrawal action.
+
+    Transitions allowed from: DRAFT, SUBMITTED, REJECTED, RESUBMITTED
+    Target state: WITHDRAWN (terminal)
+
+    Lead pipeline sync: lead moves to sts08 (Từ chối tư vấn) per
+    lead_admission_sync mapping. Service layer handles the sync.
+
+    **Validation:**
+    - reason: required, 5-1000 chars, HTML-escaped
+    - version: required for optimistic locking
+    """
+    reason: str = Field(
+        ...,
+        min_length=5,
+        max_length=1000,
+        description="Withdrawal reason (required)",
+    )
+    version: int = Field(
+        ...,
+        description="Profile version for optimistic locking",
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS prevention: escape HTML entities."""
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
 class OverrideRequest(BaseModel):
     """
     Schema for override action (Admin only).
@@ -1263,6 +1297,7 @@ __all__ = [
     "DropStudentRequest",
     "ConfirmRequest",
     "OverrideRequest",
+    "WithdrawRequest",
     "FinalizeRequest",
     # Student schemas
     "StudentDocumentResponse",
