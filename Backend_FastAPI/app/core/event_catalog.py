@@ -508,6 +508,28 @@ _ADMISSION_EVENTS: tuple = (
         priority=100,
         link_strategy="/admissions",
     ),
+    EventDefinition(
+        event=SystemEvents.APPLICATION_FEE_PAID,
+        category="application",
+        display_name="Lệ phí xét tuyển đã thanh toán",
+        description="Khi lệ phí xét tuyển được xác nhận thanh toán",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("unit_id", "integer", "ID đơn vị phụ trách", False),
+            _var("officer_id", "integer", "ID officer phụ trách", False),
+            _var("amount", "string", "Số tiền lệ phí"),
+            _var("transaction_id", "string", "Mã giao dịch", False),
+            _var("actor_id", "integer", "ID người thực hiện"),
+            _var("actor_name", "string", "Tên người thực hiện", False),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser",),
+        priority=75,
+        dedup_key_template="app:${application_id}:fee_paid",
+        link_strategy="/admissions/${application_id}",
+    ),
 )
 
 # -------------------------------------------------------------------

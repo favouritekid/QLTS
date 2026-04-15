@@ -85,6 +85,11 @@ def _get_template(defn) -> tuple:
             "Thanh toán quá hạn",
             "Hóa đơn $invoice_number với số tiền $amount đã quá hạn $days_overdue ngày.",
         )
+    if defn.event == SystemEvents.APPLICATION_FEE_PAID:
+        return (
+            "Lệ phí xét tuyển đã thanh toán",
+            "Hồ sơ #$application_id đã thanh toán lệ phí xét tuyển $amount.",
+        )
 
     # Build message from available variables — safe fallback per category
     cat = defn.category

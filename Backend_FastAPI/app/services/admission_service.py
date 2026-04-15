@@ -3977,10 +3977,44 @@ async def record_application_fee_payment(
         recorded_by=recorded_by.id if recorded_by else "system",
     )
 
+    # Resolve notification payload while the session is still open — the
+    # post_commit closure runs after db.commit() and cannot lazy-load.
+    # unit_id is required for the unit_managers resolver path (declared in
+    # the event catalog's allowed_resolvers).
+    _officer_id = (
+        profile.lead.assigned_officer_id
+        if profile.lead is not None
+        else None
+    )
+    _unit_id = profile.lead.unit_id if profile.lead is not None else None
+    _notify_payload = {
+        "application_id": profile_id,
+        "lead_id": profile.lead_id,
+        "unit_id": _unit_id,
+        "officer_id": _officer_id,
+        "amount": str(payment_data.get("amount", 0)),
+        "transaction_id": str(payment_data.get("transaction_id") or ""),
+        "actor_id": recorded_by.id if recorded_by else 0,
+        "actor_name": (
+            (recorded_by.full_name or recorded_by.username)
+            if recorded_by
+            else "System"
+        ),
+    }
+    _db = db
+
     async def post_commit():
-        log.info(
-            "Post-commit: Fee payment notification",
-            profile_id=profile_id,
+        from app.services.notification_dispatcher import safe_dispatch
+        from app.core.events import SystemEvents
+
+        # dedupe_key intentionally omitted — safe_dispatch() renders the
+        # canonical key from the catalog's dedup_key_template
+        # ("app:${application_id}:fee_paid"), keeping dedup contract in one
+        # place.
+        await safe_dispatch(
+            db=_db,
+            event=SystemEvents.APPLICATION_FEE_PAID,
+            payload=_notify_payload,
         )
 
     return profile, post_commit

@@ -304,6 +304,25 @@ class SystemEvents(str, Enum):
     Recipients: The officer, admins
     """
 
+    APPLICATION_FEE_PAID = "application_fee_paid"
+    """
+    Triggered when the application fee is confirmed paid (gateway
+    callback or manual admin confirmation).
+
+    Payload Schema:
+        {
+            "application_id": int,         # Required: AdmissionProfile ID
+            "lead_id": int,                # Required: Lead ID
+            "officer_id": Optional[int],   # Assigned officer (may be null)
+            "amount": str,                 # Fee amount as string (Decimal-safe)
+            "transaction_id": Optional[str], # Payment transaction reference
+            "actor_id": int,               # User who recorded the payment (0 for system)
+            "actor_name": Optional[str],   # Actor display name
+        }
+
+    Recipients: Assigned officer (lead_owner), unit managers, admins.
+    """
+
     # =========================================================================
     # FINANCE EVENTS (Future: Dorm, Tuition, etc.)
     # =========================================================================

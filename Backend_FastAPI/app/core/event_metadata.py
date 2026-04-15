@@ -471,6 +471,25 @@ EVENT_METADATA_REGISTRY: Dict[SystemEvents, EventMetadata] = {
         category="application"
     ),
 
+    SystemEvents.APPLICATION_FEE_PAID: EventMetadata(
+        event=SystemEvents.APPLICATION_FEE_PAID,
+        display_name="Lệ phí xét tuyển đã thanh toán",
+        description="Khi lệ phí xét tuyển được xác nhận thanh toán",
+        variables=[
+            EventVariable("application_id", "integer", "ID hồ sơ"),
+            EventVariable("lead_id", "integer", "ID của lead"),
+            EventVariable("unit_id", "integer", "ID đơn vị phụ trách", required=False),
+            EventVariable("officer_id", "integer", "ID officer phụ trách", required=False),
+            EventVariable("amount", "string", "Số tiền lệ phí"),
+            EventVariable("transaction_id", "string", "Mã giao dịch", required=False),
+            EventVariable("actor_id", "integer", "ID người thực hiện"),
+            EventVariable("actor_name", "string", "Tên người thực hiện", required=False),
+        ],
+        filter_fields=["application_id", "lead_id", "unit_id", "officer_id"],
+        default_channels=["browser"],
+        category="application"
+    ),
+
     # =========================================================================
     # FINANCE EVENTS (3 events)
     # =========================================================================

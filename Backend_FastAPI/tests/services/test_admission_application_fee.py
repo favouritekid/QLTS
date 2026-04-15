@@ -671,3 +671,251 @@ class TestFullFlowWithFee:
         # Verify lead went directly to sts09 (skipped sts13)
         lead_status = await get_lead_status(lead_id)
         assert lead_status == "sts09", f"Expected sts09, got {lead_status}"
+
+
+# ==============================================================================
+# TEST: APPLICATION_FEE_PAID EVENT DISPATCH
+# ==============================================================================
+
+
+class TestApplicationFeePaidEvent:
+    """Verify record_application_fee_payment emits the user-facing event."""
+
+    async def test_dispatches_application_fee_paid_with_correct_payload(
+        self,
+        admin_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """
+        Calling the service directly and awaiting the returned post_commit
+        callback must invoke safe_dispatch(APPLICATION_FEE_PAID, ...) with
+        the full payload shape declared in the event catalog.
+        """
+        from unittest.mock import AsyncMock, patch
+        from app.services import admission_service
+        from app.core.events import SystemEvents
+
+        unit_id = seed_admission_statuses["unit_id"]
+        officer_id = admin_user_in_db["id"]
+
+        lead_id = await create_test_lead_with_consultation(
+            unit_id=unit_id,
+            assigned_officer_id=officer_id,
+        )
+        profile = await create_admission_profile_with_fee_status(
+            lead_id=lead_id,
+            citizen_id="200000000020",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="pending",
+        )
+
+        recorded_by = models.User(
+            id=admin_user_in_db["id"],
+            username=admin_user_in_db["username"],
+            email="admin@fee.test",
+            password_hash="x",
+            role="admin",
+            status="active",
+            full_name="Fee Admin",
+        )
+
+        async with AsyncSessionLocal() as session:
+            with patch(
+                "app.services.notification_dispatcher.safe_dispatch",
+                new=AsyncMock(),
+            ) as mock_dispatch:
+                _, callback = await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={
+                        "transaction_id": "TXN-DISPATCH-001",
+                        "amount": 150000,
+                    },
+                    recorded_by=recorded_by,
+                )
+                await session.commit()
+                await callback()
+
+                mock_dispatch.assert_called_once()
+                kwargs = mock_dispatch.call_args.kwargs
+                assert kwargs["event"] == SystemEvents.APPLICATION_FEE_PAID
+                # dedupe_key should NOT be passed explicitly — dispatcher
+                # renders it from the catalog's dedup_key_template to keep
+                # dedup contract centralised.
+                assert "dedupe_key" not in kwargs
+
+                payload = kwargs["payload"]
+                assert payload["application_id"] == profile.id
+                assert payload["lead_id"] == lead_id
+                assert payload["unit_id"] == unit_id
+                assert payload["officer_id"] == officer_id
+                assert payload["amount"] == "150000"
+                assert payload["transaction_id"] == "TXN-DISPATCH-001"
+                assert payload["actor_id"] == recorded_by.id
+                assert payload["actor_name"] in (
+                    recorded_by.full_name,
+                    recorded_by.username,
+                )
+
+    async def test_catalog_dedupe_template_renders_expected_key(self):
+        """Guard: catalog's dedup_key_template for APPLICATION_FEE_PAID
+        must render the canonical per-application key. Guarantees that
+        omitting dedupe_key at the call site still produces a sane value.
+        """
+        from app.core.event_catalog import EVENT_CATALOG
+        from app.core.events import SystemEvents
+        from string import Template
+
+        defn = EVENT_CATALOG[SystemEvents.APPLICATION_FEE_PAID]
+        assert defn.dedup_key_template == "app:${application_id}:fee_paid"
+        rendered = Template(defn.dedup_key_template).substitute(application_id=42)
+        assert rendered == "app:42:fee_paid"
+
+    async def test_end_to_end_delivery_via_real_db_rule(
+        self,
+        admin_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """
+        Full E2E: seed rule into DB via sync_notification_rules, then run
+        dispatch() for APPLICATION_FEE_PAID. Verify a real Notification row
+        is created in the DB for the lead owner.
+
+        Channel send is mocked so no real socket/email is emitted; every
+        other step (rule lookup, resolver, recipient resolution, row
+        creation) is real.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from sqlalchemy import select
+        from app.core.events import SystemEvents
+        from app.scripts.sync_notification_rules import sync_notification_rules
+        from app.services.notification_dispatcher import dispatch
+        from app.services.notification_rule_loader import invalidate_rule_cache
+
+        unit_id = seed_admission_statuses["unit_id"]
+        officer_id = admin_user_in_db["id"]
+
+        lead_id = await create_test_lead_with_consultation(
+            unit_id=unit_id,
+            assigned_officer_id=officer_id,
+        )
+        profile = await create_admission_profile_with_fee_status(
+            lead_id=lead_id,
+            citizen_id="200000000030",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="pending",
+        )
+
+        async with AsyncSessionLocal() as session:
+            # 1. Seed rules from catalog → DB row for application_fee_paid
+            await sync_notification_rules(session)
+            await session.commit()
+
+            # 2. Verify rule exists for this event
+            rule_stmt = select(models.NotificationRule).where(
+                models.NotificationRule.event == "application_fee_paid",
+                models.NotificationRule.enabled == True,  # noqa: E712
+            )
+            rule_row = (await session.execute(rule_stmt)).scalars().first()
+            assert rule_row is not None, "sync_notification_rules must seed the rule"
+
+            # 3. Cache hygiene so dispatcher sees freshly seeded rule
+            await invalidate_rule_cache("application_fee_paid")
+
+            # 4. Real dispatch with channel send mocked (no real delivery side-effects)
+            mock_result = MagicMock(sent_count=1, failed_ids=[], success=True)
+            with patch(
+                "app.services.notification_dispatcher._send_via_channel",
+                new=AsyncMock(return_value=("browser", mock_result, None)),
+            ):
+                payload = {
+                    "application_id": profile.id,
+                    "lead_id": lead_id,
+                    "unit_id": unit_id,
+                    "officer_id": officer_id,
+                    "amount": "150000",
+                    "transaction_id": "TXN-E2E-001",
+                    "actor_id": officer_id,
+                    "actor_name": admin_user_in_db["username"],
+                }
+                notification_ids, callback = await dispatch(
+                    db=session,
+                    event=SystemEvents.APPLICATION_FEE_PAID,
+                    payload=payload,
+                )
+                await session.commit()
+                if callback:
+                    await callback()
+
+            # 5. Notification row must exist for the lead owner
+            assert notification_ids, (
+                "APPLICATION_FEE_PAID rule exists → notification must be created"
+            )
+            notif_stmt = select(models.Notification).where(
+                models.Notification.id.in_(notification_ids)
+            )
+            notifs = (await session.execute(notif_stmt)).scalars().all()
+            assert len(notifs) >= 1
+            recipient_ids = {n.user_id for n in notifs}
+            assert officer_id in recipient_ids, (
+                f"Lead owner {officer_id} must receive the notification; "
+                f"got recipients {recipient_ids}"
+            )
+            # Template rendering + payload snapshot survived into the row
+            matching = next(n for n in notifs if n.user_id == officer_id)
+            assert matching.title == "Lệ phí xét tuyển đã thanh toán"
+            assert str(profile.id) in matching.message
+            assert "150000" in matching.message
+            # Data JSON carries the source event type for audit/trace
+            assert matching.data is not None
+            assert matching.data.get("event") == "application_fee_paid"
+
+    async def test_idempotent_call_does_not_dispatch(
+        self,
+        admin_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """A second call on an already-paid profile returns a noop callback
+        and must not dispatch APPLICATION_FEE_PAID."""
+        from unittest.mock import AsyncMock, patch
+        from app.services import admission_service
+
+        unit_id = seed_admission_statuses["unit_id"]
+        officer_id = admin_user_in_db["id"]
+
+        lead_id = await create_test_lead_with_consultation(
+            unit_id=unit_id,
+            assigned_officer_id=officer_id,
+        )
+        profile = await create_admission_profile_with_fee_status(
+            lead_id=lead_id,
+            citizen_id="200000000021",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="paid",  # already paid
+        )
+
+        recorded_by = models.User(
+            id=admin_user_in_db["id"],
+            username=admin_user_in_db["username"],
+            email="admin@fee.test",
+            password_hash="x",
+            role="admin",
+            status="active",
+        )
+
+        async with AsyncSessionLocal() as session:
+            with patch(
+                "app.services.notification_dispatcher.safe_dispatch",
+                new=AsyncMock(),
+            ) as mock_dispatch:
+                _, callback = await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={"transaction_id": "TXN-IDEM-001", "amount": 100000},
+                    recorded_by=recorded_by,
+                )
+                await callback()
+                mock_dispatch.assert_not_called()
