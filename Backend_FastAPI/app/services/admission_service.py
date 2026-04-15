@@ -4302,9 +4302,14 @@ async def override_profile(
     )
 
     # POST-COMMIT CALLBACK
+    # Compliance alerting is delivered via the router-level
+    # APPLICATION_STATUS_CHANGED dispatch (routers/admissions.py in
+    # override_admission, around line 1909) with new_status="overridden".
+    # Admins can configure notification rules with condition filters
+    # (e.g. {"new_status": "overridden"}) targeting compliance-team users.
+    # This closure remains as a hook for future service-level side effects.
     async def post_commit():
         """Side effects after transaction commit."""
-        # TODO: Send audit alert to compliance team
         log.info(
             "Post-commit: Override audit notification sent",
             profile_id=profile.id,
