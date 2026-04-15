@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app import models
+from app.database import AsyncSessionLocal
 from app.services import user_service
 from app.schemas import UserCreate, UserUpdate, AdminUserCreate
 from app.security import get_password_hash, verify_password
@@ -318,6 +319,195 @@ class TestDeleteUser:
         """Test delete_user raises ResourceNotFoundError for non-existent user."""
         with pytest.raises(ResourceNotFoundError):
             await user_service.delete_user(db, 999999)
+
+    async def _wipe_admins(self, db: AsyncSession) -> None:
+        """Delete all existing admins so the guard sees a clean slate.
+
+        Tests that exercise the real query path need to know exactly how
+        many active admins exist; pre-existing seed data otherwise leaks
+        into the count and makes assertions non-deterministic.
+        """
+        await db.execute(
+            models.User.__table__.delete().where(models.User.role == "admin")
+        )
+        await db.flush()
+
+    async def test_delete_last_active_admin_blocked_real_query(
+        self, db: AsyncSession
+    ):
+        """Real DB query: guard fires when only one active admin exists."""
+        from app.utils.exceptions import BusinessRuleViolation
+
+        await self._wipe_admins(db)
+
+        solo_admin = models.User(
+            username="solo_admin",
+            email="solo_admin@test.com",
+            password_hash=get_password_hash("SoloAdmin123!"),
+            role="admin",
+            status="active",
+        )
+        db.add(solo_admin)
+        await db.flush()
+        solo_admin_id = solo_admin.id
+
+        with pytest.raises(BusinessRuleViolation, match="last active admin"):
+            await user_service.delete_user(db, solo_admin_id)
+
+        still_there = await db.get(models.User, solo_admin_id)
+        assert still_there is not None
+
+    async def test_delete_admin_when_multiple_active_admins_succeeds_real_query(
+        self, db: AsyncSession
+    ):
+        """Real DB query: with two active admins, deleting one is allowed."""
+        await self._wipe_admins(db)
+
+        admin_a = models.User(
+            username="admin_a",
+            email="admin_a@test.com",
+            password_hash=get_password_hash("AdminA123!"),
+            role="admin",
+            status="active",
+        )
+        admin_b = models.User(
+            username="admin_b",
+            email="admin_b@test.com",
+            password_hash=get_password_hash("AdminB123!"),
+            role="admin",
+            status="active",
+        )
+        db.add_all([admin_a, admin_b])
+        await db.flush()
+        admin_a_id = admin_a.id
+
+        _, callback = await user_service.delete_user(db, admin_a_id)
+        await db.commit()
+        if callback:
+            await callback()
+
+        async with AsyncSessionLocal() as verify_session:
+            assert await verify_session.get(models.User, admin_a_id) is None
+            remaining_admin = await verify_session.get(models.User, admin_b.id)
+            assert remaining_admin is not None and remaining_admin.status == "active"
+
+    async def test_delete_inactive_admin_skips_guard_real_query(
+        self, db: AsyncSession
+    ):
+        """Inactive admin can be deleted even when no other active admins exist."""
+        await self._wipe_admins(db)
+
+        inactive_admin = models.User(
+            username="inactive_admin",
+            email="inactive_admin@test.com",
+            password_hash=get_password_hash("InactiveAdmin123!"),
+            role="admin",
+            status="banned",
+        )
+        db.add(inactive_admin)
+        await db.flush()
+        inactive_admin_id = inactive_admin.id
+
+        _, callback = await user_service.delete_user(db, inactive_admin_id)
+        await db.commit()
+        if callback:
+            await callback()
+
+        async with AsyncSessionLocal() as verify_session:
+            assert await verify_session.get(models.User, inactive_admin_id) is None
+
+    async def test_concurrent_delete_admins_serialized_by_lock(self):
+        """
+        Race condition test: two transactions concurrently delete two
+        different admins. Without the SELECT FOR UPDATE lock both would
+        observe count=2 and commit, leaving zero admins. With the lock
+        they serialize and the second one sees count=1 and is rejected.
+
+        Uses separate AsyncSessionLocal sessions per coroutine so each
+        runs in its own transaction with its own connection — the only
+        setup that exercises real row-locking semantics.
+        """
+        import asyncio
+        from app.utils.exceptions import BusinessRuleViolation
+
+        # Setup: ensure exactly two active admins.
+        async with AsyncSessionLocal() as setup_session:
+            await setup_session.execute(
+                models.User.__table__.delete().where(models.User.role == "admin")
+            )
+            admin_x = models.User(
+                username="race_admin_x",
+                email="race_x@test.com",
+                password_hash=get_password_hash("RaceAdminX123!"),
+                role="admin",
+                status="active",
+            )
+            admin_y = models.User(
+                username="race_admin_y",
+                email="race_y@test.com",
+                password_hash=get_password_hash("RaceAdminY123!"),
+                role="admin",
+                status="active",
+            )
+            setup_session.add_all([admin_x, admin_y])
+            await setup_session.commit()
+            admin_x_id, admin_y_id = admin_x.id, admin_y.id
+
+        async def delete_in_own_session(target_id: int):
+            async with AsyncSessionLocal() as session:
+                try:
+                    _, cb = await user_service.delete_user(session, target_id)
+                    await session.commit()
+                    if cb:
+                        await cb()
+                    return "ok"
+                except BusinessRuleViolation as e:
+                    await session.rollback()
+                    return f"blocked: {e}"
+                except Exception as e:
+                    await session.rollback()
+                    return f"error: {type(e).__name__}: {e}"
+
+        try:
+            results = await asyncio.gather(
+                delete_in_own_session(admin_x_id),
+                delete_in_own_session(admin_y_id),
+                return_exceptions=False,
+            )
+
+            # Exactly one delete must succeed and one must be blocked.
+            ok_count = sum(1 for r in results if r == "ok")
+            blocked_count = sum(1 for r in results if r.startswith("blocked"))
+            assert ok_count == 1, (
+                f"Expected exactly 1 successful delete, got results={results}"
+            )
+            assert blocked_count == 1, (
+                f"Expected exactly 1 blocked delete, got results={results}"
+            )
+
+            # Final DB state: exactly 1 active admin must remain.
+            async with AsyncSessionLocal() as verify_session:
+                from sqlalchemy import func, select as sa_select
+
+                count_result = await verify_session.execute(
+                    sa_select(func.count(models.User.id)).where(
+                        models.User.role == "admin",
+                        models.User.status == "active",
+                    )
+                )
+                remaining = count_result.scalar_one()
+                assert remaining == 1, (
+                    f"Race fix broken: {remaining} active admins remain (expected 1)"
+                )
+        finally:
+            # Cleanup: remove whichever admin survived so the test DB stays clean.
+            async with AsyncSessionLocal() as cleanup_session:
+                await cleanup_session.execute(
+                    models.User.__table__.delete().where(
+                        models.User.username.in_(["race_admin_x", "race_admin_y"])
+                    )
+                )
+                await cleanup_session.commit()
 
 
 # =============================================================================

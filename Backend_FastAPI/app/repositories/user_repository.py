@@ -326,6 +326,37 @@ class UserRepository(BaseRepository[models.User]):
         )
         return result.scalars().first()
 
+    async def count_active_admins_for_update(self) -> int:
+        """
+        Count active admin users while holding row-level locks on each.
+
+        Used as the safety guard against deleting the last active admin.
+        The ``SELECT ... FOR UPDATE`` clause locks every active-admin row
+        for the duration of the current transaction, so two concurrent
+        delete-admin transactions serialize on the lock instead of both
+        observing ``count == 2`` and ending up with zero admins.
+
+        Concurrency contract:
+            - Caller MUST be inside an open transaction; the row locks
+              are released on commit/rollback.
+            - The row holding the user being deleted is included in the
+              lock set, which is correct: it prevents another transaction
+              from racing on the same row.
+
+        Returns:
+            Number of users with role="admin" and status="active".
+        """
+        stmt = (
+            select(models.User.id)
+            .where(
+                models.User.role == UserRole.ADMIN,
+                models.User.status == "active",
+            )
+            .with_for_update()
+        )
+        result = await self.db.execute(stmt)
+        return len(result.scalars().all())
+
     async def get_statistics(self) -> Dict[str, int]:
         """
         Get user statistics.

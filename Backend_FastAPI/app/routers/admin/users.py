@@ -1067,8 +1067,10 @@ async def delete_existing_user(
     - ✓ IDOR Protection: Enabled
 
     **Business Rules:**
-    - Cannot delete yourself
-    - Cannot delete last admin (future enhancement)
+    - Cannot delete yourself (returns 403)
+    - Cannot delete the last active admin (returns 400 BusinessRuleViolation).
+      Guard is enforced atomically in `user_service.delete_user()` via
+      `SELECT ... FOR UPDATE` on the active-admin row set.
 
     Admin: Can delete all users (except self)
     Manager: Can delete users in managed units only (except self)
@@ -1084,12 +1086,6 @@ async def delete_existing_user(
         current_user=current_admin
     )
     username = db_user.username if db_user else f"User#{user_id}"
-
-    # TODO: Add business rule - prevent deletion of last admin
-    # if db_user.role == "admin":
-    #     admin_count = await count_admins(db)
-    #     if admin_count <= 1:
-    #         raise BadRequest("Cannot delete the last admin")
 
     # ⚠️ IMPORTANT: Log activity BEFORE deleting user to avoid FK constraint violation
     # The activity_log.target_user_id references user.id, so user must exist when logging

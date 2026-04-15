@@ -20,6 +20,7 @@ from ..utils.csv_helpers import sanitize_csv_row  # ✅ SECURITY FIX: CSV Inject
 from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-independent)
     BadRequest,
     BaseAppException,
+    BusinessRuleViolation,
     CacheServiceError,
     DuplicateResourceError,
     InvalidCredentials,
@@ -27,6 +28,7 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-ind
     ResourceNotFoundError,
     UserServiceError,
 )
+from ..core.constants import UserRole
 
 # ✅ 1. SỬA LỖI: Thêm import `safe_redis_pipeline` (sửa NameError)
 from ..database import (
@@ -932,6 +934,19 @@ async def delete_user(db: AsyncSession, user_id: int) -> Tuple[None, Callable]:
 
         if not user_to_delete:
             raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
+
+        # Safety guard: prevent deletion of the last active admin.
+        # Losing the last admin would lock the system out of administrative access.
+        # count_active_admins_for_update() acquires SELECT FOR UPDATE row locks on
+        # every active admin, so two concurrent delete-admin transactions serialize
+        # on the lock and the second one observes the post-commit count from the
+        # first.
+        if user_to_delete.role == UserRole.ADMIN and user_to_delete.status == "active":
+            active_admin_count = await user_repo.count_active_admins_for_update()
+            if active_admin_count <= 1:
+                raise BusinessRuleViolation(
+                    detail="Cannot delete the last active admin user."
+                )
 
         # Save data for emit before deletion
         deleted_username = user_to_delete.username
