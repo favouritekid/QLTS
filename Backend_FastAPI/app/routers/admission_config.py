@@ -730,7 +730,7 @@ async def preview_scoring(
         allowed_subjects=resolution.allowed_subjects,
         input_scores=subject_scores,
         score_result=result,
-        policy_version="2025.1",  # TODO: Get from criteria or config
+        policy_version=criteria.policy_version,
     )
     
     return ScoringPreviewResponse(
