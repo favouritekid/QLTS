@@ -30,7 +30,6 @@ from ..core.deps import (
     CasbinAuth,  # ✅ Phase 2.2: Use standard alias
     get_admission_for_manager,
     get_admission_for_user,
-    # get_admission_for_owner - DEPRECATED: Replaced by token-based confirmation
 )
 from ..services import admission_service
 from ..services.notification_dispatcher import safe_dispatch
@@ -1832,20 +1831,6 @@ async def resubmit_admission(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-
-
-# ==============================================================================
-# DEPRECATED: confirm_enrollment endpoint
-# ==============================================================================
-# 
-# The old /{profile_id}/confirm endpoint has been REMOVED.
-# Confirmation is now done via Magic Link + CCCD verification:
-# 
-# - GET /api/admissions/confirm/{token}  (public - get token info)
-# - POST /api/admissions/confirm/{token} (public - verify CCCD & confirm)
-# 
-# See: implementation_plan.md (Magic Link + CCCD Verification)
-#
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

@@ -132,7 +132,6 @@ export const installmentPlanSchema = z.object({
   penalty_rate: z.string(), // Decimal → string
   is_active: z.boolean(),
   created_at: z.string(),
-  // [TODO_BACKEND] Add: description, penalty_type, grace_period_days
 })
 
 export type InstallmentPlan = z.infer<typeof installmentPlanSchema>
@@ -457,7 +456,6 @@ export type ProfileFinanceSummary = z.infer<typeof profileFinanceSummarySchema>
 
 // ==============================================================================
 // DASHBOARD STATS
-// [TODO_BACKEND] This schema may not exist in backend yet - verify!
 // ==============================================================================
 
 export const financeDashboardStatsSchema = z.object({

@@ -101,7 +101,7 @@ Per-channel filtering: disabling one channel does NOT suppress others. Implement
 |---|---|---|---|---|
 | Verify payment (maker-checker) | `payment_service.verify_payment()` | `PAYMENT_VERIFIED` | browser, email | Active |
 | Record payment | `payment_service.record_manual_payment()` | — | — | **No notification** |
-| Reject payment | `payment_service.reject_payment()` | — | — | **No notification** |
+| Reject payment | `payment_service.reject_payment()` | `PAYMENT_REJECTED` | browser, email | Active |
 | Payment overdue check | — | `PAYMENT_OVERDUE` | browser, email | **Defined, not emitted** |
 | Create invoice | `invoice_service` | — | — | **No notification** |
 | Create fee | `fee_calculation_service` | `DORM_FEE_CREATED` | browser, email | **Defined, not emitted** |

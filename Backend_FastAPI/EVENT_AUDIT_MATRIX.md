@@ -219,7 +219,7 @@ enrolled            → sts11 (Đã nhập học)          → stg06
 |---|---|---|---|---|---|---|
 | F5 | **Học phí được tính** (sts14/stg05) | `sync_lead_tuition_calculated()` — inline call từ `fee_calculation_service.py:182` | **KHÔNG CÓ** | `FeeCalculated` (defined, chưa emit) | Lead/officer không biết phải đóng bao nhiêu, lead di chuyển sang stg05 nhưng không notify | **P2**: Thêm SystemEvent |
 | F6 | **Invoice phát hành** | Không có pipeline sync riêng | **KHÔNG CÓ** | `InvoiceIssued` (defined, chưa emit) | Lead không biết có invoice mới + deadline | **P2**: Thêm SystemEvent |
-| F7 | **Payment bị reject** | Không có pipeline sync | **KHÔNG CÓ** | `PaymentRejected` (defined, chưa emit). `payment_service.py:442` có **TODO stub trống** | Officer ghi payment không biết bị reject | **P2**: Implement TODO stub |
+| F7 | **Payment bị reject** | Không có pipeline sync | `PAYMENT_REJECTED` | `PaymentRejected` (emitted by `payment_service.reject_payment()`) | Officer được notify qua curated template trong `sync_notification_rules.py` | **Done** |
 | F8 | **Fee fully paid** (sts10/stg05) | `sync_lead_tuition_paid()` — inline call từ `payment_service.py:323` | **KHÔNG CÓ** | `FeeFullyPaid` (defined, chưa emit) | **Gate cuối trước enrollment** — milestone quan trọng nhất nhưng không notify | **P1**: Thêm SystemEvent |
 | F9 | **Hoàn học phí** (sts18/stg05) | `sync_lead_tuition_refunded()` — inline call từ `payment_service.py:859` | **KHÔNG CÓ** | `RefundProcessed` (defined, chưa emit) | Lead/accountant không biết tiền đã hoàn | **P2**: Thêm SystemEvent |
 

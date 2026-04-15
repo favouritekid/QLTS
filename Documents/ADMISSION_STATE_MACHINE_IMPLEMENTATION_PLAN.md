@@ -6,6 +6,13 @@
 > **Author:** Architecture Team
 > **Status:** ✅ PRODUCTION-READY FOR MVP
 > **Compliance:** MASTER_ARCHITECTURE.md v3.0 + AUTHORIZATION_GUIDELINES.md v1.0
+>
+> ⚠️ **Historical reference:** The `confirm` endpoint (`POST /admissions/{id}/confirm`)
+> and its `get_admission_for_owner` dependency + `confirm_enrollment()` service
+> function described in this plan have been **superseded by the Magic Link +
+> CCCD token flow** (`GET/POST /api/admissions/confirm/{token}`). Those
+> symbols no longer exist in the codebase. Treat all references to them in
+> this document as historical design context.
 
 ---
 

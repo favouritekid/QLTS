@@ -6,7 +6,7 @@ Architecture Compliance:
 - Service Layer: Pure business logic, no HTTP dependencies
 - Security: IDOR checks in ALL functions (lead.unit_id == user.unit_id)
 - Transactions: Services use db.add()/db.flush(), Router commits via db.commit()
-- Performance: selectinload/joinedload to prevent N+1 queries
+- Performance: selectinload to prevent N+1 queries
 - Error Handling: Raise custom exceptions (ResourceNotFoundError, BadRequest, etc.)
 
 Workflow:
@@ -32,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.utils.redis_lock import acquire_redis_lock
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from .. import models
@@ -3569,9 +3569,11 @@ async def approve_profile(
     )
 
     # PREPARE POST-COMMIT CALLBACK
+    # Applicant notifications for approval are dispatched at the router
+    # level via APPLICATION_STATUS_CHANGED (admissions.py:~1502); this
+    # closure stays as a hook for future service-level side effects.
     async def post_commit():
-        """Side effects after transaction commit (notifications, etc.)."""
-        # TODO: Send notification to applicant
+        """Side effects after transaction commit."""
         log.info(
             "Post-commit: Profile approved notification",
             profile_id=profile.id,
@@ -4156,104 +4158,6 @@ async def resubmit_profile(
         """Side effects after transaction commit."""
         log.info(
             "Post-commit: Profile resubmitted notification",
-            profile_id=profile.id,
-        )
-
-    return profile, post_commit
-
-
-async def confirm_enrollment(
-    db: AsyncSession,
-    profile: models.AdmissionProfile,
-    applicant: models.User,
-    data: Dict[str, Any],
-) -> tuple[models.AdmissionProfile, Any]:
-    """
-    Confirm enrollment intent (Applicant/User SELF action).
-
-    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3:
-    - Transition: APPROVED → CONFIRMED
-    - SELF check enforced by get_admission_for_owner dependency
-    - Applicant confirms they want to enroll
-
-    Args:
-        db: Database session
-        profile: AdmissionProfile (from IDOR dependency with SELF check)
-        applicant: User performing confirmation (must be profile owner)
-        data: ConfirmRequest data (empty)
-
-    Returns:
-        Tuple of (updated_profile, post_commit_callback)
-
-    Raises:
-        BadRequest: Invalid state transition
-        ConflictError: Version mismatch
-    """
-    from .admission_state_machine import validate_transition
-
-    # STATE VALIDATION
-    try:
-        validate_transition(profile.status, "confirmed")
-    except ValueError as e:
-        log.warning(
-            "Invalid state transition for confirm",
-            profile_id=profile.id,
-            current_status=profile.status,
-            error=str(e),
-        )
-        raise BadRequest(str(e))
-
-    # VERSION CHECK
-    if data.get("version") is not None and data["version"] != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
-
-    # STATE CHANGE
-    profile.status = "confirmed"
-    profile.confirmed_at = datetime.now(timezone.utc)
-    profile.confirmed_by_id = applicant.id
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
-
-    # Invalidate stale magic-link tokens (profile leaving approved state)
-    from app.repositories import AdmissionRepository
-    await AdmissionRepository(db).invalidate_existing_tokens(profile.id)
-
-    # ✅ PIPELINE SYNC: Create system consultation for confirmation milestone
-    if profile.lead:
-        await _create_admission_milestone_consultation(
-            db=db,
-            lead=profile.lead,
-            event="profile_confirmed",
-            actor=applicant,
-            profile_id=profile.id,
-        )
-
-    # ✅ SYNC: Update lead consultation status to match admission status (confirmed → sts09)
-    from .lead_admission_sync import sync_lead_from_admission
-    await sync_lead_from_admission(
-        db=db,
-        profile=profile,
-        changed_by_user_id=applicant.id,
-        reason="Applicant confirmed enrollment intent",
-    )
-
-    await db.flush()
-
-    log.info(
-        "Admission profile confirmed by applicant",
-        profile_id=profile.id,
-        applicant_id=applicant.id,
-    )
-
-    # POST-COMMIT CALLBACK
-    async def post_commit():
-        """Side effects after transaction commit."""
-        log.info(
-            "Post-commit: Enrollment confirmed notification",
             profile_id=profile.id,
         )
 
@@ -5179,7 +5083,7 @@ async def verify_and_confirm(
     except ValueError as e:
         raise BadRequest(str(e))
 
-    # STATE CHANGE — same semantics as confirm_enrollment
+    # STATE CHANGE — token-based confirmation flow
     profile.status = "confirmed"
     profile.confirmed_at = now
     profile.confirmed_via = "magic_link"

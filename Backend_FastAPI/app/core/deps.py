@@ -58,8 +58,7 @@ __all__ = [
     # Admission State Machine IDOR (State Machine Implementation)
     "get_admission_for_manager",  # Manager approve/reject
     "get_admission_for_user",  # Officer resubmit
-    "get_admission_for_owner",  # Applicant confirm (SELF check)
-    
+
     # Admission Configuration Console IDOR
     "get_admission_path_for_user",  # Phase 1: Config Console
 
@@ -2333,31 +2332,6 @@ async def get_admission_for_user(
                 raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
     return profile
-
-
-# ==============================================================================
-# DEPRECATED: get_admission_for_owner
-# ==============================================================================
-# 
-# This dependency was designed for user-based confirmation with Lead.user_id.
-# However, the Lead model doesn't have a user_id field, so this check is broken.
-# 
-# REPLACED BY: Token-based confirmation flow (Magic Link)
-# - POST /api/admissions/confirm/{token} (public endpoint)
-# - Uses AdmissionConfirmationToken + CCCD verification
-# 
-# See: implementation_plan.md (Magic Link + CCCD Verification)
-# 
-# async def get_admission_for_owner(
-#     profile_id: int = Path(..., description="Admission Profile ID"),
-#     current_user: models.User = Depends(get_current_active_user),
-#     db: AsyncSession = Depends(database.get_db),
-# ) -> models.AdmissionProfile:
-#     """DEPRECATED: Use token-based confirmation instead."""
-#     raise NotImplementedError(
-#         "get_admission_for_owner is deprecated. "
-#         "Use token-based confirmation: POST /api/admissions/confirm/{token}"
-#     )
 
 
 # ==============================================================================

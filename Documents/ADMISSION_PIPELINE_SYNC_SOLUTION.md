@@ -1,5 +1,11 @@
 # Admission Pipeline Synchronization - Implementation Summary
 
+> ⚠️ **Historical reference:** `confirm_enrollment()` has been replaced by the
+> Magic Link + CCCD token flow; the service function no longer exists. The
+> pipeline transition it describes (`stg04` stay, `sts09` stay on confirm)
+> is still correct, but the underlying handler is now the token-verification
+> endpoint in `routers/admissions.py`.
+
 ## Executive Summary
 
 This document describes the complete solution to synchronize admission events with the consultation pipeline system, addressing the critical architectural gap identified in `report.txt`.

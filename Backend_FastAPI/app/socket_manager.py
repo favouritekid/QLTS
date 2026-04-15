@@ -574,30 +574,6 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
 
 
 # =====================================================================
-# DEPRECATED FUNCTIONS REMOVED
-# =====================================================================
-# The following emit_* functions have been removed as they are now
-# handled by notification_dispatcher.dispatch() which provides:
-#   - Database persistence before sending
-#   - Immediate Socket.IO emission
-#   - Celery task queue for email delivery
-#   - User preference filtering
-#   - Deduplication support
-#
-# Removed functions:
-#   - emit_lead_reassigned()
-#   - emit_lead_created()
-#   - emit_lead_assignment_failed()
-#   - emit_lead_assigned()
-#   - emit_pipeline_config_updated()
-#   - emit_consultation_deleted()
-#   - emit_consultation_updated()
-#   - emit_consultation_created()
-#   - emit_lead_updated()
-# =====================================================================
-
-
-# =====================================================================
 # EVENT DISPATCHER HANDLERS (Architecture Refactoring)
 # =====================================================================
 # Services dispatch domain events → dispatcher routes to transport handlers

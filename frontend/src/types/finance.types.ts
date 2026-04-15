@@ -342,7 +342,6 @@ export interface ProfileFinanceSummary {
 
 // ============================================================================
 // DASHBOARD STATS
-// [TODO_BACKEND] This schema does not exist in backend yet!
 // ============================================================================
 export interface FinanceDashboardStats {
   pending_fees_count: number
