@@ -1677,11 +1677,11 @@ async def update_lead(
                         event=SystemEvents.LEAD_REASSIGNED,
                         payload=EventPayload.for_lead_reassigned(
                             lead_id, updated_by,
-                            old_officer_id=old_officer_id,  # type: ignore
+                            old_officer_id=old_officer_id,
                             new_officer_id=None,  # Will be assigned by auto-assignment
-                            old_unit_id=old_unit_id,  # type: ignore
-                            new_unit_id=new_target_unit_id,  # type: ignore
-                            reason=f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
+                            old_unit_id=old_unit_id,
+                            new_unit_id=new_target_unit_id,
+                            reason=f"Offering changed from #{old_offering_id} to #{new_offering_id}",
                             notify_user_ids=[old_officer_id] if old_officer_id else [],
                         ),
                         dedupe_key=f"lead_reassigned:{lead_id}",

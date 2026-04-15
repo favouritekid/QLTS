@@ -40,9 +40,7 @@ async def get_pipeline_stages(
 async def get_full_pipeline(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    # <<< SỬA Ở ĐÂY: Đổi dependency để kiểm tra quyền >>>
-    current_user: models.User = CasbinAuth,  # Yêu cầu Casbin check
-    # Hoặc dùng: current_user: models.User = deps.OfficerRequired, # Nếu chỉ officer trở lên
+    current_user: models.User = CasbinAuth,  # Casbin RBAC check
 ):
     """Lấy toàn bộ cấu trúc Pipeline (Stages và Statuses)."""
     stages = await pipeline_service.get_all_pipeline_stages(db)

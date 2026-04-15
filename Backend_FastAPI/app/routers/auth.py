@@ -425,7 +425,7 @@ async def logout(
     refresh_token: str = Cookie(None, alias="refresh_token"),
     db: AsyncSession = Depends(database.get_db),
     authorization: Annotated[str | None, Header()] = None,
-    current_user: models.User = deps.CurrentUser,
+    current_user: models.User = Depends(deps.get_current_user),
 ):
     # (Giữ nguyên logic)
     access_token = None
@@ -670,7 +670,7 @@ async def perform_change_password(
     request: Request,
     password_data: schemas.ChangePasswordSchema,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = deps.CurrentUser,
+    current_user: models.User = Depends(deps.get_current_user),
 ):
     """
     Change user password and invalidate all sessions.

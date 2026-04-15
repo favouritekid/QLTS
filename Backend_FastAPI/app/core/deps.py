@@ -1692,25 +1692,6 @@ async def get_criteria_access(
 
 
 # ============================================================================
-# DEPENDENCY SHORTCUTS (LEGACY - DEPRECATED)
-# ============================================================================
-# ⚠️ DEPRECATED: These aliases will be removed in next major version.
-# Use the direct async functions instead per AUTHORIZATION_GUIDELINES.md
-
-# DEPRECATED: Use Depends(get_current_user) directly
-CurrentUser = Depends(get_current_user)
-
-# DEPRECATED: Use Depends(require_admin) instead
-AdminRequired = Depends(require_roles(["admin"]))
-
-# DEPRECATED: Use Depends(require_admin_or_manager) instead
-AdminManagerRequired = Depends(require_roles(["admin", "manager"]))
-
-# DEPRECATED: Use Depends(require_any_staff) instead
-OfficerRequired = Depends(require_roles(["officer", "admin", "manager"]))
-
-
-# ============================================================================
 # STANDARD ALIASES (AUTHORIZATION_GUIDELINES.md v1.0)
 # ============================================================================
 # These are the recommended pre-wrapped Depends for router use.

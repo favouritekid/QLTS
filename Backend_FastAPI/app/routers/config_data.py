@@ -35,8 +35,7 @@ async def import_system_categories(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
     # Only Admin/Manager should import
-    # Only Admin/Manager should import
-    current_user: models.User = deps.AdminManagerRequired, 
+    current_user: models.User = Depends(deps.require_admin_or_manager),
 ):
     """
     Import categories from Excel.
@@ -56,7 +55,7 @@ async def import_system_categories(
 async def delete_system_category(
     category_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = deps.AdminManagerRequired,
+    current_user: models.User = Depends(deps.require_admin_or_manager),
 ):
     """
     Delete a system category by ID.

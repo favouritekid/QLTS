@@ -5306,7 +5306,7 @@ async def bulk_approve(
             )
 
             # Annotate for router notification dispatch
-            profile._pre_status = _old_status  # type: ignore[attr-defined]
+            profile._pre_status = _old_status
             approved_profiles.append(profile)
             success_count += 1
 
@@ -5448,7 +5448,7 @@ async def bulk_reject(
             )
 
             # Annotate for router notification dispatch
-            profile._pre_status = _old_status  # type: ignore[attr-defined]
+            profile._pre_status = _old_status
             rejected_profiles.append(profile)
             success_count += 1
 

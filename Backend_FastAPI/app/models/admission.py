@@ -15,7 +15,7 @@ Architecture:
 """
 
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import ClassVar, List, Optional
 from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -53,6 +53,13 @@ class AdmissionProfile(Base):
             name="ck_admission_profile_confirmed_via"
         ),
     )
+
+    # Transient attribute used by bulk-approve/bulk-reject flows to carry
+    # the pre-mutation status from service -> router so the router can
+    # dispatch APPLICATION_STATUS_CHANGED with a correct `old_status`.
+    # Declared as ClassVar so SQLAlchemy's mapper ignores it (not persisted,
+    # no column). Shadowed per-instance when the service writes to it.
+    _pre_status: ClassVar[Optional[str]] = None
 
     # Primary Key
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)

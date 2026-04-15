@@ -93,8 +93,8 @@ class EventPayload:
         *,
         old_officer_id: Optional[int],
         new_officer_id: Optional[int],
-        old_unit_id: int,
-        new_unit_id: int,
+        old_unit_id: Optional[int],
+        new_unit_id: Optional[int],
         reason: str,
         notify_user_ids: Optional[List[int]] = None,
     ) -> dict:
