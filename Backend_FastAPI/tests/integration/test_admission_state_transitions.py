@@ -142,6 +142,18 @@ class TestRaceCondition:
     Scenario: 2 managers try to approve/reject the same profile simultaneously.
     Expected: One succeeds, one fails with clear error message.
     Risk: Without proper locking, both could succeed causing invalid state.
+
+    ⚠️ KNOWN HARNESS ARTIFACT: these two HTTP-level tests currently
+    observe [200, 200] because httpx.ASGITransport + asyncio.gather
+    in this in-process test setup lets both requests clear the
+    business-rule gate before either commits. The row locking itself
+    is verified at the DB and service layers in
+    ``tests/integration/test_race_condition_probe.py`` and the
+    real concurrency contract holds.
+
+    See docs/RACE_CONDITION_INVESTIGATION.md for the full investigation.
+    Treat the [200, 200] failure here as a signal that the harness has
+    not been replaced, not as a production concurrency bug.
     """
 
     async def test_concurrent_approve_reject(
