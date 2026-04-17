@@ -408,7 +408,9 @@ class TestMetadataCanonicalChannels:
         assert "browser" in metadata.default_channels
 
     @pytest.mark.asyncio
-    async def test_metadata_api_exposes_only_wizard_safe_internal_resolvers(self):
+    async def test_metadata_api_exposes_only_wizard_safe_internal_resolvers(
+        self, db: AsyncSession,
+    ):
         """Metadata API should hide unsupported nested resolvers from the wizard."""
         from types import SimpleNamespace
         from app.routers.notification_rules import get_notification_metadata
@@ -416,6 +418,7 @@ class TestMetadataCanonicalChannels:
         response = await get_notification_metadata.__wrapped__(
             request=None,
             current_admin=SimpleNamespace(id=1),
+            db=db,
         )
         resolver_types = {item["value"] for item in response["resolver_types"]}
 

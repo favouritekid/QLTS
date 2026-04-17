@@ -108,14 +108,14 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
     """
     Seed required dependencies for integration tests.
     """
-    # Organization Unit
+    # Organization Unit — auto-generated ID to avoid duplicate-key
+    # conflicts if truncation between tests is incomplete.
     unit = models.OrganizationUnit(
-        id=3001,
         name="Integration Test Unit",
         type="department"
     )
     db.add(unit)
-    
+
     # Pipeline Stage
     stage = models.PipelineStage(
         id="INTEGRATION_TEST_STAGE",
@@ -123,7 +123,7 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
         order=10
     )
     db.add(stage)
-    
+
     # Initial Status
     initial_status = models.ConsultationStatus(
         id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
@@ -132,12 +132,17 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
         stage_id="INTEGRATION_TEST_STAGE"
     )
     db.add(initial_status)
-    
+
     await db.flush()
 
     # PR1: Seed notification rules from catalog (dispatcher requires DB rules)
     from app.scripts.sync_notification_rules import sync_notification_rules
     await sync_notification_rules(db)
+
+    # NOTE: Intentionally flush-only, NOT committed here.
+    # Notification tests rely on rollback at end of test to clean up.
+    # E2E tests that need cross-session visibility (HTTP endpoints)
+    # commit via admission_workflow_data fixture instead.
 
     return {
         "unit_id": unit.id,

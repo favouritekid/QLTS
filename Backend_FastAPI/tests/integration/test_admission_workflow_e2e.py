@@ -197,7 +197,58 @@ async def admission_workflow_data(db: AsyncSession, seeded_dependencies: dict) -
     db.add(bank_transfer)
     
     await db.flush()
-    
+
+    # OfferingAcademicInfo + OfferingSemesterTuition — required by
+    # fee_calculation_service which looks up tuition via
+    # applied_rules["academic_info_id"] (ADR-002 fallback path).
+    # Without this chain Phase-3 finance steps fail with "thiếu cả
+    # offering_admission_config lẫn applied_rules.academic_info_id".
+    from app.models.offering_academic_info import OfferingAcademicInfo
+    from app.models.offering_semester_tuition import OfferingSemesterTuition
+    from sqlalchemy import select as _sa_select
+
+    offering_result = await db.execute(
+        _sa_select(models.ProgramOffering).limit(1)
+    )
+    offering = offering_result.scalar_one_or_none()
+    if not offering:
+        program = models.MajorProgram(
+            name="E2E Workflow Program",
+            code="TEST-E2E-WF",
+            degree_level="Đại học",
+            unit_id=unit_id,
+        )
+        db.add(program)
+        await db.flush()
+        offering = models.ProgramOffering(
+            program_id=program.id,
+            offering_type="Chính quy",
+        )
+        db.add(offering)
+        await db.flush()
+
+    academic_info = OfferingAcademicInfo(
+        offering_id=offering.id,
+        academic_year=2025,
+        tuition_fee_per_year=25000000,
+        is_published=True,
+    )
+    db.add(academic_info)
+    await db.flush()
+
+    semester_tuition = OfferingSemesterTuition(
+        academic_info_id=academic_info.id,
+        semester_no=1,
+        amount=25000000,
+    )
+    db.add(semester_tuition)
+    await db.flush()
+
+    # Commit so data is visible to DI sessions created by HTTP
+    # endpoints (ASGITransport runs in-process but uses separate
+    # sessions from AsyncSessionLocal).
+    await db.commit()
+
     return {
         "officer": officer,
         "accountant": accountant,
@@ -207,6 +258,7 @@ async def admission_workflow_data(db: AsyncSession, seeded_dependencies: dict) -
         "initial_status_id": seeded_dependencies["initial_status_id"],
         "cash_method": cash_method,
         "bank_transfer": bank_transfer,
+        "academic_info_id": academic_info.id,
     }
 
 
@@ -382,6 +434,8 @@ class TestPhase2AdmissionProfile:
             applied_rules={
                 "min_gpa": 6.5,
                 "mandatory_docs": ["CCCD", "HOCBA", "PHOTO"],
+                # Required by fee_calculation_service legacy fallback.
+                "academic_info_id": admission_workflow_data["academic_info_id"],
             },
             citizen_id="012345678901",
             full_name=lead.full_name,
@@ -673,7 +727,9 @@ class TestPhase3Finance:
                 lead_id=lead.id,
                 status="approved",
                 academic_year=2025,
-                applied_rules={},
+                applied_rules={
+                    "academic_info_id": admission_workflow_data["academic_info_id"],
+                },
                 citizen_id="098765432109",
                 version=1,
             )

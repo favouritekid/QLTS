@@ -70,6 +70,18 @@ async def _seed_rule(
     db: AsyncSession, *, event: str, condition: dict | None, officer_id: int
 ) -> models.NotificationRule:
     """Seed a DB rule that resolves to a specific officer via lead_owner resolver."""
+    # Disable existing rules for this event to avoid
+    # "Multiple enabled rules for same event" config error.
+    existing = await db.execute(
+        select(models.NotificationRule).where(
+            models.NotificationRule.event == event,
+            models.NotificationRule.enabled.is_(True),
+        )
+    )
+    for row in existing.scalars():
+        row.enabled = False
+    await db.flush()
+
     template = models.NotificationTemplate(
         template_code=f"TPL_COND_{event}_{id(condition) % 10000}",
         name=f"Condition Test {event}",
