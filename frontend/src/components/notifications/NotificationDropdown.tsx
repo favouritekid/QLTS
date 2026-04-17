@@ -207,7 +207,15 @@ export function NotificationDropdown() {
                 ) : (
                   <div
                     key={notification.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleMarkAsRead(notification)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleMarkAsRead(notification);
+                      }
+                    }}
                     className={wrapperClassName}
                   >
                     {notificationContent}

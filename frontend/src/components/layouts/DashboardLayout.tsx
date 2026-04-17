@@ -8,7 +8,7 @@ import { Header } from "./dashboard/Header";
 import { Main } from "./dashboard/Main";
 import { MobileBottomNav } from "./dashboard/MobileBottomNav";
 import { SecurityBanner, useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "./SecurityBanner";
-import { Suspense, useEffect } from "react";
+import { Suspense, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 
 const CommandPalette = dynamic(
@@ -78,6 +78,44 @@ export function DashboardLayout({
     return () => window.removeEventListener("resize", handleResize);
   }, [setSidebarCollapsed]);
 
+  // Mobile sidebar: focus management
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const mainWrapperRef = useRef<HTMLDivElement>(null);
+  const isMobileSidebarOpen = !isSidebarCollapsed;
+
+  const closeSidebar = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
+
+  // Move focus into sidebar when it opens on mobile, close on Escape
+  useEffect(() => {
+    if (typeof window === "undefined" || window.innerWidth >= 1024) return;
+
+    if (isMobileSidebarOpen) {
+      // Focus the sidebar so keyboard users land inside it
+      sidebarRef.current?.focus();
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") closeSidebar();
+      };
+      document.addEventListener("keydown", handleKeyDown);
+      return () => document.removeEventListener("keydown", handleKeyDown);
+    }
+  }, [isMobileSidebarOpen, closeSidebar]);
+
+  // Mark all non-sidebar content inert while mobile sidebar is open
+  // so Tab cannot escape into background (skip link, header, main,
+  // command palette, MobileBottomNav).
+  useEffect(() => {
+    const el = mainWrapperRef.current;
+    if (!el || typeof window === "undefined" || window.innerWidth >= 1024) return;
+
+    if (isMobileSidebarOpen) {
+      el.setAttribute("inert", "");
+    } else {
+      el.removeAttribute("inert");
+    }
+    return () => el.removeAttribute("inert");
+  }, [isMobileSidebarOpen]);
+
   // Calculate total top offset: header + banner if visible
   // Uses CSS variable --header-height (56px) for consistency
   const headerHeight = 56; // var(--header-height)
@@ -85,56 +123,70 @@ export function DashboardLayout({
 
   return (
     <>
-      {/* Command Palette - Global keyboard shortcut (Cmd/Ctrl+K) */}
-      <CommandPalette />
-
-      <div className="bg-muted/40 relative flex min-h-screen w-full overflow-hidden">
-        {/* Sidebar */}
+      {/* Sidebar — outside inert shell so it stays focusable when open */}
+      <div ref={sidebarRef} tabIndex={-1} className="outline-none">
         <Suspense fallback={<SidebarSkeleton />}>
           <AppSidebar />
         </Suspense>
-
-        {/* Mobile Overlay */}
-        {!isSidebarCollapsed && (
-          <div
-            className="fixed inset-0 z-40 bg-black/50 lg:hidden"
-            onClick={() => setSidebarCollapsed(true)}
-            aria-hidden="true"
-          />
-        )}
-
-        {/* Main wrapper - chứa cả Header và Content */}
-        <div
-          className={cn(
-            "flex flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
-            // Uses CSS vars: --sidebar-width-collapsed (72px), --sidebar-width (256px)
-            "lg:ml-[var(--sidebar-width-collapsed)]",
-            !isSidebarCollapsed && "lg:ml-[var(--sidebar-width)]"
-          )}
-        >
-          {/* Security Banner - Shows when password change required */}
-          <SecurityBanner />
-
-          {/* Header */}
-          <Suspense fallback={<HeaderSkeleton />}>
-            <Header />
-          </Suspense>
-
-          {/* Main Content - Dynamic padding top based on header + banner */}
-          {/* Added pb-20 on mobile for MobileBottomNav (64px height + safe area) */}
-          <div 
-            className="flex-1 transition-[margin-top] duration-300 ease-in-out pb-20 lg:pb-0"
-            style={{ marginTop: `${totalTopOffset}px` }}
-          >
-            <Main>{children}</Main>
-          </div>
-        </div>
       </div>
 
-      {/* Mobile Bottom Navigation - Only visible on mobile (< lg) */}
-      <Suspense fallback={<MobileBottomNavSkeleton />}>
-        <MobileBottomNav />
-      </Suspense>
+      {/* Non-sidebar shell — entire subtree gets inert when mobile
+          sidebar is open so keyboard focus cannot escape the drawer. */}
+      <div ref={mainWrapperRef}>
+        {/* Skip to main content — visible only on focus (keyboard users) */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:shadow-md focus:ring-2 focus:ring-ring"
+        >
+          Chuyển đến nội dung chính
+        </a>
+
+        {/* Command Palette - Global keyboard shortcut (Cmd/Ctrl+K) */}
+        <CommandPalette />
+
+        <div className="bg-muted/40 relative flex min-h-screen w-full overflow-hidden">
+          {/* Mobile Overlay */}
+          {!isSidebarCollapsed && (
+            <div
+              className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+              onClick={() => setSidebarCollapsed(true)}
+              aria-hidden="true"
+            />
+          )}
+
+          {/* Main content area */}
+          <div
+            className={cn(
+              "flex flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
+              // Uses CSS vars: --sidebar-width-collapsed (72px), --sidebar-width (256px)
+              "lg:ml-[var(--sidebar-width-collapsed)]",
+              !isSidebarCollapsed && "lg:ml-[var(--sidebar-width)]"
+            )}
+          >
+            {/* Security Banner - Shows when password change required */}
+            <SecurityBanner />
+
+            {/* Header */}
+            <Suspense fallback={<HeaderSkeleton />}>
+              <Header />
+            </Suspense>
+
+            {/* Main Content - Dynamic padding top based on header + banner */}
+            {/* Added pb-20 on mobile for MobileBottomNav (64px height + safe area) */}
+            <div
+              className="flex-1 transition-[margin-top] duration-300 ease-in-out pb-20 lg:pb-0"
+              style={{ marginTop: `${totalTopOffset}px` }}
+            >
+              <Main>{children}</Main>
+            </div>
+          </div>
+        </div>
+
+        {/* Mobile Bottom Navigation - Only visible on mobile (< lg) */}
+        <Suspense fallback={<MobileBottomNavSkeleton />}>
+          <MobileBottomNav />
+        </Suspense>
+      </div>
     </>
   );
 }

@@ -8,6 +8,7 @@ import { Breadcrumbs } from "@/components/common/Breadcrumbs";
 export function Main({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <main
+      id="main-content"
       className={cn(
         // Padding và spacing - Responsive padding for mobile
         "flex-1 p-3 md:p-4 lg:p-6",

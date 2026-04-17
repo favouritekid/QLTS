@@ -8,6 +8,7 @@ import { NavUser } from "./NavUser";
 import { NavGroup } from "./NavGroup";
 import { RecentPages } from "./RecentPages";
 import type { NavigationLink } from "@/types/layout.types";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -20,8 +21,10 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
       {isCollapsed ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="flex-shrink-0" aria-label="QLTS - Trang chủ">
-              <BookMarked className="h-6 w-6" />
+            <Button variant="ghost" size="icon" asChild className="flex-shrink-0" aria-label="QLTS - Trang chủ">
+              <Link href="/dashboard">
+                <BookMarked className="h-6 w-6" />
+              </Link>
             </Button>
           </TooltipTrigger>
           <TooltipContent
@@ -33,8 +36,10 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
         </Tooltip>
       ) : (
         <>
-          <Button variant="ghost" size="icon" className="flex-shrink-0" aria-label="QLTS - Trang chủ">
-            <BookMarked className="h-6 w-6" />
+          <Button variant="ghost" size="icon" asChild className="flex-shrink-0" aria-label="QLTS - Trang chủ">
+            <Link href="/dashboard">
+              <BookMarked className="h-6 w-6" />
+            </Link>
           </Button>
           <h1
             className={cn(

@@ -314,7 +314,6 @@ export function LoginForm() {
                     />
                     <button
                       type="button"
-                      tabIndex={-1}
                       className="text-muted-foreground hover:text-foreground absolute right-3 top-1/2 -translate-y-1/2"
                       onClick={() => setShowPassword((prev) => !prev)}
                       aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
