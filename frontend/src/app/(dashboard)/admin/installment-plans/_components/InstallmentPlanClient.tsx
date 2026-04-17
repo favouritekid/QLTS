@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import {
@@ -75,8 +75,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TableEmptyState } from "@/components/common/EmptyState";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
-import { cn } from "@/lib/utils";
-
 import {
   useAdminInstallmentPlans,
   useCreateInstallmentPlan,
@@ -213,8 +211,7 @@ function MobilePlanCard({ plan, onEdit, onDelete }: MobilePlanCardProps) {
 // =============================================================================
 
 interface ScheduleEditorProps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  form: any;
+  form: UseFormReturn<PlanFormValues>;
   installmentCount: number;
 }
 
@@ -426,8 +423,8 @@ export function InstallmentPlanClient() {
 
     try {
       if (isEditMode && editPlan) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { code, ...updateData } = payload;
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructure-to-omit pattern
+        const { code: _code, ...updateData } = payload;
         await updateMutation.mutateAsync({
           id: editPlan.id,
           data: updateData,

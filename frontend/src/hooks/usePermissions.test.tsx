@@ -64,11 +64,10 @@ describe("usePermissions Hook", () => {
     })
 
     it("should handle resource without permissions object", () => {
-      // Cast to any to test runtime behavior with missing permissions
+      // Test runtime behavior with empty permissions
       const resource = { id: 1, status: "draft", permissions: {} } as const
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { result } = renderHook(() => usePermissions(resource as any))
+      const { result } = renderHook(() => usePermissions(resource))
 
       expect(result.current.can("edit")).toBe(false)
     })

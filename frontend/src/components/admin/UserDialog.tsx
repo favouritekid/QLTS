@@ -311,8 +311,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 />
                 {form.formState.errors.avatar && (
                   <p className="text-destructive text-xs">
-                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                    {String((form.formState.errors.avatar as any)?.message || "Tệp không hợp lệ")}
+                        {String((form.formState.errors.avatar as { message?: string } | undefined)?.message || "Tệp không hợp lệ")}
                   </p>
                 )}
               </div>

@@ -4,10 +4,9 @@
  *
  * Tests the centralized error handling pattern (ADR-FE-004)
  */
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { AxiosError } from "axios"
-import { handleApiError, isErrorType, type ApiErrorResponse } from "./error-handler"
+import type { AxiosError, InternalAxiosRequestConfig } from "axios"
+import { handleApiError, isErrorType, type ApiErrorResponse, type HandleErrorOptions } from "./error-handler"
 
 // Mock sonner toast
 vi.mock("sonner", () => ({
@@ -31,12 +30,12 @@ function createAxiosError(
       data,
       statusText: "Error",
       headers: {},
-      config: {} as any,
+      config: {} as InternalAxiosRequestConfig,
     },
     isAxiosError: true,
     name: "AxiosError",
     message: "Request failed",
-    config: {} as any,
+    config: {} as InternalAxiosRequestConfig,
     toJSON: () => ({}),
   }
 }
@@ -69,14 +68,14 @@ describe("handleApiError", () => {
       const error = createAxiosError(409)
 
       handleApiError(error, {
-        queryClient: mockQueryClient as any,
+        queryClient: mockQueryClient as unknown as HandleErrorOptions["queryClient"],
         invalidateKeys: [["admissions", "detail", 1]],
         onConflict,
       })
 
       // Get the action callback from the toast call
       const toastCall = vi.mocked(toast.error).mock.calls[0]
-      const actionConfig = (toastCall[1] as any)?.action
+      const actionConfig = (toastCall[1] as { action?: { onClick?: () => void } } | undefined)?.action
       
       // Simulate clicking the action
       if (actionConfig?.onClick) {
@@ -232,7 +231,7 @@ describe("handleApiError", () => {
     it("should prefer backend code over HTTP status", () => {
       // Backend returns 400 but with STATE_CONFLICT code
       const error = createAxiosError(400, {
-        code: "STATE_CONFLICT" as any,
+        code: "STATE_CONFLICT",
       })
 
       handleApiError(error)
@@ -255,7 +254,7 @@ describe("isErrorType", () => {
 
   it("should identify error type from backend code", () => {
     const error = createAxiosError(400, {
-      code: "BUSINESS_RULE_VIOLATION" as any
+      code: "BUSINESS_RULE_VIOLATION"
     })
     
     expect(isErrorType(error, "BUSINESS_RULE_VIOLATION")).toBe(true)

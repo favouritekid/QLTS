@@ -153,9 +153,9 @@ export function MajorProgramDialog({
 
     try {
       if (isEditMode && majorProgram) {
-        // Cannot update 'code' - remove it from payload
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { code: _code, ...updatePayload } = payload;
+        // Cannot update 'code' - remove it from update payload
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructure-to-omit pattern
+        const { code: _, ...updatePayload } = payload;
         await updateMutation.mutateAsync({
           id: majorProgram.id,
           data: updatePayload as MajorProgramUpdate,

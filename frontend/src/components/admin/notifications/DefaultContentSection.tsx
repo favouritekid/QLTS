@@ -48,7 +48,7 @@ interface Variable {
 }
 
 interface DefaultContentSectionProps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Control is invariant; shared component must accept any form shape
   formControl: Control<any>;
   availableVariables: Variable[];
   onInsertVariable: (field: "title_template" | "message_template", variable: string) => void;

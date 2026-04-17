@@ -10,8 +10,8 @@ let audioContext: AudioContext | null = null;
  */
 function getAudioContext(): AudioContext {
   if (!audioContext) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const WebkitAudioContext = (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    audioContext = new (window.AudioContext || WebkitAudioContext!)();
   }
   return audioContext;
 }
