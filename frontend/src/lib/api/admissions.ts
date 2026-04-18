@@ -428,6 +428,46 @@ async function unclaimAdmissionProfile(id: number, data: { version: number }) {
   return response.data
 }
 
+// ============================================
+// MAGIC-LINK CONFIRMATION (Public flow)
+// ============================================
+// Backend exempts /api/admissions/confirm/* from CSRF (middleware/csrf.py:58),
+// so the shared axios instance works for unauthenticated applicants.
+
+import type {
+  ConfirmTokenInfoResponse,
+  ConfirmTokenResponse,
+  ConfirmTokenVerifyRequest,
+} from '@/lib/zod/admissions'
+
+/**
+ * GET /api/admissions/confirm/{token}
+ * Returns token state so the page can render form / locked / expired / used banners.
+ */
+export async function getConfirmTokenInfo(
+  token: string,
+): Promise<ConfirmTokenInfoResponse> {
+  const response = await api.get<ConfirmTokenInfoResponse>(
+    `/api/admissions/confirm/${encodeURIComponent(token)}`,
+  )
+  return response.data
+}
+
+/**
+ * POST /api/admissions/confirm/{token}
+ * Verify last 4 CCCD digits → status transitions to 'confirmed'.
+ */
+export async function confirmAdmissionByToken(
+  token: string,
+  body: ConfirmTokenVerifyRequest,
+): Promise<ConfirmTokenResponse> {
+  const response = await api.post<ConfirmTokenResponse>(
+    `/api/admissions/confirm/${encodeURIComponent(token)}`,
+    body,
+  )
+  return response.data
+}
+
 export const admissionsApi = {
   listAdmissions,
   getAdmission,
@@ -459,6 +499,9 @@ export const admissionsApi = {
   bulkRejectAdmissions,
   bulkAssignAdmissions,
   exportAdmissionsCsv,
+  // Magic-link confirmation (public)
+  getConfirmTokenInfo,
+  confirmAdmissionByToken,
 }
 
 export default admissionsApi

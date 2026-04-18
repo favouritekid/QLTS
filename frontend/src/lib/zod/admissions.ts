@@ -1013,3 +1013,45 @@ export interface AdmissionStats {
   avg_completion: number
 }
 
+// ==============================================================================
+// MAGIC-LINK CONFIRMATION (Public flow)
+// ==============================================================================
+// Mirrors backend schemas in Backend_FastAPI/app/schemas/admission.py:1198-1244.
+// Applicant clicks email link → /confirm/[token] page → submits 4 CCCD digits.
+
+/**
+ * POST /api/admissions/confirm/{token} body
+ */
+export const ConfirmTokenVerifyRequestSchema = z.object({
+  last_digits_citizen_id: z
+    .string()
+    .regex(/^\d{4}$/, "Phải là 4 chữ số"),
+})
+export type ConfirmTokenVerifyRequest = z.infer<typeof ConfirmTokenVerifyRequestSchema>
+
+/**
+ * POST /api/admissions/confirm/{token} response (success)
+ */
+export const ConfirmTokenResponseSchema = z.object({
+  message: z.string(),
+  profile_id: z.number().int(),
+  status: z.string(),
+  confirmed_at: z.string().datetime({ offset: true }),
+})
+export type ConfirmTokenResponse = z.infer<typeof ConfirmTokenResponseSchema>
+
+/**
+ * GET /api/admissions/confirm/{token} response — used to render form pre-submit
+ * (attempts remaining, expiry state, locked state, already-used state).
+ */
+export const ConfirmTokenInfoResponseSchema = z.object({
+  valid: z.boolean(),
+  expired: z.boolean(),
+  locked: z.boolean(),
+  already_used: z.boolean(),
+  attempts_remaining: z.number().int(),
+  profile_name: z.string(),
+  expires_at: z.string().datetime({ offset: true }).nullable(),
+})
+export type ConfirmTokenInfoResponse = z.infer<typeof ConfirmTokenInfoResponseSchema>
+
