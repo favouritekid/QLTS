@@ -4991,15 +4991,45 @@ async def generate_confirmation_token(
     
     # Post-commit callback for sending email
     async def _send_email_callback():
-        # This will be implemented when email service is ready
-        # For now, just log
-        log.info(
-            "POST-COMMIT: Would send confirmation email",
-            profile_id=profile.id,
-            lead_email=profile.lead.email if profile.lead else None,
-            token_id=token_obj.id,
-        )
-    
+        from ..tasks.email_tasks import send_magic_link_confirmation_task
+
+        lead = profile.lead
+        if not lead or not lead.email:
+            log.warning(
+                "Skip magic-link email: no lead or email",
+                profile_id=profile.id,
+                token_id=token_obj.id,
+            )
+            return
+
+        try:
+            confirm_url = (
+                f"{settings.FRONTEND_URL.rstrip('/')}/confirm/{token_obj.token}"
+            )
+            send_magic_link_confirmation_task.delay(
+                email_to=lead.email,
+                confirm_url=confirm_url,
+                lead_name=lead.full_name or "Học viên",
+                expires_at_iso=token_obj.expires_at.isoformat(),
+                expires_days=settings.ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS,
+                lang="vi",
+            )
+            log.info(
+                "POST-COMMIT: queued magic link email",
+                profile_id=profile.id,
+                token_id=token_obj.id,
+            )
+        except Exception as e:
+            # Non-fatal: token đã commit, HTTP response phải thành công.
+            # Operator có thể manual re-send qua POST /admissions/{id}/send-confirmation.
+            log.error(
+                "POST-COMMIT: failed to enqueue magic link email",
+                profile_id=profile.id,
+                token_id=token_obj.id,
+                error=str(e),
+                exc_info=True,
+            )
+
     return token_obj, _send_email_callback
 
 
@@ -5217,13 +5247,41 @@ async def verify_and_confirm(
         confirmed_at=now.isoformat(),
     )
 
-    # Post-commit callback for notifications
+    # Post-commit callback: email applicant "confirmed successfully + next steps".
+    # Internal admin/officer fanout is handled separately by the router-level
+    # APPLICATION_STATUS_CHANGED dispatch — no duplication.
     async def _notification_callback():
-        log.info(
-            "POST-COMMIT: Would send confirmation success notification",
-            profile_id=profile.id,
-            lead_id=profile.lead_id,
-        )
+        from ..tasks.email_tasks import send_admission_confirmed_notification_task
+
+        if not profile.lead or not profile.lead.email:
+            log.info(
+                "POST-COMMIT: skip confirmation success email (no lead/email)",
+                profile_id=profile.id,
+                lead_id=profile.lead_id,
+            )
+            return
+
+        try:
+            send_admission_confirmed_notification_task.delay(
+                email_to=profile.lead.email,
+                lead_name=profile.lead.full_name or "Học viên",
+                confirmed_at_iso=profile.confirmed_at.isoformat(),
+                lang="vi",
+            )
+            log.info(
+                "POST-COMMIT: queued confirmation success email",
+                profile_id=profile.id,
+                lead_id=profile.lead_id,
+            )
+        except Exception as e:
+            # Non-fatal: status đã commit thành 'confirmed', HTTP phải thành công.
+            log.error(
+                "POST-COMMIT: failed to enqueue confirmation success email",
+                profile_id=profile.id,
+                lead_id=profile.lead_id,
+                error=str(e),
+                exc_info=True,
+            )
 
     return profile, _notification_callback
 
