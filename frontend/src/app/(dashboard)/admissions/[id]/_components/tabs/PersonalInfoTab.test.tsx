@@ -7,9 +7,12 @@
  * Does NOT test address selection behavior (covered by AdaptiveAddressSelect.test.tsx).
  */
 
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { useForm, FormProvider } from "react-hook-form";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "@/test/utils/test-utils";
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions";
 
 // Mock useConfigData — all category lists return empty
@@ -119,6 +122,7 @@ function TestFormHost({
   profile: AdmissionProfileResponse;
   isEditable?: boolean;
 }) {
+  const [queryClient] = useState(() => createTestQueryClient());
   const form = useForm<AdmissionProfileUpdateInput>({
     defaultValues: {
       ...DEFAULT_VALUES,
@@ -129,9 +133,11 @@ function TestFormHost({
   });
 
   return (
-    <FormProvider {...form}>
-      <PersonalInfoTab profile={profile} form={form} isEditable={isEditable} />
-    </FormProvider>
+    <QueryClientProvider client={queryClient}>
+      <FormProvider {...form}>
+        <PersonalInfoTab profile={profile} form={form} isEditable={isEditable} />
+      </FormProvider>
+    </QueryClientProvider>
   );
 }
 
