@@ -902,6 +902,178 @@ class TestTokenBasedConfirmation:
         assert response.status_code == 400
         assert "expired" in response.json()["detail"].lower()
 
+    async def test_concurrent_confirm_same_token(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Two simultaneous POST /confirm/{token} with the same token —
+        only one should win; the other must be rejected because the
+        SELECT FOR UPDATE row lock serialises the transactions and the
+        profile is already 'confirmed' by the time the loser acquires it.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        citizen_id = "111122223344"  # last 4 = "3344"
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(
+            lead_id, status="approved", citizen_id=citizen_id
+        )
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+        await client.post(
+            f"/api/admissions/{profile.id}/send-confirmation", headers=headers
+        )
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.AdmissionConfirmationToken)
+                .where(models.AdmissionConfirmationToken.profile_id == profile.id)
+            )
+            token_value = result.scalar_one().token
+
+        # Fire both confirms with the correct CCCD at the same time.
+        responses = await asyncio.gather(
+            client.post(
+                f"/api/admissions/confirm/{token_value}",
+                json={"last_digits_citizen_id": "3344"},
+            ),
+            client.post(
+                f"/api/admissions/confirm/{token_value}",
+                json={"last_digits_citizen_id": "3344"},
+            ),
+        )
+
+        statuses = sorted(r.status_code for r in responses)
+        # Exactly one 200 winner and one rejection (400 "already used" /
+        # "not in approved state"). No double-commit, no 500.
+        assert statuses == [200, 400], (
+            f"Expected [200, 400], got {statuses}: "
+            f"{[r.text for r in responses]}"
+        )
+
+        # Final DB state: profile confirmed exactly once.
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == profile.id
+                )
+            )
+            final = result.scalar_one()
+            assert final.status == "confirmed"
+            assert final.confirmed_at is not None
+
+    async def test_token_expires_at_boundary(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Document the inclusive/exclusive semantics of the expiry check.
+
+        Current code at admission_service.verify_and_confirm uses
+        `token_obj.expires_at < now` — strict `<`. So a token whose
+        `expires_at` is exactly `now` is still considered valid (by a hair).
+        This test locks that behaviour in so any future change that flips
+        the comparison to `<=` becomes a visible breaking change rather
+        than a silent UX shift.
+        """
+        from datetime import timedelta
+
+        unit_id = seed_lead_dependencies["unit_id"]
+        citizen_id = "222211119988"  # last 4 = "9988"
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(
+            lead_id, status="approved", citizen_id=citizen_id
+        )
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+        await client.post(
+            f"/api/admissions/{profile.id}/send-confirmation", headers=headers
+        )
+
+        # Pin expires_at a few milliseconds in the future so the comparison
+        # `expires_at < now` is false and the token is still accepted.
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(models.AdmissionConfirmationToken)
+                    .where(
+                        models.AdmissionConfirmationToken.profile_id == profile.id
+                    )
+                )
+                token = result.scalar_one()
+                token.expires_at = datetime.now(timezone.utc) + timedelta(
+                    milliseconds=200
+                )
+                token_value = token.token
+
+        response = await client.post(
+            f"/api/admissions/confirm/{token_value}",
+            json={"last_digits_citizen_id": "9988"},
+        )
+
+        assert response.status_code == 200, (
+            f"Boundary expires_at (now + 200ms) should still be valid, got "
+            f"{response.status_code}: {response.text}"
+        )
+        assert response.json()["status"] == "confirmed"
+
+    async def test_verify_and_confirm_bumps_version(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Guard the optimistic-lock contract around the confirm transition.
+
+        Any subsequent mutation that relies on version matching (PUT
+        /admissions/{id}, withdraw, etc.) would otherwise observe a
+        stale version and 409 silently. If this test ever fails, the
+        version bump in verify_and_confirm has regressed and downstream
+        clients need to be told.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        citizen_id = "444455556677"  # last 4 = "6677"
+
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(
+            lead_id, status="approved", citizen_id=citizen_id
+        )
+        version_before = profile.version
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+        await client.post(
+            f"/api/admissions/{profile.id}/send-confirmation", headers=headers
+        )
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.AdmissionConfirmationToken)
+                .where(models.AdmissionConfirmationToken.profile_id == profile.id)
+            )
+            token_value = result.scalar_one().token
+
+        response = await client.post(
+            f"/api/admissions/confirm/{token_value}",
+            json={"last_digits_citizen_id": "6677"},
+        )
+        assert response.status_code == 200
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == profile.id
+                )
+            )
+            updated = result.scalar_one()
+            assert updated.version == version_before + 1, (
+                f"Expected version {version_before + 1}, got {updated.version}"
+            )
+            assert updated.status == "confirmed"
+
     async def test_resend_confirmation_invalidates_old_token(
         self,
         client: AsyncClient,
