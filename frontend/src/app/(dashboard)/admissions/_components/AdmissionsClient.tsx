@@ -141,12 +141,20 @@ const PAYMENT_STATUS_OPTIONS = [
   { value: "no_fee", label: "Chưa có học phí" },
 ]
 
-/** Tab definitions - group statuses for quick filtering */
+/** Tab definitions - group statuses for quick filtering.
+ *
+ * `approved` vs `confirmed`: the applicant still has to tap the magic link
+ * before enrollment — keeping the two tabs separate lets officers spot
+ * profiles that are stuck waiting on the applicant without hunting through
+ * a mixed "Đã duyệt" bucket. `overridden` stays with `approved` because it's
+ * still an admin-driven state awaiting enroll.
+ */
 const STATUS_TABS = [
   { key: "all", label: "Tất cả", statuses: [] as string[] },
   { key: "draft", label: "Nháp", statuses: ["draft"] },
   { key: "pending", label: "Chờ duyệt", statuses: ["submitted", "resubmitted"] },
-  { key: "approved", label: "Đã duyệt", statuses: ["approved", "confirmed", "overridden"] },
+  { key: "approved", label: "Đã duyệt", statuses: ["approved", "overridden"] },
+  { key: "confirmed", label: "Đã xác nhận", statuses: ["confirmed"] },
   { key: "enrolled", label: "Đã nhập học", statuses: ["enrolled"] },
   { key: "rejected", label: "Từ chối", statuses: ["rejected"] },
 ] as const

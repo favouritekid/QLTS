@@ -64,8 +64,9 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
     badgeVariant: 'default',
     badgeColor: 'bg-success-100 text-success-700',
     showBanner: true,
-    bannerType: 'success',
-    bannerMessage: 'Hồ sơ đã được phê duyệt',
+    bannerType: 'info',
+    bannerMessage:
+      'Hồ sơ đã duyệt. Đang chờ thí sinh xác nhận qua email (4 số cuối CCCD) trước khi ghi danh.',
     allowedActions: ['enroll'],
   },
   rejected: {

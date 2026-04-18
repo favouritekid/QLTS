@@ -278,11 +278,13 @@ export function AdmissionActions({
             </AlertDialog>
           )}
 
-          {/* Enroll - can('enroll') when status = approved */}
+          {/* Enroll - can('enroll') when status ∈ {approved, confirmed, overridden}.
+              Label is "Ghi danh" (not "Xác nhận nhập học") so officers don't
+              confuse it with the applicant-facing "xác nhận" magic-link step. */}
           {can('enroll') && (
             <Button onClick={onEnroll} disabled={isEnrolling} className="bg-info-600 hover:bg-info-700">
               {isEnrolling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
-              Xác nhận nhập học
+              Ghi danh
             </Button>
           )}
         </div>
