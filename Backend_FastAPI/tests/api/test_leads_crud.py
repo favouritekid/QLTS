@@ -313,6 +313,44 @@ async def test_get_lead_detail_success_officer(
 
 
 @pytest.mark.asyncio
+async def test_get_lead_detail_includes_gate_fields(
+    client: AsyncClient, officer_token_headers: dict, seeded_lead: dict
+):
+    """Test GET /leads/{id} - response includes thin-client gate fields.
+
+    Verifies BUG-UX-001 fix: LeadDetail schema carries permissions,
+    available_actions, action_blockers computed from
+    admission_service.check_lead_level_admission_eligibility.
+
+    seeded_lead has no offering_id → blocker should be 'missing_offering'.
+    """
+    log.info("--- Running: test_get_lead_detail_includes_gate_fields ---")
+    lead_id = seeded_lead["id"]
+    response = await client.get(
+        LeadsURLs.LEAD_DETAIL(lead_id), headers=officer_token_headers
+    )
+
+    assert response.status_code == 200, f"Resp: {response.text}"
+    data = response.json()
+
+    # Gate fields are present on LeadDetail response
+    assert "permissions" in data, "permissions field missing from LeadDetail"
+    assert "available_actions" in data, "available_actions field missing"
+    assert "action_blockers" in data, "action_blockers field missing"
+    assert isinstance(data["permissions"], dict)
+    assert isinstance(data["available_actions"], list)
+    assert isinstance(data["action_blockers"], dict)
+
+    # seeded_lead is not qualified for admission (no offering), so gate denies.
+    # Expected: create_admission=False, blocker=missing_offering (first blocker in order).
+    assert data["permissions"].get("create_admission") is False
+    assert data["action_blockers"].get("create_admission") == "missing_offering"
+    assert "create_admission" not in data["available_actions"]
+    log.info("Gate fields present and correctly populated.")
+    log.info("--- Finished: test_get_lead_detail_includes_gate_fields ---")
+
+
+@pytest.mark.asyncio
 async def test_get_lead_detail_permission_denied(
     client: AsyncClient, regular_user_token_headers: dict, seeded_lead: dict
 ):

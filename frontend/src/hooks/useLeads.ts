@@ -7,6 +7,7 @@ import { workflowContextKeys } from "@/hooks/useWorkflowContext";
 import type { ApiErrorResponse } from "@/types/api.types";
 import type {
   Lead,
+  LeadDetail,
   LeadCreate,
   LeadUpdate,
   LeadsPage,
@@ -144,12 +145,14 @@ export function useLeads(
 export function useLead(
   id: number,
   enabled: boolean = true,
-  options?: { initialData?: Lead }
+  options?: { initialData?: LeadDetail }
 ) {
-  return useQuery<Lead, AxiosError<ApiErrorResponse>>({
+  // GET /leads/{id} returns LeadDetail (Lead + permissions/available_actions/action_blockers).
+  // Other endpoints (update/create/assign) return plain Lead — see useUpdateLead for cache merge strategy.
+  return useQuery<LeadDetail, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.detail(id),
     queryFn: async () => {
-      const data = await leadsApi.getLead(id);
+      const data = (await leadsApi.getLead(id)) as LeadDetail | null;
       if (!data) throw new Error("Failed to fetch lead");
       return data;
     },
@@ -301,7 +304,7 @@ export function useUpdateLead() {
     Lead,
     AxiosError<ApiErrorResponse>,
     { id: number; data: LeadUpdate },
-    { previousLead: Lead | undefined }
+    { previousLead: LeadDetail | undefined }
   >({
     mutationFn: async ({ id, data }) => {
       return await leadsApi.updateLead(id, data);
@@ -312,10 +315,11 @@ export function useUpdateLead() {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: leadsKeys.detail(id) });
 
-      // Snapshot the previous value
-      const previousLead = queryClient.getQueryData<Lead>(leadsKeys.detail(id));
+      // Snapshot the previous value (cached as LeadDetail from GET /leads/{id})
+      const previousLead = queryClient.getQueryData<LeadDetail>(leadsKeys.detail(id));
 
       // Optimistically update the cache (only merge scalar fields to avoid corrupting nested objects)
+      // Preserve LeadDetail gate fields (permissions/available_actions/action_blockers) via spread.
       if (previousLead) {
         const scalarUpdates: Partial<Lead> = {};
         for (const [key, value] of Object.entries(data)) {
@@ -325,7 +329,7 @@ export function useUpdateLead() {
             (scalarUpdates as Record<string, unknown>)[key] = value;
           }
         }
-        queryClient.setQueryData<Lead>(leadsKeys.detail(id), {
+        queryClient.setQueryData<LeadDetail>(leadsKeys.detail(id), {
           ...previousLead,
           ...scalarUpdates,
         });
@@ -347,7 +351,7 @@ export function useUpdateLead() {
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : err.response?.data?.message || err.message || "Không thể cập nhật lead";
-      
+
       // ✅ Phase 2: Actionable toast with retry button
       toast.error("Cập nhật lead thất bại", {
         description: errorMessage,
@@ -360,11 +364,30 @@ export function useUpdateLead() {
         description: updatedLead.full_name,
       });
 
-      // Update cache immediately with full response from API
-      queryClient.setQueryData(leadsKeys.detail(updatedLead.id), updatedLead);
+      // Merge update response (plain Lead) into cached LeadDetail ONLY when a
+      // prior detail entry exists — else skip seeding. Reason: the update
+      // endpoint returns plain `Lead` without gate fields
+      // (permissions/available_actions/action_blockers). If no detail cache
+      // exists yet (e.g. update triggered from list/dialog without visiting
+      // detail page), casting plain Lead to LeadDetail would pollute the cache
+      // with missing gate fields. A later create-page visit could render the
+      // stale cache first and fall back to permissive UI before refetch lands.
+      // Instead: leave cache empty, let useLead fetch a fresh LeadDetail.
+      const existingDetail = queryClient.getQueryData<LeadDetail>(
+        leadsKeys.detail(updatedLead.id),
+      );
+      if (existingDetail) {
+        queryClient.setQueryData<LeadDetail>(leadsKeys.detail(updatedLead.id), {
+          ...existingDetail,
+          ...updatedLead,
+        });
+      }
 
-      // Invalidate related queries (only refetch currently active ones)
+      // Invalidate detail WITHOUT refetchType filter so the stale mark persists
+      // even if no observer is active right now — next useLead() mount refetches.
+      // Other queries stay on active-only to avoid background work.
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) }),
         queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' }),
         queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id), refetchType: 'active' }),
         queryClient.invalidateQueries({ queryKey: leadsKeys.insights(updatedLead.id), refetchType: 'active' }),

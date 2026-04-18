@@ -10,6 +10,8 @@ These tests use real database to verify:
 """
 import logging
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
+from typing import Optional
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -2204,4 +2206,314 @@ class TestBulkAssignBugFixes:
         assert result["total"] == 1
         assert result["successful"] == 1
         assert result["failed"] == 0
+
+
+# =============================================================================
+# LEAD-LEVEL ADMISSION ELIGIBILITY TESTS (BUG-UX-001 fix)
+#
+# Covers admission_service.check_lead_level_admission_eligibility() which is
+# the SINGLE SOURCE OF TRUTH shared by:
+#   - create_admission_profile() validation (check_role=False)
+#   - lead_service._populate_lead_detail_fields() gate (check_role=True)
+#
+# 7 blocker codes: forbidden | already_has_profile | invalid_lead_status
+#                  | missing_offering | no_consultation
+#                  | consultation_missing_status | consultation_universal_status
+# =============================================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestLeadAdmissionEligibility:
+    """Tests for admission_service.check_lead_level_admission_eligibility."""
+
+    async def _make_offering(
+        self,
+        db: AsyncSession,
+        seeded_dependencies: dict,
+    ) -> models.ProgramOffering:
+        """Helper: create minimal MajorProgram + ProgramOffering pair for the seeded unit."""
+        unique_suffix = str(datetime.now(timezone.utc).timestamp()).replace(".", "")
+        program = models.MajorProgram(
+            name=f"Test Program {unique_suffix}",
+            degree_level="Cao đẳng",
+            code=f"TEST{unique_suffix[-8:]}",
+            is_active=True,
+            unit_id=seeded_dependencies["unit_id"],
+        )
+        db.add(program)
+        await db.flush()
+
+        offering = models.ProgramOffering(
+            program_id=program.id,
+            offering_type="Chính quy",
+            is_active=True,
+        )
+        db.add(offering)
+        await db.flush()
+        return offering
+
+    async def _add_consultation(
+        self,
+        db: AsyncSession,
+        lead: models.Lead,
+        officer: models.User,
+        *,
+        status_id: Optional[str],
+        is_universal: bool = False,
+    ) -> models.Consultation:
+        """Helper: attach a consultation to lead with given status (optionally universal)."""
+        if status_id is not None:
+            existing = await db.get(models.ConsultationStatus, status_id)
+            if existing is None:
+                stage = await db.get(models.PipelineStage, "stg01")
+                if stage is None:
+                    stage = models.PipelineStage(id="stg01", name="Stage", order=1)
+                    db.add(stage)
+                    await db.flush()
+                existing = models.ConsultationStatus(
+                    id=status_id,
+                    name=f"Status {status_id}",
+                    color_code="#123456",
+                    stage_id="stg01",
+                    is_universal=is_universal,
+                )
+                db.add(existing)
+                await db.flush()
+            elif existing.is_universal != is_universal:
+                existing.is_universal = is_universal
+                await db.flush()
+
+        consultation = models.Consultation(
+            lead_id=lead.id,
+            officer_id=officer.id,
+            consultation_date=datetime.now(timezone.utc),
+            method="phone",
+            consultation_status_id=status_id,
+        )
+        db.add(consultation)
+        await db.flush()
+        return consultation
+
+    async def test_eligible_when_all_conditions_met(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Lead với offering + consultation (non-universal status) → eligible=True."""
+        from app.services import admission_service
+
+        offering = await self._make_offering(db, seeded_dependencies)
+        seeded_lead.offering_id = offering.id
+        await self._add_consultation(
+            db, seeded_lead, officer_user, status_id="sts_eligible", is_universal=False
+        )
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is True
+        assert result.blocker_code is None
+        assert result.blocker_message is None
+
+    async def test_blocker_missing_offering(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+    ):
+        """Lead không có offering_id → missing_offering."""
+        from app.services import admission_service
+
+        seeded_lead.offering_id = None
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "missing_offering"
+        assert "chương trình" in result.blocker_message.lower()
+
+    async def test_blocker_already_has_profile(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+    ):
+        """Lead đã có admission profile → already_has_profile (priority over other checks)."""
+        from app.services import admission_service
+
+        # Directly attach profile to model's __dict__ to simulate eager-loaded state
+        fake_profile = models.AdmissionProfile(
+            lead_id=seeded_lead.id,
+            status="draft",
+            version=1,
+        )
+        seeded_lead.__dict__["admission_profile"] = fake_profile
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "already_has_profile"
+
+    async def test_blocker_invalid_lead_status(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+    ):
+        """lead.status = 'converted' → invalid_lead_status."""
+        from app.services import admission_service
+
+        seeded_lead.status = "converted"
+        seeded_lead.offering_id = 1  # bypass offering check
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "invalid_lead_status"
+
+    async def test_blocker_no_consultation(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Lead có offering nhưng không consultation → no_consultation."""
+        from app.services import admission_service
+
+        offering = await self._make_offering(db, seeded_dependencies)
+        seeded_lead.offering_id = offering.id
+        # No consultation added
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "no_consultation"
+
+    async def test_blocker_consultation_missing_status(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Consultation mới nhất chưa có consultation_status_id → consultation_missing_status."""
+        from app.services import admission_service
+
+        offering = await self._make_offering(db, seeded_dependencies)
+        seeded_lead.offering_id = offering.id
+        await self._add_consultation(
+            db, seeded_lead, officer_user, status_id=None, is_universal=False
+        )
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "consultation_missing_status"
+
+    async def test_blocker_consultation_universal_status(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Consultation với is_universal=True → consultation_universal_status."""
+        from app.services import admission_service
+
+        offering = await self._make_offering(db, seeded_dependencies)
+        seeded_lead.offering_id = offering.id
+        await self._add_consultation(
+            db, seeded_lead, officer_user, status_id="sts_universal", is_universal=True
+        )
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "consultation_universal_status"
+
+    async def test_blocker_forbidden_for_unassigned_officer(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user_2: models.User,
+    ):
+        """Officer không được assigned lead → forbidden (check_role=True)."""
+        from app.services import admission_service
+
+        # seeded_lead is assigned to officer_user, not officer_user_2
+        # check_role=True (default) should return forbidden
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, officer_user_2, check_role=True
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "forbidden"
+
+    async def test_precedence_missing_offering_wins_over_invalid_status(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        admin_user: models.User,
+    ):
+        """Precedence: missing_offering MUST surface before invalid_lead_status.
+
+        Mirrors the original create_admission_profile() order — a lead that is
+        both `converted` and missing `offering_id` historically got a 400
+        `missing_offering` (BadRequest inside the lock) before the 400
+        `invalid_lead_status` check ran (outside the lock). Changing this
+        precedence would silently shift UX/error messages, so lock it with a test.
+        """
+        from app.services import admission_service
+
+        seeded_lead.offering_id = None
+        seeded_lead.status = "converted"
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, admin_user
+        )
+
+        assert result.eligible is False
+        assert result.blocker_code == "missing_offering", (
+            f"Expected missing_offering first (contract precedence), "
+            f"got {result.blocker_code}"
+        )
+
+    async def test_check_role_false_bypasses_role_check(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user_2: models.User,
+    ):
+        """check_role=False skips role check — used by service layer (IDOR upstream)."""
+        from app.services import admission_service
+
+        seeded_lead.offering_id = None  # will fail on missing_offering instead
+
+        result = await admission_service.check_lead_level_admission_eligibility(
+            db, seeded_lead, officer_user_2, check_role=False
+        )
+
+        # Role check skipped → falls through to structural checks
+        assert result.eligible is False
+        assert result.blocker_code == "missing_offering"  # NOT "forbidden"
 

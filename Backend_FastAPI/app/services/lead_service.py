@@ -4343,3 +4343,41 @@ async def restore_lead(
             exc_info=True
         )
         raise e
+
+
+# =============================================================================
+# Thin-client gate fields for LeadDetail response (GET /leads/{id})
+# =============================================================================
+
+async def _populate_lead_detail_fields(
+    db: AsyncSession,
+    lead: models.Lead,
+    current_user: Optional[models.User],
+) -> None:
+    """Attach permissions / available_actions / action_blockers to a Lead ORM model.
+
+    Called by the GET /leads/{id} router before serializing via ``LeadDetail``
+    response_model. Delegates to ``admission_service.check_lead_level_admission_eligibility``
+    to keep the eligibility contract in a single place.
+
+    Safe to call with ``current_user=None`` (system contexts) — no-op silently,
+    matching the ``admission_service._populate_response_fields`` contract.
+    """
+    if current_user is None:
+        return
+
+    # Lazy import to avoid circular dependency (admission_service imports from lead indirectly)
+    from app.services import admission_service
+
+    eligibility = await admission_service.check_lead_level_admission_eligibility(
+        db, lead, current_user, check_role=True
+    )
+
+    permissions = {"create_admission": eligibility.eligible}
+    blockers: dict[str, str] = {}
+    if not eligibility.eligible and eligibility.blocker_code:
+        blockers["create_admission"] = eligibility.blocker_code
+
+    lead.permissions = permissions
+    lead.available_actions = [k for k, v in permissions.items() if v]
+    lead.action_blockers = blockers

@@ -128,6 +128,7 @@ from .lead import (
     LeadAction,
     LeadBase,
     LeadCreate,
+    LeadDetail,
     LeadImportError,
     LeadImportResult,
     LeadInsights,

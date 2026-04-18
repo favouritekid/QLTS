@@ -32,6 +32,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type {
   Lead,
+  LeadDetail,
   LeadsPage,
   LeadListParams,
   TimelineItem,
@@ -214,12 +215,14 @@ const leads = {
   },
 
   /**
-   * Get single lead by ID (Server-Side)
+   * Get single lead by ID (Server-Side).
+   *
+   * Backend returns `LeadDetail` (Lead + gate flags for thin client).
    *
    * @throws {Error} 404 if lead not found, 403 if no permission
    */
-  async getLead(leadId: number): Promise<Lead> {
-    return serverFetch<Lead>(`/api/leads/${leadId}`);
+  async getLead(leadId: number): Promise<LeadDetail> {
+    return serverFetch<LeadDetail>(`/api/leads/${leadId}`);
   },
 
   /**

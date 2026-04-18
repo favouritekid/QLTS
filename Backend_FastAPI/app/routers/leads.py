@@ -543,12 +543,18 @@ async def export_leads(
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
-@router.get("/{lead_id}", response_model=schemas.Lead)
+@router.get("/{lead_id}", response_model=schemas.LeadDetail)
 async def get_lead_details(
     request: Request,
     lead: models.Lead = LeadAccessDep,
+    current_user: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
 ):
-    """Lấy thông tin chi tiết của một Lead."""
+    """Lấy thông tin chi tiết của một Lead (có gate flags cho thin client)."""
+    # Attach permissions / available_actions / action_blockers for LeadDetail response.
+    # Delegates to admission_service.check_lead_level_admission_eligibility for
+    # single source of truth shared with POST /admissions validation.
+    await lead_service._populate_lead_detail_fields(db, lead, current_user)
     return lead
 
 

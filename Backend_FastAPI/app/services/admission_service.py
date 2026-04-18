@@ -23,6 +23,7 @@ Security Features:
 """
 
 import random
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Tuple, Callable
 from decimal import Decimal
@@ -474,6 +475,114 @@ def _compute_completion_percent(
         elif state == "warning":
             completion += int(weight * 0.5)
     return min(100, completion)
+
+
+@dataclass
+class LeadAdmissionEligibility:
+    """Result of lead-level admission eligibility check.
+
+    Returned by check_lead_level_admission_eligibility(). When eligible=True,
+    blocker_code and blocker_message are None.
+    """
+    eligible: bool
+    blocker_code: Optional[str]  # None when eligible
+    blocker_message: Optional[str]  # Vietnamese message for UI
+
+
+async def check_lead_level_admission_eligibility(
+    db: AsyncSession,
+    lead: models.Lead,
+    current_user: models.User,
+    *,
+    check_role: bool = True,
+) -> LeadAdmissionEligibility:
+    """Check 7 lead-level conditions for creating an admission profile.
+
+    SINGLE SOURCE OF TRUTH for lead-level eligibility.
+    Called by:
+      - create_admission_profile() with check_role=False (IDOR enforced upstream)
+      - lead_service._populate_lead_detail_fields() with check_role=True (gate UX)
+
+    Does NOT check offering/method/path-level rules (those require
+    admission_method_id and are validated in create_admission_profile directly).
+
+    Blocker codes (precedence order):
+      forbidden > already_has_profile > invalid_lead_status > missing_offering
+      > no_consultation > consultation_missing_status > consultation_universal_status
+
+    Requires lead.admission_profile eager-loaded — uses __dict__.get() to avoid
+    lazy-load crash in async context.
+    """
+    # Role check (optional — skipped when caller already enforced IDOR at deps layer)
+    if check_role:
+        user_role = current_user.role
+        is_admin = user_role == UserRole.ADMIN
+        is_manager = user_role == UserRole.MANAGER
+        is_officer = user_role == UserRole.OFFICER
+        is_assigned = lead.assigned_officer_id == current_user.id
+        role_ok = is_admin or is_manager or (is_officer and is_assigned)
+        if not role_ok:
+            return LeadAdmissionEligibility(
+                False,
+                "forbidden",
+                "Bạn không có quyền tạo hồ sơ cho lead này.",
+            )
+
+    # Precedence order mirrors the original create_admission_profile() contract
+    # (pre-refactor): existing_profile → missing_offering → invalid_lead_status
+    # → consultation chain. Keep this order stable — a lead that is both
+    # `converted` and missing an offering must surface `missing_offering` first,
+    # matching the historical POST /admissions response.
+
+    # 1. Already has profile (structural conflict)
+    if lead.__dict__.get("admission_profile") is not None:
+        return LeadAdmissionEligibility(
+            False,
+            "already_has_profile",
+            "Lead này đã có hồ sơ tuyển sinh.",
+        )
+
+    # 2. Missing offering (fixable first — historical precedence)
+    if not lead.offering_id:
+        return LeadAdmissionEligibility(
+            False,
+            "missing_offering",
+            "Lead chưa có chương trình đào tạo. Vui lòng chọn chương trình trước.",
+        )
+
+    # 3. Invalid lead status (checked after offering per original contract)
+    if lead.status == "converted":
+        return LeadAdmissionEligibility(
+            False,
+            "invalid_lead_status",
+            f"Lead đang ở trạng thái '{lead.status}', không thể tạo hồ sơ.",
+        )
+
+    # 4-6. Consultation checks (DB query — reuse admission_repo, consultation_status eager-loaded)
+    from app.repositories import AdmissionRepository  # local import (matches pattern at lines 995, 1288)
+    admission_repo = AdmissionRepository(db)
+    latest = await admission_repo.get_latest_consultation_for_lead(lead.id)
+    if latest is None:
+        return LeadAdmissionEligibility(
+            False,
+            "no_consultation",
+            "Lead chưa có lịch sử tư vấn. Vui lòng thêm ít nhất 1 lần tư vấn.",
+        )
+    if not latest.consultation_status_id:
+        return LeadAdmissionEligibility(
+            False,
+            "consultation_missing_status",
+            "Lần tư vấn gần nhất chưa cập nhật kết quả.",
+        )
+    if latest.consultation_status and latest.consultation_status.is_universal:
+        return LeadAdmissionEligibility(
+            False,
+            "consultation_universal_status",
+            f"Trạng thái '{latest.consultation_status.name}' chỉ là ghi nhận hoạt động, "
+            "chưa phải kết quả tư vấn.",
+        )
+
+    return LeadAdmissionEligibility(True, None, None)
 
 
 def _compute_frontend_fields(
@@ -1234,101 +1343,39 @@ async def create_profile(
         # IF we trust the session sync. 
         # Better: Re-query specifically for existence check to be safe.
         
+        # Fresh idempotency check inside lock (race-safe — DB query)
         existing_profile = await admission_repo.get_profile_by_lead_id(lead_id)
         if existing_profile:
              raise ConflictError(f"Lead {lead_id} already has an admission profile")
 
-        # Step 3: Check Lead has offering_id
-        if not lead.offering_id:
-            log.warning(
-                "Lead has no offering_id (required for admission rules)",
-                lead_id=lead_id,
+    # Lead-level eligibility gate (SINGLE SOURCE OF TRUTH shared with GET /leads/{id}).
+    # Checks: already_has_profile, invalid_lead_status, missing_offering,
+    # no_consultation, consultation_missing_status, consultation_universal_status.
+    # Role check skipped — IDOR enforced upstream by get_lead_for_user dep.
+    eligibility = await check_lead_level_admission_eligibility(
+        db, lead, current_user, check_role=False
+    )
+    if not eligibility.eligible:
+        code = eligibility.blocker_code
+        msg = eligibility.blocker_message
+        log.warning(
+            "Admission creation blocked at lead-level eligibility",
+            lead_id=lead_id,
+            blocker_code=code,
+            user_id=current_user.id,
+        )
+        if code == "already_has_profile":
+            raise ConflictError(f"Lead {lead_id} already has an admission profile")
+        elif code == "missing_offering":
+            raise BadRequest(msg)
+        elif code == "invalid_lead_status":
+            raise BusinessRuleViolation(
+                f"Cannot create admission profile for lead with status '{lead.status}'. "
+                f"Lead must be in active pipeline (new, assigned, contacted, qualified) or be re-engaged."
             )
-            raise BadRequest(
-                "Lead must have a program offering assigned before creating admission profile"
-            )
-
-        # Step 4: Check Lead check (Redundant with Step 2 re-check but kept for flow)
-        if lead.admission_profile:
-             raise ConflictError(f"Lead {lead_id} already has an admission profile")
-
-    # ✅ AUDIT FIX: Parent-child state guard - prevent profile creation for invalid lead states
-    from app.utils.exceptions import BusinessRuleViolation
-
-    INVALID_LEAD_STATUSES_FOR_ADMISSION = frozenset({
-        # "rejected",      # REMOVED: Allow re-engagement with rejected leads
-        # "unqualified",   # REMOVED: Allow re-engagement with unqualified leads
-        "converted",       # Already enrolled (shouldn't happen, but defensive)
-    })
-
-    if lead.status in INVALID_LEAD_STATUSES_FOR_ADMISSION:
-        log.warning(
-            "Attempt to create admission profile for lead in invalid status",
-            lead_id=lead_id,
-            lead_status=lead.status,
-            user_id=current_user.id,
-        )
-        raise BusinessRuleViolation(
-            f"Cannot create admission profile for lead with status '{lead.status}'. "
-            f"Lead must be in active pipeline (new, assigned, contacted, qualified) or be re-engaged."
-        )
-
-    # Note: If lead is rejected/unqualified, proceeding here effectively re-opens them via admission process.
-
-
-    # =========================================================================
-    # ✅ EDGE CASE #9 FIX: Validate Consultation Completeness
-    # Enforces workflow: Lead → Consultation (with status) → Admission
-    # Uses ACTUAL consultation data, not just cached fields on Lead
-    # =========================================================================
-
-    # Step 4a: Get latest consultation (actual DB query for accuracy)
-    latest_consultation = await admission_repo.get_latest_consultation_for_lead(lead_id)
-
-    if not latest_consultation:
-        log.warning(
-            "Attempt to create admission profile for lead without consultations",
-            lead_id=lead_id,
-            consultation_count=lead.consultation_count,
-            user_id=current_user.id,
-        )
-        raise BusinessRuleViolation(
-            "Chưa thể tạo hồ sơ xét tuyển: Lead chưa có lịch sử tư vấn. "
-            "Vui lòng thêm ít nhất 1 lần tư vấn trước khi tạo hồ sơ."
-        )
-
-    # Step 4b: Validate consultation has a status assigned
-    if not latest_consultation.consultation_status_id:
-        log.warning(
-            "Attempt to create admission profile with incomplete consultation",
-            lead_id=lead_id,
-            consultation_id=latest_consultation.id,
-            has_status=False,
-            user_id=current_user.id,
-        )
-        raise BusinessRuleViolation(
-            "Chưa thể tạo hồ sơ xét tuyển: Lần tư vấn gần nhất chưa cập nhật kết quả. "
-            "Vui lòng chọn trạng thái tư vấn (VD: 'Có nhu cầu', 'Đồng ý tư vấn') trước khi tạo hồ sơ."
-        )
-
-    # Step 4c: Validate consultation status is not a "universal" activity-only status
-    # Universal statuses (e.g., "Không nghe máy", "Nhắn tin không phản hồi") are
-    # activity markers, not pipeline progression indicators
-    if latest_consultation.consultation_status and latest_consultation.consultation_status.is_universal:
-        status_name = latest_consultation.consultation_status.name
-        log.warning(
-            "Attempt to create admission profile with universal/activity-only status",
-            lead_id=lead_id,
-            consultation_id=latest_consultation.id,
-            status_id=latest_consultation.consultation_status_id,
-            status_name=status_name,
-            user_id=current_user.id,
-        )
-        raise BusinessRuleViolation(
-            f"Chưa thể tạo hồ sơ xét tuyển: Trạng thái hiện tại '{status_name}' chỉ là ghi nhận hoạt động, "
-            "chưa phải kết quả tư vấn. Vui lòng cập nhật trạng thái phản ánh kết quả tư vấn thực tế "
-            "(VD: 'Có nhu cầu tìm hiểu', 'Đồng ý tư vấn', 'Từ chối tư vấn')."
-        )
+        else:
+            # no_consultation | consultation_missing_status | consultation_universal_status
+            raise BusinessRuleViolation(msg)
 
     # Step 5: Validate offering exists
     if not lead.offering:

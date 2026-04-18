@@ -414,6 +414,34 @@ class Lead(LeadBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LeadDetail(Lead):
+    """Lead response for GET /leads/{id} with thin-client gate flags.
+
+    Populated by lead_service._populate_lead_detail_fields() based on
+    admission_service.check_lead_level_admission_eligibility(). Other lead
+    endpoints (list/create/update) continue returning plain ``Lead`` and
+    do not carry these fields.
+
+    Blocker codes emitted for ``create_admission``:
+      forbidden, already_has_profile, invalid_lead_status, missing_offering,
+      no_consultation, consultation_missing_status, consultation_universal_status.
+    """
+    permissions: Dict[str, bool] = Field(
+        default_factory=dict,
+        description="Permission flags computed per-user (e.g. create_admission).",
+    )
+    available_actions: List[str] = Field(
+        default_factory=list,
+        description="Actions currently allowed (subset of permissions keys where value=True).",
+    )
+    action_blockers: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map action_name → blocker_code for disabled actions.",
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LeadsSummary(BaseModel):
     """Aggregate stats over the entire filtered set (not just current page)."""
     new_count: int = 0

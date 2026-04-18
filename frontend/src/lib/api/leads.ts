@@ -7,6 +7,7 @@
 import { api } from './client'
 import type {
   Lead,
+  LeadDetail,
   LeadCreate,
   LeadUpdate,
   AssignLead,
@@ -59,12 +60,16 @@ export async function getLeads(params?: LeadListParams): Promise<LeadsPage> {
 }
 
 /**
- * Get single lead by ID
+ * Get single lead by ID.
+ *
+ * Backend returns `LeadDetail` (Lead + permissions/available_actions/action_blockers).
+ * These thin-client gate fields are populated only on this endpoint —
+ * list/create/update endpoints return plain `Lead`.
  *
  * @throws {AxiosError} 404 if lead not found, 403 if no permission
  */
-export async function getLead(leadId: number): Promise<Lead> {
-  const response = await api.get<Lead>(`/api/leads/${leadId}`)
+export async function getLead(leadId: number): Promise<LeadDetail> {
+  const response = await api.get<LeadDetail>(`/api/leads/${leadId}`)
   return response.data
 }
 

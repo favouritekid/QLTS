@@ -67,11 +67,13 @@ import { LeadInfoTabs } from "./LeadInfoTabs";
 import { WorkflowBreadcrumb } from "@/components/common";
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import { getLeadScoreLabel, getLeadScoreTextColor } from "@/constants";
-import type { Lead, TimelineItem, LeadInsights } from "@/types/lead.types";
+import type { LeadDetail, TimelineItem, LeadInsights } from "@/types/lead.types";
 
 interface LeadDetailClientProps {
   leadId: number;
-  initialData?: Lead;
+  // SSR prefetch uses serverApi.leads.getLead which returns LeadDetail from
+  // GET /leads/{id}. Client-side useLead also queries that endpoint, so types align.
+  initialData?: LeadDetail;
   initialTimeline?: TimelineItem[];
   initialInsights?: LeadInsights;
 }

@@ -58,6 +58,19 @@ export type AssignmentMethod = "manual" | "automatic" | "round_robin" | "skill_b
 // ============================================
 
 /**
+ * Blocker codes emitted by backend for Lead-level admission eligibility.
+ * Mirrors admission_service.check_lead_level_admission_eligibility().
+ */
+export type LeadAdmissionBlocker =
+  | "forbidden"
+  | "already_has_profile"
+  | "invalid_lead_status"
+  | "missing_offering"
+  | "no_consultation"
+  | "consultation_missing_status"
+  | "consultation_universal_status";
+
+/**
  * Complete Lead object from backend
  */
 export interface Lead {
@@ -740,6 +753,17 @@ export interface APIError {
         msg: string;
         type: string;
       }>;
+}
+
+/**
+ * LeadDetail - response shape of GET /leads/{id}.
+ * Extends Lead with thin-client gate flags populated by backend.
+ * Other lead endpoints (list/create/update) return plain Lead without these fields.
+ */
+export interface LeadDetail extends Lead {
+  permissions: Record<string, boolean>;
+  available_actions: string[];
+  action_blockers: Partial<Record<"create_admission", LeadAdmissionBlocker>>;
 }
 
 /**
