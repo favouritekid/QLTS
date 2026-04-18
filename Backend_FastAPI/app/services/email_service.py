@@ -126,12 +126,16 @@ def get_email_subject(template_name: str, lang: str = "vi") -> str:
             "password_reset_confirmation": "🔐 Mật khẩu đã được Đặt lại Thành công",
             "login_alert": "🚨 Cảnh báo Bảo mật: Phát hiện Đăng nhập Đáng ngờ",
             "welcome": "Chào mừng bạn đến với QLTS!",
+            "admission_confirmation": "🎓 Xác nhận nhập học — Hành động cần thiết",
+            "admission_confirmed_success": "✅ Xác nhận nhập học thành công",
         },
         "en": {
             "password_reset_request": "Password Reset Request",
             "password_reset_confirmation": "🔐 Your Password Has Been Reset Successfully",
             "login_alert": "🚨 Security Alert: Suspicious Login Detected",
             "welcome": "Welcome to QLTS!",
+            "admission_confirmation": "🎓 Confirm Your Admission — Action Required",
+            "admission_confirmed_success": "✅ Admission Confirmed Successfully",
         },
     }
 

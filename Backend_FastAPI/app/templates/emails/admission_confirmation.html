@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if lang == 'vi' %}
+<h2>🎓 Xác nhận nhập học</h2>
+
+<p>Xin chào <strong>{{ lead_name }}</strong>,</p>
+
+<p>Hồ sơ nhập học của bạn đã được Nhà trường duyệt. Để hoàn tất thủ tục, vui lòng xác nhận bằng cách nhấp vào nút bên dưới và nhập <strong>4 số cuối CCCD/CMND</strong> của bạn.</p>
+
+<div class="button-container">
+    <a href="{{ confirm_url }}" class="button">
+        Xác nhận nhập học
+    </a>
+</div>
+
+<p style="color: #666; font-size: 14px; margin-top: 20px;">
+    Hoặc copy và paste link sau vào trình duyệt của bạn:<br>
+    <a href="{{ confirm_url }}" style="color: #667eea; word-break: break-all;">{{ confirm_url }}</a>
+</p>
+
+<div class="alert alert-warning">
+    <strong>⏰ Thời hạn xác nhận:</strong>
+    <p>Liên kết này có hiệu lực đến <strong>{{ expires_at_display }}</strong> (còn <strong>{{ expires_days }} ngày</strong>). Sau thời hạn, vui lòng liên hệ cán bộ tuyển sinh để được cấp lại.</p>
+</div>
+
+<div class="alert alert-info">
+    <strong>🔐 Bạn sẽ cần:</strong>
+    <ul>
+        <li><strong>4 số cuối CCCD/CMND</strong> của bạn để xác thực</li>
+        <li>Tối đa <strong>5 lần nhập sai</strong> trước khi liên kết bị khóa</li>
+        <li>Sau khi xác nhận, Nhà trường sẽ liên hệ trong <strong>3 ngày làm việc</strong></li>
+    </ul>
+</div>
+
+<div class="alert alert-danger">
+    <p><strong>❌ Nếu bạn KHÔNG đăng ký vào Nhà trường:</strong></p>
+    <p>Vui lòng:</p>
+    <ul>
+        <li><strong>Bỏ qua email này</strong> - Liên kết sẽ tự động hết hạn</li>
+        <li>Liên hệ hotline của Nhà trường nếu nghi ngờ có người sử dụng thông tin của bạn</li>
+    </ul>
+</div>
+
+<p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #666; font-size: 14px;">
+    <strong>Mẹo Bảo mật:</strong><br>
+    - Không bao giờ chia sẻ liên kết xác nhận với bất kỳ ai<br>
+    - Nhà trường không bao giờ yêu cầu mật khẩu hay thông tin thanh toán qua email<br>
+    - Luôn kiểm tra URL trước khi nhập thông tin nhạy cảm
+</p>
+
+{% else %}
+<h2>🎓 Confirm Your Admission</h2>
+
+<p>Hi <strong>{{ lead_name }}</strong>,</p>
+
+<p>Your admission profile has been approved. To complete the process, please confirm by clicking the button below and entering the <strong>last 4 digits of your Citizen ID</strong>.</p>
+
+<div class="button-container">
+    <a href="{{ confirm_url }}" class="button">
+        Confirm Admission
+    </a>
+</div>
+
+<p style="color: #666; font-size: 14px; margin-top: 20px;">
+    Or copy and paste this link into your browser:<br>
+    <a href="{{ confirm_url }}" style="color: #667eea; word-break: break-all;">{{ confirm_url }}</a>
+</p>
+
+<div class="alert alert-warning">
+    <strong>⏰ Deadline:</strong>
+    <p>This link is valid until <strong>{{ expires_at_display }}</strong> (in <strong>{{ expires_days }} days</strong>). After expiry, please contact the admission office for a new link.</p>
+</div>
+
+<div class="alert alert-info">
+    <strong>🔐 You will need:</strong>
+    <ul>
+        <li><strong>Last 4 digits of your Citizen ID</strong> for verification</li>
+        <li>Maximum <strong>5 incorrect attempts</strong> before the link is locked</li>
+        <li>After confirmation, the school will contact you within <strong>3 business days</strong></li>
+    </ul>
+</div>
+
+<div class="alert alert-danger">
+    <p><strong>❌ If you did NOT apply to our school:</strong></p>
+    <ul>
+        <li><strong>Ignore this email</strong> - The link will automatically expire</li>
+        <li>Contact the school hotline if you suspect someone is using your information</li>
+    </ul>
+</div>
+
+<p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #666; font-size: 14px;">
+    <strong>Security Tips:</strong><br>
+    - Never share your confirmation link with anyone<br>
+    - The school will never ask for your password or payment info via email<br>
+    - Always verify the URL before entering sensitive information
+</p>
+
+{% endif %}
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if lang == 'vi' %}
+<h2>✅ Xác nhận nhập học thành công</h2>
+
+<p>Xin chào <strong>{{ lead_name }}</strong>,</p>
+
+<p>Hệ thống đã ghi nhận việc xác nhận nhập học của bạn lúc <strong>{{ confirmed_at_display }}</strong>.</p>
+
+<div class="alert alert-success">
+    <strong>🎉 Cảm ơn bạn đã xác nhận!</strong>
+    <p>Hồ sơ của bạn đã sẵn sàng để Nhà trường xử lý bước tiếp theo.</p>
+</div>
+
+<div class="alert alert-info">
+    <strong>📋 Bước tiếp theo:</strong>
+    <ul>
+        <li>Nhà trường sẽ liên hệ với bạn trong vòng <strong>3 ngày làm việc</strong></li>
+        <li>Bạn sẽ được hướng dẫn thủ tục đóng học phí và hoàn tất ghi danh</li>
+        <li>Vui lòng giữ điện thoại mở và kiểm tra email thường xuyên</li>
+    </ul>
+</div>
+
+<p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #666; font-size: 14px;">
+    Nếu bạn có thắc mắc, vui lòng liên hệ hotline hoặc email hỗ trợ ở chân trang email này.
+</p>
+
+{% else %}
+<h2>✅ Admission Confirmed Successfully</h2>
+
+<p>Hi <strong>{{ lead_name }}</strong>,</p>
+
+<p>Your admission confirmation has been recorded at <strong>{{ confirmed_at_display }}</strong>.</p>
+
+<div class="alert alert-success">
+    <strong>🎉 Thank you for confirming!</strong>
+    <p>Your profile is now ready for the school's next processing steps.</p>
+</div>
+
+<div class="alert alert-info">
+    <strong>📋 Next steps:</strong>
+    <ul>
+        <li>The school will contact you within <strong>3 business days</strong></li>
+        <li>You will receive instructions for tuition payment and final enrollment</li>
+        <li>Please keep your phone available and check your email regularly</li>
+    </ul>
+</div>
+
+<p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #666; font-size: 14px;">
+    If you have any questions, please contact the hotline or support email listed in the footer.
+</p>
+
+{% endif %}
+{% endblock %}

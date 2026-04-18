@@ -170,6 +170,116 @@ def send_password_reset_confirmation_email_task(
 
 
 # ============================================================================
+# Admission Magic-Link Confirmation Email
+# ============================================================================
+@celery_app.task(
+    name="send_magic_link_confirmation_task",
+    autoretry_for=(Exception,),
+    max_retries=3,
+    default_retry_delay=60,
+)
+def send_magic_link_confirmation_task(
+    email_to: str,
+    confirm_url: str,
+    lead_name: str,
+    expires_at_iso: str,
+    expires_days: int,
+    lang: str = "vi",
+):
+    """
+    Send magic-link confirmation email to the admission applicant (lead).
+
+    Applicant clicks the link → lands on /confirm/{token} → enters last 4 CCCD
+    digits → status transitions to 'confirmed'.
+    """
+    task_log = logging.getLogger("send_magic_link_confirmation_task")
+    if not email_to:
+        task_log.warning("No email_to; skipping magic link send")
+        return {"status": "skipped", "reason": "no_email"}
+
+    task_log.info(f"Magic link confirmation task started for recipient: {email_to}")
+
+    try:
+        from ..services.email_service import render_email_template, get_email_subject
+
+        expires_at_dt = datetime.fromisoformat(expires_at_iso)
+        expires_at_display = expires_at_dt.strftime("%d/%m/%Y %H:%M")
+
+        html_body, text_body = render_email_template(
+            "admission_confirmation",
+            {
+                "lead_name": lead_name,
+                "confirm_url": confirm_url,
+                "expires_at_display": expires_at_display,
+                "expires_days": expires_days,
+            },
+            lang=lang,
+        )
+        subject = get_email_subject("admission_confirmation", lang=lang)
+
+        _send_email(email_to, subject, html_body, text_body)
+
+        task_log.info(f"Magic link confirmation email sent successfully to: {email_to}")
+        return {"status": "success", "recipient": email_to, "lang": lang}
+    except Exception as e:
+        task_log.error(f"Failed to send magic link confirmation email to {email_to}", exc_info=True)
+        raise e
+
+
+# ============================================================================
+# Admission Confirmed Success Notification
+# ============================================================================
+@celery_app.task(
+    name="send_admission_confirmed_notification_task",
+    autoretry_for=(Exception,),
+    max_retries=3,
+    default_retry_delay=60,
+)
+def send_admission_confirmed_notification_task(
+    email_to: str,
+    lead_name: str,
+    confirmed_at_iso: str,
+    lang: str = "vi",
+):
+    """
+    Send post-confirmation success email to the applicant.
+
+    Sent after the applicant successfully verifies via magic-link + CCCD,
+    letting them know next steps (school will contact within 3 business days).
+    """
+    task_log = logging.getLogger("send_admission_confirmed_notification_task")
+    if not email_to:
+        task_log.warning("No email_to; skipping confirmation success notification")
+        return {"status": "skipped", "reason": "no_email"}
+
+    task_log.info(f"Admission confirmed notification task started for recipient: {email_to}")
+
+    try:
+        from ..services.email_service import render_email_template, get_email_subject
+
+        confirmed_at_dt = datetime.fromisoformat(confirmed_at_iso)
+        confirmed_at_display = confirmed_at_dt.strftime("%d/%m/%Y %H:%M")
+
+        html_body, text_body = render_email_template(
+            "admission_confirmed_success",
+            {
+                "lead_name": lead_name,
+                "confirmed_at_display": confirmed_at_display,
+            },
+            lang=lang,
+        )
+        subject = get_email_subject("admission_confirmed_success", lang=lang)
+
+        _send_email(email_to, subject, html_body, text_body)
+
+        task_log.info(f"Admission confirmed notification sent successfully to: {email_to}")
+        return {"status": "success", "recipient": email_to, "lang": lang}
+    except Exception as e:
+        task_log.error(f"Failed to send admission confirmed notification to {email_to}", exc_info=True)
+        raise e
+
+
+# ============================================================================
 # Private Helper Functions
 # ============================================================================
 def _send_email(to: str, subject: str, html_body: str, text_body: str):

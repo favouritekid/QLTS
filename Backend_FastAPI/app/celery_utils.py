@@ -26,6 +26,8 @@ from .tasks.email_tasks import (
     send_password_reset_email_task,
     send_login_alert_email_task,
     send_password_reset_confirmation_email_task,
+    send_magic_link_confirmation_task,
+    send_admission_confirmed_notification_task,
 )
 from .tasks.assignment_tasks import process_automatic_lead_assignment_task
 from .tasks.notification_tasks import (
@@ -78,6 +80,8 @@ __all__ = [
     "send_password_reset_email_task",
     "send_login_alert_email_task",
     "send_password_reset_confirmation_email_task",
+    "send_magic_link_confirmation_task",
+    "send_admission_confirmed_notification_task",
     # Assignment tasks
     "process_automatic_lead_assignment_task",
     # Notification tasks
