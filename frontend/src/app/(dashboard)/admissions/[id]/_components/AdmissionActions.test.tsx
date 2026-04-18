@@ -372,7 +372,7 @@ describe("AdmissionActions", () => {
       });
       renderActions(profile, 7);
 
-      expect(screen.getByText("Xác nhận nhập học")).toBeInTheDocument();
+      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
       expect(screen.getByText(getStatusConfig("approved").label)).toBeInTheDocument();
     });
 
@@ -383,7 +383,7 @@ describe("AdmissionActions", () => {
       });
       renderActions(profile, 7);
 
-      expect(screen.getByText("Xác nhận nhập học")).toBeInTheDocument();
+      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
       expect(screen.getByText(getStatusConfig("overridden").label)).toBeInTheDocument();
     });
 
@@ -394,7 +394,7 @@ describe("AdmissionActions", () => {
       });
       const spies = renderActions(profile, 7);
 
-      fireEvent.click(screen.getByText("Xác nhận nhập học"));
+      fireEvent.click(screen.getByText("Ghi danh"));
       expect(spies.onEnroll).toHaveBeenCalled();
     });
   });
@@ -417,7 +417,7 @@ describe("AdmissionActions", () => {
       expect(screen.queryByText("Từ chối")).not.toBeInTheDocument();
       expect(screen.queryByText("Nhận duyệt")).not.toBeInTheDocument();
       expect(screen.queryByText("Bỏ nhận")).not.toBeInTheDocument();
-      expect(screen.queryByText("Xác nhận nhập học")).not.toBeInTheDocument();
+      expect(screen.queryByText("Ghi danh")).not.toBeInTheDocument();
       expect(screen.queryByText("Nộp lại hồ sơ")).not.toBeInTheDocument();
       expect(screen.queryByText("Nộp hồ sơ")).not.toBeInTheDocument();
       expect(screen.queryByText("Lưu thay đổi")).not.toBeInTheDocument();
