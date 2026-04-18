@@ -599,9 +599,27 @@ class AdmissionProfileResponse(BaseModel):
     # Computed by backend: True if all academic criteria met
     is_qualified: Optional[bool] = None
 
-    # JSONB Fields
-    family_info: List[FamilyMemberSchema] = []
-    academic_history: List[AcademicRecordSchema] = []
+    # JSONB Fields — DB allows NULL (legacy rows, partial migrations). The
+    # response contract is always a list, so coerce None → [] rather than
+    # 500-ing the whole /admissions list page on a single poisoned row.
+    # See project_admissions_list_null_list_fields for the 2026-04-18 smoke
+    # that surfaced this.
+    family_info: List[FamilyMemberSchema] = Field(default_factory=list)
+    academic_history: List[AcademicRecordSchema] = Field(default_factory=list)
+
+    @field_validator("family_info", "academic_history", mode="before")
+    @classmethod
+    def _coerce_null_list_jsonb_to_empty(cls, value):
+        """Convert DB NULL into an empty list before Pydantic type-check.
+
+        Runs in `mode='before'` so the raw `None` from SQLAlchemy never
+        hits Pydantic's `List[...]` validator (which would raise
+        `list_type`). If the column was accidentally set to a non-list
+        value by some unusual path, we still raise below.
+        """
+        if value is None:
+            return []
+        return value
 
     # Nested relationships (using forward refs for circular import avoidance)
     lead: Optional["LeadShallowForAdmission"] = None
@@ -1249,10 +1267,31 @@ class SendConfirmationResponse(BaseModel):
     message: str
     token_expires_at: datetime
     sent_to_email: Optional[str] = None
-    sent_to_phone: Optional[str] = None
+    # Canonical field: lead's phone number. The API does NOT send SMS today —
+    # this is just data the officer can use to reach out. See
+    # project_send_confirmation_ops_gaps for rationale on the rename.
+    phone: Optional[str] = Field(
+        None,
+        description="Lead's phone number (informational — system does not send SMS)",
+    )
+    # DEPRECATED: alias of `phone`. Previous name implied SMS delivery, which
+    # was never true. Kept for one release cycle so existing consumers don't
+    # break silently. Remove after frontends are updated.
+    sent_to_phone: Optional[str] = Field(
+        None,
+        description="DEPRECATED: use `phone`. Kept for one cycle to avoid breaking clients.",
+        deprecated=True,
+    )
     token_value: Optional[str] = Field(
         None,
-        description="Token value for admin/officer to share confirmation link manually"
+        description="Token value for admin/officer to share confirmation link manually",
+    )
+    confirm_url: Optional[str] = Field(
+        None,
+        description=(
+            "Full confirmation URL (FRONTEND_URL + /confirm/{token}). "
+            "Prefer this over composing the link manually from `token_value`."
+        ),
     )
 
 

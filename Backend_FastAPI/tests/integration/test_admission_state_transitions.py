@@ -1119,6 +1119,171 @@ class TestTokenBasedConfirmation:
         new_token_response = await client.get(f"/api/admissions/confirm/{new_token}")
         assert new_token_response.status_code == 200
 
+    async def test_verify_and_confirm_succeeds_without_officer(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """BUG-1 regression guard.
+
+        Lead approved without assigned_officer_id → applicant should still
+        be able to confirm. Milestone consultation is skipped gracefully
+        (logged warning) rather than raising 400.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        citizen_id = "888877776666"  # last 4 = "6666"
+
+        # Create lead WITHOUT assigned_officer_id — the orphan edge case.
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=None)
+        profile = await create_admission_profile(
+            lead_id, status="approved", citizen_id=citizen_id
+        )
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+        await client.post(
+            f"/api/admissions/{profile.id}/send-confirmation", headers=headers
+        )
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.AdmissionConfirmationToken)
+                .where(models.AdmissionConfirmationToken.profile_id == profile.id)
+            )
+            token_value = result.scalar_one().token
+
+        # Double-check lead really has no officer before we confirm.
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.Lead.assigned_officer_id).where(models.Lead.id == lead_id)
+            )
+            assert result.scalar_one() is None
+
+        response = await client.post(
+            f"/api/admissions/confirm/{token_value}",
+            json={"last_digits_citizen_id": "6666"},
+        )
+
+        assert response.status_code == 200, (
+            f"Confirm must succeed even without an officer on the lead. "
+            f"Got {response.status_code}: {response.text}"
+        )
+        assert response.json()["status"] == "confirmed"
+
+        # Profile status committed.
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == profile.id
+                )
+            )
+            final = result.scalar_one()
+            assert final.status == "confirmed"
+            assert final.confirmed_at is not None
+
+    async def test_send_confirmation_response_includes_confirm_url(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Ops gap 1 regression guard.
+
+        `/send-confirmation` must return a ready-to-share `confirm_url` so
+        officers don't need to hardcode FRONTEND_URL + /confirm/ + token
+        themselves. Also verifies the `phone` rename ships with a
+        backward-compat `sent_to_phone` alias.
+        """
+        from app.config import settings
+
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(
+            lead_id, status="approved", citizen_id="776655443322"
+        )
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+        response = await client.post(
+            f"/api/admissions/{profile.id}/send-confirmation", headers=headers
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+
+        # Canonical confirm_url built from settings, not composed by caller.
+        assert body["confirm_url"].startswith(settings.FRONTEND_URL.rstrip("/"))
+        assert "/confirm/" in body["confirm_url"]
+        assert body["token_value"] in body["confirm_url"]
+
+        # Backward-compat alias — both present for one cycle.
+        assert body["phone"] == body["sent_to_phone"], (
+            "`phone` (canonical) and `sent_to_phone` (deprecated alias) "
+            "must return the same value while the cycle runs."
+        )
+
+
+# ==============================================================================
+# LIST ENDPOINT HARDENING (BUG-2)
+# ==============================================================================
+
+
+class TestAdmissionListNullJsonbFields:
+    """BUG-2 regression guard: GET /admissions must tolerate rows with NULL
+    JSONB list columns (family_info, academic_history). Pre-fix this crashed
+    the whole page with pydantic `list_type` validation error.
+    """
+
+    async def test_list_tolerates_profile_with_null_list_fields(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Seed a profile with family_info=NULL + academic_history=NULL
+        (simulating legacy rows or partial migrations that bypass service).
+        Listing the page must 200 with `[]` for those fields, not 500.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = models.AdmissionProfile(
+                    lead_id=lead_id,
+                    status="draft",
+                    citizen_id="990088007700",
+                    version=1,
+                    applied_rules={"min_gpa": 6.0, "mandatory_docs": []},
+                    academic_year=2025,
+                    family_info=None,  # Intentional poison
+                    academic_history=None,  # Intentional poison
+                )
+                session.add(profile)
+                await session.flush()
+                profile_id = profile.id
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+        response = await client.get(
+            "/api/admissions?page=1&page_size=50", headers=headers
+        )
+
+        assert response.status_code == 200, (
+            f"List endpoint must not 500 on a profile with NULL list JSONB "
+            f"fields. Got {response.status_code}: {response.text[:300]}"
+        )
+
+        # Find the poisoned row in the response; its list fields must have
+        # been coerced to `[]`.
+        body = response.json()
+        rows = body.get("profiles") or body.get("items") or []
+        poison = next((p for p in rows if p["id"] == profile_id), None)
+        assert poison is not None, (
+            f"Poisoned profile {profile_id} missing from response; list "
+            f"may have silently dropped it."
+        )
+        assert poison["family_info"] == []
+        assert poison["academic_history"] == []
+
 
 # ==============================================================================
 # CLAIM/UNCLAIM WORKFLOW TESTS

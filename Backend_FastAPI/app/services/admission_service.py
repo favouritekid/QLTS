@@ -1109,15 +1109,25 @@ async def _create_admission_milestone_consultation(
         or fallback_officer_id
     )
     if officer_id is None:
-        log.error(
-            "Cannot create milestone consultation: no officer resolvable",
+        # Graceful skip: the magic-link confirm path is applicant-driven; we
+        # must not fail their request because an internal ownership field is
+        # empty. Ops needs a loud warning to go triage the orphan lead.
+        # Every other caller of this helper has either an `actor` or an
+        # `assigned_officer_id`, so in practice this only fires during the
+        # confirm flow when the lead was approved without an officer assigned.
+        log.warning(
+            "Skipping admission milestone consultation: no officer resolvable. "
+            "Lead pipeline stage/status not synced for this event — ops must "
+            "assign an officer and re-sync manually.",
             lead_id=lead.id,
+            lead_status=lead.status,
+            lead_assigned_officer_id=lead.assigned_officer_id,
+            profile_id=profile_id,
             admission_event=event,
+            actor_user_id=actor.id if actor else None,
+            fallback_officer_id=fallback_officer_id,
         )
-        raise BusinessRuleViolation(
-            "Hồ sơ chưa sẵn sàng để xử lý: không xác định được cán bộ phụ trách. "
-            "Vui lòng liên hệ nhà trường."
-        )
+        return
     system_consultation = models.Consultation(
         lead_id=lead.id,
         officer_id=officer_id,

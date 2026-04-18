@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
+from ..config import settings
 from ..core import deps
 from ..core.deps import (
     CasbinAuth,  # ✅ Phase 2.2: Use standard alias
@@ -2304,12 +2305,19 @@ async def send_confirmation_link(
         
         # 4. RETURN Response
         lead = profile.lead
+        confirm_url = (
+            f"{settings.FRONTEND_URL.rstrip('/')}/confirm/{token_obj.token}"
+        )
+        phone = lead.phone if lead else None
         return schemas.SendConfirmationResponse(
             message="Đường link xác nhận đã được gửi thành công!",
             token_expires_at=token_obj.expires_at,
             sent_to_email=lead.email if lead else None,
-            sent_to_phone=lead.phone if lead else None,
+            phone=phone,
+            # DEPRECATED alias — remove after FE consumers migrate to `phone`.
+            sent_to_phone=phone,
             token_value=token_obj.token,
+            confirm_url=confirm_url,
         )
 
     except BadRequest as e:
