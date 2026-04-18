@@ -346,6 +346,9 @@ test.describe("Lead Management Workflow", () => {
 
     // --- Step 7: Add consultation ---
     await test.step("Add consultation", async () => {
+      // Refresh CSRF token before mutation
+      officerHeaders = await restoreCookies(page, officerCookies);
+
       const resp = await page.request.post(
         `${API_URL}/api/leads/${leadId1}/consultations`,
         {
@@ -357,9 +360,12 @@ test.describe("Lead Management Workflow", () => {
           },
         }
       );
+      if (!resp.ok() && resp.status() !== 201) {
+        console.log(`Add consultation failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+      }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
-      consultationId1 = body.id;
+      consultationId1 = body.consultation?.id ?? body.id;
       expect(consultationId1).toBeTruthy();
       console.log(`Consultation ID: ${consultationId1}`);
     });
@@ -717,7 +723,7 @@ test.describe("Lead Management Workflow", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      expect(body.id).toBe(consultationId1);
+      expect(body.consultation?.id ?? body.id).toBe(consultationId1);
       console.log(`Consultation ${consultationId1} restored`);
     });
   });
@@ -775,6 +781,8 @@ test.describe("Lead Management Workflow", () => {
 
     // --- Step 4: Add consultation to lead4 (prerequisite for FSM PATCH) ---
     await test.step("Add consultation to lead4 (set initial status)", async () => {
+      officerHeaders = await restoreCookies(page, officerCookies);
+
       const resp = await page.request.post(
         `${API_URL}/api/leads/${leadId4}/consultations`,
         {
@@ -788,7 +796,7 @@ test.describe("Lead Management Workflow", () => {
       );
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
-      expect(body.consultation_status_id).toBe(initialStatusId);
+      expect(body.consultation_status_id ?? body.lead?.consultation_status_id).toBe(initialStatusId);
       console.log(`Lead4 consultation set to ${initialStatusId}`);
     });
 

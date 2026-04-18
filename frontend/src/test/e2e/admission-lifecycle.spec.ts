@@ -666,11 +666,13 @@ test.describe("Admission Profile Lifecycle", () => {
     await test.step("Officer resubmits profile", async () => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
+      const profile = await (await page.request.get(`${API_URL}/api/admissions/${profileId2}`)).json();
+
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId2}/resubmit`,
         {
           headers: officerHeaders,
-          data: { notes: "Corrected documents uploaded" },
+          data: { notes: "Corrected documents uploaded", version: profile.version },
         }
       );
       expect(resp.ok()).toBeTruthy();
@@ -1141,11 +1143,13 @@ test.describe("Admission Profile Lifecycle", () => {
     await test.step("Officer resubmits after revision", async () => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
+      const profile = await (await page.request.get(`${API_URL}/api/admissions/${profileId5}`)).json();
+
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId5}/resubmit`,
         {
           headers: officerHeaders,
-          data: { notes: "Đã bổ sung đầy đủ hồ sơ theo yêu cầu" },
+          data: { notes: "Đã bổ sung đầy đủ hồ sơ theo yêu cầu", version: profile.version },
         }
       );
       expect(resp.ok()).toBeTruthy();
