@@ -9,6 +9,7 @@ import { Main } from "./dashboard/Main";
 import { MobileBottomNav } from "./dashboard/MobileBottomNav";
 import { SecurityBanner, useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "./SecurityBanner";
 import { Suspense, useCallback, useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 
 const CommandPalette = dynamic(
@@ -59,6 +60,7 @@ export function DashboardLayout({
   children: React.ReactNode;
 }>) {
   const { isSidebarCollapsed, setSidebarCollapsed } = useUIStore();
+  const pathname = usePathname();
   const showSecurityBanner = useShouldShowSecurityBanner();
 
   // ✅ SECURITY FIX: Removed client-side auth guard
@@ -84,6 +86,13 @@ export function DashboardLayout({
   const isMobileSidebarOpen = !isSidebarCollapsed;
 
   const closeSidebar = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
+
+  // Auto-close mobile sidebar when the route changes (link click navigates away)
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setSidebarCollapsed(true);
+    }
+  }, [pathname, setSidebarCollapsed]);
 
   // Move focus into sidebar when it opens on mobile, close on Escape
   useEffect(() => {
@@ -130,6 +139,18 @@ export function DashboardLayout({
         </Suspense>
       </div>
 
+      {/* Mobile overlay — outside inert shell so hit-testing keeps the
+          onClick handler reachable. (When placed inside mainWrapperRef,
+          inert disables pointer events for the whole subtree, which
+          made tap-to-dismiss silently fail on mobile.) */}
+      {!isSidebarCollapsed && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={closeSidebar}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Non-sidebar shell — entire subtree gets inert when mobile
           sidebar is open so keyboard focus cannot escape the drawer. */}
       <div ref={mainWrapperRef}>
@@ -145,15 +166,6 @@ export function DashboardLayout({
         <CommandPalette />
 
         <div className="bg-muted/40 relative flex min-h-screen w-full overflow-hidden">
-          {/* Mobile Overlay */}
-          {!isSidebarCollapsed && (
-            <div
-              className="fixed inset-0 z-40 bg-black/50 lg:hidden"
-              onClick={() => setSidebarCollapsed(true)}
-              aria-hidden="true"
-            />
-          )}
-
           {/* Main content area */}
           <div
             className={cn(
