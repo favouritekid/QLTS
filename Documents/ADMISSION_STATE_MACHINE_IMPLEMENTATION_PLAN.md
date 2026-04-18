@@ -2,17 +2,27 @@
 
 > **Version:** 3.1
 > **Created:** 2026-01-06
-> **Updated:** 2026-01-06 (Enhanced checklists + Complete acceptance criteria)
+> **Updated:** 2026-04-18 (magic-link shipped, historical notes cleaned up)
 > **Author:** Architecture Team
 > **Status:** ✅ PRODUCTION-READY FOR MVP
 > **Compliance:** MASTER_ARCHITECTURE.md v3.0 + AUTHORIZATION_GUIDELINES.md v1.0
 >
-> ⚠️ **Historical reference:** The `confirm` endpoint (`POST /admissions/{id}/confirm`)
-> and its `get_admission_for_owner` dependency + `confirm_enrollment()` service
-> function described in this plan have been **superseded by the Magic Link +
-> CCCD token flow** (`GET/POST /api/admissions/confirm/{token}`). Those
-> symbols no longer exist in the codebase. Treat all references to them in
-> this document as historical design context.
+> ⚠️ **Historical document — do not use as design reference.**
+> This plan was written when the confirmation step was imagined as
+> `POST /admissions/{id}/confirm` + `get_admission_for_owner` +
+> `confirm_enrollment()`. Those symbols were never shipped. The flow that
+> actually runs in production is the **magic-link + CCCD** design:
+> `GET/POST /api/admissions/confirm/{token}`, service entry point
+> `admission_service.verify_and_confirm()` at
+> `app/services/admission_service.py:5063`.
+>
+> **Canonical reference for confirmation:**
+> `Backend_FastAPI/docs/MAGIC_LINK_CONFIRMATION_FLOW.md`.
+>
+> Everything in sections below that mentions `/confirm/{id}`,
+> `get_admission_for_owner`, or `confirm_enrollment()` is preserved only
+> for architectural archaeology; cross-reference the canonical doc before
+> treating any paragraph as a design rule.
 
 ---
 

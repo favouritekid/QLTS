@@ -533,3 +533,11 @@ for its area.
   it as canonical.
 - **Finance — Dead event cluster removal** (shipped): no `DomainEvent` /
   `emit_event()`. See `docs/adr/ADR-001-remove-finance-events.md`.
+- **Admission — Magic-link confirmation flow** (shipped 2026-04-18): the
+  `approved → confirmed → enrolled` transition is canonical. `confirmed`
+  is set only through the public `/api/admissions/confirm/{token}` flow
+  (token + last-4-CCCD); direct admin `approved → enrolled` is blocked at
+  the state machine, admins wanting to bypass use `override`. Historical
+  sketches of `POST /admissions/{id}/confirm` / `confirm_enrollment()` in
+  `Documents/ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md` were never
+  shipped — the authoritative design is `docs/MAGIC_LINK_CONFIRMATION_FLOW.md`.
