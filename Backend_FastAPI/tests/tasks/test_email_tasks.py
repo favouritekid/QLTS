@@ -22,7 +22,12 @@ class TestSendMagicLinkConfirmationTask:
     """Covers the magic-link email Celery task."""
 
     def test_renders_and_sends_successfully(self):
-        """Happy path: valid inputs → render_email_template + _send_email called with expected args."""
+        """Happy path: valid inputs → render_email_template + _send_email called with expected args.
+
+        Also verifies the expiry timestamp is converted from UTC to the
+        configured local timezone (Asia/Ho_Chi_Minh) before display —
+        10:00 UTC → 17:00 Asia/Ho_Chi_Minh (UTC+7, no DST).
+        """
         expires_at = datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc)
         with patch("app.tasks.email_tasks._send_email") as mock_send, \
              patch("app.services.email_service.render_email_template",
@@ -47,7 +52,8 @@ class TestSendMagicLinkConfirmationTask:
         assert context["lead_name"] == "Nguyễn Văn A"
         assert context["confirm_url"] == "https://qlts.tnpc.edu.vn/confirm/abc123"
         assert context["expires_days"] == 7
-        assert "25/04/2026" in context["expires_at_display"]
+        # Timezone-converted: 10:00 UTC → 17:00 Asia/Ho_Chi_Minh
+        assert context["expires_at_display"] == "25/04/2026 17:00"
         assert call_args[1]["lang"] == "vi"
 
         # SMTP called once with correct subject
@@ -113,7 +119,8 @@ class TestSendAdmissionConfirmedNotificationTask:
         assert call_args[0][0] == "admission_confirmed_success"
         context = call_args[0][1]
         assert context["lead_name"] == "Trần Thị B"
-        assert "20/04/2026" in context["confirmed_at_display"]
+        # Timezone-converted: 14:30 UTC → 21:30 Asia/Ho_Chi_Minh
+        assert context["confirmed_at_display"] == "20/04/2026 21:30"
 
         # SMTP called with VI subject
         mock_send.assert_called_once()

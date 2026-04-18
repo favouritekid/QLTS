@@ -34,6 +34,10 @@ const PUBLIC_ROUTE_PREFIXES = [
   "/forgot-password",
   "/reset-password",
   "/tuyen-sinh",
+  // Admission magic-link confirmation — applicants arrive from email
+  // without being logged in. Backend exempts /api/admissions/confirm/*
+  // from CSRF; frontend proxy must likewise let the page render.
+  "/confirm",
 ];
 
 /**

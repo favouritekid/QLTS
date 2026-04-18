@@ -12,6 +12,7 @@ import smtplib
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from zoneinfo import ZoneInfo
 
 from ..celery_app import celery_app
 from ..config import settings
@@ -202,8 +203,12 @@ def send_magic_link_confirmation_task(
     try:
         from ..services.email_service import render_email_template, get_email_subject
 
+        # Convert UTC timestamp to the configured local timezone (Asia/Ho_Chi_Minh)
+        # before formatting — applicants must see the deadline in their own time,
+        # not UTC (off by 7 hours for VN users).
         expires_at_dt = datetime.fromisoformat(expires_at_iso)
-        expires_at_display = expires_at_dt.strftime("%d/%m/%Y %H:%M")
+        expires_at_local = expires_at_dt.astimezone(ZoneInfo(settings.TIMEZONE))
+        expires_at_display = expires_at_local.strftime("%d/%m/%Y %H:%M")
 
         html_body, text_body = render_email_template(
             "admission_confirmation",
@@ -257,8 +262,11 @@ def send_admission_confirmed_notification_task(
     try:
         from ..services.email_service import render_email_template, get_email_subject
 
+        # Same timezone-aware handling as the magic-link task: applicants see
+        # the confirmation timestamp in local (Asia/Ho_Chi_Minh) time.
         confirmed_at_dt = datetime.fromisoformat(confirmed_at_iso)
-        confirmed_at_display = confirmed_at_dt.strftime("%d/%m/%Y %H:%M")
+        confirmed_at_local = confirmed_at_dt.astimezone(ZoneInfo(settings.TIMEZONE))
+        confirmed_at_display = confirmed_at_local.strftime("%d/%m/%Y %H:%M")
 
         html_body, text_body = render_email_template(
             "admission_confirmed_success",
