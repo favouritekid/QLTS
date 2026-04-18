@@ -12,6 +12,28 @@ import { Suspense, useCallback, useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 
+/**
+ * Subscribes to pathname changes and collapses the mobile sidebar on
+ * navigate. Isolated into its own component so `usePathname()` (a dynamic
+ * API under Next.js 16 Cache Components) can sit behind a <Suspense>
+ * boundary without forcing the whole layout to be dynamic.
+ */
+function MobileSidebarRouteSync({
+  onNavigate,
+}: {
+  onNavigate: () => void;
+}) {
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      onNavigate();
+    }
+  }, [pathname, onNavigate]);
+
+  return null;
+}
+
 const CommandPalette = dynamic(
   () => import("@/components/common/CommandPalette").then(m => ({ default: m.CommandPalette })),
   { ssr: false }
@@ -60,7 +82,6 @@ export function DashboardLayout({
   children: React.ReactNode;
 }>) {
   const { isSidebarCollapsed, setSidebarCollapsed } = useUIStore();
-  const pathname = usePathname();
   const showSecurityBanner = useShouldShowSecurityBanner();
 
   // ✅ SECURITY FIX: Removed client-side auth guard
@@ -86,13 +107,6 @@ export function DashboardLayout({
   const isMobileSidebarOpen = !isSidebarCollapsed;
 
   const closeSidebar = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
-
-  // Auto-close mobile sidebar when the route changes (link click navigates away)
-  useEffect(() => {
-    if (typeof window !== "undefined" && window.innerWidth < 1024) {
-      setSidebarCollapsed(true);
-    }
-  }, [pathname, setSidebarCollapsed]);
 
   // Move focus into sidebar when it opens on mobile, close on Escape
   useEffect(() => {
@@ -150,6 +164,14 @@ export function DashboardLayout({
           aria-hidden="true"
         />
       )}
+
+      {/* Auto-close the mobile drawer on route change — wrapped in
+          <Suspense> because usePathname() is a dynamic API under Next.js
+          16 Cache Components and would otherwise force the whole layout
+          to be rendered dynamically. */}
+      <Suspense fallback={null}>
+        <MobileSidebarRouteSync onNavigate={closeSidebar} />
+      </Suspense>
 
       {/* Non-sidebar shell — entire subtree gets inert when mobile
           sidebar is open so keyboard focus cannot escape the drawer. */}
