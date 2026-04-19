@@ -34,6 +34,11 @@ from .delivery_tasks import (
     sweep_retry_deliveries,
     reconcile_stale_deliveries,
 )
+from .finance_tasks import check_overdue_invoices_task
+from .collaborator_tasks import (
+    check_ctv_attribution_expiry_task,
+    send_ctv_weekly_summary_task,
+)
 
 __all__ = [
     # Email tasks
@@ -54,4 +59,9 @@ __all__ = [
     "execute_notification_delivery",
     "sweep_retry_deliveries",
     "reconcile_stale_deliveries",
+    # Finance tasks
+    "check_overdue_invoices_task",
+    # Collaborator tasks
+    "check_ctv_attribution_expiry_task",
+    "send_ctv_weekly_summary_task",
 ]
