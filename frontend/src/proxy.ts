@@ -229,7 +229,10 @@ export const config = {
      * - favicon.ico, robots.txt, sitemap.xml (public files)
      * - manifest.json (PWA manifest)
      * - public folder content (images, etc.)
+     * - zalo_verifier*.html (Zalo Developer Console domain ownership proof —
+     *   must be reachable without auth redirect; Zalo's verifier does not
+     *   follow 307 to /login)
      */
-    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|manifest.json|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.svg|.*\\.gif).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|manifest.json|zalo_verifier|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.svg|.*\\.gif|.*\\.html).*)",
   ],
 };
