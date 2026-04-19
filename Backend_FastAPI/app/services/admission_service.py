@@ -628,11 +628,16 @@ def _compute_frontend_fields(
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "enroll": status in ["confirmed", "overridden"] and (is_owner or is_manager or is_admin),
-        # Send/resend magic-link confirmation email. Mirrors the contract of
-        # POST /admissions/{id}/send-confirmation (CasbinAuth + manager IDOR).
-        # Only meaningful while the profile is waiting on the applicant to
-        # confirm — after `confirmed`, no more tokens are generated.
-        "send_confirmation": status == "approved" and (is_manager or is_admin),
+        # Send/resend magic-link confirmation email. Mirrors the real route
+        # contract for POST /admissions/{id}/send-confirmation:
+        #   - Casbin policy grants this to every role (officer/manager/admin)
+        #     via `policy_templates.py:139`
+        #   - `get_admission_for_manager` dependency gates IDOR 3-tier:
+        #     admin (all) / manager (unit) / officer (assigned + in-unit)
+        # Equivalent client-side: assigned officer, unit manager, or admin.
+        # Only meaningful while waiting on the applicant — after `confirmed`,
+        # no more tokens are generated.
+        "send_confirmation": status == "approved" and (is_owner or is_manager or is_admin),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),

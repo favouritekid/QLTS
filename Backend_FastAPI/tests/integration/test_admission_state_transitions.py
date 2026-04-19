@@ -1181,6 +1181,50 @@ class TestTokenBasedConfirmation:
             assert final.status == "confirmed"
             assert final.confirmed_at is not None
 
+    async def test_assigned_officer_sees_send_confirmation_permission_on_approved(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Contract guard for P1/P2 from the 2026-04-19 review.
+
+        The Casbin policy grants POST /send-confirmation to every role
+        (policy_templates.py:139), and get_admission_for_manager permits
+        officers who are assigned to the lead within their own unit. The
+        permission builder in _compute_frontend_fields MUST mirror that —
+        otherwise the UI button is invisible to the very users who ARE
+        allowed to call the endpoint.
+
+        Setup: approved profile, officer assigned to the lead, same unit.
+        Expect: GET /api/admissions/{id} response has
+        permissions.send_confirmation == True.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(
+            unit_id, assigned_officer_id=officer_user_in_db["id"]
+        )
+        profile = await create_admission_profile(
+            lead_id, status="approved", citizen_id="554433221100"
+        )
+
+        officer_headers = await get_auth_headers(client, officer_user_in_db)
+        response = await client.get(
+            f"/api/admissions/{profile.id}", headers=officer_headers
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "approved"
+        assert body["permissions"].get("send_confirmation") is True, (
+            f"Assigned officer must receive send_confirmation=True on an "
+            f"approved profile. Full permissions: {body['permissions']}"
+        )
+        # Cross-check: the same permission flips false when the profile
+        # leaves the approved window (applicant already confirmed etc.).
+        # Covered here implicitly by the "submitted does NOT show" UI test
+        # in AdmissionActions.test.tsx and by confirmed-state tests above.
+
     async def test_send_confirmation_response_includes_confirm_url(
         self,
         client: AsyncClient,
