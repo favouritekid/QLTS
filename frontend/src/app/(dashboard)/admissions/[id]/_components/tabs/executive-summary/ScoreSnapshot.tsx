@@ -45,6 +45,23 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
   const minSubjectScore = scoreStatus?.min_subject_score ?? profile.applied_rules?.min_subject_score
   const minScore = scoreStatus?.min_score ?? profile.applied_rules?.min_score
 
+  // PR6 Step 3 (2026-04-19): weighted-scoring breakdown. Source of truth
+  // for `totalScore` is still the backend (thin client). The extra
+  // columns below are a READ-ONLY explanation of how the backend got
+  // there — useful when scoring_method="weighted" and the frozen
+  // `subject_weights` map is present on the snapshot.
+  //
+  // Missing key → fallback 1.0, matching the backend scoring contract.
+  // Pre-migration snapshots (no `subject_weights`) → degrade to the
+  // original 3-column view, no-op.
+  const scoringMethod = profile.applied_rules?.scoring_method
+  const subjectWeights = profile.applied_rules?.subject_weights ?? {}
+  const hasWeights =
+    scoringMethod === "weighted" &&
+    Object.keys(subjectWeights).length > 0
+  const getWeight = (code: string): number =>
+    subjectWeights[code] !== undefined ? subjectWeights[code] : 1.0
+
   // If GPA-only method, show message
   if (isGpaOnly) {
     return (
@@ -103,9 +120,21 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[50%]">Môn học</TableHead>
-                <TableHead className="text-right w-[25%]">Điểm</TableHead>
-                <TableHead className="text-right w-[25%]">Trạng thái</TableHead>
+                {hasWeights ? (
+                  <>
+                    <TableHead className="w-[32%]">Môn học</TableHead>
+                    <TableHead className="text-right w-[16%]">Điểm</TableHead>
+                    <TableHead className="text-right w-[12%]">Hệ số</TableHead>
+                    <TableHead className="text-right w-[20%]">Điểm sau nhân</TableHead>
+                    <TableHead className="text-right w-[20%]">Trạng thái</TableHead>
+                  </>
+                ) : (
+                  <>
+                    <TableHead className="w-[50%]">Môn học</TableHead>
+                    <TableHead className="text-right w-[25%]">Điểm</TableHead>
+                    <TableHead className="text-right w-[25%]">Trạng thái</TableHead>
+                  </>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -114,6 +143,11 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                 // ✅ THIN CLIENT: Use backend-computed status, NOT local calculation
                 const subjectStatus = scoreStatus?.subject_statuses?.[subjectCode]
                 const isPassing = subjectStatus === "passing"
+                const weight = hasWeights ? getWeight(subjectCode) : null
+                const weightedScore =
+                  hasWeights && score !== null && score !== undefined && weight !== null
+                    ? score * weight
+                    : null
 
                 return (
                   <TableRow key={subjectCode}>
@@ -125,6 +159,16 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                         ? score.toFixed(1)
                         : "N/A"}
                     </TableCell>
+                    {hasWeights && (
+                      <>
+                        <TableCell className="text-right text-sm tabular-nums text-muted-foreground">
+                          {weight !== null ? `×${weight}` : "×1"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {weightedScore !== null ? weightedScore.toFixed(2) : "—"}
+                        </TableCell>
+                      </>
+                    )}
                     <TableCell className="text-right">
                       {score !== null && score !== undefined && subjectStatus != null ? (
                         isPassing ? (
@@ -140,10 +184,23 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                 )
               })}
 
-              {/* Total Row */}
+              {/* Total Row — totalScore stays the backend-computed source
+                  of truth. When hasWeights, we also widen the "Điểm"
+                  cell's colspan so the total aligns with the
+                  already-weighted per-subject column above. */}
               <TableRow className="bg-info-50 font-bold border-t-2">
-                <TableCell>Tổng điểm</TableCell>
-                <TableCell className="text-right text-xl text-info-700 tabular-nums">
+                <TableCell>
+                  Tổng điểm
+                  {hasWeights && (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      (đã áp hệ số)
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell
+                  colSpan={hasWeights ? 3 : 1}
+                  className="text-right text-xl text-info-700 tabular-nums"
+                >
                   {totalScore !== null && totalScore !== undefined
                     ? totalScore.toFixed(2)
                     : "N/A"}
@@ -169,10 +226,13 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
               {/* Min Score Info */}
               {minScore !== null && minScore !== undefined && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-xs text-muted-foreground text-center pt-2 tabular-nums">
+                  <TableCell colSpan={hasWeights ? 5 : 3} className="text-xs text-muted-foreground text-center pt-2 tabular-nums">
                     Điểm chuẩn tối thiểu: {minScore.toFixed(2)}
                     {minSubjectScore !== null && minSubjectScore !== undefined && (
                       <> • Điểm liệt: {minSubjectScore.toFixed(1)}</>
+                    )}
+                    {hasWeights && (
+                      <> • Phương thức: tính theo hệ số</>
                     )}
                   </TableCell>
                 </TableRow>
