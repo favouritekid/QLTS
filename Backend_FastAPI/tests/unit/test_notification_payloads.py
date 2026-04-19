@@ -576,3 +576,127 @@ class TestConsultationReminder:
         payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
         assert payload["scheduled_time_vn"] == "20/04/2026 15:30"
         assert len(payload["scheduled_time_vn"]) <= 20
+
+
+# ===========================================================================
+# for_invoice_issued
+# ===========================================================================
+
+
+def _make_invoice(**overrides):
+    defaults = dict(
+        id=501,
+        invoice_number="INV-2026-0501",
+        fee_id=77,
+        amount="7000000",
+        due_date=datetime(2026, 5, 15, 0, 0, 0),
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+class TestInvoiceIssued:
+    def test_exact_keys(self):
+        inv = _make_invoice()
+        payload = EventPayload.for_invoice_issued(
+            inv,
+            admission_profile_id=42,
+            lead_id=99,
+            unit_id=10,
+            officer_id=5,
+            lead_full_name="Phạm Thái Hà",
+            major_name="Điều dưỡng",
+            degree_level="Cao đẳng",
+        )
+        assert payload == {
+            # Backward-compat
+            "invoice_id": 501,
+            "invoice_number": "INV-2026-0501",
+            "fee_id": 77,
+            "amount": "7000000",
+            "due_date": "2026-05-15T00:00:00",
+            "admission_profile_id": 42,
+            "lead_id": 99,
+            "unit_id": 10,
+            "user_id": 5,
+            # New
+            "profile_code": "HS-000042",
+            "lead_full_name": "Phạm Thái Hà",
+            "major_name": "Điều dưỡng",
+            "degree_level": "Cao đẳng",
+            "amount_vnd": "7000000",
+            "due_date_vn": "15/05/2026",
+            "bank_transfer_note": "Pham Thai Ha HS 000042 thanh toan hoc phi Dieu duong",
+        }
+
+    def test_lead_full_name_fallback_unknown(self):
+        inv = _make_invoice()
+        payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
+        assert payload["lead_full_name"] == "Unknown"
+
+    def test_major_name_fallback_na(self):
+        inv = _make_invoice()
+        payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
+        assert payload["major_name"] == "N/A"
+        assert payload["degree_level"] == "N/A"
+
+    def test_amount_vnd_strips_decimal(self):
+        """Zalo CURRENCY type rejects decimals; must coerce to integer."""
+        inv = _make_invoice(amount="5500000.00")
+        payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
+        assert payload["amount_vnd"] == "5500000"
+        assert payload["amount"] == "5500000.00"  # raw preserved for other channels
+
+    def test_amount_vnd_invalid_becomes_zero(self):
+        inv = _make_invoice(amount="not-a-number")
+        payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
+        assert payload["amount_vnd"] == "0"
+
+    def test_due_date_vn_format(self):
+        inv = _make_invoice(due_date=datetime(2026, 5, 15, 0, 0, 0))
+        payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
+        assert payload["due_date_vn"] == "15/05/2026"
+
+    def test_due_date_missing_yields_empty_vn(self):
+        inv = _make_invoice(due_date=None)
+        payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
+        assert payload["due_date"] is None
+        assert payload["due_date_vn"] == ""
+
+    def test_profile_code_format(self):
+        inv = _make_invoice()
+        payload = EventPayload.for_invoice_issued(inv, admission_profile_id=7)
+        assert payload["profile_code"] == "HS-000007"
+
+    def test_profile_code_defaults_when_absent(self):
+        inv = _make_invoice()
+        payload = EventPayload.for_invoice_issued(inv)  # no admission_profile_id
+        assert payload["profile_code"] == "HS-000000"
+
+    def test_bank_transfer_note_zalo_compliant(self):
+        """Must match ^[a-zA-Z0-9 ]+$ — Zalo BANK_TRANSFER_NOTE constraint."""
+        import re
+        inv = _make_invoice()
+        payload = EventPayload.for_invoice_issued(
+            inv,
+            admission_profile_id=42,
+            lead_full_name="Phạm Thái Hà",
+            major_name="Điều dưỡng",
+        )
+        note = payload["bank_transfer_note"]
+        assert re.match(r"^[a-zA-Z0-9 ]+$", note), f"not Zalo-compliant: {note!r}"
+        assert len(note) <= 90
+
+    def test_truncation_caps_on_30_char_fields(self):
+        inv = _make_invoice()
+        long_name = "a" * 50
+        payload = EventPayload.for_invoice_issued(
+            inv,
+            admission_profile_id=1,
+            lead_full_name=long_name,
+            major_name=long_name,
+            degree_level=long_name,
+        )
+        assert len(payload["lead_full_name"]) == 30
+        assert len(payload["major_name"]) == 30
+        assert len(payload["degree_level"]) == 30

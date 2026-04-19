@@ -218,32 +218,48 @@ class InvoiceService:
         if auto_issue and invoices:
             _lead_id = None
             _officer_id = None
+            _lead_full_name = None
+            _major_name = None
+            _degree_level = None
             if fee.admission_profile_id:
                 from sqlalchemy.orm import selectinload as _sil
                 _prof_result = await self.db.execute(
                     select(models.AdmissionProfile)
                     .where(models.AdmissionProfile.id == fee.admission_profile_id)
-                    .options(_sil(models.AdmissionProfile.lead))
+                    .options(
+                        _sil(models.AdmissionProfile.lead)
+                        .selectinload(models.Lead.offering)
+                        .selectinload(models.ProgramOffering.program),
+                    )
                 )
                 _prof = _prof_result.scalar_one_or_none()
                 if _prof:
                     _lead_id = _prof.lead_id
-                    if getattr(_prof, "lead", None):
-                        _officer_id = _prof.lead.assigned_officer_id
+                    _lead_obj = getattr(_prof, "lead", None)
+                    if _lead_obj is not None:
+                        _officer_id = _lead_obj.assigned_officer_id
+                        _lead_full_name = _lead_obj.full_name
+                        _offering = getattr(_lead_obj, "offering", None)
+                        if _offering is not None:
+                            _program = getattr(_offering, "program", None)
+                            if _program is not None:
+                                _major_name = _program.name
+                                _degree_level = _program.degree_level
 
-            _issued_payloads = []
-            for inv in invoices:
-                _issued_payloads.append({
-                    "invoice_id": inv.id,
-                    "invoice_number": inv.invoice_number,
-                    "fee_id": inv.fee_id,
-                    "amount": str(inv.amount),
-                    "due_date": inv.due_date.isoformat() if inv.due_date else None,
-                    "admission_profile_id": fee.admission_profile_id,
-                    "lead_id": _lead_id,
-                    "unit_id": unit_id,
-                    "user_id": _officer_id,
-                })
+            from app.services.notification_payloads import EventPayload
+            _issued_payloads = [
+                EventPayload.for_invoice_issued(
+                    inv,
+                    admission_profile_id=fee.admission_profile_id,
+                    lead_id=_lead_id,
+                    unit_id=unit_id,
+                    officer_id=_officer_id,
+                    lead_full_name=_lead_full_name,
+                    major_name=_major_name,
+                    degree_level=_degree_level,
+                )
+                for inv in invoices
+            ]
             _db = self.db
 
             async def _post_commit_cb_fn():
@@ -410,31 +426,46 @@ class InvoiceService:
         _profile = None
         _lead_id = None
         _officer_id = None
+        _lead_full_name = None
+        _major_name = None
+        _degree_level = None
         fee = await self.fee_repo.get_by_id_with_relations(invoice.fee_id, unit_id) if invoice.fee_id else None
         if fee:
             from sqlalchemy.orm import selectinload
             result = await self.db.execute(
                 select(models.AdmissionProfile)
                 .where(models.AdmissionProfile.id == fee.admission_profile_id)
-                .options(selectinload(models.AdmissionProfile.lead))
+                .options(
+                    selectinload(models.AdmissionProfile.lead)
+                    .selectinload(models.Lead.offering)
+                    .selectinload(models.ProgramOffering.program),
+                )
             )
             _profile = result.scalar_one_or_none()
             if _profile:
                 _lead_id = _profile.lead_id
-                if hasattr(_profile, "lead") and _profile.lead:
-                    _officer_id = _profile.lead.assigned_officer_id
+                _lead_obj = getattr(_profile, "lead", None)
+                if _lead_obj is not None:
+                    _officer_id = _lead_obj.assigned_officer_id
+                    _lead_full_name = _lead_obj.full_name
+                    _offering = getattr(_lead_obj, "offering", None)
+                    if _offering is not None:
+                        _program = getattr(_offering, "program", None)
+                        if _program is not None:
+                            _major_name = _program.name
+                            _degree_level = _program.degree_level
 
-        _invoice_payload = {
-            "invoice_id": invoice.id,
-            "invoice_number": invoice.invoice_number,
-            "fee_id": invoice.fee_id,
-            "amount": str(invoice.amount),
-            "due_date": invoice.due_date.isoformat() if invoice.due_date else None,
-            "admission_profile_id": fee.admission_profile_id if fee else None,
-            "lead_id": _lead_id,
-            "unit_id": unit_id,
-            "user_id": _officer_id,
-        }
+        from app.services.notification_payloads import EventPayload
+        _invoice_payload = EventPayload.for_invoice_issued(
+            invoice,
+            admission_profile_id=fee.admission_profile_id if fee else None,
+            lead_id=_lead_id,
+            unit_id=unit_id,
+            officer_id=_officer_id,
+            lead_full_name=_lead_full_name,
+            major_name=_major_name,
+            degree_level=_degree_level,
+        )
         _db = self.db
 
         async def post_commit():

@@ -211,6 +211,43 @@ _ZNS_DRAFTS: list[TemplateSeed] = [
         template_type="zalo_zns",
     ),
     TemplateSeed(
+        name="ZNS Draft - Invoice Issued v1",
+        template_code="ZNS_INVOICE_ISSUED_V1",
+        description="Draft mapping for ZNS tuition invoice notification (template 557767).",
+        title_template="H\u1ecdc ph\u00ed $profile_code",
+        message_template=(
+            "H\u1ed3 s\u01a1 $profile_code - $lead_full_name ($major_name, $degree_level). "
+            "S\u1ed1 ti\u1ec1n $amount_vnd \u0111\u1ed3ng, h\u1ea1n $due_date_vn. "
+            "N\u1ed9i dung chuy\u1ec3n kho\u1ea3n: $bank_transfer_note."
+        ),
+        link_template=None,
+        # Must mirror payload contract at
+        # app/services/notification_payloads.py:for_invoice_issued +
+        # app/core/event_catalog.py INVOICE_ISSUED variables.
+        variables=[
+            "invoice_id",
+            "invoice_number",
+            "fee_id",
+            "amount",
+            "due_date",
+            "admission_profile_id",
+            "lead_id",
+            "unit_id",
+            "user_id",
+            "profile_code",
+            "lead_full_name",
+            "major_name",
+            "degree_level",
+            "amount_vnd",
+            "due_date_vn",
+            "bank_transfer_note",
+        ],
+        category="finance",
+        supported_channels=["zalo"],
+        allowed_events=["invoice_issued"],
+        template_type="zalo_zns",
+    ),
+    TemplateSeed(
         name="ZNS Draft - Lead Created v1",
         template_code="ZNS_LEAD_CREATED_V1",
         description="Draft mapping for ZNS confirmation when a lead is created.",

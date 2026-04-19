@@ -288,3 +288,69 @@ class EventPayload:
             "lead_code": format_lead_code(lead.id),
             "major_name": (major_name or "N/A")[:30],
         }
+
+    @staticmethod
+    def for_invoice_issued(
+        invoice,
+        *,
+        admission_profile_id: Optional[int] = None,
+        lead_id: Optional[int] = None,
+        unit_id: Optional[int] = None,
+        officer_id: Optional[int] = None,
+        lead_full_name: Optional[str] = None,
+        major_name: Optional[str] = None,
+        degree_level: Optional[str] = None,
+    ) -> dict:
+        """Build invoice-issued payload.
+
+        Caller resolves ``lead_full_name``, ``major_name``, ``degree_level``
+        from ``AdmissionProfile.lead.offering.program`` (eager-loaded at the
+        dispatch site in ``invoice_service.py``) and passes them via kwargs —
+        this builder stays pure per module contract.
+
+        Note: ``user_id`` is the assigned officer. Callers guard dispatch on
+        ``bool(payload['user_id'])`` to skip invoices on leads without an owner.
+        """
+        from decimal import Decimal, InvalidOperation
+        from app.utils.datetime_helpers import format_vn_date
+        from app.utils.id_helpers import format_profile_code
+        from app.utils.text_helpers import to_bank_transfer_note
+
+        # Coerce amount to integer-VND string; Zalo CURRENCY rejects decimals.
+        # invoice.amount is typically Decimal (Numeric column); str may have ".00".
+        raw_amount = getattr(invoice, "amount", None)
+        try:
+            amount_vnd_int = int(Decimal(str(raw_amount))) if raw_amount is not None else 0
+        except (TypeError, ValueError, InvalidOperation):
+            amount_vnd_int = 0
+
+        clean_name = (lead_full_name or "Unknown")[:30]
+        clean_major = (major_name or "N/A")[:30]
+        clean_level = (degree_level or "N/A")[:30]
+        profile_code = (
+            format_profile_code(admission_profile_id) if admission_profile_id else "HS-000000"
+        )
+        # Zalo BANK_TRANSFER_NOTE: ASCII alphanumeric + space only (≤90).
+        bank_note_raw = f"{clean_name} {profile_code} thanh toan hoc phi {clean_major}"
+        bank_note = to_bank_transfer_note(bank_note_raw, max_len=90)
+
+        return {
+            # Backward-compatible keys (payload contract prior to ZNS wire-up).
+            "invoice_id": invoice.id,
+            "invoice_number": invoice.invoice_number,
+            "fee_id": invoice.fee_id,
+            "amount": str(raw_amount) if raw_amount is not None else "0",
+            "due_date": invoice.due_date.isoformat() if invoice.due_date else None,
+            "admission_profile_id": admission_profile_id,
+            "lead_id": lead_id,
+            "unit_id": unit_id,
+            "user_id": officer_id,
+            # New keys for ZNS template 557767 ``Thông báo thu học phí``.
+            "profile_code": profile_code,
+            "lead_full_name": clean_name,
+            "major_name": clean_major,
+            "degree_level": clean_level,
+            "amount_vnd": str(amount_vnd_int),
+            "due_date_vn": format_vn_date(invoice.due_date),
+            "bank_transfer_note": bank_note,
+        }
