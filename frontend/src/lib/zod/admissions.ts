@@ -363,6 +363,12 @@ export const appliedRulesSchema = z.object({
   required_subject_count: z.number().int().optional().nullable(),
   min_subject_score: z.number().optional().nullable(), // Điểm liệt
   max_possible_score: z.number().optional().nullable(),
+  // PR6 Step 1 (2026-04-19): per-subject weights frozen into the snapshot
+  // at application time. Mirrors the backend field emitted by
+  // AdmissionScoringService.generate_snapshot(). Optional + missing-key
+  // semantics — a missing code or an entire absent object means weight 1.0
+  // (plain sum), which preserves behavior for pre-migration snapshots.
+  subject_weights: z.record(z.string(), z.number().positive()).optional(),
 
   // =========================================================================
   // GROUP 3: Subject Validation (CRITICAL for input validation)
