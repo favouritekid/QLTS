@@ -498,10 +498,15 @@ async def submit_lead_claim(
             # Grant implied Zalo consent — CTV-submitted lead also cung cấp
             # phone voluntarily (qua collaborator claim form). Same rationale
             # as lead_service.create_lead. Non-blocking.
+            #
+            # actor_id: granted_by là FK tới user.id. Collaborator.id không
+            # cùng namespace (PK riêng của bảng collaborator), dùng trực tiếp
+            # sẽ violate FK. Collaborator.user_id là link nullable tới user,
+            # None cũng OK vì granted_by nullable.
             try:
                 from app.services import notification_consent_service
                 await notification_consent_service.grant_implied_zalo_consent(
-                    db, lead, actor_id=collaborator.id,
+                    db, lead, actor_id=collaborator.user_id,
                 )
             except Exception as e:
                 log.warning(

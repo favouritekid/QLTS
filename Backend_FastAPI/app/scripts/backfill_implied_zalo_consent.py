@@ -29,6 +29,7 @@ log = structlog.get_logger(__name__)
 async def main(batch_size: int = 500) -> None:
     total_considered = 0
     total_granted = 0
+    total_failed = 0
     total_skipped_existing = 0
     total_skipped_no_phone = 0
 
@@ -72,10 +73,13 @@ async def main(batch_size: int = 500) -> None:
                 if not lead.phone:
                     total_skipped_no_phone += 1
                     continue
-                await notification_consent_service.grant_implied_zalo_consent(
+                ok = await notification_consent_service.grant_implied_zalo_consent(
                     session, lead, actor_id=None,
                 )
-                total_granted += 1
+                if ok:
+                    total_granted += 1
+                else:
+                    total_failed += 1
 
             await session.commit()
             log.info(
@@ -83,17 +87,20 @@ async def main(batch_size: int = 500) -> None:
                 last_id=last_id,
                 considered=total_considered,
                 granted=total_granted,
+                failed=total_failed,
             )
 
     log.info(
         "backfill_done",
         considered=total_considered,
         granted=total_granted,
+        failed=total_failed,
         skipped_existing=total_skipped_existing,
         skipped_no_phone=total_skipped_no_phone,
     )
     print(
         f"considered={total_considered} granted={total_granted} "
+        f"failed={total_failed} "
         f"skipped_existing={total_skipped_existing} "
         f"skipped_no_phone={total_skipped_no_phone}"
     )

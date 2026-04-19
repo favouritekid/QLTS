@@ -48,7 +48,7 @@ async def upsert_consent(
     db: AsyncSession,
     *,
     data: Dict[str, Any],
-    actor_id: int,
+    actor_id: Optional[int],
 ) -> Any:
     """
     Upsert a single consent record.
@@ -75,7 +75,7 @@ async def grant_implied_zalo_consent(
     lead,
     *,
     actor_id: Optional[int] = None,
-) -> None:
+) -> bool:
     """Grant Zalo ZNS consent for a newly-registered lead (implied consent).
 
     Rationale: lead đã chủ động cung cấp số điện thoại qua luồng đăng ký
@@ -90,12 +90,24 @@ async def grant_implied_zalo_consent(
        `consent_status=revoked` qua /admin/notification-consents → channel
        gate tự block.
 
+    Args:
+        actor_id: User.id của người tạo lead. None khi không có user thật
+            (CTV chưa gắn user account, hoặc backfill script) — sẽ lưu
+            granted_by=None vì NotificationConsent.granted_by là FK
+            nullable tới user.id. Tuyệt đối KHÔNG truyền 0 hoặc namespace
+            khác (VD collaborator.id) — sẽ raise FK violation.
+
+    Returns:
+        True nếu consent row đã được upsert thành công; False nếu skip
+        (no phone) hoặc upsert raise exception. Caller dùng giá trị này
+        để đếm chính xác số grant thật sự.
+
     Non-blocking: log + silent skip nếu thất bại. Caller phải không expect
     consent row tồn tại 100% (vẫn phải check qua is_consent_granted trong
     dispatcher).
     """
     if not getattr(lead, "phone", None):
-        return  # No phone → no Zalo delivery possible anyway
+        return False  # No phone → no Zalo delivery possible anyway
     try:
         from app.utils.phone_helpers import to_zalo_phone
 
@@ -118,8 +130,9 @@ async def grant_implied_zalo_consent(
                     f"created_via={created_via}. NĐ 13/2023 Đ.17.2."
                 ),
             },
-            actor_id=actor_id or 0,
+            actor_id=actor_id,
         )
+        return True
     except Exception as e:
         # Never block lead creation on consent grant failure.
         log.warning(
@@ -127,6 +140,7 @@ async def grant_implied_zalo_consent(
             lead_id=getattr(lead, "id", None),
             error=str(e),
         )
+        return False
 
 
 async def bulk_import_consents(
