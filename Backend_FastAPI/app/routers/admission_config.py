@@ -716,11 +716,25 @@ async def preview_scoring(
         for code, score in request.subject_scores.items()
     }
     
+    # Read live weights from the group (preview/what-if flow — not a
+    # frozen snapshot). If no group was resolved, weights stay None and
+    # scoring falls back to plain behavior.
+    preview_weights = (
+        {
+            m.subject.code: float(m.weight)
+            for m in subject_group.subject_mappings
+            if m.subject
+        }
+        if subject_group
+        else None
+    )
+
     # Calculate score
     result = AdmissionScoringService.calculate_score(
         criteria=criteria,
         subject_scores=subject_scores,
         allowed_subjects=resolution.allowed_subjects,
+        subject_weights=preview_weights,
     )
     
     # Generate snapshot with policy version

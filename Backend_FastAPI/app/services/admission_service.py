@@ -2359,11 +2359,17 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     allowed_subjects = applied_rules.get("allowed_subject_codes", [])
     # Removed legacy fallback - allowed_subjects must be populated in validation phase
 
+    # PR6 Step 2 (2026-04-19): read frozen per-subject weights from the
+    # snapshot. None/empty → scoring engine falls back to plain behavior,
+    # which is the no-retroactive guarantee for pre-migration snapshots.
+    subject_weights = applied_rules.get("subject_weights") or None
+
     # 3. Calculate using robust engine
     score_result = AdmissionScoringService.calculate_score(
         criteria=snapshot_criteria,
         subject_scores=target_scores_map,
         allowed_subjects=allowed_subjects,
+        subject_weights=subject_weights,
     )
     
     # Update transient fields
@@ -2558,6 +2564,7 @@ async def submit_and_evaluate(
             criteria=snapshot_criteria,
             subject_scores=subject_scores_map,
             allowed_subjects=allowed_subjects,
+            subject_weights=applied_rules.get("subject_weights") or None,
         )
 
         # 5. Handle Validation Results

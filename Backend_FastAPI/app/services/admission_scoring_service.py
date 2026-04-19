@@ -214,14 +214,26 @@ class AdmissionScoringService:
         criteria: AdmissionCriteria,
         subject_scores: dict[str, Decimal],
         allowed_subjects: list[str],
+        subject_weights: Optional[dict[str, Decimal | float]] = None,
     ) -> AdmissionScoreResult:
         """
         Calculate admission score based on criteria rules.
-        
+
         CRITICAL RULES:
         - If validation fails → status = INVALID, final_score = None
         - Selection is 100% deterministic
         - any_n treated as fixed (DEPRECATED)
+
+        **Weights (PR6 Step 2, 2026-04-19)**:
+        - ``subject_weights`` is the map frozen into the snapshot at
+          application time (see ``generate_snapshot``).
+        - ``None`` or empty dict → plain behavior (legacy). This is how
+          pre-migration snapshots keep working without retroactive backfill.
+        - Missing key for a selected subject → treated as 1.0. Matches the
+          no-op default at the DB layer (NUMERIC DEFAULT 1.0).
+        - Actively consumed only when ``scoring_method == "weighted"``; sum
+          and average ignore weights so switching methods on a snapshot
+          doesn't silently change results.
         """
         failure_reasons = []
         disqualification_codes = []
@@ -315,6 +327,8 @@ class AdmissionScoringService:
         final_score = AdmissionScoringService._calculate_final_score(
             scores=list(selected_scores.values()),
             method=scoring_method,
+            selected_codes=selected_codes,
+            subject_weights=subject_weights,
         )
         
         # Check min_score threshold
@@ -400,20 +414,45 @@ class AdmissionScoringService:
     def _calculate_final_score(
         scores: list[Decimal],
         method: str,
+        selected_codes: Optional[list[str]] = None,
+        subject_weights: Optional[dict[str, Decimal | float]] = None,
     ) -> Decimal:
-        """Calculate final score based on method."""
+        """Calculate final score based on method.
+
+        ``selected_codes`` and ``subject_weights`` are only meaningful for
+        the ``weighted`` method. For ``sum`` / ``average`` they are
+        intentionally ignored so that switching scoring_method on an
+        existing snapshot doesn't silently re-weight historical scores.
+        """
         if not scores:
             return Decimal("0")
-        
+
         if method == ScoringMethod.SUM.value:
             return sum(scores)
-        
+
         elif method == ScoringMethod.AVERAGE.value:
             return sum(scores) / len(scores)
-        
+
         elif method == ScoringMethod.WEIGHTED.value:
-            return sum(scores)  # Future: implement weighted
-        
+            # Missing weights or missing selected_codes → safe fallback to
+            # plain sum. This mirrors the "no-retroactive" guarantee: a
+            # pre-migration snapshot with scoring_method="weighted" but no
+            # frozen weights must not suddenly start applying coefficients.
+            if not subject_weights or not selected_codes:
+                return sum(scores)
+            # Align scores with codes by position (callers build the two
+            # lists from the same ordered dict).
+            if len(selected_codes) != len(scores):
+                # Defensive: caller contract violation → fall back.
+                return sum(scores)
+            total = Decimal("0")
+            for code, score in zip(selected_codes, scores):
+                raw = subject_weights.get(code, 1.0)
+                # Accept both float (from JSONB snapshot) and Decimal.
+                weight = raw if isinstance(raw, Decimal) else Decimal(str(raw))
+                total += score * weight
+            return total
+
         else:
             return sum(scores)
     
