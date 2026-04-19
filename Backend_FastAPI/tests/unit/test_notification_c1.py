@@ -153,15 +153,12 @@ class TestValidateActions:
         # Should NOT raise — template_code is now accepted (validated async in E2)
         self._validate(actions)
 
-    def test_duplicate_browser_rejected(self):
-        """Phase 3b: duplicate browser still blocked, non-browser allowed."""
-        from app.utils.exceptions import BadRequest
-        actions = [
-            MagicMock(step=1, channel="browser", delay_minutes=0, template_code=None, config=None),
-            MagicMock(step=2, channel="browser", delay_minutes=0, template_code=None, config=None),
-        ]
-        with pytest.raises(BadRequest, match="browser"):
-            self._validate(actions)
+    # test_duplicate_browser_rejected removed — PR1 (1e463d16) removed the
+    # max-one-browser constraint. CRUD-layer regression coverage lives at
+    # tests/unit/test_delivery_branch_schema.py::TestCRUDValidationRules
+    # ::test_duplicate_browser_allowed and
+    # tests/unit/test_dispatcher_per_action.py::TestCRUDDuplicateChannel
+    # ::test_duplicate_browser_allowed.
 
     def test_duplicate_non_browser_allowed(self):
         """Phase 3b: duplicate non-browser channels allowed."""

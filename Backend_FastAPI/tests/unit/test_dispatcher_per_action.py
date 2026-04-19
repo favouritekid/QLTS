@@ -118,7 +118,8 @@ class TestActionScopedKeys:
 
 
 class TestCRUDDuplicateChannel:
-    """Phase 3b: non-browser duplicate channels allowed, browser still blocked."""
+    """PR1 (commit 1e463d16): all duplicate channels are allowed — cross-action
+    dedup in the dispatcher handles precedence (lower step wins)."""
 
     def test_duplicate_email_allowed(self):
         from app.services.notification_rule_crud_service import _validate_actions
@@ -130,15 +131,16 @@ class TestCRUDDuplicateChannel:
         # Should NOT raise
         _validate_actions(actions)
 
-    def test_duplicate_browser_rejected(self):
+    def test_duplicate_browser_allowed(self):
+        """Regression guard for PR1 change — duplicate browser must stay allowed."""
         from app.services.notification_rule_crud_service import _validate_actions
         from app.schemas.notification import NotificationActionCreate
         actions = [
             NotificationActionCreate(step=1, channel="browser"),
             NotificationActionCreate(step=2, channel="browser"),
         ]
-        with pytest.raises(Exception, match="browser"):
-            _validate_actions(actions)
+        # Should NOT raise — dispatcher cross-action dedup handles precedence.
+        _validate_actions(actions)
 
     def test_mixed_channels_allowed(self):
         from app.services.notification_rule_crud_service import _validate_actions

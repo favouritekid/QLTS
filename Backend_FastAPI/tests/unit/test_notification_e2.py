@@ -397,17 +397,9 @@ class TestValidateActionsSyncNoRegression:
         with pytest.raises(BadRequest, match="Duplicate step"):
             _validate_actions(actions)
 
-    def test_duplicate_browser_rejected(self):
-        """Phase 3b: duplicate browser blocked, non-browser allowed."""
-        from app.services.notification_rule_crud_service import _validate_actions
-        from app.utils.exceptions import BadRequest
-
-        actions = [
-            MagicMock(step=1, channel="browser", delay_minutes=0, template_code=None, config=None),
-            MagicMock(step=2, channel="browser", delay_minutes=0, template_code=None, config=None),
-        ]
-        with pytest.raises(BadRequest, match="browser"):
-            _validate_actions(actions)
+    # test_duplicate_browser_rejected removed — PR1 (1e463d16) removed the
+    # max-one-browser constraint. CRUD-layer regression coverage lives at
+    # test_delivery_branch_schema.py / test_dispatcher_per_action.py.
 
     def test_negative_delay_rejected(self):
         from app.services.notification_rule_crud_service import _validate_actions

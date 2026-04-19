@@ -140,16 +140,20 @@ class TestPydanticSchemaNewFields:
 class TestCRUDValidationRules:
     """CRUD validation for content_mode and branch_key (via _validate_actions)."""
 
-    def test_duplicate_browser_rejected(self):
-        """Phase 3b: duplicate browser still blocked (single browser until 3c)."""
+    def test_duplicate_browser_allowed(self):
+        """PR1 (commit 1e463d16) removed the max-one-browser constraint.
+
+        Cross-action dedup in the dispatcher now handles multi-group browser
+        precedence (lower step wins). This test locks the new behavior so a
+        regression that re-adds the constraint is caught at the CRUD layer.
+        """
         from app.services.notification_rule_crud_service import _validate_actions
 
         actions = [
             NotificationActionCreate(step=1, channel="browser"),
             NotificationActionCreate(step=2, channel="browser"),
         ]
-        with pytest.raises(Exception, match="browser"):
-            _validate_actions(actions)
+        _validate_actions(actions)  # should NOT raise
 
     def test_duplicate_non_browser_allowed(self):
         """Phase 3b: duplicate non-browser channels allowed."""
