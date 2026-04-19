@@ -8,9 +8,11 @@
 --   channel       = zalo
 --   content_mode  = channel_native
 --
--- Merge strategy: COALESCE(config, '{}'::jsonb) || jsonb_build_object(...)
---   - Handles NULL config safely (column is nullable per
---     app/models/notification.py:300).
+-- Merge strategy: (COALESCE(config::jsonb, '{}'::jsonb) || jsonb_build_object(...))::json
+--   - Column is declared Column(JSON, ...) in app/models/notification.py:300
+--     which maps to Postgres `json` (not jsonb). JSON does not support ||,
+--     so we cast to jsonb for the merge then back to json on assignment.
+--   - Handles NULL config safely (column is nullable).
 --   - Preserves any pre-existing keys (e.g. a prior external_resolver or
 --     other channel-native keys that dispatcher reads at
 --     app/services/notification_dispatcher.py:822).
@@ -44,7 +46,7 @@
 BEGIN;
 
 UPDATE notification_action
-SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object(
+SET config = (COALESCE(config::jsonb, '{}'::jsonb) || jsonb_build_object(
     'external_resolver', 'lead_contact',
     'zalo_template_id', 333738,
     'zalo_template_data', jsonb_build_object(
@@ -55,11 +57,11 @@ SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object(
         'ten_nganh_hoc', '$major_name',
         'ma_hoc_vien',   '$lead_code'
     )
-)
+))::json
 WHERE id = 63;
 
 -- Verification: dump the merged config so the deployer can eyeball it.
-SELECT id, rule_id, step, channel, content_mode, jsonb_pretty(config) AS config
+SELECT id, rule_id, step, channel, content_mode, jsonb_pretty(config::jsonb) AS config
 FROM notification_action
 WHERE id = 63;
 

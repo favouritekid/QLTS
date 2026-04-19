@@ -9,7 +9,10 @@
 --   safely merges config without wiping other keys.
 --
 -- Merge strategy for existing row (if any):
---   config = COALESCE(notification_action.config, '{}'::jsonb) || EXCLUDED.config
+--   config = (COALESCE(notification_action.config::jsonb, '{}'::jsonb) || EXCLUDED.config::jsonb)::json
+--   - Column is declared Column(JSON, ...) in app/models/notification.py:300
+--     which maps to Postgres `json` (not jsonb). JSON does not support ||,
+--     so we cast to jsonb for the merge then back to json on assignment.
 --   - Preserves any pre-existing keys (external_resolver, other channel-native keys).
 --   - Overwrites only the 3 keys we own.
 --
@@ -51,7 +54,7 @@ SELECT
             'ten_nganh_hoc', '$major_name',
             'ngay_dang_ky',  '$created_date_vn'
         )
-    ),
+    )::json,
     0
 FROM notification_rule r
 WHERE r.event = 'lead_created'
@@ -59,10 +62,10 @@ ON CONFLICT (rule_id, step) DO UPDATE
 SET
     channel = EXCLUDED.channel,
     content_mode = EXCLUDED.content_mode,
-    config = COALESCE(notification_action.config, '{}'::jsonb) || EXCLUDED.config;
+    config = (COALESCE(notification_action.config::jsonb, '{}'::jsonb) || EXCLUDED.config::jsonb)::json;
 
 -- Verification
-SELECT id, rule_id, step, channel, content_mode, jsonb_pretty(config) AS config
+SELECT id, rule_id, step, channel, content_mode, jsonb_pretty(config::jsonb) AS config
 FROM notification_action
 WHERE rule_id = (SELECT id FROM notification_rule WHERE event = 'lead_created')
 ORDER BY step;
