@@ -51,6 +51,13 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        {/* Zalo Developer Console domain ownership verification.
+            Required to register webhook URL at
+            https://developers.zalo.me/app/1860141329355019864/webhook */}
+        <meta
+          name="zalo-platform-site-verification"
+          content="FlwqDUJe6cW1ch5VyRm-UYoBcsp0_KunD38s"
+        />
       </head>
       <body className={`${inter.variable} ${plusJakarta.variable} font-sans antialiased`}>
         {/* Wrap the children with Providers */}
