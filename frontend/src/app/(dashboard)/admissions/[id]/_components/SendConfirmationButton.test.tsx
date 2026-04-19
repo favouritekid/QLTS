@@ -60,7 +60,6 @@ function mockResponse(overrides: Partial<Record<string, unknown>> = {}) {
       token_expires_at: "2026-04-26T10:00:00Z",
       sent_to_email: "applicant@example.com",
       phone: "0901234567",
-      sent_to_phone: "0901234567",
       token_value: "abc123",
       confirm_url: "https://qlts.tnpc.edu.vn/confirm/abc123",
       ...overrides,

@@ -17,8 +17,6 @@ export interface SendConfirmationResponse {
   token_expires_at: string
   sent_to_email: string | null
   phone: string | null
-  /** @deprecated Use `phone`. Kept for one cycle to avoid breaking older clients. */
-  sent_to_phone: string | null
   token_value: string | null
   confirm_url: string | null
 }

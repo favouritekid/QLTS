@@ -1235,8 +1235,7 @@ class TestTokenBasedConfirmation:
 
         `/send-confirmation` must return a ready-to-share `confirm_url` so
         officers don't need to hardcode FRONTEND_URL + /confirm/ + token
-        themselves. Also verifies the `phone` rename ships with a
-        backward-compat `sent_to_phone` alias.
+        themselves. Also verifies the canonical `phone` field is present.
         """
         from app.config import settings
 
@@ -1259,11 +1258,10 @@ class TestTokenBasedConfirmation:
         assert "/confirm/" in body["confirm_url"]
         assert body["token_value"] in body["confirm_url"]
 
-        # Backward-compat alias — both present for one cycle.
-        assert body["phone"] == body["sent_to_phone"], (
-            "`phone` (canonical) and `sent_to_phone` (deprecated alias) "
-            "must return the same value while the cycle runs."
-        )
+        # Canonical phone field present; deprecated `sent_to_phone` alias
+        # removed after one cycle (originally shipped 2026-04-19).
+        assert "phone" in body
+        assert "sent_to_phone" not in body
 
 
 # ==============================================================================

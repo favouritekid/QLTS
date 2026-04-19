@@ -1274,14 +1274,6 @@ class SendConfirmationResponse(BaseModel):
         None,
         description="Lead's phone number (informational — system does not send SMS)",
     )
-    # DEPRECATED: alias of `phone`. Previous name implied SMS delivery, which
-    # was never true. Kept for one release cycle so existing consumers don't
-    # break silently. Remove after frontends are updated.
-    sent_to_phone: Optional[str] = Field(
-        None,
-        description="DEPRECATED: use `phone`. Kept for one cycle to avoid breaking clients.",
-        deprecated=True,
-    )
     token_value: Optional[str] = Field(
         None,
         description="Token value for admin/officer to share confirmation link manually",
