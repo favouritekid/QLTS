@@ -279,11 +279,13 @@ export function AdmissionActions({
             </AlertDialog>
           )}
 
-          {/* Send magic-link — visible on approved. Lets officers regenerate/
-              resend the confirm link and grab a copy-able URL for Zalo/SMS
-              when the applicant has no email on file. See
-              project_send_confirmation_ops_gaps. */}
-          {profile.status === "approved" && can('enroll') && (
+          {/* Send magic-link. Visibility is driven by the backend
+              `send_confirmation` permission (see _compute_frontend_fields:
+              status=='approved' && manager/admin). Previously gated on
+              `can('enroll')`, which is never true on `approved` per backend
+              contract — the button was unreachable on real approved profiles.
+              See project_send_confirmation_ops_gaps. */}
+          {can('send_confirmation') && (
             <SendConfirmationButton profileId={profile.id} />
           )}
 

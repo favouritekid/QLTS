@@ -125,6 +125,26 @@ describe("SendConfirmationButton", () => {
       await screen.findByText(/thí sinh chưa có email/i),
     ).toBeInTheDocument()
     expect(screen.getByText(/0901234567/)).toBeInTheDocument()
+
+    // Toast must NOT lie about sending an email when no email was queued.
+    expect(mockToastSuccess).toHaveBeenCalledWith("Đã tạo liên kết xác nhận")
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Đã gửi email xác nhận")
+  })
+
+  it("success toast says 'Đã gửi email' only when an email was queued", async () => {
+    mockSendConfirmation.mockResolvedValueOnce(mockResponse())
+
+    withProviders(<SendConfirmationButton profileId={1} />)
+    fireEvent.click(
+      screen.getByRole("button", { name: /gửi liên kết xác nhận/i }),
+    )
+
+    await screen.findByText(
+      "Liên kết xác nhận nhập học",
+      { selector: "h2" },
+    )
+
+    expect(mockToastSuccess).toHaveBeenCalledWith("Đã gửi email xác nhận")
   })
 
   it("copies confirm_url to clipboard when Copy button clicked", async () => {

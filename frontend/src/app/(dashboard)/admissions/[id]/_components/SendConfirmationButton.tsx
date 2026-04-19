@@ -50,7 +50,14 @@ export function SendConfirmationButton({ profileId }: Props) {
       onSuccess: (data) => {
         setResult(data)
         setOpen(true)
-        toast.success("Đã gửi email xác nhận")
+        // No-email path: the system only minted a token, operator must
+        // share the link manually. Saying "đã gửi email" here contradicts
+        // the dialog's own destructive alert below.
+        toast.success(
+          data.sent_to_email
+            ? "Đã gửi email xác nhận"
+            : "Đã tạo liên kết xác nhận",
+        )
       },
       onError: (err) => {
         handleApiError(err as AxiosError<ApiErrorResponse>, {

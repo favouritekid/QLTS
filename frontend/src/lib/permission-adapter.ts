@@ -104,7 +104,13 @@ function inferPermissionsFromStatus(status?: string): PermissionFlags {
         delete: false,
         approve: false,
         reject: false,
-        enroll: true,
+        // Backend gates enroll on {confirmed, overridden}; fallback mirrors it.
+        enroll: false,
+        // New in PR-B: approved is the window where officers send/resend
+        // the magic-link. Backend also gates this on manager/admin role;
+        // this fallback only fires when backend omits permissions (legacy
+        // responses), so role-gate enforcement lives server-side.
+        send_confirmation: true,
       }
 
     case 'confirmed':

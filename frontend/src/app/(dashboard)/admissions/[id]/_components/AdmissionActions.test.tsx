@@ -374,18 +374,23 @@ describe("AdmissionActions", () => {
     });
   });
 
-  // ===== ENROLL (approved / overridden) =====
+  // ===== ENROLL (confirmed / overridden — matches backend contract) =====
+  //
+  // Backend only emits `permissions.enroll = True` for status ∈
+  // {confirmed, overridden} — see _compute_frontend_fields in
+  // admission_service.py. Tests must model that combo, not the
+  // impossible-in-practice `approved + enroll=true`.
 
   describe("Enroll", () => {
-    it("approved + enroll=true: shows enroll + badge Đã duyệt", () => {
+    it("confirmed + enroll=true: shows enroll + badge Đã xác nhận", () => {
       const profile = buildProfile({
-        status: "approved",
+        status: "confirmed",
         permissions: { enroll: true },
       });
       renderActions(profile, 7);
 
       expect(screen.getByText("Ghi danh")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("approved").label)).toBeInTheDocument();
+      expect(screen.getByText(getStatusConfig("confirmed").label)).toBeInTheDocument();
     });
 
     it("overridden + enroll=true: shows enroll + badge Đã override", () => {
@@ -401,13 +406,74 @@ describe("AdmissionActions", () => {
 
     it("click Enroll calls onEnroll", () => {
       const profile = buildProfile({
-        status: "approved",
+        status: "confirmed",
         permissions: { enroll: true },
       });
       const spies = renderActions(profile, 7);
 
       fireEvent.click(screen.getByText("Ghi danh"));
       expect(spies.onEnroll).toHaveBeenCalled();
+    });
+
+    it("approved does NOT show Ghi danh (contract: enroll gated on confirmed/overridden)", () => {
+      // Defense against regression: if someone ever re-adds an incorrect
+      // enroll permission for approved, this test catches it before it
+      // reaches production.
+      const profile = buildProfile({
+        status: "approved",
+        permissions: { enroll: false, send_confirmation: true },
+      });
+      renderActions(profile, 7);
+
+      expect(screen.queryByText("Ghi danh")).not.toBeInTheDocument();
+    });
+  });
+
+  // ===== SEND CONFIRMATION (approved) =====
+
+  describe("Send confirmation", () => {
+    it("approved + send_confirmation=true: shows send button", () => {
+      const profile = buildProfile({
+        status: "approved",
+        permissions: { send_confirmation: true },
+      });
+      renderActions(profile, 7);
+
+      // Mocked child renders a stub button — see vi.mock at top of file.
+      expect(screen.getByTestId("send-confirmation-button")).toBeInTheDocument();
+    });
+
+    it("approved + send_confirmation=false: hides send button", () => {
+      // E.g. officer role that does not have the backend permission.
+      const profile = buildProfile({
+        status: "approved",
+        permissions: { send_confirmation: false },
+      });
+      renderActions(profile, 7);
+
+      expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
+    });
+
+    it("confirmed does NOT show send button (applicant already confirmed)", () => {
+      const profile = buildProfile({
+        status: "confirmed",
+        permissions: { send_confirmation: false, enroll: true },
+      });
+      renderActions(profile, 7);
+
+      expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
+      // Sanity: Ghi danh DOES show at confirmed.
+      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
+    });
+
+    it("submitted does NOT show send button (not approved yet)", () => {
+      const profile = buildProfile({
+        status: "submitted",
+        permissions: { send_confirmation: false, approve: true },
+      });
+      renderActions(profile, 7);
+
+      expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
     });
   });
 
