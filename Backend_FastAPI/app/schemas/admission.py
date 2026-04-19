@@ -599,11 +599,11 @@ class AdmissionProfileResponse(BaseModel):
     # Computed by backend: True if all academic criteria met
     is_qualified: Optional[bool] = None
 
-    # JSONB Fields — DB allows NULL (legacy rows, partial migrations). The
-    # response contract is always a list, so coerce None → [] rather than
-    # 500-ing the whole /admissions list page on a single poisoned row.
-    # See project_admissions_list_null_list_fields for the 2026-04-18 smoke
-    # that surfaced this.
+    # JSONB Fields — DB enforces NOT NULL DEFAULT '[]' after migration
+    # `nn20260419001`. Validator below stays as belt-and-suspenders for
+    # any cached payload / downgrade path that still produces None.
+    # See project_admissions_list_null_list_fields for original 2026-04-18
+    # incident.
     family_info: List[FamilyMemberSchema] = Field(default_factory=list)
     academic_history: List[AcademicRecordSchema] = Field(default_factory=list)
 

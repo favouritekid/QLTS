@@ -188,8 +188,9 @@ class AdmissionProfile(Base):
     # Structure: [{relationship, full_name, occupation, phone}, ...]
     family_info: Mapped[list] = mapped_column(
         JSONB,
-        nullable=True,
+        nullable=False,
         default=list,
+        server_default="[]",
         comment="Array of family members"
     )
 
@@ -197,8 +198,9 @@ class AdmissionProfile(Base):
     # Structure: [{school_name, year_from, year_to, gpa}, ...]
     academic_history: Mapped[list] = mapped_column(
         JSONB,
-        nullable=True,
+        nullable=False,
         default=list,
+        server_default="[]",
         comment="Array of academic records (schools attended)"
     )
 
