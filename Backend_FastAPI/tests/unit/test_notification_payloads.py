@@ -458,7 +458,9 @@ class TestConsultationReminder:
     def test_exact_keys(self):
         consultation = _make_consultation()
         lead = _make_lead()
-        payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
+        payload = EventPayload.for_consultation_reminder(
+            consultation, lead, minutes_until=10, major_name="Công nghệ thông tin",
+        )
         assert payload == {
             "consultation_id": 100,
             "lead_id": 42,
@@ -467,6 +469,10 @@ class TestConsultationReminder:
             "officer_id": 5,  # lead.assigned_officer_id
             "scheduled_at": "2026-04-01T10:00:00",
             "minutes_until": 10,
+            "scheduled_time_vn": "01/04/2026 10:00",
+            "booking_code": "CONS-000100",
+            "lead_code": "LEAD-000042",
+            "major_name": "Công nghệ thông tin",
         }
 
     def test_uses_lead_owner_not_consultation_creator(self):
@@ -489,3 +495,45 @@ class TestConsultationReminder:
         payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=5)
         assert payload["lead_name"] == "Unknown"
         assert payload["lead_phone"] == ""
+
+    def test_major_name_defaults_to_na_when_kwarg_omitted(self):
+        """Caller always resolves major_name; default ensures Zalo required
+        field is never empty if caller has no offering link."""
+        consultation = _make_consultation()
+        lead = _make_lead()
+        payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
+        assert payload["major_name"] == "N/A"
+
+    def test_major_name_defaults_to_na_when_kwarg_none(self):
+        consultation = _make_consultation()
+        lead = _make_lead()
+        payload = EventPayload.for_consultation_reminder(
+            consultation, lead, minutes_until=10, major_name=None,
+        )
+        assert payload["major_name"] == "N/A"
+
+    def test_major_name_truncated_to_30_chars(self):
+        """Zalo STRING params cap at 30 chars for template 333738 `ten_nganh_hoc`."""
+        consultation = _make_consultation()
+        lead = _make_lead()
+        long_name = "Công nghệ thông tin và truyền thông đa phương tiện"
+        payload = EventPayload.for_consultation_reminder(
+            consultation, lead, minutes_until=10, major_name=long_name,
+        )
+        assert len(payload["major_name"]) <= 30
+        assert payload["major_name"] == long_name[:30]
+
+    def test_derived_code_formats(self):
+        consultation = _make_consultation(id=7)
+        lead = _make_lead(id=3)
+        payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
+        assert payload["booking_code"] == "CONS-000007"
+        assert payload["lead_code"] == "LEAD-000003"
+
+    def test_scheduled_time_vn_format_locked(self):
+        """Must be DD/MM/YYYY HH:MM (≤20 chars, fits Zalo DATE param)."""
+        consultation = _make_consultation(scheduled_at=datetime(2026, 4, 20, 15, 30, 0))
+        lead = _make_lead()
+        payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
+        assert payload["scheduled_time_vn"] == "20/04/2026 15:30"
+        assert len(payload["scheduled_time_vn"]) <= 20

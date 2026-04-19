@@ -428,8 +428,12 @@ _CONSULTATION_EVENTS: tuple = (
             _var("lead_name", "string", "Tên lead"),
             _var("lead_phone", "string", "SĐT lead"),
             _var("officer_id", "integer", "ID officer"),
-            _var("scheduled_at", "datetime", "Thời gian hẹn"),
+            _var("scheduled_at", "datetime", "Thời gian hẹn (ISO)"),
             _var("minutes_until", "integer", "Số phút còn lại"),
+            _var("scheduled_time_vn", "string", "Thời gian hẹn VN (dd/mm/yyyy HH:MM)"),
+            _var("booking_code", "string", "Mã booking (CONS-{id})"),
+            _var("lead_code", "string", "Mã lead pseudo (LEAD-{id})"),
+            _var("major_name", "string", "Tên ngành (tối đa 30 ký tự)"),
         ),
         condition_fields=_LEAD_CONDS + _CONSULTATION_CONDS + (
             _cond("event.minutes_until", "integer", "Số phút còn lại", _OPS_NUM),

@@ -242,7 +242,22 @@ class EventPayload:
         }
 
     @staticmethod
-    def for_consultation_reminder(consultation, lead, *, minutes_until: int) -> dict:
+    def for_consultation_reminder(
+        consultation,
+        lead,
+        *,
+        minutes_until: int,
+        major_name: Optional[str] = None,
+    ) -> dict:
+        """Build reminder payload.
+
+        ``major_name`` is resolved by the caller (e.g. ``notification_tasks.py``
+        eager-loads ``lead.offering.program.name``) and passed in — this
+        builder never touches ORM relationships per module contract.
+        """
+        from app.utils.datetime_helpers import format_vn_datetime
+        from app.utils.id_helpers import format_booking_code, format_lead_code
+
         return {
             "consultation_id": consultation.id,
             "lead_id": lead.id,
@@ -253,4 +268,9 @@ class EventPayload:
             "officer_id": lead.assigned_officer_id or consultation.officer_id,
             "scheduled_at": consultation.scheduled_at.isoformat(),
             "minutes_until": minutes_until,
+            # Channel-specific derived fields (e.g. Zalo ZNS 333738 params).
+            "scheduled_time_vn": format_vn_datetime(consultation.scheduled_at),
+            "booking_code": format_booking_code(consultation.id),
+            "lead_code": format_lead_code(lead.id),
+            "major_name": (major_name or "N/A")[:30],
         }

@@ -201,8 +201,10 @@ def check_consultation_reminders_task(self):
 
     async def _run_reminder_check() -> dict:
         from sqlalchemy import and_, select
+        from sqlalchemy.orm import selectinload
         from ..core.events import SystemEvents
         from ..models.lead import Consultation, Lead
+        from ..models.program_offering import ProgramOffering
         from ..services import notification_dispatcher
         from ..services.notification_payloads import EventPayload
 
@@ -217,6 +219,13 @@ def check_consultation_reminders_task(self):
             query = (
                 select(Consultation, Lead)
                 .join(Lead, Consultation.lead_id == Lead.id)
+                .options(
+                    # Eager-load the offering→program chain so payload builder
+                    # can receive a pre-resolved major_name without touching
+                    # ORM relationships itself (builder contract at
+                    # notification_payloads.py:3).
+                    selectinload(Lead.offering).selectinload(ProgramOffering.program),
+                )
                 .where(
                     and_(
                         Lead.deleted_at.is_(None),
@@ -242,11 +251,20 @@ def check_consultation_reminders_task(self):
                     time_diff = scheduled - now
                     minutes_until = max(0, int(time_diff.total_seconds() / 60))
 
+                    # Resolve major_name pre-dispatch so the payload builder
+                    # stays pure (does not touch ORM relationships).
+                    major_name = None
+                    if lead.offering is not None and lead.offering.program is not None:
+                        major_name = lead.offering.program.name
+
                     _, notif_cb = await notification_dispatcher.dispatch(
                         db=session,
                         event=SystemEvents.CONSULTATION_REMINDER,
                         payload=EventPayload.for_consultation_reminder(
-                            consultation, lead, minutes_until=minutes_until,
+                            consultation,
+                            lead,
+                            minutes_until=minutes_until,
+                            major_name=major_name,
                         ),
                     )
                     if notif_cb:

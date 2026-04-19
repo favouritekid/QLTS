@@ -214,10 +214,31 @@ _ZNS_DRAFTS: list[TemplateSeed] = [
         name="ZNS Draft - Consultation Reminder v1",
         template_code="ZNS_CONSULTATION_REMINDER_V1",
         description="Draft mapping for reminder before consultation.",
-        title_template="Nh\u1eafc l\u1ecbch t\u01b0 v\u1ea5n",
-        message_template="B\u1ea1n c\u00f3 l\u1ecbch t\u01b0 v\u1ea5n v\u1edbi $lead_name sau $minutes_until ph\u00fat.",
+        title_template="Nh\u1eafc l\u1ecbch t\u01b0 v\u1ea5n $booking_code",
+        message_template=(
+            "Nh\u1eafc b\u1ea1n l\u1ecbch t\u01b0 v\u1ea5n $lead_name "
+            "(m\u00e3 $lead_code, ng\u00e0nh $major_name) "
+            "v\u00e0o $scheduled_time_vn (sau $minutes_until ph\u00fat)."
+        ),
         link_template=None,
-        variables=["consultation_id", "lead_id", "lead_name", "lead_phone", "scheduled_at", "minutes_until"],
+        # Must mirror payload contract at
+        # app/services/notification_payloads.py:for_consultation_reminder +
+        # app/core/event_catalog.py CONSULTATION_REMINDER variables. Workbook
+        # generator renders `required_variables` from this list (line 493)
+        # so stale keys here surface as mis-mappings in admin intake sheets.
+        variables=[
+            "consultation_id",
+            "lead_id",
+            "lead_name",
+            "lead_phone",
+            "officer_id",
+            "scheduled_at",
+            "minutes_until",
+            "scheduled_time_vn",
+            "booking_code",
+            "lead_code",
+            "major_name",
+        ],
         category="consultation",
         supported_channels=["zalo"],
         allowed_events=["consultation_reminder"],
