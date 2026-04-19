@@ -8,7 +8,9 @@ Tables:
 - SubjectGroupSubject: Join table mapping subjects to groups
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, UniqueConstraint
+from decimal import Decimal
+
+from sqlalchemy import Column, Integer, Numeric, String, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
@@ -149,6 +151,19 @@ class SubjectGroupSubject(Base):
         nullable=False,
         default=1,
         comment="Position in group (1, 2, 3)"
+    )
+    # PR6 (2026-04-19): per-subject weight. Raw coefficient; default 1.0
+    # means "no weighting" (plain sum). See
+    # project_pr6_weighted_scoring_unblock for rationale. Scoring logic
+    # that actually consumes this column will land in PR6 Step 2.
+    weight = Column(
+        Numeric(precision=3, scale=2),
+        nullable=False,
+        default=Decimal("1.0"),
+        server_default="1.0",
+        comment=(
+            "Per-subject weight coefficient (raw, default 1.0 = plain sum)."
+        ),
     )
 
     # Relationships

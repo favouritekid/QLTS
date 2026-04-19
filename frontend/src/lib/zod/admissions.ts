@@ -307,12 +307,21 @@ export type AdmissionProfileUpdate = z.output<
 
 /**
  * Subject Group Schema (for applied_rules snapshot)
- * Preserved from AdmissionPath for audit trail
+ * Preserved from AdmissionPath for audit trail.
+ *
+ * PR6 Step 1 (2026-04-19): `weights` is a NEW parallel field mapping each
+ * subject code in `subjects` to its raw coefficient. Default 1.0 per
+ * subject = no-op (plain sum behavior). The field is optional so older
+ * snapshots (pre-migration) pass validation — those profiles keep their
+ * original plain-sum calculation as agreed during PR6 spec (no
+ * retroactive backfill).
  */
 export const subjectGroupSnapshotSchema = z.object({
   code: z.string(), // e.g., "A00", "D01"
   name: z.string(), // e.g., "Toán - Lý - Hóa"
   subjects: z.array(z.string()), // e.g., ["math", "physics", "chemistry"]
+  // e.g., { math: 2.0, physics: 1.0, chemistry: 1.0 }
+  weights: z.record(z.string(), z.number().positive()).optional(),
 })
 
 export type SubjectGroupSnapshot = z.infer<typeof subjectGroupSnapshotSchema>

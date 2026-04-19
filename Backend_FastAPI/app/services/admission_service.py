@@ -1224,11 +1224,17 @@ def _serialize_subject_groups(admission_path) -> List[Dict[str, Any]]:
 
     Preserves the original group structure for compliance and debugging.
 
+    **Backward-compat contract (PR6 Step 1, 2026-04-19):**
+    - `subjects` stays a flat list of codes — existing clients keep working.
+    - `weights` is a NEW parallel field: `{subject_code: coefficient}`.
+      Default 1.0 per subject = no-op (plain sum). The weighted scoring
+      logic that consumes these values will land in PR6 Step 2.
+
     Args:
         admission_path: AdmissionPath object with loaded criteria and subject_group_mappings
 
     Returns:
-        List of subject group dictionaries with code, name, and subjects
+        List of subject group dictionaries with code, name, subjects, weights.
 
     Example:
         >>> _serialize_subject_groups(path)
@@ -1236,12 +1242,14 @@ def _serialize_subject_groups(admission_path) -> List[Dict[str, Any]]:
             {
                 "code": "A00",
                 "name": "Toán - Lý - Hóa",
-                "subjects": ["math", "physics", "chemistry"]
+                "subjects": ["math", "physics", "chemistry"],
+                "weights": {"math": 2.0, "physics": 1.0, "chemistry": 1.0},
             },
             {
                 "code": "D01",
                 "name": "Toán - Văn - Anh",
-                "subjects": ["math", "literature", "english"]
+                "subjects": ["math", "literature", "english"],
+                "weights": {"math": 1.0, "literature": 1.0, "english": 1.0},
             }
         ]
     """
@@ -1255,14 +1263,22 @@ def _serialize_subject_groups(admission_path) -> List[Dict[str, Any]]:
     groups = []
     for mapping in admission_path.criteria.subject_group_mappings:
         if mapping.subject_group:
+            # Preserve ordered iteration (SubjectGroup.subject_mappings is
+            # already ordered by position via the relationship config).
+            subject_mappings = [
+                m for m in mapping.subject_group.subject_mappings if m.subject
+            ]
             groups.append({
                 "code": mapping.subject_group.code,
                 "name": mapping.subject_group.name,
-                "subjects": [
-                    m.subject.code 
-                    for m in mapping.subject_group.subject_mappings 
-                    if m.subject
-                ]
+                "subjects": [m.subject.code for m in subject_mappings],
+                # Float conversion is intentional: applied_rules is a JSONB
+                # snapshot; Decimal is not natively JSON-serializable and the
+                # downstream audit / frontend consumers read plain numbers.
+                "weights": {
+                    m.subject.code: float(m.weight)
+                    for m in subject_mappings
+                },
             })
 
     return groups

@@ -438,6 +438,19 @@ class AdmissionScoringService:
         """
         now = datetime.now(timezone.utc)
         
+        # Precompute weights up front so they feed BOTH the rule hash
+        # (change-detection: a weight edit must bump the hash) and the
+        # snapshot body below.
+        subject_weights: dict[str, float] = (
+            {
+                m.subject.code: float(m.weight)
+                for m in subject_group.subject_mappings
+                if m.subject
+            }
+            if subject_group
+            else {}
+        )
+
         # Build rule params for hashing
         rule_params = {
             "required_subject_count": criteria.required_subject_count,
@@ -446,6 +459,9 @@ class AdmissionScoringService:
             "min_score": float(criteria.min_score) if criteria.min_score else None,
             "min_gpa": float(criteria.min_gpa) if criteria.min_gpa else None,
             "min_subject_score": float(criteria.min_subject_score) if criteria.min_subject_score else None,
+            # PR6 Step 1: weights participate in the hash so editing a
+            # coefficient is treated as a rule change, not a cosmetic one.
+            "subject_weights": subject_weights,
         }
         rule_hash = cls._generate_checksum(rule_params)
         
@@ -468,6 +484,12 @@ class AdmissionScoringService:
             # Subject group
             "subject_group_code": subject_group.code if subject_group else None,
             "allowed_subjects": allowed_subjects,
+            # PR6 Step 1 (2026-04-19): per-subject weights from join table.
+            # Frozen into the snapshot at application time so future weight
+            # edits on SubjectGroupSubject never retroactively affect this
+            # profile's already-committed score. Default {} when no group
+            # resolved — scoring logic treats absent keys as weight=1.0.
+            "subject_weights": subject_weights,
             
             # Input (for audit)
             "input_scores": {k: float(v) for k, v in input_scores.items()},
