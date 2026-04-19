@@ -41,23 +41,33 @@ async def zalo_webhook(
     body = await request.body()
     signature = request.headers.get("X-ZEvent-Signature", "")
 
-    if not signature:
-        log.warning("Zalo webhook missing signature header")
-        return Response(status_code=401, content="Missing signature")
-
-    # 2. Verify HMAC signature
-    if not zalo_gateway.verify_webhook_signature(body, signature):
-        log.warning("Zalo webhook signature verification failed")
-        return Response(status_code=401, content="Invalid signature")
-
-    # 3. Parse event
+    # 2. Parse body once — we need event_name both to identify Zalo's
+    #    connectivity probe (no event_name / empty body) and for dispatch.
     try:
-        data = await request.json()
+        data = await request.json() if body else {}
     except Exception:
         log.warning("Zalo webhook invalid JSON body")
         return Response(status_code=400, content="Invalid JSON")
 
-    event_name = data.get("event_name", "")
+    event_name = data.get("event_name", "") if isinstance(data, dict) else ""
+
+    # 3. Connectivity probe from Zalo Developer Console ("Kiểm tra" button)
+    #    sends POST without X-ZEvent-Signature + empty body. Accept with 200
+    #    so the admin can save the webhook URL. Real events always carry an
+    #    event_name AND signature — we enforce signature only for those.
+    if not event_name:
+        log.info("Zalo webhook probe / heartbeat received", has_signature=bool(signature))
+        return {"status": "ok", "mode": "probe"}
+
+    if not signature:
+        log.warning("Zalo webhook missing signature header", event_name=event_name)
+        return Response(status_code=401, content="Missing signature")
+
+    # 4. Verify HMAC signature for real events
+    if not zalo_gateway.verify_webhook_signature(body, signature):
+        log.warning("Zalo webhook signature verification failed", event_name=event_name)
+        return Response(status_code=401, content="Invalid signature")
+
     log.info("Zalo webhook received", event_name=event_name)
 
     # 4. Handle delivery status events
