@@ -289,26 +289,33 @@ def test_all_system_events_have_group_mapping():
 @pytest.mark.unit
 def test_all_notification_events_have_runtime_config():
     """
-    P1-2: Every event in EVENT_GROUP_MAPPING should have config in
-    NOTIFICATION_REGISTRY.
+    P1-2: Every event in EVENT_GROUP_MAPPING must have an EventDefinition
+    in EVENT_CATALOG (the runtime source-of-truth).
+
+    Post-PR1 the dispatcher reads from ``app.core.event_catalog`` — see
+    ``app/services/notification_dispatcher.py`` ``get_event(event)``.
+    ``NOTIFICATION_REGISTRY`` is deprecated (self-documented at
+    ``app/services/notification_registry.py:3``) and kept only for enum +
+    dataclass re-exports; missing entries there no longer block dispatch.
 
     Events in the group mapping are part of the user notification contract.
-    Without a registry entry, dispatch() has nothing to render or deliver.
-    Broadcast-only events are allowed to be missing.
+    Without a catalog entry, dispatch() cannot render title/message/link,
+    resolve recipients, or derive dedup keys.  Broadcast-only events are
+    allowed to be missing.
     """
     missing = []
     for event in EVENT_GROUP_MAPPING:
         # Skip known broadcast-only events
         if any(event.name.startswith(prefix) for prefix in _BROADCAST_ONLY_PREFIXES):
             continue
-        if event not in NOTIFICATION_REGISTRY:
+        if event not in EVENT_CATALOG:
             missing.append(event.value)
 
     assert not missing, (
-        f"Events in EVENT_GROUP_MAPPING but missing from NOTIFICATION_REGISTRY: "
+        f"Events in EVENT_GROUP_MAPPING but missing from EVENT_CATALOG: "
         f"{sorted(missing)}. "
         "dispatch() will silently skip these events. "
-        "Add a NotificationConfig entry in app/services/notification_registry.py."
+        "Add an EventDefinition entry in app/core/event_catalog.py."
     )
 
 
