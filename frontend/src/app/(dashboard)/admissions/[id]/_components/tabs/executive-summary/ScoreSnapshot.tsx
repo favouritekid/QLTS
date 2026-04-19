@@ -36,9 +36,39 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
 
   const methodType = profile.applied_rules?.method_type
   const isGpaOnly = methodType === "gpa_only"
-  const subjectScores = profile.admission_scores?.subject_scores ?? {}
+  const allSubjectScores = profile.admission_scores?.subject_scores ?? {}
   const totalScore = profile.total_score  // root-level computed field (source of truth)
   const selectedGroup = profile.admission_scores?.selected_group
+
+  // PR6 Step 3 follow-up (2026-04-19): honour backend subject selection.
+  //
+  // On `best_n` / `any_n` selection modes the backend picks a subset of
+  // the submitted scores and `total_score` is computed from that subset.
+  // `admission_scores.subject_scores` still contains every submitted
+  // score (ignored + selected) so the weighted breakdown would explain
+  // an inflated, wrong total if we rendered all of them.
+  //
+  // `score_snapshot_status.subject_statuses` already holds exactly the
+  // selected subjects (backend only emits statuses for what it scored).
+  // Prefer `snapshot_score.selected_subjects` when present because it's
+  // the explicit contract; fall back to the subject_statuses keys; last
+  // fallback is the full map (legacy behavior for snapshots that predate
+  // these fields).
+  const selectedSubjectCodes: string[] | null = (() => {
+    const explicit = profile.snapshot_score?.selected_subjects
+    if (explicit && explicit.length > 0) return explicit
+    const statusKeys = profile.score_snapshot_status?.subject_statuses
+      ? Object.keys(profile.score_snapshot_status.subject_statuses)
+      : []
+    if (statusKeys.length > 0) return statusKeys
+    return null
+  })()
+  const subjectScores: Record<string, number | null | undefined> =
+    selectedSubjectCodes !== null
+      ? Object.fromEntries(
+          selectedSubjectCodes.map((code) => [code, allSubjectScores[code]]),
+        )
+      : allSubjectScores
 
   // ✅ THIN CLIENT: Use backend-computed score status instead of local calculation
   const scoreStatus = profile.score_snapshot_status
