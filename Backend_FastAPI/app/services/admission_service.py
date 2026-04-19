@@ -1284,6 +1284,36 @@ def _serialize_subject_groups(admission_path) -> List[Dict[str, Any]]:
     return groups
 
 
+def _merge_subject_weights(admission_path) -> Dict[str, float]:
+    """Flatten per-subject weights across all subject groups of a path.
+
+    Feeds the top-level ``applied_rules["subject_weights"]`` field that
+    ``AdmissionScoringService.calculate_score`` reads at submit / re-score
+    time. Keeping this parallel to the nested shape in
+    ``_serialize_subject_groups`` lets the scoring engine look up weights
+    with one dict access, without having to walk group structure.
+
+    When a subject code appears in multiple groups of the same path
+    (rare), the last group's weight wins. That's documented where this
+    helper is called.
+
+    Empty dict when the path has no criteria / groups — scoring falls
+    back to plain sum (matches the no-retroactive guarantee).
+    """
+    if not admission_path or not admission_path.criteria:
+        return {}
+
+    merged: Dict[str, float] = {}
+    for mapping in admission_path.criteria.subject_group_mappings:
+        group = mapping.subject_group
+        if not group:
+            continue
+        for m in group.subject_mappings:
+            if m.subject:
+                merged[m.subject.code] = float(m.weight)
+    return merged
+
+
 # ==============================================================================
 # CRUD FUNCTIONS
 # ==============================================================================
@@ -1575,7 +1605,20 @@ async def create_profile(
 
         # Original subject groups (for audit trail and fixed mode)
         "subject_groups": _serialize_subject_groups(full_path),
-        
+
+        # PR6 Step 2 (2026-04-19): top-level per-subject weight map. Frozen
+        # at profile creation so later edits to SubjectGroupSubject.weight
+        # don't retroactively re-score this profile. The nested
+        # subject_groups[*].weights field above is for audit display;
+        # this top-level field is what the scoring engine actually reads
+        # at submit/re-score time (see _evaluate_admission_profile).
+        #
+        # Merge order across groups: last group wins on duplicate subject
+        # codes. In the vast majority of configs, each allowed subject
+        # appears in only one group of a given path anyway.
+        "subject_weights": _merge_subject_weights(full_path),
+
+
         # =========================================================================
         # GROUP 4: Method Metadata (Updated Ticket #3)
         # =========================================================================

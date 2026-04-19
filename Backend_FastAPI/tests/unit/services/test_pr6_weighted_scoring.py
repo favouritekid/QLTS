@@ -166,3 +166,131 @@ class TestCalculateScoreWithWeights:
             subject_weights={"math": 2.0},
         )
         assert result.final_score == Decimal("24")
+
+
+# ---------------------------------------------------------------------------
+# Service-level regression: runtime scoring path actually consumes
+# applied_rules.subject_weights (not just the isolated engine function).
+# This is the contract reviewer flagged: unit-engine-green but snapshot
+# never wires the field → weighted profiles silently fall back to sum.
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeScoringReadsAppliedRulesWeights:
+    """Drives `_calculate_and_update_totals()` on a minimal profile stub.
+
+    This is the service entry point that submit / re-score / evaluation
+    flows hit. It reconstructs criteria from `profile.applied_rules`,
+    calls `AdmissionScoringService.calculate_score`, and writes the
+    transient totals back onto the profile.
+
+    The previous Step 2 tests only exercised the scoring engine in
+    isolation — they did not prove the runtime layer actually forwards
+    `applied_rules["subject_weights"]` into the engine. These tests
+    close that gap by driving the service function end-to-end on a
+    lightweight stub (no DB needed) and asserting the total reflects
+    the frozen weights.
+    """
+
+    @staticmethod
+    def _mk_score(code: str, value: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            subject=SimpleNamespace(code=code),
+            score=Decimal(value),
+        )
+
+    @staticmethod
+    def _mk_profile(applied_rules: dict, scores_list) -> SimpleNamespace:
+        # Subclass-like stub: attrs the function writes to (total_score,
+        # average_score, admission_scores, snapshot_score) start at
+        # placeholder values and get overwritten. `lead` is needed for
+        # the gpa_only branch we explicitly steer away from.
+        return SimpleNamespace(
+            id=1,
+            applied_rules=applied_rules,
+            subject_scores=scores_list,
+            lead=SimpleNamespace(gpa=None),
+            total_score=None,
+            average_score=None,
+            admission_scores=None,
+            snapshot_score=None,
+        )
+
+    @staticmethod
+    def _weighted_rules(subject_weights) -> dict:
+        """Minimal applied_rules shape the runtime scoring path reads."""
+        return {
+            "method_type": "subject_based",
+            "scoring_method": "weighted",
+            "subject_selection_mode": "fixed",
+            "required_subject_count": 3,
+            "min_score": None,
+            "min_gpa": None,
+            "min_subject_score": None,
+            "allowed_subject_codes": ["math", "physics", "chemistry"],
+            "subject_weights": subject_weights,
+        }
+
+    def test_runtime_uses_weights_when_frozen(self):
+        """Applied_rules has top-level subject_weights → final total is
+        weighted, not plain sum. Locks reviewer P1: runtime must read
+        the field, not fall back silently."""
+        from app.services.admission_service import _calculate_and_update_totals
+
+        profile = self._mk_profile(
+            applied_rules=self._weighted_rules(
+                {"math": 2.0, "physics": 1.0, "chemistry": 1.0}
+            ),
+            scores_list=[
+                self._mk_score("math", "8"),
+                self._mk_score("physics", "7"),
+                self._mk_score("chemistry", "9"),
+            ],
+        )
+
+        _calculate_and_update_totals(profile)
+
+        assert profile.total_score == 32.0, (
+            "Runtime scoring must apply frozen weights. Getting plain sum "
+            "(24) would mean applied_rules['subject_weights'] was ignored."
+        )
+
+    def test_runtime_without_weights_falls_back_to_plain_sum(self):
+        """No subject_weights frozen (pre-migration snapshot) → plain sum
+        stays. Locks the no-retroactive guarantee at the runtime layer."""
+        from app.services.admission_service import _calculate_and_update_totals
+
+        applied_rules = self._weighted_rules(subject_weights=None)
+        # Explicit removal mirrors a pre-migration snapshot shape:
+        applied_rules.pop("subject_weights", None)
+        profile = self._mk_profile(
+            applied_rules=applied_rules,
+            scores_list=[
+                self._mk_score("math", "8"),
+                self._mk_score("physics", "7"),
+                self._mk_score("chemistry", "9"),
+            ],
+        )
+
+        _calculate_and_update_totals(profile)
+
+        assert profile.total_score == 24.0  # plain sum, no weighting
+
+    def test_runtime_missing_key_treats_as_one(self):
+        """A subject not listed in subject_weights uses 1.0. Mirrors the
+        DB default + the no-op guarantee at the runtime layer."""
+        from app.services.admission_service import _calculate_and_update_totals
+
+        profile = self._mk_profile(
+            applied_rules=self._weighted_rules({"math": 2.0}),  # others missing
+            scores_list=[
+                self._mk_score("math", "8"),
+                self._mk_score("physics", "7"),
+                self._mk_score("chemistry", "9"),
+            ],
+        )
+
+        _calculate_and_update_totals(profile)
+
+        # 8*2 + 7*1 + 9*1 = 32
+        assert profile.total_score == 32.0

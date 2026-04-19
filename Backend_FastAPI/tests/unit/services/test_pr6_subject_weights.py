@@ -16,7 +16,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.admission_service import _serialize_subject_groups
+from app.services.admission_service import (
+    _merge_subject_weights,
+    _serialize_subject_groups,
+)
 from app.services.admission_scoring_service import AdmissionScoringService
 
 
@@ -124,6 +127,69 @@ class TestSerializeSubjectGroups:
         """No regression: the pre-existing None-guard still works."""
         path = SimpleNamespace(id=1, criteria=None)
         assert _serialize_subject_groups(path) == []
+
+
+# ---------------------------------------------------------------------------
+# _merge_subject_weights (top-level applied_rules.subject_weights)
+# ---------------------------------------------------------------------------
+
+
+class TestMergeSubjectWeights:
+    """Runtime scoring reads the TOP-LEVEL `applied_rules.subject_weights`,
+    not the nested one on each group. Without this merge the weighted
+    formula never fires on real profiles even though the engine supports
+    it. This class locks that contract.
+    """
+
+    def test_flattens_single_group_weights(self):
+        path = _mk_admission_path([
+            _mk_group("A00", "Toán - Lý - Hóa", [
+                ("math", Decimal("2.0")),
+                ("physics", Decimal("1.0")),
+                ("chemistry", Decimal("1.0")),
+            ]),
+        ])
+
+        merged = _merge_subject_weights(path)
+
+        assert merged == {"math": 2.0, "physics": 1.0, "chemistry": 1.0}
+
+    def test_flattens_multiple_groups_last_wins(self):
+        """Documented merge semantics: on duplicate subject codes across
+        groups on the same path, the last group's weight wins. Guards
+        the behavior so a future "first wins" swap is a visible change."""
+        path = _mk_admission_path([
+            _mk_group("A00", "Toán - Lý - Hóa", [
+                ("math", Decimal("2.0")),
+                ("physics", Decimal("1.0")),
+            ]),
+            _mk_group("D01", "Toán - Văn - Anh", [
+                ("math", Decimal("1.5")),  # Same subject, different group
+                ("literature", Decimal("1.0")),
+                ("english", Decimal("2.0")),
+            ]),
+        ])
+
+        merged = _merge_subject_weights(path)
+
+        assert merged["math"] == 1.5  # last group wins
+        assert merged["physics"] == 1.0
+        assert merged["literature"] == 1.0
+        assert merged["english"] == 2.0
+
+    def test_empty_criteria_returns_empty_dict(self):
+        """Scoring engine treats {} as "no weights frozen" → plain sum.
+        This is the backward-compat path for pre-migration profiles."""
+        path = SimpleNamespace(id=1, criteria=None)
+        assert _merge_subject_weights(path) == {}
+
+    def test_values_are_floats(self):
+        """applied_rules is JSONB — Decimal would fail to serialize."""
+        path = _mk_admission_path([
+            _mk_group("A00", "x", [("math", Decimal("1.5"))]),
+        ])
+        merged = _merge_subject_weights(path)
+        assert isinstance(merged["math"], float)
 
 
 # ---------------------------------------------------------------------------
