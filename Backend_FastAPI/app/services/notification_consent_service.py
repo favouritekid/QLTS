@@ -70,6 +70,65 @@ async def upsert_consent(
     return await repo.upsert_latest(data)
 
 
+async def grant_implied_zalo_consent(
+    db: AsyncSession,
+    lead,
+    *,
+    actor_id: Optional[int] = None,
+) -> None:
+    """Grant Zalo ZNS consent for a newly-registered lead (implied consent).
+
+    Rationale: lead đã chủ động cung cấp số điện thoại qua luồng đăng ký
+    (mẫu giấy / form online / referral). Theo Nghị định 13/2023 Điều 17.2,
+    xử lý DLCN "cần thiết cho việc thực hiện hợp đồng/yêu cầu của chủ thể
+    dữ liệu" không yêu cầu consent tường minh riêng. Việc ghi nhận consent
+    row ở đây có 2 tác dụng:
+
+    1. **Audit trail**: lưu `consent_source=implied_by_registration` +
+       notes trích xuất source/created_via để chứng minh basis nếu bị audit.
+    2. **Opt-out mechanism**: nếu lead yêu cầu dừng Zalo, admin set
+       `consent_status=revoked` qua /admin/notification-consents → channel
+       gate tự block.
+
+    Non-blocking: log + silent skip nếu thất bại. Caller phải không expect
+    consent row tồn tại 100% (vẫn phải check qua is_consent_granted trong
+    dispatcher).
+    """
+    if not getattr(lead, "phone", None):
+        return  # No phone → no Zalo delivery possible anyway
+    try:
+        from app.utils.phone_helpers import to_zalo_phone
+
+        normalized = to_zalo_phone(lead.phone)
+        created_at = getattr(lead, "created_at", None)
+        created_str = created_at.strftime("%Y-%m-%d") if created_at else "N/A"
+        created_via = getattr(lead, "created_via", None) or "unknown"
+        source = getattr(lead, "source", None) or "unknown"
+        await upsert_consent(
+            db,
+            data={
+                "channel": "zalo",
+                "source_type": "lead",
+                "source_id": lead.id,
+                "normalized_phone": normalized,
+                "consent_status": "granted",
+                "consent_source": "implied_by_registration",
+                "notes": (
+                    f"Lead đăng ký {created_str} qua source={source} "
+                    f"created_via={created_via}. NĐ 13/2023 Đ.17.2."
+                ),
+            },
+            actor_id=actor_id or 0,
+        )
+    except Exception as e:
+        # Never block lead creation on consent grant failure.
+        log.warning(
+            "grant_implied_zalo_consent failed, lead creation unblocked",
+            lead_id=getattr(lead, "id", None),
+            error=str(e),
+        )
+
+
 async def bulk_import_consents(
     db: AsyncSession,
     *,

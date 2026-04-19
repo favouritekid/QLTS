@@ -69,11 +69,23 @@ async def zalo_webhook(
         except Exception as e:  # pragma: no cover — defensive
             log.warning("verify_webhook_signature raised", error=str(e))
 
+    # Extract UID from common event shapes. Different event_name families put
+    # the user identifier in different payload paths — capture the first hit.
+    uid = None
+    if isinstance(data, dict):
+        uid = (
+            (data.get("follower") or {}).get("id")              # follow / unfollow
+            or (data.get("sender") or {}).get("id")             # user_send_text / image / etc
+            or (data.get("recipient") or {}).get("id")          # oa_send_text / template callbacks
+            or (data.get("user_id"))                            # fallback
+        )
     log.info(
         "Zalo webhook received",
         event_name=event_name,
         signature_present=bool(signature),
         signature_valid=sig_ok,
+        uid=uid,
+        raw_data=data,
     )
 
     # 4. Handle delivery status events

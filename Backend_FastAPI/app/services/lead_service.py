@@ -1159,6 +1159,19 @@ async def create_lead(
             source="api",
         )
 
+        # ✅ Grant implied Zalo consent (NĐ 13/2023 Đ.17.2 — lead chủ động
+        # cung cấp phone qua registration). Non-blocking; helper swallows
+        # errors. Runs in savepoint to avoid poisoning parent txn if upsert
+        # races another concurrent grant for same (channel,source,source_id).
+        try:
+            async with db.begin_nested():
+                from app.services import notification_consent_service
+                await notification_consent_service.grant_implied_zalo_consent(
+                    db, db_lead, actor_id=created_by.id if created_by else None,
+                )
+        except Exception as e:
+            log.warning("Implied consent grant failed", lead_id=db_lead.id, error=str(e))
+
         # ✅ Dispatch LEAD_CREATED notification in savepoint
         _lead_created_cb = None
         try:

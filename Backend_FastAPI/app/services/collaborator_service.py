@@ -495,6 +495,20 @@ async def submit_lead_claim(
 
             await db.flush()
 
+            # Grant implied Zalo consent — CTV-submitted lead also cung cấp
+            # phone voluntarily (qua collaborator claim form). Same rationale
+            # as lead_service.create_lead. Non-blocking.
+            try:
+                from app.services import notification_consent_service
+                await notification_consent_service.grant_implied_zalo_consent(
+                    db, lead, actor_id=collaborator.id,
+                )
+            except Exception as e:
+                log.warning(
+                    "Implied consent grant failed (CTV claim path)",
+                    lead_id=lead.id, error=str(e),
+                )
+
         # Create LeadClaim record (inside savepoint for atomicity)
         claim_data_dict = claim_data.model_dump()
         try:
