@@ -482,6 +482,15 @@ class Settings(BaseSettings):
         validation_alias="MOMO_ENDPOINT"
     )  # Sandbox or production endpoint
 
+    # -- School contact info (shared across email + Zalo channels) --
+    SCHOOL_ADDRESS: str = Field(
+        default="02 Lý Nhân Tông, Phường Tân An, Tỉnh Đắk Lắk",
+        validation_alias="SCHOOL_ADDRESS",
+    )
+    SCHOOL_BANK_NAME: str = Field(default="", validation_alias="SCHOOL_BANK_NAME")
+    SCHOOL_BANK_ACCOUNT: str = Field(default="", validation_alias="SCHOOL_BANK_ACCOUNT")
+    SCHOOL_BANK_HOLDER: str = Field(default="", validation_alias="SCHOOL_BANK_HOLDER")
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)

@@ -74,7 +74,7 @@ def render_email_template(
         "company_name": "Trường cao đẳng Bách khoa Tây Nguyên",
         "support_email": settings.MAIL_FROM,
         "hotline": "0906 513 555",
-        "address": "02 Lý Nhân Tông, Phường Tân An, Tỉnh Đắk Lắk",
+        "address": settings.SCHOOL_ADDRESS,
         "current_year": str(datetime.now().year),
     })
 
