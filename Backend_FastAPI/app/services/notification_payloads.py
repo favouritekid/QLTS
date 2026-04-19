@@ -40,13 +40,27 @@ class EventPayload:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def for_lead_created(lead, actor) -> dict:
+    def for_lead_created(lead, actor, *, major_name: Optional[str] = None) -> dict:
+        """Build lead-created payload.
+
+        ``major_name`` is resolved by the caller (e.g. ``lead_service.py``
+        refreshes ``lead.offering.program``) and passed in — this builder
+        stays pure per module contract. ``getattr`` defaults cover both stubs
+        and real models where ``created_at`` is set by server_default after flush.
+        """
+        from app.utils.datetime_helpers import format_vn_date
+        from app.utils.id_helpers import format_lead_code
+
         return {
             "lead_id": lead.id,
             "unit_id": lead.unit_id,
             "lead_name": lead.full_name or "Unknown",
             "source": lead.source or "Unknown",
             **EventPayload._actor_info(actor),
+            # Channel-specific derived fields (e.g. Zalo ZNS 257524 params).
+            "lead_code": format_lead_code(lead.id),
+            "major_name": (major_name or "N/A")[:30],
+            "created_date_vn": format_vn_date(getattr(lead, "created_at", None)),
         }
 
     @staticmethod

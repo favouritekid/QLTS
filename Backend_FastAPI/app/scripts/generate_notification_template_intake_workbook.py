@@ -459,7 +459,7 @@ async def build_workbook(output_path: Path) -> None:
     intake_rows.extend(_scenario_rows())
     intake_rows.extend(_planned_finance_rows())
 
-    allowed_zns_events = {"payment_verified", "application_status_changed", "consultation_reminder"}
+    allowed_zns_events = {"payment_verified", "application_status_changed", "consultation_reminder", "lead_created"}
     for draft in _ZNS_DRAFTS:
         event_key = draft.allowed_events[0]
         if event_key not in allowed_zns_events:
@@ -477,7 +477,7 @@ async def build_workbook(output_path: Path) -> None:
                 "current_rule_enabled": "yes" if enabled_by_event.get(event_key) else "no",
                 "template_scope": "template_only",
                 "actor_type": _infer_actor(event_key, _module_name(definition.category if definition else draft.category), "zns_external"),
-                "recipient_primary": "lead_contact" if event_key in {"payment_verified", "application_status_changed", "consultation_reminder"} else "collaborator_user",
+                "recipient_primary": "lead_contact" if event_key in {"payment_verified", "application_status_changed", "consultation_reminder", "lead_created"} else "collaborator_user",
                 "recipient_additional": "",
                 "primary_channel": "zalo",
                 "browser_enabled": "no",

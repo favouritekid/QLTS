@@ -31,6 +31,7 @@ def _make_lead(**overrides):
         offering=None,
         pipeline_stage_id=3,
         consultation_status_id="new",
+        created_at=datetime(2026, 4, 20, 10, 30, 0),
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -94,7 +95,7 @@ class TestLeadCreated:
     def test_exact_keys(self):
         lead = _make_lead()
         actor = _make_actor()
-        payload = EventPayload.for_lead_created(lead, actor)
+        payload = EventPayload.for_lead_created(lead, actor, major_name="Công nghệ thông tin")
         assert payload == {
             "lead_id": 42,
             "unit_id": 10,
@@ -102,6 +103,9 @@ class TestLeadCreated:
             "source": "website",
             "actor_id": 1,
             "actor_name": "Admin User",
+            "lead_code": "LEAD-000042",
+            "major_name": "Công nghệ thông tin",
+            "created_date_vn": "20/04/2026",
         }
 
     def test_none_actor(self):
@@ -119,6 +123,41 @@ class TestLeadCreated:
         lead = _make_lead(source=None)
         payload = EventPayload.for_lead_created(lead, _make_actor())
         assert payload["source"] == "Unknown"
+
+    def test_major_name_defaults_to_na_when_kwarg_omitted(self):
+        lead = _make_lead()
+        payload = EventPayload.for_lead_created(lead, _make_actor())
+        assert payload["major_name"] == "N/A"
+
+    def test_major_name_defaults_to_na_when_kwarg_none(self):
+        lead = _make_lead()
+        payload = EventPayload.for_lead_created(lead, _make_actor(), major_name=None)
+        assert payload["major_name"] == "N/A"
+
+    def test_major_name_truncated_to_30_chars(self):
+        lead = _make_lead()
+        long_name = "Công nghệ thông tin và truyền thông đa phương tiện"
+        payload = EventPayload.for_lead_created(lead, _make_actor(), major_name=long_name)
+        assert len(payload["major_name"]) <= 30
+        assert payload["major_name"] == long_name[:30]
+
+    def test_lead_code_format(self):
+        lead = _make_lead(id=7)
+        payload = EventPayload.for_lead_created(lead, _make_actor())
+        assert payload["lead_code"] == "LEAD-000007"
+
+    def test_created_date_vn_format_locked(self):
+        lead = _make_lead(created_at=datetime(2026, 4, 20, 15, 30, 0))
+        payload = EventPayload.for_lead_created(lead, _make_actor())
+        assert payload["created_date_vn"] == "20/04/2026"
+
+    def test_created_date_vn_empty_when_created_at_missing(self):
+        """Builder stays defensive: SimpleNamespace w/o created_at yields empty string."""
+        lead = SimpleNamespace(
+            id=1, full_name="X", unit_id=1, source="web",
+        )
+        payload = EventPayload.for_lead_created(lead, _make_actor())
+        assert payload["created_date_vn"] == ""
 
 
 # ===========================================================================

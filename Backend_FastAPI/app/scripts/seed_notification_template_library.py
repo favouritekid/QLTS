@@ -211,6 +211,35 @@ _ZNS_DRAFTS: list[TemplateSeed] = [
         template_type="zalo_zns",
     ),
     TemplateSeed(
+        name="ZNS Draft - Lead Created v1",
+        template_code="ZNS_LEAD_CREATED_V1",
+        description="Draft mapping for ZNS confirmation when a lead is created.",
+        title_template="Ti\u1ebfp nh\u1eadn th\u00f4ng tin $lead_code",
+        message_template=(
+            "C\u1ea3m \u01a1n $lead_name \u0111\u00e3 \u0111\u0103ng k\u00fd ng\u00e0nh "
+            "$major_name v\u00e0o $created_date_vn. M\u00e3 h\u1ed3 s\u01a1: $lead_code."
+        ),
+        link_template=None,
+        # Must mirror payload contract at
+        # app/services/notification_payloads.py:for_lead_created +
+        # app/core/event_catalog.py LEAD_CREATED variables.
+        variables=[
+            "lead_id",
+            "unit_id",
+            "lead_name",
+            "source",
+            "actor_id",
+            "actor_name",
+            "lead_code",
+            "major_name",
+            "created_date_vn",
+        ],
+        category="lead",
+        supported_channels=["zalo"],
+        allowed_events=["lead_created"],
+        template_type="zalo_zns",
+    ),
+    TemplateSeed(
         name="ZNS Draft - Consultation Reminder v1",
         template_code="ZNS_CONSULTATION_REMINDER_V1",
         description="Draft mapping for reminder before consultation.",

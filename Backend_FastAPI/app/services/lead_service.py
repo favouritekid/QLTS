@@ -1098,6 +1098,7 @@ async def create_lead(
         # Must load offering while we're still in transaction context
         # Store relationship references immediately to avoid triggering lazy loads
         offering_name = ""
+        major_name: Optional[str] = None  # Clean program.name for ZNS (template 257524)
         if db_lead.offering_id:
             await db.refresh(db_lead, ["offering"])
             offering_obj = db_lead.offering  # Store reference immediately
@@ -1110,6 +1111,7 @@ async def create_lead(
 
                     if program_obj is not None:
                         offering_name = f"{program_obj.name} - {offering_obj.offering_type}"
+                        major_name = program_obj.name
                     else:
                         offering_name = offering_obj.offering_type
                 else:
@@ -1164,7 +1166,9 @@ async def create_lead(
                 _, _lead_created_cb = await dispatch(
                     db=db,
                     event=SystemEvents.LEAD_CREATED,
-                    payload=EventPayload.for_lead_created(db_lead, created_by),
+                    payload=EventPayload.for_lead_created(
+                        db_lead, created_by, major_name=major_name,
+                    ),
                     dedupe_key=f"lead_created:{db_lead.id}",
                 )
         except Exception as e:
