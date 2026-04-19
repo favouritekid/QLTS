@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils"
 import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { SendConfirmationButton } from "./SendConfirmationButton"
 
 interface AdmissionActionsProps {
   profile: AdmissionProfileResponse
@@ -276,6 +277,14 @@ export function AdmissionActions({
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+          )}
+
+          {/* Send magic-link — visible on approved. Lets officers regenerate/
+              resend the confirm link and grab a copy-able URL for Zalo/SMS
+              when the applicant has no email on file. See
+              project_send_confirmation_ops_gaps. */}
+          {profile.status === "approved" && can('enroll') && (
+            <SendConfirmationButton profileId={profile.id} />
           )}
 
           {/* Enroll - can('enroll') when status ∈ {approved, confirmed, overridden}.

@@ -20,6 +20,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions";
 
+// Mock SendConfirmationButton — it has its own dedicated test file and
+// pulls in useMutation, which would require a QueryClientProvider that
+// this test suite intentionally doesn't set up. Pass-through mock keeps
+// the render tree intact without dragging the dependency chain in.
+vi.mock("./SendConfirmationButton", () => ({
+  SendConfirmationButton: ({ profileId }: { profileId: number }) => (
+    <button data-testid="send-confirmation-button">
+      Gửi liên kết xác nhận (#{profileId})
+    </button>
+  ),
+}));
+
 // Mock alert-dialog to pass-through (no Radix portal needed)
 vi.mock("@/components/ui/alert-dialog", () => ({
   AlertDialog: ({ children }: { children: React.ReactNode }) => <>{children}</>,
