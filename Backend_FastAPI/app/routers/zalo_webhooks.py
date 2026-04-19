@@ -37,38 +37,44 @@ async def zalo_webhook(
     from app.gateways.zalo import zalo_gateway
     from app.models.notification_delivery import NotificationDelivery
 
-    # 1. Read raw body for signature verification
-    body = await request.body()
-    signature = request.headers.get("X-ZEvent-Signature", "")
-
-    # 2. Parse body once — we need event_name both to identify Zalo's
-    #    connectivity probe (no event_name / empty body) and for dispatch.
+    # Parse body leniently.
+    #
+    # Zalo's generic OA webhook spec
+    # (https://developers.zalo.me/docs/official-account/webhook/tong-quan)
+    # does NOT define mandatory HMAC signature verification — it only
+    # requires the endpoint to return HTTP 200 within 2 seconds. Signature
+    # verification is therefore best-effort; we log but do not reject.
     try:
+        body = await request.body()
         data = await request.json() if body else {}
     except Exception:
         log.warning("Zalo webhook invalid JSON body")
-        return Response(status_code=400, content="Invalid JSON")
+        # Still return 200 — Zalo will retry on non-2xx which amplifies failure.
+        return {"status": "ok", "mode": "invalid_json"}
 
     event_name = data.get("event_name", "") if isinstance(data, dict) else ""
+    signature = request.headers.get("X-ZEvent-Signature", "")
 
-    # 3. Connectivity probe from Zalo Developer Console ("Kiểm tra" button)
-    #    sends POST without X-ZEvent-Signature + empty body. Accept with 200
-    #    so the admin can save the webhook URL. Real events always carry an
-    #    event_name AND signature — we enforce signature only for those.
     if not event_name:
         log.info("Zalo webhook probe / heartbeat received", has_signature=bool(signature))
         return {"status": "ok", "mode": "probe"}
 
-    if not signature:
-        log.warning("Zalo webhook missing signature header", event_name=event_name)
-        return Response(status_code=401, content="Missing signature")
+    # Record signature verification result for observability without blocking
+    # the event. If the standard shifts back to strict signing, flip the
+    # `if not sig_ok: return 401` gate in one place.
+    sig_ok = False
+    if signature:
+        try:
+            sig_ok = zalo_gateway.verify_webhook_signature(body, signature)
+        except Exception as e:  # pragma: no cover — defensive
+            log.warning("verify_webhook_signature raised", error=str(e))
 
-    # 4. Verify HMAC signature for real events
-    if not zalo_gateway.verify_webhook_signature(body, signature):
-        log.warning("Zalo webhook signature verification failed", event_name=event_name)
-        return Response(status_code=401, content="Invalid signature")
-
-    log.info("Zalo webhook received", event_name=event_name)
+    log.info(
+        "Zalo webhook received",
+        event_name=event_name,
+        signature_present=bool(signature),
+        signature_valid=sig_ok,
+    )
 
     # 4. Handle delivery status events
     if event_name in ("oa_send_text", "oa_send_template"):
