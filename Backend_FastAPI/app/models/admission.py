@@ -243,6 +243,21 @@ class AdmissionProfile(Base):
         comment="Optional approval notes from Manager/Admin"
     )
 
+    # Phase E — post-approval survey (ZNS 426903) dedupe cursor.
+    # survey_sent_at: set once when APPLICATION_SURVEY_DUE is dispatched,
+    # primary filter for the daily scheduler (WHERE survey_sent_at IS NULL).
+    # survey_tracking_id: UUID echoed back by Zalo user_feedback webhook to
+    # correlate responses to the originating profile.
+    survey_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    survey_tracking_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
+    )
+
     # ✅ FIX #6: Rejection tracking (for audit trail)
     rejected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

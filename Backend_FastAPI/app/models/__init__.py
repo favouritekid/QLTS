@@ -35,6 +35,7 @@ from .lead_phone import LeadPhoneIdentity
 
 # Admission models (NEW: Replacement for Application)
 from .admission import AdmissionProfile, AdmissionConfirmationToken
+from .admission_survey_feedback import AdmissionSurveyFeedback
 from .student import Student, StudentDocument
 
 # Admission Config Domain (Phase 1: Relational admission system)
@@ -158,6 +159,7 @@ __all__ = [
     # Admission (NEW)
     "AdmissionProfile",
     "AdmissionConfirmationToken",
+    "AdmissionSurveyFeedback",
     "Student",
     "StudentDocument",
     "ProfileSubjectScore",
