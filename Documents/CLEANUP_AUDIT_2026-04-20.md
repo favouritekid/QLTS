@@ -41,43 +41,55 @@ unit_created / unit_updated / unit_deleted
 
 ### Consumer blockers (cần migrate TRƯỚC khi delete)
 
-`NOTIFICATION_REGISTRY` — 8 consumers:
+> **Audit rule**: only files with actual ``from ... import`` statements or
+> identifier references count. Mentions inside module docstrings or code
+> comments are not consumers and don't block deletion.
+
+`NOTIFICATION_REGISTRY` — **4 real consumers**:
 
 | Consumer | Type | Migrate path |
 |---|---|---|
-| `app/core/event_catalog.py` | code — builds catalog from registry at import time | Inline-paste registry data into catalog file |
-| `app/core/event_metadata.py` | code — legacy bridging layer | Delete along with metadata module |
 | `app/scripts/seed_notification_rules.py` | seed script | Switch to catalog; retire registry import |
 | `app/scripts/reset_notification_rules_dev.py` | dev-only reset script | Same as above |
-| `tests/integration/test_lead_notification_flow.py` | test | Replace registry refs với catalog |
-| `tests/unit/test_notification_contract.py` | test | Same |
-| `tests/unit/test_notification_parity.py` | test | Same |
-| `tests/unit/test_registry_actions_compat.py` | test | Rename (registry will no longer exist) |
+| `tests/unit/test_notification_parity.py` | test | Replace registry refs với catalog |
+| `tests/unit/test_registry_actions_compat.py` | test | Delete (registry will no longer exist) |
 
-`EVENT_METADATA_REGISTRY` — 5 consumers:
+`EVENT_METADATA_REGISTRY` — **4 real consumers**:
 
 | Consumer | Type | Migrate path |
 |---|---|---|
-| `app/core/event_catalog.py` | code — bridges metadata into catalog | Inline-paste metadata into catalog |
 | `tests/integration/test_notification_core_v2.py` | test | Replace metadata refs với catalog |
 | `tests/services/test_payment_service.py` | test | Same |
 | `tests/unit/test_condition_metadata_parity.py` | test | Rename test to catalog-vs-something else |
 | `tests/unit/test_notification_parity.py` | test | Same |
 
+Earlier draft of this table listed `event_catalog.py`, `event_metadata.py`,
+`test_lead_notification_flow.py`, `test_notification_contract.py` as
+consumers; those were docstring/comment mentions only and have been
+removed after re-verifying with strict `from ... import` grep.
+
 ### Recommendation
 
 Hai file legacy **không delete-ready trong một sweep**. Thứ tự đề xuất:
-1. **Split PR** migrate seed scripts (2 files) khỏi `NOTIFICATION_REGISTRY` — low risk, không đụng test
-2. **Split PR** migrate tests (6 files) khỏi `NOTIFICATION_REGISTRY` — medium (touches contract test semantics)
-3. **Split PR** inline catalog build data (không còn phụ thuộc registry/metadata) — cuối cùng mới delete 2 file legacy
+1. **Split PR** migrate 2 seed scripts khỏi `NOTIFICATION_REGISTRY` — low risk, không đụng test
+2. **Split PR** migrate 6 test files (2 reference registry, 4 reference metadata, `test_notification_parity.py` counted once — it imports both) — medium (touches contract test semantics)
+3. **Split PR** delete 2 legacy modules once consumers are gone
 
-Mỗi split PR ~1–2h, tổng ~4–5h. **Out of scope cleanup wave hiện tại** — ghi nhận như tech debt tiếp theo.
+Mỗi split PR ~1–2h, tổng ~3–4h. **Out of scope cleanup wave hiện tại** — ghi nhận như tech debt tiếp theo.
 
 ---
 
 ## W4 — TODO/FIXME triage
 
-### Backend (`app/**/*.py`) — 13 markers, phân loại
+> **Units**: ``raw match`` = one grep hit for `TODO|FIXME|XXX|HACK`.
+> Multiple hits on the same concern get grouped into one ``bucket``
+> below. Totals are raw matches; buckets are disposition-oriented.
+
+Raw match counts (strict grep, 2026-04-20):
+- Backend `Backend_FastAPI/app/**/*.py`: **16 raw matches**
+- Frontend `frontend/src/**/*.{ts,tsx}`: **31 raw matches**
+
+### Backend — 16 raw matches, grouped
 
 #### 🔴 Actionable — should fix or convert to issue (7)
 
@@ -108,9 +120,9 @@ scripts/generate_notification_template_intake_workbook.py:162 — TODO in audit 
 
 Không cần xử lý.
 
-### Frontend (`src/**/*.{ts,tsx}`) — 31 markers, phân loại
+### Frontend — 31 raw matches, grouped
 
-#### 🔴 `[TODO_BACKEND]` markers (22) — chờ BE shipping thêm field
+#### 🔴 `[TODO_BACKEND]` markers (24 raw hits across `frontend/src`) — chờ BE shipping thêm field
 
 Tất cả tập trung ở `finance.types.ts` (11) + `finance.ts` (11). Pattern đồng nhất: FE đã khai báo Zod/TS interface sẵn sàng nhận field, chờ BE expose.
 
@@ -126,7 +138,7 @@ Missing fields (grouped by domain):
 
 **Disposition**: **convert thành 1 issue** — "Finance API: missing response fields for FE-declared interfaces". Không sprawl thành N issues, 1 consolidated tracker. Scope feature, out of cleanup wave.
 
-#### 🔴 `permissions.ts` — 5 markers (P4 FE-quality)
+#### 🔴 `permissions.ts` — 6 raw hits (P4 FE-quality)
 
 ```
 permissions.ts:8,60,70,80,90,100 — "TODO: Replace with API permission flags when backend supports it"
@@ -134,26 +146,26 @@ permissions.ts:8,60,70,80,90,100 — "TODO: Replace with API permission flags wh
 
 FE đang hardcode 6 permission checks bằng `user.role`. Blueprint Notification Refactor P4 (FE architecture) flag là debt. **Convert thành issue** — khi backend ship `can_*` flags trên response, FE gỡ hardcode.
 
-#### 🟡 Single-page features (4)
+#### 🟡 Single-page features (3)
 
 | Location | Content | Disposition |
 |---|---|---|
-| `admissions/[id]/_components/tabs/AdmissionScoresTab.tsx:90` | `// TODO: Implement weighted scoring with weights from snapshot` | **Stale** — PR6 đã ship weighted-scoring end-to-end. Remove comment. |
+| `admissions/[id]/_components/tabs/AdmissionScoresTab.tsx:90` | `// TODO: Implement weighted scoring with weights from snapshot` | **Real gap — do NOT remove**. Weighted branch (line 93) still returns plain `sum(scores)` with the weights ignored, and that total is rendered at lines 318 + 363. `ScoreSnapshot.tsx` has the correct weighted display elsewhere, but this local tab total needs the same wiring. Convert to issue. |
 | `useInvoiceViewModel.ts:39` | `[TODO_BACKEND] Add penalty_amount, total_due` | Gộp vào tracker finance fields |
 | `usePaymentMethods.ts:102` | `[TODO_BACKEND] Add description` | Gộp vào tracker finance fields |
 
 ### Recommendation W4
 
-- **Remove 2 stale comments** ngay (nhỏ):
-  - `admission_service.py:4426` (audit log đã tồn tại)
-  - `AdmissionScoresTab.tsx:90` (PR6 đã ship)
-- **Open 3 issues** tracker:
+- **Remove 1 stale comment** ngay (nhỏ):
+  - `admission_service.py:4426` (audit log đã tồn tại — `entity_audit_log` table verified present)
+- **Open 4 issues** tracker:
   - Backend: `officer conversion_rate` + `kpi aggregation` + `document_group offering_type validation` → 1 issue "Backend TODO cluster — 3 gaps"
-  - Finance: 22 `[TODO_BACKEND]` finance fields missing → 1 issue "Finance API: FE-declared fields awaiting backend ship"
-  - FE permissions: 5 `TODO: Replace with API flag` → 1 issue "FE hardcoded permission checks — migrate to API flags"
+  - Finance: 24 `[TODO_BACKEND]` finance fields missing → 1 issue "Finance API: FE-declared fields awaiting backend ship"
+  - FE permissions: 6 `TODO: Replace with API flag` → 1 issue "FE hardcoded permission checks — migrate to API flags"
+  - Admission weighted scoring: `AdmissionScoresTab.tsx:90` weighted branch returns plain sum instead of applying subject weights → 1 issue "AdmissionScoresTab: weighted total ignores subject weights"
 - **Leave as-is**: SMS future placeholder + Dorm-contingent TODOs + speculative caching comment.
 
-**Tổng actionable cleanup: 2 remove-comment lines + 3 issues**. Phần lớn TODO là feature placeholder, không phải cleanup target.
+**Tổng actionable cleanup: 1 remove-comment line + 4 issues**. Phần lớn TODO là feature placeholder, không phải cleanup target.
 
 ---
 
@@ -161,7 +173,7 @@ FE đang hardcode 6 permission checks bằng `user.role`. Blueprint Notification
 
 | Wave | Finding | Actionable next |
 |---|---|---|
-| **W1b'** | Catalog strict superset (58/58). Legacy modules ra được về coverage, nhưng bị block bởi 8 NOTIFICATION_REGISTRY consumers + 5 EVENT_METADATA_REGISTRY consumers | 3 split PRs (~4–5h tổng) — **out of current cleanup wave** |
-| **W4** | 13 backend + 31 FE markers. Phần lớn là feature placeholder hoặc grep noise. Chỉ 2 comment stale có thể remove ngay; 3 issue trackers cho real debt | 2 comment deletion + 3 issue mở — không gộp vào PR3 (tránh scope creep) |
+| **W1b'** | Catalog strict superset (58/58). Legacy modules ra được về coverage, nhưng bị block bởi 4 real `NOTIFICATION_REGISTRY` consumers + 4 real `EVENT_METADATA_REGISTRY` consumers (docstring mentions NOT counted) | 3 split PRs (~3–4h tổng) — **out of current cleanup wave** |
+| **W4** | 16 backend + 31 FE raw grep matches. Phần lớn là feature placeholder hoặc grep noise. 1 comment stale có thể remove ngay; 4 issue trackers cho real debt (weighted-scoring gap confirmed, không stale) | 1 comment deletion + 4 issue mở — không gộp vào PR3 (tránh scope creep) |
 
 PR3 là audit doc only. Next steps là các issue tracker + follow-up PRs có scope rõ ràng.
