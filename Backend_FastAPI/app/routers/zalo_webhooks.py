@@ -99,6 +99,28 @@ async def zalo_webhook(
     elif event_name == "user_unfollow_oa":
         log.info("Zalo user unfollowed OA", user_id=data.get("follower", {}).get("id"))
 
+    # 6. Handle rating-template feedback (Phase E — ZNS 426903 survey).
+    # Never raise out of this branch: malformed Zalo payload must log +
+    # still return 200 so we don't trigger a retry storm on caller-side
+    # noise. ValidationError is swallowed for that reason.
+    elif event_name == "user_feedback":
+        from app.services import admission_survey_service
+        from app.utils.exceptions import ValidationError
+
+        try:
+            await admission_survey_service.record_feedback(
+                db, raw_payload=data
+            )
+            await db.commit()
+        except ValidationError as e:
+            log.warning(
+                "Zalo user_feedback malformed — 200-acked, not persisted",
+                error=str(e),
+            )
+        except Exception:
+            log.exception("Zalo user_feedback handler failed unexpectedly")
+            # Best-effort: swallow so Zalo doesn't retry on our own bug.
+
     # Always return 200 to acknowledge receipt
     return {"status": "ok"}
 
