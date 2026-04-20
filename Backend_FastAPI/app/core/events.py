@@ -323,6 +323,28 @@ class SystemEvents(str, Enum):
     Recipients: Assigned officer (lead_owner), unit managers, admins.
     """
 
+    APPLICATION_SURVEY_DUE = "application_survey_due"
+    """
+    Triggered by the daily admission survey scheduler 30 days after profile
+    approval. Sends ZNS template 426903 ("Khảo sát dịch vụ tư vấn") to the
+    applicant via lead_contact resolver. One-shot per profile — scheduler
+    guards with ``survey_sent_at IS NULL`` so re-approval does not re-fire.
+
+    Payload Schema:
+        {
+            "application_id": int,         # Required: AdmissionProfile ID
+            "lead_id": int,                # Required: Lead ID for phone resolver
+            "full_name": str,              # Pre-resolved, ≤30 chars enforced by builder
+            "program_name": str,           # offering.program.name, ≤30 chars
+            "profile_code": str,           # profile.profile_code, ≤30 chars
+            "submitted_date_vn": str,      # DD/MM/YYYY of profile.submitted_at
+            "tracking_id": str,            # UUID, echoed back in user_feedback webhook
+        }
+
+    Recipients: Applicant only (external channel). No internal recipients
+    — this is a customer-facing survey, not an officer notification.
+    """
+
     # =========================================================================
     # FINANCE EVENTS (Future: Dorm, Tuition, etc.)
     # =========================================================================

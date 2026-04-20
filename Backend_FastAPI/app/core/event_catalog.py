@@ -537,6 +537,30 @@ _ADMISSION_EVENTS: tuple = (
         dedup_key_template="app:${application_id}:fee_paid",
         link_strategy="/admissions/${application_id}",
     ),
+    EventDefinition(
+        event=SystemEvents.APPLICATION_SURVEY_DUE,
+        category="application",
+        display_name="Khảo sát dịch vụ tư vấn sau duyệt 30 ngày",
+        description="Scheduler gửi ZNS 426903 cho applicant sau khi hồ sơ được duyệt 30 ngày",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead (cho lead_contact resolver)"),
+            _var("full_name", "string", "Họ tên applicant (≤30 ký tự)"),
+            _var("program_name", "string", "Tên ngành (≤30 ký tự)"),
+            _var("profile_code", "string", "Mã hồ sơ (≤30 ký tự)"),
+            _var("submitted_date_vn", "string", "Ngày nộp DD/MM/YYYY"),
+            _var("tracking_id", "string", "UUID echo-back cho user_feedback webhook"),
+        ),
+        # Applicant-only survey. No internal audience — there is no officer /
+        # manager notification on this event. External delivery is wired per
+        # action.config.external_resolver="lead_contact" on the ZNS rule row.
+        default_resolver="specific_users",
+        allowed_resolvers=("specific_users",),
+        default_channels=("zalo",),
+        priority=50,
+        dedup_key_template="survey_due:${application_id}",
+        link_strategy=None,
+    ),
 )
 
 # -------------------------------------------------------------------
