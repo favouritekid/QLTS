@@ -14,6 +14,9 @@ Locks five invariants through the real /api/webhooks/zalo endpoint:
 5. **Ignored event** — non-``user_feedback`` event_name leaves the
    feedback table untouched.
 """
+import hashlib
+import hmac
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -22,7 +25,30 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.config import settings
 from app.main import app
+
+
+def _sign_body(body: bytes) -> str:
+    """Compute X-ZEvent-Signature the same way the gateway verifies it
+    (see zalo_gateway.verify_webhook_signature). Using the same secret
+    fallback chain ZALO_WEBHOOK_SECRET or ZALO_APP_SECRET."""
+    secret = settings.ZALO_WEBHOOK_SECRET or settings.ZALO_APP_SECRET or ""
+    return hmac.new(
+        key=secret.encode(), msg=body, digestmod=hashlib.sha256
+    ).hexdigest()
+
+
+async def _post_signed(client: AsyncClient, payload: dict):
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return await client.post(
+        "/api/webhooks/zalo",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-ZEvent-Signature": _sign_body(body),
+        },
+    )
 
 
 def _feedback_payload(
@@ -81,8 +107,20 @@ async def _approved_profile_with_tracking(
     return profile
 
 
+@pytest.fixture
+def zalo_signing_secret(monkeypatch):
+    """Dev/test envs don't ship a Zalo secret; set one so
+    verify_webhook_signature has a key to HMAC against. Must fire BEFORE
+    any test body that calls _sign_body() or _post_signed() so both
+    sides use the same value."""
+    monkeypatch.setattr(settings, "ZALO_APP_SECRET", "test-app-secret")
+    monkeypatch.setattr(settings, "ZALO_WEBHOOK_SECRET", "")
+    yield
+
+
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.usefixtures("zalo_signing_secret")
 class TestUserFeedbackWebhook:
     async def test_happy_path_persists_with_profile(
         self, db: AsyncSession, seeded_dependencies: dict,
@@ -97,7 +135,7 @@ class TestUserFeedbackWebhook:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/webhooks/zalo", json=payload)
+            resp = await _post_signed(client, payload)
 
         assert resp.status_code == 200
         row = (
@@ -121,7 +159,7 @@ class TestUserFeedbackWebhook:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/webhooks/zalo", json=payload)
+            resp = await _post_signed(client, payload)
 
         assert resp.status_code == 200
         row = (
@@ -145,12 +183,12 @@ class TestUserFeedbackWebhook:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             first = _feedback_payload(tracking_id=tracking, rate=2, note="bad")
-            await client.post("/api/webhooks/zalo", json=first)
+            await _post_signed(client, first)
 
             second = _feedback_payload(
                 tracking_id=tracking, rate=5, note="changed my mind", tags=["Hướng dẫn tận tình"],
             )
-            await client.post("/api/webhooks/zalo", json=second)
+            await _post_signed(client, second)
 
         rows = (
             await db.execute(
@@ -173,7 +211,7 @@ class TestUserFeedbackWebhook:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/webhooks/zalo", json=payload)
+            resp = await _post_signed(client, payload)
 
         # 200 to stop Zalo retry; row not persisted.
         assert resp.status_code == 200
@@ -182,6 +220,59 @@ class TestUserFeedbackWebhook:
                 select(models.AdmissionSurveyFeedback).where(
                     models.AdmissionSurveyFeedback.tracking_id
                     == "survey_malformed_e5_01"
+                )
+            )
+        ).scalar_one_or_none()
+        assert row is None
+
+    async def test_unsigned_request_200_acks_without_persist(
+        self, db: AsyncSession, seeded_dependencies: dict,
+    ):
+        """Public endpoint cannot be used to plant synthetic feedback —
+        missing signature must 200-ack but skip persistence."""
+        tracking = "survey_unsigned_e5_01"
+        await _approved_profile_with_tracking(db, seeded_dependencies, tracking)
+        await db.commit()
+
+        payload = _feedback_payload(tracking_id=tracking, rate=5)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Plain POST — no X-ZEvent-Signature header
+            resp = await client.post("/api/webhooks/zalo", json=payload)
+
+        assert resp.status_code == 200
+        row = (
+            await db.execute(
+                select(models.AdmissionSurveyFeedback).where(
+                    models.AdmissionSurveyFeedback.tracking_id == tracking
+                )
+            )
+        ).scalar_one_or_none()
+        assert row is None
+
+    async def test_wrong_signature_200_acks_without_persist(
+        self, db: AsyncSession, seeded_dependencies: dict,
+    ):
+        tracking = "survey_wrongsig_e5_01"
+        await _approved_profile_with_tracking(db, seeded_dependencies, tracking)
+        await db.commit()
+
+        payload = _feedback_payload(tracking_id=tracking, rate=5)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/webhooks/zalo",
+                json=payload,
+                headers={"X-ZEvent-Signature": "deadbeef" * 8},
+            )
+
+        assert resp.status_code == 200
+        row = (
+            await db.execute(
+                select(models.AdmissionSurveyFeedback).where(
+                    models.AdmissionSurveyFeedback.tracking_id == tracking
                 )
             )
         ).scalar_one_or_none()
@@ -197,7 +288,7 @@ class TestUserFeedbackWebhook:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/webhooks/zalo", json=payload)
+            resp = await _post_signed(client, payload)
 
         assert resp.status_code == 200
         row = (

@@ -79,14 +79,32 @@ async def zalo_webhook(
             or (data.get("recipient") or {}).get("id")          # oa_send_text / template callbacks
             or (data.get("user_id"))                            # fallback
         )
-    log.info(
-        "Zalo webhook received",
-        event_name=event_name,
-        signature_present=bool(signature),
-        signature_valid=sig_ok,
-        uid=uid,
-        raw_data=data,
-    )
+    # user_feedback carries applicant free-text (``message.note`` +
+    # ``feedbacks``) — don't dump it into application logs. The DB row
+    # is the audit record; the log just needs to say it happened.
+    # Other event_name families have no PII so we keep raw_data for
+    # ops visibility like before.
+    if event_name == "user_feedback":
+        _message = data.get("message", {}) if isinstance(data, dict) else {}
+        log.info(
+            "Zalo webhook received",
+            event_name=event_name,
+            signature_present=bool(signature),
+            signature_valid=sig_ok,
+            uid=uid,
+            tracking_id=_message.get("tracking_id"),
+            msg_id=_message.get("msg_id"),
+            rate=_message.get("rate"),
+        )
+    else:
+        log.info(
+            "Zalo webhook received",
+            event_name=event_name,
+            signature_present=bool(signature),
+            signature_valid=sig_ok,
+            uid=uid,
+            raw_data=data,
+        )
 
     # 4. Handle delivery status events
     if event_name in ("oa_send_text", "oa_send_template"):
@@ -100,26 +118,40 @@ async def zalo_webhook(
         log.info("Zalo user unfollowed OA", user_id=data.get("follower", {}).get("id"))
 
     # 6. Handle rating-template feedback (Phase E — ZNS 426903 survey).
-    # Never raise out of this branch: malformed Zalo payload must log +
-    # still return 200 so we don't trigger a retry storm on caller-side
-    # noise. ValidationError is swallowed for that reason.
+    #
+    # Persistence is gated on a valid signature. Unlike the other
+    # event_name branches (read-only log / status updates on rows we
+    # already own), this branch is the only durable write path reachable
+    # from an unauthenticated public endpoint: without the gate, anyone
+    # could POST synthetic feedback and either plant rows with
+    # profile_id=NULL or spray random tracking_ids to bloat the table.
+    #
+    # Still return 200 on sig-missing/invalid to avoid Zalo retry
+    # storms — we just skip the write. Malformed payloads that pass
+    # signature still 200-ack for the same reason.
     elif event_name == "user_feedback":
-        from app.services import admission_survey_service
-        from app.utils.exceptions import ValidationError
-
-        try:
-            await admission_survey_service.record_feedback(
-                db, raw_payload=data
-            )
-            await db.commit()
-        except ValidationError as e:
+        if not sig_ok:
             log.warning(
-                "Zalo user_feedback malformed — 200-acked, not persisted",
-                error=str(e),
+                "Zalo user_feedback rejected: signature missing or invalid — 200-acked, not persisted",
+                signature_present=bool(signature),
             )
-        except Exception:
-            log.exception("Zalo user_feedback handler failed unexpectedly")
-            # Best-effort: swallow so Zalo doesn't retry on our own bug.
+        else:
+            from app.services import admission_survey_service
+            from app.utils.exceptions import ValidationError
+
+            try:
+                await admission_survey_service.record_feedback(
+                    db, raw_payload=data
+                )
+                await db.commit()
+            except ValidationError as e:
+                log.warning(
+                    "Zalo user_feedback malformed — 200-acked, not persisted",
+                    error=str(e),
+                )
+            except Exception:
+                log.exception("Zalo user_feedback handler failed unexpectedly")
+                # Best-effort: swallow so Zalo doesn't retry on our own bug.
 
     # Always return 200 to acknowledge receipt
     return {"status": "ok"}
