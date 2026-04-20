@@ -1,5 +1,7 @@
 # BÁO CÁO AUDIT TOÀN DIỆN: MODULE CTV (CỘNG TÁC VIÊN)
 
+> **⚠️ Deprecated historical audit note**: references below mention the retired `Application` model (e.g. `Application.status = "passed"`) and are kept only as legacy analysis context, not current architecture. The active admission entity is `AdmissionProfile` — see `MASTER_ARCHITECTURE.md` and `CLAUDE.md` for current system docs. Retained for traceability of 2026-02 audit findings, not as design reference.
+
 > **Ngày thực hiện**: 2026-02-24
 > **Phạm vi**: Backend, Frontend, Database, Business Logic
 > **Phiên bản module**: Phase 1 (CTV Registration + Lead Claim)
