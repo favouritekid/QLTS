@@ -58,6 +58,18 @@ def check_admission_surveys_due_task(self):
         from ..services.notification_payloads import EventPayload
 
         result = {"checked": 0, "sent": 0, "failed": 0, "skipped_no_phone": 0}
+
+        # Rollout gate — beat schedule stays registered (so /the next deploy
+        # can't silently drop it) but the task is an early-return until ops
+        # flips ENABLED=true. Two-step rollout: set BASELINE_DATE first, then
+        # flip this flag, so a stale env or misconfigured baseline can't
+        # flood the past catalogue on first run.
+        if not settings.ADMISSION_SURVEY_ENABLED:
+            task_log.info(
+                "ADMISSION_SURVEY_ENABLED=false, skipping survey scan"
+            )
+            return result
+
         post_commit_callbacks = []
 
         cutoff_now = datetime.now(timezone.utc)
@@ -103,59 +115,66 @@ def check_admission_surveys_due_task(self):
             result["checked"] = len(profiles)
 
             for profile in profiles:
+                # Real savepoint per profile — if dispatch or flush throws a
+                # DB error, the nested transaction rolls back and the outer
+                # transaction stays clean so the batch continues. Without
+                # this, a single failed row poisons the session and the
+                # final commit() would take the whole batch down with it.
                 try:
-                    lead = profile.lead
-                    if not lead or not getattr(lead, "phone", None):
-                        # No phone = Zalo delivery impossible. Mark as sent to
-                        # drop out of the scan window — re-trying daily never
-                        # helps, and zero phone is a data issue, not a retry
-                        # candidate. Tracking_id stays NULL (no send happened).
+                    async with session.begin_nested():
+                        lead = profile.lead
+                        if not lead or not getattr(lead, "phone", None):
+                            # No phone = Zalo delivery impossible. Mark as
+                            # sent_at=now to drop out of future scans — a
+                            # daily re-scan never fixes a missing phone, and
+                            # tracking_id stays NULL so the webhook never
+                            # tries to map a nonexistent delivery.
+                            profile.survey_sent_at = cutoff_now
+                            result["skipped_no_phone"] += 1
+                            continue
+
+                        # Resolve program name upstream so the builder receives
+                        # primitives only.
+                        program_name = None
+                        offering = getattr(lead, "offering", None)
+                        if offering is not None:
+                            program = getattr(offering, "program", None)
+                            if program is not None:
+                                program_name = getattr(program, "name", None)
+
+                        tracking_id = f"survey_{uuid.uuid4().hex[:16]}"
+
+                        # NOTE (2026-04-20): admission_profile lacks a
+                        # dedicated submitted_at column — transition
+                        # draft→submitted is only captured in
+                        # entity_audit_log. Using created_at as proxy here
+                        # is close enough for the Zalo display slot (gap
+                        # between draft creation and submit is typically
+                        # <1 day) and avoids a second hot-path query per
+                        # scheduler row.
+                        submitted_ref = getattr(profile, "created_at", None)
+
+                        _, notif_cb = await notification_dispatcher.dispatch(
+                            db=session,
+                            event=SystemEvents.APPLICATION_SURVEY_DUE,
+                            payload=EventPayload.for_application_survey_due(
+                                profile,
+                                lead_id=lead.id,
+                                full_name=getattr(lead, "full_name", None)
+                                or getattr(profile, "full_name", None),
+                                program_name=program_name,
+                                submitted_at=submitted_ref,
+                                tracking_id=tracking_id,
+                            ),
+                        )
+                        if notif_cb:
+                            post_commit_callbacks.append(notif_cb)
+
                         profile.survey_sent_at = cutoff_now
-                        result["skipped_no_phone"] += 1
-                        await session.flush()
-                        continue
+                        profile.survey_tracking_id = tracking_id
+                        result["sent"] += 1
 
-                    # Resolve program name upstream so the builder receives
-                    # primitives only.
-                    program_name = None
-                    offering = getattr(lead, "offering", None)
-                    if offering is not None:
-                        program = getattr(offering, "program", None)
-                        if program is not None:
-                            program_name = getattr(program, "name", None)
-
-                    tracking_id = f"survey_{uuid.uuid4().hex[:16]}"
-
-                    # NOTE (2026-04-20): admission_profile lacks a dedicated
-                    # submitted_at column — transition draft→submitted is only
-                    # captured in entity_audit_log. Using created_at as proxy
-                    # here is close enough for the Zalo display slot (gap
-                    # between draft creation and submit is typically <1 day)
-                    # and avoids a second hot-path query per scheduler row.
-                    submitted_ref = getattr(profile, "created_at", None)
-
-                    _, notif_cb = await notification_dispatcher.dispatch(
-                        db=session,
-                        event=SystemEvents.APPLICATION_SURVEY_DUE,
-                        payload=EventPayload.for_application_survey_due(
-                            profile,
-                            lead_id=lead.id,
-                            full_name=getattr(lead, "full_name", None)
-                            or getattr(profile, "full_name", None),
-                            program_name=program_name,
-                            submitted_at=submitted_ref,
-                            tracking_id=tracking_id,
-                        ),
-                    )
-                    if notif_cb:
-                        post_commit_callbacks.append(notif_cb)
-
-                    profile.survey_sent_at = cutoff_now
-                    profile.survey_tracking_id = tracking_id
-                    result["sent"] += 1
-                    await session.flush()
-
-                except Exception as exc:  # pragma: no cover — logged below
+                except Exception:
                     task_log.exception(
                         "Failed to dispatch survey for profile %s", profile.id
                     )

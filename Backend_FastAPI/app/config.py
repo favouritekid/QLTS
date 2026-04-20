@@ -384,6 +384,12 @@ class Settings(BaseSettings):
     )  # PR 8: ISO date (YYYY-MM-DD). Only dispatch PAYMENT_OVERDUE for invoices
     # with due_date >= this value. None = notify all overdue. Set explicitly
     # in env at rollout to prevent first-run notification burst.
+    ADMISSION_SURVEY_ENABLED: bool = Field(
+        default=False, validation_alias="ADMISSION_SURVEY_ENABLED"
+    )  # Phase E master switch. Beat schedule is always registered (so a stale
+    # worker can't silently drop it — see commit 011340b4), but the task
+    # early-returns until this is flipped to true. Keeps rollout two-step:
+    # 1) deploy with ENABLED=false, 2) set BASELINE_DATE, 3) flip ENABLED=true.
     ADMISSION_SURVEY_BASELINE_DATE: Optional[str] = Field(
         default=None, validation_alias="ADMISSION_SURVEY_BASELINE_DATE"
     )  # Phase E: ISO date (YYYY-MM-DD). Only dispatch APPLICATION_SURVEY_DUE for
