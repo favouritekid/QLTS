@@ -4423,7 +4423,8 @@ async def override_profile(
     await _populate_response_fields(db, profile, admin)
 
     # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11)
-    # TODO: Implement proper audit log table
+    # TODO: Wire admin-override audit into audit_service.log_*.
+    # entity_audit_log table already exists; this path still only emits log.warning.
     log.warning(
         "AUDIT: Admin override action",
         profile_id=profile.id,
