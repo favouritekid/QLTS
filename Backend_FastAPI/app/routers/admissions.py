@@ -2375,13 +2375,13 @@ async def drop_student(
         # this event; before this was added, ops only saw the LEAD-side
         # pipeline move to sts12 with no profile-level trail.
         #
-        # ``new_status="enrolled"`` by design — drop is a side-channel
-        # flag (is_dropped=True) that keeps profile.status at "enrolled"
-        # per mark_student_dropped contract. The old/new strings here
-        # describe the semantic transition (enrolled → enrolled+dropped)
-        # so downstream consumers can branch on the old_status sentinel
-        # "enrolled_dropped" without having to special-case the status
-        # string staying equal.
+        # Drop is a side-channel flag (is_dropped=True) that keeps
+        # profile.status at "enrolled" per mark_student_dropped contract.
+        # The event carries old_status="enrolled" (the literal status
+        # on the row both before and after the flag flip) and a
+        # new_status="enrolled_dropped" sentinel so downstream consumers
+        # can branch on the transition without having to read is_dropped
+        # or special-case a status string that stays equal.
         if result.lead_id:
             await safe_dispatch(
                 db=db,
