@@ -39,6 +39,7 @@ from .collaborator_tasks import (
     check_ctv_attribution_expiry_task,
     send_ctv_weekly_summary_task,
 )
+from .admission_tasks import check_admission_surveys_due_task
 
 __all__ = [
     # Email tasks
@@ -64,4 +65,6 @@ __all__ = [
     # Collaborator tasks
     "check_ctv_attribution_expiry_task",
     "send_ctv_weekly_summary_task",
+    # Admission tasks
+    "check_admission_surveys_due_task",
 ]

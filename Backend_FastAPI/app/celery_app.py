@@ -163,6 +163,15 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- Admission Survey Due (Phase E — ZNS 426903) ---
+    # Fires APPLICATION_SURVEY_DUE for profiles approved ≥30 days ago.
+    # 07:00 VN chosen to stagger off the 04:00/05:00 heavy scans.
+    "check-admission-surveys-due-daily": {
+        "task": "check_admission_surveys_due_task",
+        "schedule": crontab(hour=7, minute=0),
+        "options": {"queue": "default"},
+    },
+
     # --- Holiday Calendar Yearly Check (Phase A9) ---
     "check-next-year-holidays": {
         "task": "check_next_year_holidays_task",

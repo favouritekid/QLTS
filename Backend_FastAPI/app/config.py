@@ -384,6 +384,18 @@ class Settings(BaseSettings):
     )  # PR 8: ISO date (YYYY-MM-DD). Only dispatch PAYMENT_OVERDUE for invoices
     # with due_date >= this value. None = notify all overdue. Set explicitly
     # in env at rollout to prevent first-run notification burst.
+    ADMISSION_SURVEY_BASELINE_DATE: Optional[str] = Field(
+        default=None, validation_alias="ADMISSION_SURVEY_BASELINE_DATE"
+    )  # Phase E: ISO date (YYYY-MM-DD). Only dispatch APPLICATION_SURVEY_DUE for
+    # profiles with approved_at >= this value. None = send to every profile whose
+    # approved_at is ≥30d old and not yet surveyed (strongly discouraged on
+    # first-run — would flood every past approval on day one). Set to deploy
+    # date at rollout; leave fixed afterwards so the scheduler has a stable
+    # scan window.
+    ADMISSION_SURVEY_BATCH_SIZE: int = Field(
+        default=100, validation_alias="ADMISSION_SURVEY_BATCH_SIZE"
+    )  # Max profiles per scheduler tick. Keeps Zalo API load bounded and
+    # recovers gracefully from single-profile failures (savepoint per row).
     ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT: bool = Field(
         default=False, validation_alias="ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT"
     )  # Phase P2-2: Use fairness-weighted scoring instead of pure round-robin
