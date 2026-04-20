@@ -2368,8 +2368,36 @@ async def drop_student(
 
         await callback()
 
-        # Dispatch LEAD_STATUS_CHANGED for commission trigger
+        # Dispatch APPLICATION_STATUS_CHANGED so the admission-lifecycle
+        # feed treats drop-out as a first-class transition just like
+        # approve/reject/confirm/enroll. Applicant-facing messaging
+        # (officer browser + email) plus future reporting both key off
+        # this event; before this was added, ops only saw the LEAD-side
+        # pipeline move to sts12 with no profile-level trail.
+        #
+        # ``new_status="enrolled"`` by design — drop is a side-channel
+        # flag (is_dropped=True) that keeps profile.status at "enrolled"
+        # per mark_student_dropped contract. The old/new strings here
+        # describe the semantic transition (enrolled → enrolled+dropped)
+        # so downstream consumers can branch on the old_status sentinel
+        # "enrolled_dropped" without having to special-case the status
+        # string staying equal.
         if result.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": result.id,
+                    "lead_id": result.lead_id,
+                    "old_status": "enrolled",
+                    "new_status": "enrolled_dropped",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"admission_profile_dropped:{result.id}",
+            )
+
+            # Dispatch LEAD_STATUS_CHANGED for commission trigger
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.LEAD_STATUS_CHANGED,

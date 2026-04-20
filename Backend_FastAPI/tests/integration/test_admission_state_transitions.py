@@ -2031,3 +2031,70 @@ class TestDropStudentWorkflow:
         workflow_actions = [a for a in actions if a != "view"]
         assert workflow_actions == [], f"Dropped student should have no workflow actions, got: {actions}"
         assert get_resp.json()["is_dropped"] is True
+
+    async def test_drop_dispatches_application_status_changed(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Drop must dispatch APPLICATION_STATUS_CHANGED just like
+        approve/reject/confirm/enroll.
+
+        Regression guard for the W3-E5 cleanup (2026-04-20): before the
+        fix, mark_student_dropped only logged in post_commit and the
+        router dispatched LEAD_STATUS_CHANGED alone, so the admission
+        feed had no profile-level trail of the drop transition.
+
+        This test captures dispatch intent at the router layer by
+        intercepting ``safe_dispatch``; the downstream delivery/channel
+        path is covered by the dispatcher's own integration suite so
+        there's no value recreating rule-row seeding in this harness
+        just to prove the same plumbing works.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from app.core.events import SystemEvents
+
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id)
+        profile = await create_admission_profile(lead_id, status="enrolled")
+
+        headers = await get_auth_headers(client, manager_user_in_db)
+
+        with patch(
+            "app.routers.admissions.safe_dispatch", new=AsyncMock()
+        ) as mock_dispatch:
+            drop_resp = await client.post(
+                f"/api/admissions/{profile.id}/drop",
+                json={
+                    "reason": "Sinh viên nghỉ theo nguyện vọng của gia đình",
+                    "version": profile.version,
+                },
+                headers=headers,
+            )
+
+        assert drop_resp.status_code == 200
+
+        dispatched_events = [
+            call.kwargs["event"] for call in mock_dispatch.await_args_list
+        ]
+        assert SystemEvents.APPLICATION_STATUS_CHANGED in dispatched_events, (
+            "Drop must dispatch APPLICATION_STATUS_CHANGED; got "
+            f"{[e.value if hasattr(e, 'value') else e for e in dispatched_events]}"
+        )
+
+        app_call = next(
+            call for call in mock_dispatch.await_args_list
+            if call.kwargs.get("event") == SystemEvents.APPLICATION_STATUS_CHANGED
+        )
+        payload = app_call.kwargs["payload"]
+        assert payload["application_id"] == profile.id
+        assert payload["lead_id"] == lead_id
+        assert payload["old_status"] == "enrolled"
+        # Drop is a side-channel transition — status stays "enrolled" on
+        # the row (is_dropped=True flag), so the event carries a sentinel
+        # new_status so downstream consumers can branch without having to
+        # read is_dropped separately.
+        assert payload["new_status"] == "enrolled_dropped"
+        assert app_call.kwargs["dedupe_key"] == f"admission_profile_dropped:{profile.id}"
