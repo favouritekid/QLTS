@@ -257,3 +257,9 @@ frontend/test_output.txt
 # Report artifacts
 **/duplicate_report*.txt
 **/test_response.json
+
+# Personal workspace artifacts (screenshots, ops scratch logs, test runners)
+qa_org_selector_verified.png
+2026-*-sn-sng.txt
+test-results/
+playwright-report/
