@@ -657,6 +657,109 @@ class TestInvoiceIssued:
         payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
         assert payload["due_date_vn"] == "15/05/2026"
 
+
+# ===========================================================================
+# for_application_survey_due
+# ===========================================================================
+
+
+def _make_profile(**overrides):
+    defaults = dict(id=42)
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+class TestApplicationSurveyDue:
+    def test_exact_keys(self):
+        profile = _make_profile(id=42)
+        payload = EventPayload.for_application_survey_due(
+            profile,
+            lead_id=99,
+            full_name="Dư Thị Huệ Ly",
+            program_name="Dược",
+            submitted_at=datetime(2024, 12, 20, 8, 30, 0),
+            tracking_id="7a1b2c3d4e5f6a7b",
+        )
+        assert payload == {
+            "application_id": 42,
+            "lead_id": 99,
+            "full_name": "Dư Thị Huệ Ly",
+            "program_name": "Dược",
+            "profile_code": "HS-000042",
+            "submitted_date_vn": "20/12/2024",
+            "tracking_id": "7a1b2c3d4e5f6a7b",
+        }
+
+    def test_full_name_fallback_unknown(self):
+        payload = EventPayload.for_application_survey_due(
+            _make_profile(),
+            lead_id=1,
+            full_name=None,
+            program_name="Dược",
+            submitted_at=datetime(2024, 12, 20),
+            tracking_id="t1",
+        )
+        assert payload["full_name"] == "Unknown"
+
+    def test_program_name_fallback_na(self):
+        payload = EventPayload.for_application_survey_due(
+            _make_profile(),
+            lead_id=1,
+            full_name="Nguyễn Văn A",
+            program_name=None,
+            submitted_at=datetime(2024, 12, 20),
+            tracking_id="t1",
+        )
+        assert payload["program_name"] == "N/A"
+
+    def test_truncates_full_name_over_30_chars(self):
+        long_name = "Nguyễn Thị Phương Thảo Kim Hoàng Anh Tú"  # > 30 chars
+        payload = EventPayload.for_application_survey_due(
+            _make_profile(),
+            lead_id=1,
+            full_name=long_name,
+            program_name="Dược",
+            submitted_at=datetime(2024, 12, 20),
+            tracking_id="t1",
+        )
+        assert len(payload["full_name"]) == 30
+        assert payload["full_name"] == long_name[:30]
+
+    def test_truncates_program_name_over_30_chars(self):
+        long_program = "Công nghệ thông tin ứng dụng quản trị doanh nghiệp"
+        payload = EventPayload.for_application_survey_due(
+            _make_profile(),
+            lead_id=1,
+            full_name="A",
+            program_name=long_program,
+            submitted_at=datetime(2024, 12, 20),
+            tracking_id="t1",
+        )
+        assert len(payload["program_name"]) == 30
+
+    def test_submitted_at_none_returns_empty_vn_date(self):
+        """format_vn_date(None) returns empty string; webhook receives empty slot."""
+        payload = EventPayload.for_application_survey_due(
+            _make_profile(),
+            lead_id=1,
+            full_name="A",
+            program_name="B",
+            submitted_at=None,
+            tracking_id="t1",
+        )
+        assert payload["submitted_date_vn"] == ""
+
+    def test_profile_code_zero_padded(self):
+        payload = EventPayload.for_application_survey_due(
+            _make_profile(id=7),
+            lead_id=1,
+            full_name="A",
+            program_name="B",
+            submitted_at=datetime(2024, 12, 20),
+            tracking_id="t1",
+        )
+        assert payload["profile_code"] == "HS-000007"
+
     def test_due_date_missing_yields_empty_vn(self):
         inv = _make_invoice(due_date=None)
         payload = EventPayload.for_invoice_issued(inv, admission_profile_id=1)
