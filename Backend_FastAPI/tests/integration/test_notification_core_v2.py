@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.events import SystemEvents
-from app.core.event_metadata import EVENT_METADATA_REGISTRY
+from app.core.event_catalog import EVENT_CATALOG  # Wave 2: replaces EVENT_METADATA_REGISTRY
 from app.core.event_groups import NotificationChannel, DEFAULT_GROUP_CHANNELS
 from app.services.notification_dispatcher import dispatch
 from app.services.notification_preference_service import (
@@ -366,7 +366,7 @@ class TestMetadataCanonicalChannels:
 
     def test_event_metadata_defaults_are_browser_not_socket(self):
         """Every event's default_channels must use 'browser', never 'socket'."""
-        for event, metadata in EVENT_METADATA_REGISTRY.items():
+        for event, metadata in EVENT_CATALOG.items():
             for ch in metadata.default_channels:
                 assert ch != "socket", (
                     f"Event {event.value} still has 'socket' in default_channels: "
@@ -377,8 +377,8 @@ class TestMetadataCanonicalChannels:
                 )
 
     def test_registered_events_have_canonical_channels(self):
-        """Every event IN the registry must use canonical channels only."""
-        for event, metadata in EVENT_METADATA_REGISTRY.items():
+        """Every event in the catalog must use canonical channels only."""
+        for event, metadata in EVENT_CATALOG.items():
             for ch in metadata.default_channels:
                 assert ch in ("browser", "email", "zalo", "sms"), (
                     f"Event {event.value} has non-canonical channel '{ch}'"
@@ -401,9 +401,9 @@ class TestMetadataCanonicalChannels:
             )
 
     def test_payment_verified_in_metadata(self):
-        """PAYMENT_VERIFIED event must exist in metadata registry."""
-        assert SystemEvents.PAYMENT_VERIFIED in EVENT_METADATA_REGISTRY
-        metadata = EVENT_METADATA_REGISTRY[SystemEvents.PAYMENT_VERIFIED]
+        """PAYMENT_VERIFIED event must exist in the catalog."""
+        assert SystemEvents.PAYMENT_VERIFIED in EVENT_CATALOG
+        metadata = EVENT_CATALOG[SystemEvents.PAYMENT_VERIFIED]
         assert metadata.category == "finance"
         assert "browser" in metadata.default_channels
 

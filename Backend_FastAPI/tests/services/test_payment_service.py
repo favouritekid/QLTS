@@ -811,12 +811,14 @@ class TestPaymentVerifiedNotificationBridge:
 
     async def test_payment_verified_event_metadata_exists(self):
         """
-        PAYMENT_VERIFIED must have metadata entry with correct payload variables.
+        PAYMENT_VERIFIED must have a catalog entry with correct payload
+        variables. Wave 2 migration: source switched from
+        EVENT_METADATA_REGISTRY to EVENT_CATALOG.
         """
         from app.core.events import SystemEvents
-        from app.core.event_metadata import EVENT_METADATA_REGISTRY
+        from app.core.event_catalog import EVENT_CATALOG
 
-        metadata = EVENT_METADATA_REGISTRY.get(SystemEvents.PAYMENT_VERIFIED)
+        metadata = EVENT_CATALOG.get(SystemEvents.PAYMENT_VERIFIED)
         assert metadata is not None
         assert metadata.category == "finance"
 
