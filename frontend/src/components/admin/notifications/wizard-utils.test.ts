@@ -117,7 +117,7 @@ describe("mapToAPI", () => {
     expect(result.event).toBe("lead_created");
     expect(result.enabled).toBe(true);
     expect(result.title_template).toBe("Test title: $lead_name");
-    expect(result.channels).toEqual(["browser"]);
+    // Wave 4b: top-level `channels` removed — assert via actions only.
     expect(result.actions).toHaveLength(1);
     expect(result.actions![0].channel).toBe("browser");
     expect(result.actions![0].step).toBe(1);
@@ -149,7 +149,8 @@ describe("mapToAPI", () => {
 
     expect(result.actions).toHaveLength(3);
     expect(result.actions!.map((a) => a.step)).toEqual([1, 2, 3]);
-    expect(result.channels).toEqual(["browser", "email", "zalo"]);
+    // Wave 4b: top-level `channels` removed — assert via actions only.
+    expect(result.actions!.map((a) => a.channel)).toEqual(["browser", "email", "zalo"]);
     // First internal group sets rule-level recipient_config
     expect(result.recipient_config).toEqual({ resolver_type: "lead_owner", params: {} });
   });

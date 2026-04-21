@@ -73,16 +73,18 @@ async def seed_notification_rules():
                 )
                 continue
 
-            channels = [str(ch) for ch in catalog_entry.default_channels]
             link_template = catalog_entry.link_strategy
 
+            # Wave 4b (2026-04-21): the legacy `channels` compat column was
+            # dropped; runtime channels are derived from per-action rows
+            # (this script does not seed actions; call sites that need
+            # per-action delivery should use sync_notification_rules.py).
             rule = models.NotificationRule(
                 event=event_name,
                 title_template=defaults["title_template"],
                 message_template=defaults["message_template"],
                 notification_type=defaults["notification_type"],
                 link_template=link_template,
-                channels=channels,
                 recipient_config=defaults["recipient_config"],
                 condition=None,
                 enabled=True,
@@ -97,7 +99,7 @@ async def seed_notification_rules():
                 "Created notification rule",
                 event_name=event_name,
                 resolver_type=defaults["recipient_config"]["resolver_type"],
-                channels=channels,
+                catalog_default_channels=[str(ch) for ch in catalog_entry.default_channels],
             )
 
         await session.commit()

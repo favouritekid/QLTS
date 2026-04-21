@@ -356,7 +356,6 @@ class TestCRUDIntegration:
             delay_minutes=0, config=None,
         )]
         rule_data.template_id = None
-        rule_data.channels = []
         rule_data.model_dump = MagicMock(return_value={})
 
         new_rule = MagicMock()

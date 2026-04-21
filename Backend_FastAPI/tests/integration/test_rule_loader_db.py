@@ -70,7 +70,6 @@ class TestRuleLoaderDB:
             title_template="Duplicate",
             message_template="Duplicate",
             notification_type="info",
-            channels=["browser"],
             recipient_config={"resolver_type": "lead_owner", "params": {}},
             enabled=True,
         )
@@ -102,7 +101,6 @@ class TestRuleLoaderDB:
             title_template="Bad",
             message_template="Bad",
             notification_type="info",
-            channels=["browser"],
             recipient_config={"resolver_type": "nonexistent_resolver_xyz", "params": {}},
             enabled=True,
         )
@@ -144,7 +142,6 @@ class TestRuleLoaderDB:
             title_template="Rule Title (should be overridden)",
             message_template="Rule Msg",
             notification_type="info",
-            channels=["browser"],
             recipient_config={"resolver_type": "all_admins", "params": {}},
             enabled=True,
             template_id=tpl.id,
@@ -204,7 +201,6 @@ class TestSyncScriptDB:
             title_template="Orphan",
             message_template="Orphan",
             notification_type="info",
-            channels=["browser"],
             recipient_config={"resolver_type": "all_admins", "params": {}},
             enabled=False,
         )

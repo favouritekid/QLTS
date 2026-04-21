@@ -52,7 +52,8 @@ const MOCK_EXISTING_RULE = {
   message_template: "Có lead mới trong hệ thống",
   notification_type: "info",
   link_template: "/leads/$lead_id",
-  channels: ["browser"],
+  // Wave 4b (2026-04-21): legacy `channels` field removed from
+  // NotificationRule schema — channels are derived from `actions`.
   recipient_config: { resolver_type: "lead_owner", params: {} },
   condition: null,
   enabled: true,

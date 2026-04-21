@@ -157,10 +157,9 @@ class NotificationRuleBase(BaseModel):
     notification_type: str = "info"  # info, success, warning, error
     link_template: Optional[str] = None  # Optional link template
 
-    # Phase C1: channels is DEPRECATED on write path.
-    # It is accepted but IGNORED — channels are derived from actions.
-    # Kept in response schema as read-only for backward compat.
-    channels: Optional[List[str]] = None
+    # Wave 4b (2026-04-21): `channels` field removed. Runtime truth is
+    # `actions[].channel`; FE derives the display list from actions
+    # (see frontend rule-channels.ts helper).
 
     # ✅ Now typed with validation
     recipient_config: RecipientConfig  # Validated resolver config
@@ -174,8 +173,6 @@ class NotificationRuleCreate(NotificationRuleBase):
     """Schema for creating a notification rule"""
     actions: List[NotificationActionCreate] = []  # ✅ NOTIFICATION 2.0: Workflow actions
 
-    # Phase C1: channels ignored on write — derived from actions
-
 
 class NotificationRuleUpdate(BaseModel):
     """Schema for updating a notification rule (partial update)"""
@@ -183,31 +180,20 @@ class NotificationRuleUpdate(BaseModel):
     message_template: Optional[str] = None
     notification_type: Optional[str] = None
     link_template: Optional[str] = None
-    channels: Optional[List[str]] = None  # DEPRECATED (C1): ignored, derived from actions
     recipient_config: Optional[Dict[str, Any]] = None
     condition: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
     actions: Optional[List[NotificationActionCreate]] = None  # ✅ NOTIFICATION 2.0: Update actions
 
-    # Phase C1: channels ignored on write — derived from actions
-
 
 class NotificationRule(NotificationRuleBase):
     """Schema for reading notification rule (response)"""
     id: int
-    channels: List[str] = []  # Read-only, derived from actions
     actions: List[NotificationAction] = []  # ✅ NOTIFICATION 2.0: Include workflow actions
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-
-    @field_validator("channels")
-    @classmethod
-    def normalize_legacy_channels(cls, v: List[str]) -> List[str]:
-        if v:
-            return normalize_channels(v)
-        return v
 
 
 class NotificationRulesPage(BaseModel):

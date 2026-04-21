@@ -319,13 +319,9 @@ async def create_rule(
     # Phase E2: Validate template_code references (async DB lookup)
     await _validate_action_template_codes(db, rule_data.actions)
 
-    # Phase C1: channels is ALWAYS derived from actions (input ignored)
-    if rule_data.actions:
-        derived = [a.channel for a in rule_data.actions]
-        seen = set()
-        rule_data.channels = [c for c in derived if not (c in seen or seen.add(c))]
-    else:
-        rule_data.channels = []
+    # Wave 4b (2026-04-21): the legacy `channels` write-through to the
+    # compat column is gone. Runtime delivery already uses
+    # `actions[].channel`; FE derives the display list from actions.
 
     # Create rule via repository
     new_rule = await repo.create_with_actions(rule_data)
@@ -364,9 +360,11 @@ async def update_rule(
     old_template_id = rule.template_id
     updated_fields = []
 
-    # Update basic fields (exclude actions + channels + link_template)
-    # PR1: link_template is code-owned (catalog), not DB-writable
-    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions", "channels", "link_template"})
+    # Update basic fields (exclude actions + link_template)
+    # PR1: link_template is code-owned (catalog), not DB-writable.
+    # Wave 4b: `channels` is no longer in NotificationRuleUpdate, so no
+    # exclusion needed for it.
+    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions", "link_template"})
 
     # Phase 2: If condition is being updated, canonicalize and validate
     if 'condition' in update_data and update_data['condition'] is not None:
@@ -403,12 +401,7 @@ async def update_rule(
         await repo.delete_actions(rule.id)
         await repo.add_actions(rule.id, rule_update.actions)
         updated_fields.append("actions")
-        # Phase C0: Sync channels from actions
-        derived = [a.channel for a in rule_update.actions]
-        seen = set()
-        rule.channels = [c for c in derived if not (c in seen or seen.add(c))]
-        if "channels" not in updated_fields:
-            updated_fields.append("channels")
+        # Wave 4b: legacy `channels` compat column dropped — no sync needed.
 
     # Update usage_count if template_id changed
     if "template_id" in updated_fields:

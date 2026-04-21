@@ -103,11 +103,9 @@ class NotificationRule(Base):
     link_template = Column(String(512), nullable=True,
                           comment="Optional link template (e.g., /leads/{lead_id})")
 
-    # Delivery configuration
-    # DEPRECATED (Phase C1): Derived from actions. Do not read at runtime.
-    # Kept for backward compat in API responses. Will be removed in Phase D.
-    channels = Column(JSON, nullable=False, default=["browser"],
-                     comment="DEPRECATED (C1): Derived from actions. Will be removed in Phase D.")
+    # Phase C1 deprecated `channels` column was dropped in Wave 4b
+    # (migration 2297e303be04). Runtime truth lives in
+    # `NotificationAction` rows (see the `actions` relationship below).
 
     # Recipient resolution configuration
     recipient_config = Column(JSON, nullable=False,

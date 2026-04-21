@@ -475,7 +475,6 @@ class DatabaseRuleConfig:
         message_template: str,
         notification_type: str,
         link_template: Optional[str],
-        channels: List[str],
         resolver: BaseResolver,
         condition: Optional[Dict[str, Any]],
         priority: int = 100,
@@ -488,15 +487,15 @@ class DatabaseRuleConfig:
         self.message_template = message_template
         self.notification_type = notification_type
         self.link_template = link_template
-        self._channels = channels  # Legacy / derived field
         self.resolver = resolver
         self.condition = condition
         self.priority = priority
         self.dedup_key_template = dedup_key_template
 
-        # Phase C0: actions are the runtime truth.
-        # If not provided, synthesize from channels for backward compat.
-        self._actions = actions if actions else synthesize_actions_from_channels(channels)
+        # Phase C0: actions are the runtime truth. Wave 4b dropped the
+        # legacy `channels` compat column, so no synthesis from channels
+        # is possible — actions must always be provided by the caller.
+        self._actions = actions if actions else []
 
         # Derive group from event
         try:
@@ -637,7 +636,6 @@ async def get_rule_for_event(
                     message_template=rule_data["message_template"],
                     notification_type=rule_data["notification_type"],
                     link_template=rule_data.get("link_template"),
-                    channels=rule_data.get("channels", []),
                     resolver=resolver,
                     condition=rule_data.get("condition"),
                     actions=action_configs,
@@ -752,7 +750,6 @@ async def get_rule_for_event(
         message_template=message_template,
         notification_type=rule.notification_type,
         link_template=link_template,
-        channels=rule.channels or [],
         resolver=resolver,
         condition=rule.condition,
         actions=action_configs,
@@ -779,7 +776,6 @@ async def get_rule_for_event(
             "message_template": message_template,
             "notification_type": rule.notification_type,
             "link_template": link_template,
-            "channels": rule.channels or [],
             "actions": actions_cache,
             "recipient_config": rule.recipient_config,  # Will deserialize on each request
             "condition": rule.condition,
@@ -806,7 +802,7 @@ async def get_rule_for_event(
         "Loaded notification rule from database",
         rule_id=rule.id,
         event_type=event_name,
-        channels=rule.channels,
+        action_count=len(config.actions),
         resolver_type=rule.recipient_config.get("resolver_type")
     )
 

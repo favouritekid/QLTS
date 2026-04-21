@@ -147,13 +147,14 @@ async def sync_notification_rules(db) -> Dict[str, int]:
             continue
 
         title_tpl, msg_tpl = _get_template(defn)
+        # Wave 4b (2026-04-21): the legacy `channels` compat column was
+        # dropped; runtime channels are derived from per-action rows.
         rule = models.NotificationRule(
             event=event_key,
             title_template=title_tpl,
             message_template=msg_tpl,
             notification_type="info",
             link_template=None,  # PR2: link is code-owned (catalog), not DB-stored
-            channels=list(defn.default_channels),
             recipient_config=_resolver_type_for_default(defn.default_resolver),
             condition=None,
             enabled=True,
@@ -161,8 +162,27 @@ async def sync_notification_rules(db) -> Dict[str, int]:
             updated_at=datetime.now(timezone.utc),
         )
         db.add(rule)
+        await db.flush()  # need rule.id for actions
+
+        # Wave 4b: seed default actions from catalog channels (the legacy
+        # synthesize-from-`channels` fallback in the loader is gone, so
+        # rules without action rows would dispatch nothing). Each
+        # default channel becomes one inherit_default action; admins can
+        # customize the workflow afterwards via the rule editor.
+        for step, channel in enumerate(defn.default_channels, start=1):
+            db.add(models.NotificationAction(
+                rule_id=rule.id,
+                step=step,
+                channel=str(channel),
+                content_mode="inherit_default",
+            ))
+
         created += 1
-        log.info("Created notification rule", event_type=event_key)
+        log.info(
+            "Created notification rule",
+            event_type=event_key,
+            seeded_actions=[str(c) for c in defn.default_channels],
+        )
 
     await db.commit()
 

@@ -160,7 +160,6 @@ class TestOrganizationEventsPolicy:
                 event=event_value,
                 title_template="Test",
                 message_template="Test",
-                channels=["browser"],
                 recipient_config={"resolver_type": "all_admins", "params": {}},
             )
             with pytest.raises(BadRequest, match="not a configurable user event"):

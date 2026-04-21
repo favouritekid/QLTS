@@ -54,11 +54,19 @@ class TestNotificationDispatcher:
             template_id=template.id,
             title_template=template.title_template,
             message_template=template.message_template,
-            channels=["browser"],
             recipient_config={"resolver_type": "specific_users", "params": {}},
             enabled=True
         )
         db.add(rule)
+        await db.flush()
+        await db.refresh(rule)
+        # Wave 4b: rules need at least one action for dispatch — the
+        # legacy synthesize-from-`channels` fallback was removed with
+        # the compat column.
+        db.add(models.NotificationAction(
+            rule_id=rule.id, step=1, channel="browser",
+            content_mode="inherit_default",
+        ))
         await db.commit()
         
         # 3. Mocks for NOTIFICATION 2.0 side effects
@@ -258,7 +266,6 @@ class TestNotificationDispatcher:
             event=event.value,
             title_template="Title",
             message_template="Message",
-            channels=["browser"],
             recipient_config={"resolver_type": "specific_users", "params": {}},
             enabled=True
         )

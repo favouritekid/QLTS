@@ -56,15 +56,12 @@ def _build_rule(
     condition: dict[str, Any] | None = None,
     enabled: bool = True,
 ) -> dict[str, Any]:
-    channels: list[str] = []
     actions: list[dict[str, Any]] = []
     step = 1
 
     for group_index, group in enumerate(groups, start=1):
         recipient_config = deepcopy(group["recipient_config"])
         for channel in group["channels"]:
-            if channel not in channels:
-                channels.append(channel)
             actions.append(
                 {
                     "step": step,
@@ -86,7 +83,6 @@ def _build_rule(
         "message_template": message_template,
         "notification_type": notification_type,
         "link_template": link_template,
-        "channels": channels,
         "recipient_config": deepcopy(groups[0]["recipient_config"]),
         "condition": condition,
         "enabled": enabled,
@@ -359,7 +355,6 @@ def _disabled_tombstone(event_name: str) -> dict[str, Any]:
         "message_template": "Rule cũ đã được tắt trong đợt reset cấu hình notification.",
         "notification_type": "info",
         "link_template": None,
-        "channels": ["browser"],
         "recipient_config": {"resolver_type": "all_admins", "params": {}},
         "condition": None,
         "enabled": False,
@@ -388,7 +383,6 @@ def _serialize_rule(rule: models.NotificationRule) -> dict[str, Any]:
         "message_template": rule.message_template,
         "notification_type": rule.notification_type,
         "link_template": rule.link_template,
-        "channels": rule.channels,
         "recipient_config": rule.recipient_config,
         "condition": rule.condition,
         "enabled": rule.enabled,
@@ -418,7 +412,6 @@ def _apply_rule_payload(rule: models.NotificationRule, payload: dict[str, Any]) 
     rule.message_template = payload["message_template"]
     rule.notification_type = payload["notification_type"]
     rule.link_template = payload["link_template"]
-    rule.channels = payload["channels"]
     rule.recipient_config = deepcopy(payload["recipient_config"])
     rule.condition = deepcopy(payload["condition"])
     rule.enabled = payload["enabled"]

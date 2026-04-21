@@ -67,8 +67,9 @@ export function mapToAPI(
     title_template: defaultContent.title_template,
     message_template: defaultContent.message_template,
     notification_type: defaultContent.notification_type,
-    // PR2: link_template removed — link is code-owned (catalog)
-    channels: [...new Set(actions.map((a) => a.channel))],
+    // PR2: link_template removed — link is code-owned (catalog).
+    // Wave 4b (2026-04-21): top-level `channels` field removed — the
+    // BE derives the runtime channel set from `actions[].channel`.
     recipient_config: ruleRecipientConfig,
     enabled: trigger.enabled,
     actions,

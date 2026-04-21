@@ -98,7 +98,6 @@ async def _seed_rule_with_actions(
         template_id=template.id,
         title_template=template.title_template,
         message_template=template.message_template,
-        channels=["browser"],
         recipient_config=recipient_config or {"resolver_type": "lead_owner", "params": {}},
         condition=condition,
         enabled=True,

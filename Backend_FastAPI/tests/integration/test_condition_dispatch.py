@@ -98,13 +98,27 @@ async def _seed_rule(
         template_id=template.id,
         title_template=template.title_template,
         message_template=template.message_template,
-        channels=["browser"],
         # lead_owner resolver: sends notification to the officer_id in payload
         recipient_config={"resolver_type": "lead_owner", "params": {}},
         condition=condition,
         enabled=True,
     )
     db.add(rule)
+    await db.flush()
+    await db.refresh(rule)
+
+    # Wave 4b: rules require at least one NotificationAction row (the
+    # legacy synthesize-from-`channels` fallback is gone now that the
+    # compat column has been dropped). Seed a single browser action so
+    # the dispatcher has a delivery target.
+    db.add(
+        models.NotificationAction(
+            rule_id=rule.id,
+            step=1,
+            channel="browser",
+            content_mode="inherit_default",
+        )
+    )
     await db.flush()
     return rule
 

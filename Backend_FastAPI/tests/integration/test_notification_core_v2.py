@@ -432,33 +432,13 @@ class TestMetadataCanonicalChannels:
 # =============================================================================
 
 class TestSchemaRejectSocket:
-    """Pydantic schemas must normalize or reject legacy 'socket' appropriately."""
+    """Pydantic schemas must normalize or reject legacy 'socket' appropriately.
 
-    def test_rule_create_accepts_deprecated_channels_field_without_validation(self):
-        """NotificationRuleCreate accepts legacy channels because write path ignores them."""
-        from app.schemas.notification import NotificationRuleCreate
-
-        rule = NotificationRuleCreate(
-            event="lead_assigned",
-            title_template="Test",
-            message_template="Test",
-            channels=["socket", "email"],
-            recipient_config={"resolver_type": "lead_owner", "params": {}},
-        )
-        assert rule.channels == ["socket", "email"]
-
-    def test_rule_create_accepts_browser(self):
-        """NotificationRuleCreate must accept canonical channels."""
-        from app.schemas.notification import NotificationRuleCreate
-
-        rule = NotificationRuleCreate(
-            event="lead_assigned",
-            title_template="Test",
-            message_template="Test",
-            channels=["browser", "email"],
-            recipient_config={"resolver_type": "lead_owner", "params": {}},
-        )
-        assert rule.channels == ["browser", "email"]
+    Wave 4b (2026-04-21): the rule-level `channels` field was removed
+    from NotificationRule(Create|Update) schemas, so the rule-level
+    accept/normalize tests were dropped. Action-level + template-level
+    rejection coverage retained — those are the surviving guard rails.
+    """
 
     def test_action_create_rejects_socket(self):
         """NotificationActionCreate must reject channel='socket'."""
@@ -481,22 +461,6 @@ class TestSchemaRejectSocket:
                 message_template="Test",
                 supported_channels=["socket"],
             )
-
-    def test_rule_response_normalizes_socket(self):
-        """NotificationRule response schema normalizes 'socket' → 'browser'."""
-        from app.schemas.notification import NotificationRule
-
-        rule = NotificationRule(
-            id=1,
-            event="lead_assigned",
-            title_template="Test",
-            message_template="Test",
-            channels=["socket", "email"],
-            recipient_config={"resolver_type": "lead_owner", "params": {}},
-            created_at="2026-01-01T00:00:00",
-            updated_at="2026-01-01T00:00:00",
-        )
-        assert rule.channels == ["browser", "email"]
 
 
 # =============================================================================
@@ -538,28 +502,12 @@ class TestDeprecationWarnings:
 # =============================================================================
 
 class TestNormalizerEdgeCases:
-    """Additional edge cases for channel normalization not in unit tests."""
+    """Additional edge cases for channel normalization not in unit tests.
 
-    def test_normalize_in_schema_dedup(self):
-        """
-        If legacy data has both 'socket' and 'browser', response should dedup
-        to just 'browser'.
-        """
-        from app.schemas.notification import NotificationRule
-
-        rule = NotificationRule(
-            id=1,
-            event="test",
-            title_template="t",
-            message_template="m",
-            channels=["socket", "browser", "email"],
-            recipient_config={"resolver_type": "lead_owner", "params": {}},
-            created_at="2026-01-01T00:00:00",
-            updated_at="2026-01-01T00:00:00",
-        )
-        assert rule.channels == ["browser", "email"], (
-            "socket+browser should dedup to just browser"
-        )
+    Wave 4b (2026-04-21): the rule-level `channels` dedup test was
+    dropped together with the rule-level `channels` schema field. The
+    template-level default check below remains relevant.
+    """
 
     def test_template_default_is_browser(self):
         """Template schema default supported_channels is ['browser'] not ['socket']."""
