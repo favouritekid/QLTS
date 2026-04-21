@@ -29,7 +29,7 @@ from sqlalchemy.orm import selectinload
 
 from app import models
 from app.config import settings
-from app.services.notification_registry import NOTIFICATION_REGISTRY
+from app.core.notification_seed_defaults import LEGACY_REGISTRY_EVENTS
 from app.services.notification_rule_loader import invalidate_rule_cache
 
 log = structlog.get_logger(__name__)
@@ -503,7 +503,13 @@ async def reset_notification_rules_dev() -> None:
             encoding="utf-8",
         )
 
-        registry_events = {event.value for event in NOTIFICATION_REGISTRY}
+        # Wave 1 (2026-04-21): replaces `{event.value for event in NOTIFICATION_REGISTRY}`.
+        # LEGACY_REGISTRY_EVENTS is a frozen snapshot of the event names
+        # the registry seeded pre-Wave-1, so tombstone behavior stays
+        # identical. Catalog-only events (e.g. offering_*, program_*,
+        # application_survey_due) are intentionally NOT included here —
+        # they were never registry-backed and must not get tombstoned.
+        registry_events = set(LEGACY_REGISTRY_EVENTS)
         target_events = registry_events | set(CURATED_RULES.keys()) | set(existing_by_event.keys())
 
         created_count = 0
