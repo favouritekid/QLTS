@@ -145,7 +145,10 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         message_template="Bạn có lịch tư vấn với $lead_name ($lead_phone) trong $minutes_until phút nữa.",
         notification_type="info",
         link_template="/leads/$lead_id",
-        groups=[_internal_group("lead_owner", ["browser", "zalo"])],
+        # Zalo is a prod-only enrichment (see event_catalog.py note).
+        # Curated dev seed stays browser-only because _internal_group
+        # cannot carry zalo_template_id / external_resolver.
+        groups=[_internal_group("lead_owner", ["browser"])],
     ),
     "application_created": _build_rule(
         event="application_created",

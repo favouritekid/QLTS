@@ -364,7 +364,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "⏰ Nhắc nhở: Lịch hẹn tư vấn",
             "Bạn có lịch hẹn gọi ${lead_name} (${lead_phone}) trong ${minutes_until} phút nữa."
         ),
-        channels=(CH.BROWSER, CH.ZALO),
+        channels=(CH.BROWSER,),
         notification_type=NT.REMINDER,
         link_template="/leads/${lead_id}",
         priority=10,  # Very high priority for reminders

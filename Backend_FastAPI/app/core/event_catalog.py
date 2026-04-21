@@ -444,7 +444,12 @@ _CONSULTATION_EVENTS: tuple = (
         ),
         default_resolver="lead_owner",
         allowed_resolvers=_LEAD_RESOLVERS,
-        default_channels=("browser", "zalo"),
+        # NOTE: prod runtime enriches this rule with a zalo action
+        # (zalo_template_id=333738, external_resolver=lead_contact) via
+        # admin UI — that per-action config cannot be expressed in the
+        # catalog's channel-list-only schema. Seed default stays
+        # browser-only; Zalo is a post-seed DB customization.
+        default_channels=("browser",),
         priority=10,
         dedup_key_template="reminder:${lead_id}:${consultation_id}",
         link_strategy="/leads/${lead_id}",
