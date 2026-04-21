@@ -3,8 +3,9 @@
 Integration tests for Lead → Notification flow.
 
 Tests verify the complete notification dispatch flow using the ACTUAL
-notification_registry rules (not custom test rules), since the registry
-is the source of truth for production behavior.
+catalog-backed rules seeded from `notification_seed_defaults.py` (not
+custom test rules), since the seeded DB rules are the source of truth
+for production behavior.
 """
 import pytest
 from sqlalchemy import select

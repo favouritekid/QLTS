@@ -1,9 +1,16 @@
 """
 Event Catalog — single source of truth for event semantics.
 
-Merges data from:
-- event_metadata.py (display, variables, condition_fields)
-- notification_registry.py (resolver, dedup, priority, link)
+Originally merged data from two modules that have since been retired
+in Wave 3 (2026-04-21):
+- event_metadata.py — display, variables, condition_fields
+- notification_registry.py — resolver, dedup, priority, link
+
+Those modules are gone; the catalog below now carries all of that
+inline. Per-event content that is NOT semantics (title_template,
+message_template, notification_type, pre-serialized recipient_config)
+lives in `app.core.notification_seed_defaults` for the seeders to
+consume.
 
 Code owns: event existence, classification, resolver OPTIONS, dedup, priority,
            link strategy, variables, condition fields.
