@@ -65,6 +65,7 @@ import {
   useNotificationMetadata,
 } from "@/hooks/useNotificationRules";
 import type { NotificationRule } from "@/types/api.types";
+import { deriveRuleChannels } from "./rule-channels";
 
 // Event category configuration
 const EVENT_CATEGORIES = {
@@ -544,7 +545,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
                                     {rule.title_template}
                                   </div>
                                   <div className="flex gap-1 mt-1">
-                                    {rule.channels.map((channel) => (
+                                    {deriveRuleChannels(rule).map((channel) => (
                                       <Badge
                                         key={channel}
                                         variant="outline"

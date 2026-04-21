@@ -349,7 +349,11 @@ export interface NotificationRule {
   message_template: string;
   notification_type: string;
   link_template: string | null;
-  channels: string[]; // DEPRECATED: derived from actions
+  // Wave 4a (2026-04-21): DEPRECATED — top-level channels is derived from
+  // `actions[].channel` since Phase C1 and will be dropped in Wave 4b.
+  // Marked optional so the FE keeps compiling/running both before and
+  // after the BE stops emitting the field.
+  channels?: string[];
   recipient_config: Record<string, unknown>;
   condition: Record<string, unknown> | null;
   enabled: boolean;
@@ -365,7 +369,10 @@ export interface NotificationRuleCreate {
   message_template: string;
   notification_type: string;
   link_template?: string | null;
-  channels: string[];
+  // Wave 4a: DEPRECATED on write (Phase C1). Kept optional so callers
+  // that still pass it keep type-checking until Wave 4b removes the
+  // field across FE + BE schemas.
+  channels?: string[];
   recipient_config: Record<string, unknown>;
   condition?: Record<string, unknown> | null;
   enabled?: boolean;

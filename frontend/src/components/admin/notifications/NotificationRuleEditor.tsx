@@ -64,6 +64,7 @@ import {
 } from "./wizard-constants";
 import type { EventOption, RecipientOption } from "./wizard-constants";
 import NotificationRuleSidebar from "./NotificationRuleSidebar";
+import { deriveRuleChannels } from "./rule-channels";
 import { TriggerSection } from "./TriggerSection";
 import DefaultContentSection from "./DefaultContentSection";
 import FinalPreviewSection from "./FinalPreviewSection";
@@ -87,7 +88,10 @@ const formSchema = z.object({
   message_template: z.string().min(1, "Vui lòng nhập nội dung"),
   notification_type: z.enum(["info", "success", "warning", "error"]),
   // PR2: link_template removed — link is code-owned (catalog)
-  channels: z.array(z.string()),
+  // Wave 4a (2026-04-21): DEPRECATED compat field on write — derived from
+  // actions by the backend since Phase C1. Kept optional in the form so
+  // hydration from pre-Wave-4b API responses still type-checks.
+  channels: z.array(z.string()).optional(),
   recipient_config: z.record(z.string(), z.unknown()),
   condition: z.record(z.string(), z.unknown()).nullable(),
   enabled: z.boolean(),
@@ -191,7 +195,9 @@ export function NotificationRuleEditor({
       title_template: existingRule.title_template,
       message_template: existingRule.message_template,
       notification_type: existingRule.notification_type as "info" | "success" | "warning" | "error",
-      channels: existingRule.channels,
+      // Wave 4a: derive from actions (runtime truth) with fallback to
+      // the deprecated compat column so old cached responses still work.
+      channels: deriveRuleChannels(existingRule),
       recipient_config: existingRule.recipient_config,
       condition: existingRule.condition,
       enabled: existingRule.enabled,
