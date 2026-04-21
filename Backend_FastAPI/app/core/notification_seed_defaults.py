@@ -427,6 +427,60 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
 }
 
 
-LEGACY_REGISTRY_EVENTS: frozenset[str] = frozenset(
-    event.value for event in NOTIFICATION_SEED_DEFAULTS.keys()
-)
+# Frozen snapshot (2026-04-21) of the event names seeded by the
+# pre-Wave-1 `NOTIFICATION_REGISTRY`. DO NOT derive this from
+# `NOTIFICATION_SEED_DEFAULTS.keys()` — that would let any future
+# addition to the seed-defaults map silently widen the tombstone scope
+# in `reset_notification_rules_dev.py`, reintroducing the coupling this
+# refactor removes. New events should be added to
+# `NOTIFICATION_SEED_DEFAULTS` only; leave this set alone unless a row
+# is genuinely being retired from the legacy registry surface.
+LEGACY_REGISTRY_EVENTS: frozenset[str] = frozenset({
+    "application_created",
+    "application_deleted",
+    "application_status_changed",
+    "asset_checked_out",
+    "asset_maintenance_alert",
+    "consultation_created",
+    "consultation_deleted",
+    "consultation_reminder",
+    "consultation_updated",
+    "ctv_approved",
+    "ctv_attribution_expired",
+    "ctv_attribution_expiring",
+    "ctv_claim_approved",
+    "ctv_claim_rejected",
+    "ctv_claim_submitted",
+    "ctv_commission_created",
+    "ctv_lead_converted",
+    "ctv_suspended",
+    "ctv_weekly_summary",
+    "dorm_fee_created",
+    "dorm_maintenance_request",
+    "dorm_room_assigned",
+    "fee_fully_paid",
+    "holiday_calendar_incomplete",
+    "invoice_issued",
+    "lead_assigned",
+    "lead_assignment_failed",
+    "lead_created",
+    "lead_deleted",
+    "lead_imported",
+    "lead_reassigned",
+    "lead_restored",
+    "lead_status_changed",
+    "lead_updated",
+    "officer_availability_changed",
+    "payment_overdue",
+    "payment_received",
+    "payment_rejected",
+    "payment_verified",
+    "pipeline_config_updated",
+    "refund_processed",
+    "suspicious_login",
+    "system_alert",
+    "system_announcement",
+    "user_deactivated",
+    "user_profile_updated",
+    "user_role_changed",
+})
