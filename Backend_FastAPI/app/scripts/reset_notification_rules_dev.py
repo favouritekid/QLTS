@@ -118,7 +118,7 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         message_template="Lead $lead_name chưa thể phân công tự động. Lý do: $reason.",
         notification_type="warning",
         link_template="/leads/$lead_id",
-        groups=[_internal_group("unit_managers", ["browser", "email"])],
+        groups=[_internal_group("unit_managers", ["browser"])],
     ),
     "lead_status_changed": _build_rule(
         event="lead_status_changed",
@@ -145,7 +145,7 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         message_template="Bạn có lịch tư vấn với $lead_name ($lead_phone) trong $minutes_until phút nữa.",
         notification_type="info",
         link_template="/leads/$lead_id",
-        groups=[_internal_group("lead_owner", ["browser"])],
+        groups=[_internal_group("lead_owner", ["browser", "zalo"])],
     ),
     "application_created": _build_rule(
         event="application_created",
