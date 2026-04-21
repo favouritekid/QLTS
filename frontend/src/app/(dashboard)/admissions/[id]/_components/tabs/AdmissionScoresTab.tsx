@@ -25,6 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Calculator, BookOpen, AlertCircle, Info } from "lucide-react"
 import type { AppliedRules } from "@/lib/zod/admissions"
+import { calculateAdmissionTotal, type ScoringMethod } from "./admission-scoring"
 
 interface AdmissionScoresTabProps {
   form: UseFormReturn<FieldValues>
@@ -73,27 +74,15 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
     return availableSubjectGroups.find((g) => g.code === selectedGroup) || null
   }, [selectedGroup, availableSubjectGroups])
 
-  // Calculate total score based on scoring method
+  // Mirrors backend `AdmissionScoringService._calculate_final_score` —
+  // weighted = plain Σ score * weight, missing key → 1.0, empty → plain sum.
   const totalScore = useMemo(() => {
-    if (!subjectScores || typeof subjectScores !== 'object') return 0
-
-    const scores = Object.values(subjectScores as Record<string, number>).filter(
-      (score) => typeof score === 'number' && !isNaN(score)
-    )
-
-    if (scores.length === 0) return 0
-
-    // Apply scoring method from snapshot
-    if (scoringMethod === 'average') {
-      return scores.reduce((sum, score) => sum + score, 0) / scores.length
-    } else if (scoringMethod === 'weighted') {
-      // TODO: Implement weighted scoring with weights from snapshot
-      return scores.reduce((sum, score) => sum + score, 0)
-    } else {
-      // Default: sum
-      return scores.reduce((sum, score) => sum + score, 0)
-    }
-  }, [subjectScores, scoringMethod])
+    return calculateAdmissionTotal({
+      subjectScores: subjectScores as Record<string, number | null | undefined>,
+      scoringMethod: scoringMethod as ScoringMethod,
+      subjectWeights: appliedRules?.subject_weights,
+    })
+  }, [subjectScores, scoringMethod, appliedRules?.subject_weights])
 
   // Initialize subject_scores when group changes
   useEffect(() => {
