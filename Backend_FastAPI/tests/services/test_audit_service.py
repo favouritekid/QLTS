@@ -4,6 +4,11 @@ Unit tests for audit_service.py
 
 Tests the generic entity audit logging functionality.
 """
+
+# Legacy misplaced mock-based audit-service tests; overlaps with tests/unit/test_audit_service.py.
+# Kept as-is for now to avoid assertion loss during cleanup wave; consolidate in a dedicated follow-up.
+# See Documents/WAVE7_TEST_AUDIT_SERVICE_INVESTIGATION.md for the classification decision.
+
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch

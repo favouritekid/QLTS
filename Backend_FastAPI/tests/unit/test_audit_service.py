@@ -9,6 +9,10 @@ Tests the audit logging utilities including:
 - Value serialization
 """
 
+# Note: overlaps partially with tests/services/test_audit_service.py.
+# That file is legacy/misplaced mock-based coverage and is pending dedicated consolidation.
+# See Documents/WAVE7_TEST_AUDIT_SERVICE_INVESTIGATION.md for the classification decision.
+
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
