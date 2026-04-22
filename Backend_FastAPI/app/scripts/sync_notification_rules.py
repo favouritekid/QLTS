@@ -231,7 +231,15 @@ async def _backfill_missing_actions(db) -> int:
     Uses catalog `default_channels` for the event. Skips rules whose
     event is not in the catalog (orphan rules) or whose catalog entry
     has no default channels — those cannot be safely synthesized.
+
+    After the DB backfill, invalidates the per-event rule cache so any
+    environment that had cached an actionless rule under the buggy
+    pre-backfill release (e.g. during the f3582513 window) picks up
+    the freshly-seeded actions on next dispatch instead of serving the
+    stale cache entry.
     """
+    from app.services.notification_rule_loader import invalidate_rule_cache
+
     stmt = (
         select(models.NotificationRule)
         .outerjoin(
@@ -248,7 +256,7 @@ async def _backfill_missing_actions(db) -> int:
     if not orphan_rules:
         return 0
 
-    seeded = 0
+    seeded_event_names: list[str] = []
     for rule in orphan_rules:
         try:
             event_enum = SystemEvents(rule.event)
@@ -274,7 +282,7 @@ async def _backfill_missing_actions(db) -> int:
                 channel=str(channel),
                 content_mode="inherit_default",
             ))
-        seeded += 1
+        seeded_event_names.append(rule.event)
         log.info(
             "Backfilled default actions for orphan rule",
             rule_id=rule.id,
@@ -282,9 +290,24 @@ async def _backfill_missing_actions(db) -> int:
             seeded_channels=[str(c) for c in defn.default_channels],
         )
 
-    if seeded:
-        await db.commit()
-    return seeded
+    if not seeded_event_names:
+        return 0
+
+    await db.commit()
+
+    # Invalidate cache for every backfilled event so dispatchers that
+    # cached the actionless rule re-read from DB on next call.
+    for event_name in seeded_event_names:
+        try:
+            await invalidate_rule_cache(event_name)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Failed to invalidate rule cache after backfill",
+                event_name=event_name,
+                error=str(exc),
+            )
+
+    return len(seeded_event_names)
 
 
 # ---------------------------------------------------------------------------
