@@ -20,8 +20,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import selectinload
 
 from app import models
 from app.config import settings
@@ -186,6 +187,18 @@ async def sync_notification_rules(db) -> Dict[str, int]:
 
     await db.commit()
 
+    # Wave 4b (2026-04-21) — safety-net action backfill.
+    # After dropping the `channels` compat column, any enabled rule
+    # that lacks `NotificationAction` rows dispatches zero
+    # notifications (the loader's synthesize-from-channels fallback
+    # is gone). The Alembic migration does a one-shot backfill from
+    # the compat column right before dropping it, but we repeat the
+    # work here using catalog `default_channels` to cover:
+    #   - dev DBs that had the earlier drop-only migration applied
+    #   - rules that somehow end up without actions in the future
+    # Idempotent: only touches rules that currently have zero actions.
+    action_backfilled = await _backfill_missing_actions(db)
+
     # Re-check: any user event still missing?
     result2 = await db.execute(select(models.NotificationRule.event))
     after_events = {row[0] for row in result2.fetchall()}
@@ -198,6 +211,7 @@ async def sync_notification_rules(db) -> Dict[str, int]:
     summary = {
         "created": created,
         "skipped": skipped,
+        "action_backfilled": action_backfilled,
         "orphan_rules": orphan_rules,
         "missing_user_rules": missing_user_rules,
     }
@@ -209,6 +223,68 @@ async def sync_notification_rules(db) -> Dict[str, int]:
 
     log.info("Notification rules sync completed", **summary)
     return summary
+
+
+async def _backfill_missing_actions(db) -> int:
+    """Seed default NotificationAction rows for enabled rules that have none.
+
+    Uses catalog `default_channels` for the event. Skips rules whose
+    event is not in the catalog (orphan rules) or whose catalog entry
+    has no default channels — those cannot be safely synthesized.
+    """
+    stmt = (
+        select(models.NotificationRule)
+        .outerjoin(
+            models.NotificationAction,
+            models.NotificationAction.rule_id == models.NotificationRule.id,
+        )
+        .where(models.NotificationRule.enabled == True)  # noqa: E712
+        .group_by(models.NotificationRule.id)
+        .having(func.count(models.NotificationAction.id) == 0)
+    )
+    result = await db.execute(stmt)
+    orphan_rules = result.scalars().all()
+
+    if not orphan_rules:
+        return 0
+
+    seeded = 0
+    for rule in orphan_rules:
+        try:
+            event_enum = SystemEvents(rule.event)
+        except ValueError:
+            log.warning(
+                "Cannot backfill actions: unknown event",
+                rule_id=rule.id,
+                event_name=rule.event,
+            )
+            continue
+        defn = EVENT_CATALOG.get(event_enum)
+        if defn is None or not defn.default_channels:
+            log.warning(
+                "Cannot backfill actions: no catalog default_channels",
+                rule_id=rule.id,
+                event_name=rule.event,
+            )
+            continue
+        for step, channel in enumerate(defn.default_channels, start=1):
+            db.add(models.NotificationAction(
+                rule_id=rule.id,
+                step=step,
+                channel=str(channel),
+                content_mode="inherit_default",
+            ))
+        seeded += 1
+        log.info(
+            "Backfilled default actions for orphan rule",
+            rule_id=rule.id,
+            event_name=rule.event,
+            seeded_channels=[str(c) for c in defn.default_channels],
+        )
+
+    if seeded:
+        await db.commit()
+    return seeded
 
 
 # ---------------------------------------------------------------------------
