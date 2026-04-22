@@ -81,6 +81,33 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
             },
         },
     },
+    SystemEvents.APPLICATION_FEE_PAID: {
+        "title_template": "Lệ phí xét tuyển đã thanh toán",
+        "message_template": "Lệ phí ${amount} cho hồ sơ #${application_id} (${application_code}) đã được ghi nhận.",
+        "notification_type": "success",
+        "recipient_config": {
+            "resolver_type": "actor_excluded",
+            "params": {
+                "inner_resolver": {"resolver_type": "lead_owner", "params": {}},
+            },
+        },
+    },
+    SystemEvents.APPLICATION_SURVEY_DUE: {
+        # Applicant-only survey (ZNS template 426903). The rule body is
+        # required so sync_notification_rules emits the row, but the
+        # in-app notification is intentionally never delivered to any
+        # internal user (recipient_config resolves to zero recipients).
+        # Outbound delivery is wired per-action via
+        # action.config.external_resolver="lead_contact" — see
+        # event_catalog.py:566-568. The action.config (template_id +
+        # external_resolver) must be seeded separately before flipping
+        # the rule to enabled=true; sync_notification_rules cannot
+        # populate it because it is ZNS-specific.
+        "title_template": "Khảo sát chất lượng tư vấn",
+        "message_template": "Mời bạn đánh giá dịch vụ tư vấn cho hồ sơ ${profile_code}.",
+        "notification_type": "info",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
     SystemEvents.ASSET_CHECKED_OUT: {
         "title_template": "Asset Checked Out",
         "message_template": "Asset '${asset_name}' has been checked out. Expected return: ${expected_return}.",
