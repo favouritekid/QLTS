@@ -22,7 +22,6 @@ from typing import Any, Dict
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import selectinload
 
 from app import models
 from app.config import settings
@@ -211,7 +210,7 @@ async def sync_notification_rules(db) -> Dict[str, int]:
     summary = {
         "created": created,
         "skipped": skipped,
-        "action_backfilled": action_backfilled,
+        "rules_backfilled": action_backfilled,
         "orphan_rules": orphan_rules,
         "missing_user_rules": missing_user_rules,
     }

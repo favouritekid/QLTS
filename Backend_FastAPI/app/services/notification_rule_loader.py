@@ -426,19 +426,6 @@ class ActionConfig:
     branch_key: Optional[str] = None
 
 
-def synthesize_actions_from_channels(channels: List[str]) -> List[ActionConfig]:
-    """
-    Create synthetic ActionConfig list from a channels array.
-
-    Used for backward compatibility when a rule has channels but no
-    NotificationAction rows (legacy rules before C0 migration).
-    """
-    return [
-        ActionConfig(step=i, channel=ch, delay_minutes=0)
-        for i, ch in enumerate(channels, start=1)
-    ]
-
-
 def derive_channels_from_actions(actions: List[ActionConfig]) -> List[str]:
     """
     Derive unique channel list from actions, preserving step order.

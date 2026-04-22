@@ -1196,7 +1196,7 @@ async def main():
         print(f"\n{'DRY RUN — ' if args.dry_run else ''}Total: {total} rows")
         if not args.dry_run:
             print("\nNext steps:")
-            print("  1. Seed notifications:  python -m app.scripts.seed_notification_rules")
+            print("  1. Seed notifications:  python -m app.scripts.sync_notification_rules")
             print("  2. Seed admin nodes:    python -m scripts.seeds.seed_administrative_nodes")
 
 
