@@ -82,6 +82,30 @@ jobs:
           tests/api/test_admission_workflow_api.py
           -v --tb=short
 
+      # ---------------------------------------------------------------------
+      # Notification reliability gate (added 2026-04-22 after the cleanup
+      # arc deploy surfaced 8 enabled-but-actionless rules). Coverage runs
+      # in non-DB mode because CI does not seed a production-shaped
+      # notification_rule table; the --check-db variant is reserved for
+      # the post-deploy SSH smoke step.
+      # ---------------------------------------------------------------------
+      - name: Backend — Notification event coverage
+        working-directory: Backend_FastAPI
+        run: python -m app.scripts.check_notification_event_coverage
+
+      - name: Backend — Notification parity (unit)
+        working-directory: Backend_FastAPI
+        run: python -m pytest tests/unit/test_notification_parity.py -q --tb=short
+
+      - name: Backend — Notification dispatcher (integration)
+        working-directory: Backend_FastAPI
+        run: >-
+          python -m pytest
+          tests/integration/test_condition_dispatch.py
+          tests/services/test_notification_dispatcher.py
+          tests/integration/test_notification_core_v2.py
+          -q --tb=short
+
       # =====================================================================
       # FRONTEND: Type Check + Lint + Contract Tests (Phase 2)
       # =====================================================================
