@@ -306,6 +306,13 @@ class ZaloGateway:
             )
             return False
 
+        # Zalo wraps the hex digest with a literal ``mac=`` prefix in the
+        # X-ZEvent-Signature header (the docs render the formula as
+        # ``mac = sha256(...)``, and the literal string ``mac=`` is part
+        # of the wire value). Strip it before constant-time compare.
+        if signature.startswith("mac="):
+            signature = signature[4:]
+
         try:
             data_str = body.decode("utf-8")
         except UnicodeDecodeError:
