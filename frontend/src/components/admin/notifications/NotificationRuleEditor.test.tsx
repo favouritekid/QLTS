@@ -23,7 +23,15 @@ vi.mock("@/hooks/useNotificationRules", () => ({
   useCreateNotificationRule: () => ({ mutateAsync: mockCreateMutateAsync, isPending: false }),
   useUpdateNotificationRule: () => ({ mutateAsync: mockUpdateMutateAsync, isPending: false }),
   useNotificationRule: (...args: unknown[]) => mockUseNotificationRule(...args),
-  useNotificationMetadata: () => ({ data: MOCK_METADATA }),
+  useNotificationMetadata: () => ({ data: MOCK_METADATA, isLoading: false, isError: false }),
+  usePreviewNotificationRule: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue({}),
+    data: null,
+    isPending: false,
+    isError: false,
+    reset: vi.fn(),
+  }),
 }));
 
 const MOCK_METADATA = {
