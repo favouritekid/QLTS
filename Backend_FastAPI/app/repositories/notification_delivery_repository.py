@@ -457,13 +457,23 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
         return (await self.db.execute(q)).scalar() or 0
 
     async def get_stale_sent_count(self, lag_minutes: int = 60) -> int:
-        """Count deliveries sent > lag_minutes ago without webhook confirmation."""
+        """Count deliveries sent > lag_minutes ago without webhook confirmation.
+
+        2026-04-22: ``zalo`` excluded from this filter — backend currently
+        does not consume the ``user_received_message`` ZBS Template Message
+        delivery webhook (header ``X-ZEvent-Server: ZNS``); the reconcile
+        task auto-marks ``sent → delivered`` after 60min instead, so a
+        ``sent`` zalo row older than 60min is the *expected* interim state,
+        not an alert condition. Re-add ``zalo`` once the webhook handler is
+        wired (separate follow-up). ``sms`` retained for when a future
+        SMS channel implementation lands; currently produces no rows.
+        """
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=lag_minutes)
         q = (
             select(func.count()).select_from(NotificationDelivery)
             .where(
                 NotificationDelivery.status == "sent",
-                NotificationDelivery.channel.in_(["zalo", "sms"]),
+                NotificationDelivery.channel.in_(["sms"]),
                 NotificationDelivery.sent_at <= cutoff,
             )
         )
