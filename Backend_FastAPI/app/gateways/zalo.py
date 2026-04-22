@@ -279,7 +279,18 @@ class ZaloGateway:
 
     def verify_webhook_signature(self, body: bytes, signature: str) -> bool:
         """
-        Verify Zalo webhook HMAC-SHA256 signature.
+        Verify Zalo webhook signature per official spec.
+
+        Spec (verified across docs pages — chat user_send_text, ZBS quota,
+        ZBS user_received_message): the X-ZEvent-Signature header value is
+        ``sha256(appId + data + timeStamp + OAsecretKey)`` where ``data``
+        is the raw JSON request body and ``appId`` / ``timeStamp`` are
+        echoed as fields inside that body. NOT HMAC — plain SHA-256 of a
+        concatenated string.
+
+        ``OAsecretKey`` comes from the webhook page in
+        ``developers.zalo.me/app/<id>/webhook`` (NOT the App Secret used
+        for OAuth). It is set in ``ZALO_WEBHOOK_SECRET``.
 
         Args:
             body: Raw request body bytes
@@ -288,16 +299,42 @@ class ZaloGateway:
         Returns:
             True if signature is valid
         """
-        secret = settings.ZALO_WEBHOOK_SECRET or settings.ZALO_APP_SECRET
+        secret = settings.ZALO_WEBHOOK_SECRET
         if not secret:
-            log.warning("No Zalo webhook secret configured, rejecting webhook")
+            log.warning(
+                "ZALO_WEBHOOK_SECRET not configured, rejecting webhook signature"
+            )
             return False
 
-        expected = hmac.new(
-            key=secret.encode(),
-            msg=body,
-            digestmod=hashlib.sha256,
-        ).hexdigest()
+        try:
+            data_str = body.decode("utf-8")
+        except UnicodeDecodeError:
+            log.warning("Webhook body is not valid UTF-8, signature verify aborted")
+            return False
+
+        # Extract appId / timestamp from the JSON body. Use string parsing
+        # rather than json.loads so the exact serialization is preserved
+        # for the SHA-256 input (the spec hashes the body verbatim).
+        import json
+        try:
+            payload = json.loads(data_str)
+        except (json.JSONDecodeError, ValueError):
+            log.warning("Webhook body is not valid JSON, signature verify aborted")
+            return False
+
+        app_id = str(payload.get("app_id", ""))
+        timestamp = str(payload.get("timestamp", ""))
+
+        if not app_id or not timestamp:
+            log.warning(
+                "Webhook body missing app_id or timestamp for signature input",
+                has_app_id=bool(app_id),
+                has_timestamp=bool(timestamp),
+            )
+            return False
+
+        mac_input = f"{app_id}{data_str}{timestamp}{secret}"
+        expected = hashlib.sha256(mac_input.encode("utf-8")).hexdigest()
 
         return hmac.compare_digest(expected, signature)
 

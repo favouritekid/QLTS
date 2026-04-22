@@ -54,6 +54,10 @@ async def zalo_webhook(
 
     event_name = data.get("event_name", "") if isinstance(data, dict) else ""
     signature = request.headers.get("X-ZEvent-Signature", "")
+    # ZBS Template Message delivery callbacks carry ``X-ZEvent-Server: ZNS``;
+    # chat events do not. Used below to disambiguate ``user_received_message``
+    # (chat read receipt vs ZBS template delivery confirmation).
+    zevent_server = request.headers.get("X-ZEvent-Server", "")
 
     if not event_name:
         log.info("Zalo webhook probe / heartbeat received", has_signature=bool(signature))
@@ -107,7 +111,18 @@ async def zalo_webhook(
         )
 
     # 4. Handle delivery status events
-    if event_name in ("oa_send_text", "oa_send_template"):
+    #
+    # ZBS Template Message delivery confirmation arrives as
+    # ``user_received_message`` with header ``X-ZEvent-Server: ZNS``
+    # (per ZBS docs `webhook-gui-tin-qua-sdt/su-kien-nguoi-dung-nhan-tin-qua-sdt`).
+    # The same event_name without the header is a chat read-receipt, which
+    # we ignore. ``oa_send_text`` / ``oa_send_template`` are the chat-side
+    # delivery hints retained for backward compatibility.
+    is_zbs_delivery = (
+        event_name == "user_received_message"
+        and zevent_server == "ZNS"
+    )
+    if event_name in ("oa_send_text", "oa_send_template") or is_zbs_delivery:
         await _handle_delivery_status(db, data)
 
     # 5. Handle follow/unfollow events (future: update consent)

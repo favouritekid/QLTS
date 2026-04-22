@@ -31,12 +31,15 @@ from app.main import app
 
 def _sign_body(body: bytes) -> str:
     """Compute X-ZEvent-Signature the same way the gateway verifies it
-    (see zalo_gateway.verify_webhook_signature). Using the same secret
-    fallback chain ZALO_WEBHOOK_SECRET or ZALO_APP_SECRET."""
-    secret = settings.ZALO_WEBHOOK_SECRET or settings.ZALO_APP_SECRET or ""
-    return hmac.new(
-        key=secret.encode(), msg=body, digestmod=hashlib.sha256
-    ).hexdigest()
+    (see zalo_gateway.verify_webhook_signature). Per Zalo spec:
+    ``mac = sha256(appId + data + timeStamp + OAsecretKey)``."""
+    secret = settings.ZALO_WEBHOOK_SECRET or ""
+    data_str = body.decode("utf-8")
+    payload = json.loads(data_str)
+    app_id = str(payload.get("app_id", ""))
+    timestamp = str(payload.get("timestamp", ""))
+    mac_input = f"{app_id}{data_str}{timestamp}{secret}"
+    return hashlib.sha256(mac_input.encode("utf-8")).hexdigest()
 
 
 async def _post_signed(client: AsyncClient, payload: dict):
@@ -109,12 +112,11 @@ async def _approved_profile_with_tracking(
 
 @pytest.fixture
 def zalo_signing_secret(monkeypatch):
-    """Dev/test envs don't ship a Zalo secret; set one so
-    verify_webhook_signature has a key to HMAC against. Must fire BEFORE
-    any test body that calls _sign_body() or _post_signed() so both
-    sides use the same value."""
-    monkeypatch.setattr(settings, "ZALO_APP_SECRET", "test-app-secret")
-    monkeypatch.setattr(settings, "ZALO_WEBHOOK_SECRET", "")
+    """Dev/test envs don't ship a Zalo OA secret; set one so
+    verify_webhook_signature has a key for the SHA-256 concat.
+    Must fire BEFORE any test body that calls _sign_body() or
+    _post_signed() so both sides use the same value."""
+    monkeypatch.setattr(settings, "ZALO_WEBHOOK_SECRET", "test-oa-secret-key")
     yield
 
 
