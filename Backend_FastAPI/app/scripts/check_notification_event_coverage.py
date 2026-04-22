@@ -67,9 +67,16 @@ class EventStatus:
             and not self.retired
         )
 
+    db_only: bool = False
+
     @property
     def gaps(self) -> List[str]:
         out: List[str] = []
+        if self.db_only:
+            out.append("db-event-not-in-enum")
+            if (self.db_action_count or 0) == 0:
+                out.append("rule-has-zero-actions")
+            return out
         if not self.in_catalog:
             out.append("missing-catalog-entry")
         if self.requires_seed and not self.in_seed_defaults:
@@ -172,6 +179,22 @@ def _build_statuses(
             ghost = EventStatus(name=f"{grepped_name} (UNKNOWN-ENUM)")
             ghost.dispatch_sites = dispatch_sites[grepped_name]
             statuses.append(ghost)
+
+    # Reverse-scan: DB rows whose `event` is not in SystemEvents at all.
+    # These are stale rule rows left behind after an event was retired
+    # from the enum/catalog (PR-#93-style cleanup that forgot to drop
+    # the DB row). Without this scan the script — which iterates the
+    # enum — would never see them.
+    if db_data is not None:
+        enum_values: Set[str] = {member.value for member in SystemEvents}
+        for db_event, (present, count) in db_data.items():
+            if db_event in enum_values:
+                continue
+            st = EventStatus(name=f"{db_event} (DB-ONLY)")
+            st.db_rule_present = present
+            st.db_action_count = count
+            st.db_only = True
+            statuses.append(st)
 
     return statuses
 
