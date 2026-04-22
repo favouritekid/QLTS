@@ -46,7 +46,23 @@ def check_admission_surveys_due_task(self):
     """
     task_name = "check_admission_surveys_due_task"
     task_log = logging.getLogger(task_name)
-    task_log.info("Starting admission survey due check...")
+
+    # Canonical heartbeat log so ops can grep
+    # ``event=admission_survey_heartbeat`` (alongside ``phase=start|end|
+    # skipped_disabled``) to confirm the task fired today and audit the
+    # rollout flag without parsing free-form text. Missing a "start"
+    # entry in any 25h window means beat or worker stopped firing.
+    from ..config import settings as _settings_for_log
+    task_log.info(
+        "admission_survey_due heartbeat: start",
+        extra={
+            "event": "admission_survey_heartbeat",
+            "phase": "start",
+            "enabled": _settings_for_log.ADMISSION_SURVEY_ENABLED,
+            "baseline_date": _settings_for_log.ADMISSION_SURVEY_BASELINE_DATE or None,
+            "batch_size": _settings_for_log.ADMISSION_SURVEY_BATCH_SIZE,
+        },
+    )
 
     async def _run() -> dict:
         from ..config import settings
@@ -66,7 +82,11 @@ def check_admission_surveys_due_task(self):
         # flood the past catalogue on first run.
         if not settings.ADMISSION_SURVEY_ENABLED:
             task_log.info(
-                "ADMISSION_SURVEY_ENABLED=false, skipping survey scan"
+                "admission_survey_due heartbeat: skipped_disabled",
+                extra={
+                    "event": "admission_survey_heartbeat",
+                    "phase": "skipped_disabled",
+                },
             )
             return result
 
@@ -196,8 +216,27 @@ def check_admission_surveys_due_task(self):
         validate_keys=["checked", "sent", "failed", "skipped_no_phone"],
     )
 
+    # ``outcome`` is the queryable bit: "idle" means the task ran cleanly
+    # but the eligibility window was empty (expected during the first ~30
+    # days after baseline), "dispatched" means at least one row was acted
+    # on. ``failed > 0`` does not flip outcome — per-profile failures are
+    # tolerated by design (savepoint + continue) and surfaced via the
+    # ``failed`` count in the same line.
+    if result["checked"] == 0:
+        outcome = "idle"
+    else:
+        outcome = "dispatched"
     task_log.info(
-        "Admission survey check completed: checked=%s sent=%s failed=%s skipped_no_phone=%s",
-        result["checked"], result["sent"], result["failed"], result["skipped_no_phone"],
+        "admission_survey_due heartbeat: end (%s)",
+        outcome,
+        extra={
+            "event": "admission_survey_heartbeat",
+            "phase": "end",
+            "outcome": outcome,
+            "checked": result["checked"],
+            "sent": result["sent"],
+            "failed": result["failed"],
+            "skipped_no_phone": result["skipped_no_phone"],
+        },
     )
     return result
