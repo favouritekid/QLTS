@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.config import settings
+from tests._lead_status_test_ids import (
+    ASSIGNED_LEAD_STATUS,
+    INITIAL_LEAD_STATUS_ID,
+    UNASSIGNED_LEAD_STATUS,
+)
 
 # Import helpers và components
 from app.database import AsyncSessionLocal
@@ -108,9 +113,9 @@ async def test_import_and_bulk_assign_success(
     log.info("--- Running: test_import_and_bulk_assign_success ---")
     unit_id = seed_lead_dependencies["unit_id"]
     major_id = seed_lead_dependencies["major_id"]
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-    assigned_status_id = settings.DEFAULT_ASSIGNED_LEAD_STATUS
-    unassigned_status_id = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+    initial_status_id = INITIAL_LEAD_STATUS_ID
+    assigned_status_id = ASSIGNED_LEAD_STATUS
+    unassigned_status_id = UNASSIGNED_LEAD_STATUS
 
     # Chuẩn bị dữ liệu file hợp lệ (sử dụng unit/major ID từ fixture)
     file_data = [

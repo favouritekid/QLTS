@@ -111,16 +111,12 @@ class Settings(BaseSettings):
     ALLOWED_AVATAR_MIME_TYPES: List[str] = ["image/png", "image/jpeg"]
     AVATAR_UPLOAD_FOLDER: str = _AVATAR_UPLOAD_FOLDER
 
-    # -- Lead Assignment Defaults (Không từ env) --
-    # ⚠️ DEPRECATED: These status constants are deprecated.
-    # Production code now uses StatusHelper (database-driven) + AssignmentStatus enum.
-    # These remain for test compatibility only and will be removed in future.
-    # @see app/services/status_helper.py for the new approach.
-    DEFAULT_INITIAL_LEAD_STATUS_ID: str = "TTHV000"  # DEPRECATED: Use StatusHelper.get_initial_status()
-    DEFAULT_LOST_LEAD_STATUS_ID: str = "TTHV004"  # DEPRECATED: Use StatusHelper.get_rejected_status()
-    DEFAULT_UNASSIGNED_LEAD_STATUS: str = "unassigned_pending"  # DEPRECATED: Use AssignmentStatus.FAILED
-    DEFAULT_ASSIGNED_LEAD_STATUS: str = "assigned"  # DEPRECATED: Use AssignmentStatus.ASSIGNED
-    DEFAULT_REASSIGN_LEAD_STATUS: str = "reassigned_pending"  # DEPRECATED: Use AssignmentStatus.REASSIGN_PENDING
+    # Wave 5 (2026-04-22): the 5 deprecated `DEFAULT_*_LEAD_STATUS*`
+    # constants that lived here are gone. Production has used
+    # `StatusHelper` (DB-driven lookups) + `AssignmentStatus` enum for
+    # a while; the constants were kept as literal seed/assertion
+    # strings for tests only. Tests now read them from
+    # `tests/_lead_status_test_ids.py` instead.
     DEFAULT_ADMISSIONS_UNIT_ID: int = 1  # Fallback unit when no distribution config found
 
     # -- Security: Account Lockout --

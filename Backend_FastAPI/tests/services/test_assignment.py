@@ -10,7 +10,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
-from app.config import settings
+from tests._lead_status_test_ids import (
+    ASSIGNED_LEAD_STATUS,
+    UNASSIGNED_LEAD_STATUS,
+)
 
 # Import các thành phần cần test
 from app.services import assignment_service
@@ -208,7 +211,7 @@ async def test_assign_success_picks_lower_workload(
 
     # 3. Assert (Giữ nguyên assertions về model)
     assert lead_new.assigned_officer_id == officer_1.id
-    assert lead_new.status == settings.DEFAULT_ASSIGNED_LEAD_STATUS
+    assert lead_new.status == ASSIGNED_LEAD_STATUS
     assert lead_new.assigned_at is not None
     assert officer_1.last_assigned_at is not None
     assert mock_db_session.add.call_count == 3
@@ -270,7 +273,7 @@ async def test_assign_success_fairness_tiebreaker(
 
     # 3. Assert (Giữ nguyên assertions về model)
     assert lead_new.assigned_officer_id == officer_1.id
-    assert lead_new.status == settings.DEFAULT_ASSIGNED_LEAD_STATUS
+    assert lead_new.status == ASSIGNED_LEAD_STATUS
     # ... (Giữ nguyên assertions về add) ...
 
     # SỬA LỖI 2: Cập nhật assertion log (kwargs phải khớp)
@@ -301,7 +304,7 @@ async def test_assign_fail_no_officers_available(mock_db_session, mock_log, lead
 
     # 3. Assert (Giữ nguyên assertions về model)
     assert lead_new.assigned_officer_id is None
-    assert lead_new.status == settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+    assert lead_new.status == UNASSIGNED_LEAD_STATUS
     assert mock_db_session.add.call_count == 1
 
     # SỬA LỖI 2: Cập nhật assertion log (kwargs phải khớp)
@@ -346,7 +349,7 @@ async def test_assign_fail_all_officers_full_capacity(
 
     # 3. Assert (Giữ nguyên assertions về model)
     assert lead_new.assigned_officer_id is None
-    assert lead_new.status == settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+    assert lead_new.status == UNASSIGNED_LEAD_STATUS
     assert mock_db_session.add.call_count == 1
 
     # SỬA LỖI 2: Cập nhật assertion log (kwargs phải khớp)

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.database import AsyncSessionLocal
 from app.security import get_password_hash
-from app.config import settings
+from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
 
     # Initial Status
     initial_status = models.ConsultationStatus(
-        id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
+        id=INITIAL_LEAD_STATUS_ID,
         name="New Lead (Integration Test)",
         color_code="#0000FF",
         stage_id="INTEGRATION_TEST_STAGE"

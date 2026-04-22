@@ -468,9 +468,13 @@ async def seed_lead_dependencies(setup_test_database):
     Tạo Unit, Major, Stage, và các Status mặc định cần thiết cho Lead CRUD.
     Fixture này giờ nằm trong conftest.py để dễ dàng được pytest tìm thấy.
     """
+    from tests._lead_status_test_ids import (
+        INITIAL_LEAD_STATUS_ID,
+        LOST_LEAD_STATUS_ID,
+    )
     unit_data = TestOrgData.UNIT_1
     major_data = TestOrgData.MAJOR_1
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
+    initial_status_id = INITIAL_LEAD_STATUS_ID
     stage_a_id = "STAGE_A"
     stage_data = {"id": stage_a_id, "name": "Initial Stage", "order": 10}
     initial_status_data = {
@@ -483,7 +487,7 @@ async def seed_lead_dependencies(setup_test_database):
     status_a1_data = TestPipelineData.STATUS_A1.copy()  # Tạo bản sao để sửa đổi
     status_a1_data["stage_id"] = stage_a_id
 
-    lost_status_id = settings.DEFAULT_LOST_LEAD_STATUS_ID
+    lost_status_id = LOST_LEAD_STATUS_ID
     lost_stage_id = "STAGE_LOST"
     lost_stage_data = {"id": lost_stage_id, "name": "Lost Stage", "order": 999}
     lost_status_data = {

@@ -16,8 +16,8 @@ from httpx import AsyncClient
 from sqlalchemy import insert
 
 from app import models
-from app.config import settings
 from app.core.constants import UserRole
+from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
 from app.database import AsyncSessionLocal
 from app.models.commission import CommissionPolicy, CommissionRecord
 from app.security import get_password_hash
@@ -122,7 +122,7 @@ async def seed_commission_deps(setup_test_database):
             session.add(stage)
 
             initial_status = models.ConsultationStatus(
-                id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
+                id=INITIAL_LEAD_STATUS_ID,
                 name="New Lead (Commission Test)",
                 color_code="#0000FF",
                 stage_id="COMM_STAGE",
@@ -140,7 +140,7 @@ async def seed_commission_deps(setup_test_database):
 
     return {
         "unit_id": unit_data["id"],
-        "initial_status_id": settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
+        "initial_status_id": INITIAL_LEAD_STATUS_ID,
         "contacted_status_id": "COMM_CONTACTED",
     }
 

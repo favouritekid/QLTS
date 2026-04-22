@@ -70,8 +70,8 @@ async def _ver(client: AsyncClient, h: dict, pid: int) -> int:
 async def _submit(client: AsyncClient, h: dict, lead_id: int, method_id: int) -> dict:
     """Add consultation + create profile + fill + upload docs + submit."""
     # Consultation required before admission (business rule)
-    from app.config import settings
-    status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
+    from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
+    status_id = INITIAL_LEAD_STATUS_ID
     await client.post(f"{LeadsURLs.LEADS}/{lead_id}/consultations", json={
         "status_id": status_id, "method": "phone", "notes": "Pre-admission consultation",
     }, headers=h)

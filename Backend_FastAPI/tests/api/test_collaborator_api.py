@@ -13,8 +13,8 @@ from httpx import AsyncClient
 from sqlalchemy import insert
 
 from app import models
-from app.config import settings
 from app.core.constants import UserRole
+from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
 from app.database import AsyncSessionLocal
 from app.security import get_password_hash
 
@@ -125,7 +125,7 @@ async def seed_collab_deps(setup_test_database):
             session.add(stage)
 
             status = models.ConsultationStatus(
-                id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
+                id=INITIAL_LEAD_STATUS_ID,
                 name="New Lead (CTV Test)",
                 color_code="#0000FF",
                 stage_id="CTV_STAGE",

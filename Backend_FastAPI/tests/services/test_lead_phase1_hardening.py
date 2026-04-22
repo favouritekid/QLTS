@@ -35,14 +35,14 @@ log = logging.getLogger(__name__)
 @pytest_asyncio.fixture
 async def import_ready_deps(db: AsyncSession, seeded_dependencies: dict) -> dict:
     """Ensure initial status has legacy_status='new' and is_final=False (required by import)."""
-    from app.config import settings
+    from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
 
     await db.execute(
         text(
             "UPDATE consultation_status SET legacy_status = 'new', is_final = false "
             "WHERE id = :sid"
         ),
-        {"sid": settings.DEFAULT_INITIAL_LEAD_STATUS_ID},
+        {"sid": INITIAL_LEAD_STATUS_ID},
     )
     await db.flush()
     return seeded_dependencies

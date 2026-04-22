@@ -47,23 +47,30 @@ class SeedDependenciesBuilder:
         self.unit_name = unit_name
         self.include_admission_pipeline = include_admission_pipeline
 
-    async def build(self, session, models, settings) -> dict:
+    async def build(self, session, models, settings=None) -> dict:
         """
         Seed dependencies and return result dict.
 
         Args:
             session: active async session (inside begin() context)
             models: app.models module
-            settings: app.config.settings
+            settings: kept for backwards-compatible signature, unused —
+                Wave 5 replaced the `settings.DEFAULT_*_LEAD_STATUS*`
+                reads with literal shadow constants in
+                `tests/_lead_status_test_ids`.
 
         Returns:
             dict with unit_id, major_program_id, initial_status_id, etc.
         """
+        from tests._lead_status_test_ids import (
+            INITIAL_LEAD_STATUS_ID,
+            LOST_LEAD_STATUS_ID,
+        )
         major_id = _next_id()
         stage_a_id = f"STG_{self.unit_id}_A"
         stage_lost_id = f"STG_{self.unit_id}_LOST"
-        initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-        lost_status_id = settings.DEFAULT_LOST_LEAD_STATUS_ID
+        initial_status_id = INITIAL_LEAD_STATUS_ID
+        lost_status_id = LOST_LEAD_STATUS_ID
         status_a1_id = f"STS_{self.unit_id}_A1"
 
         # Core entities

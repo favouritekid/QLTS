@@ -17,7 +17,10 @@ from app import models
 from app.core.constants import UserRole
 from app.database import AsyncSessionLocal, engine
 from app.security import get_password_hash
-from app.config import settings
+from tests._lead_status_test_ids import (
+    INITIAL_LEAD_STATUS_ID,
+    LOST_LEAD_STATUS_ID,
+)
 
 # Import shared constants
 try:
@@ -175,7 +178,7 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
 
     # Initial Status (system default) — must be in PHASE_STATUSES[CONSULTATION]
     initial_status = models.ConsultationStatus(
-        id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
+        id=INITIAL_LEAD_STATUS_ID,
         name="New Lead (Test)",
         color_code="#0000FF",
         stage_id="stg01"
@@ -201,7 +204,7 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
     db.add(lost_stage)
 
     lost_status = models.ConsultationStatus(
-        id=settings.DEFAULT_LOST_LEAD_STATUS_ID,
+        id=LOST_LEAD_STATUS_ID,
         name="Lost (Test)",
         color_code="#FF0000",
         stage_id="stg02"
