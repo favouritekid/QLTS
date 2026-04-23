@@ -106,6 +106,21 @@ jobs:
           tests/integration/test_notification_core_v2.py
           -q --tb=short
 
+      # ---------------------------------------------------------------------
+      # Arch-3 bundle contract gate (added 2026-04-23). Guards against:
+      # - strict= flag removal on dispatch_bundle → bulk_insert error
+      #   nukes outer admission mutation via internal db.rollback()
+      # - regression of pre_status propagation in bulk approve/reject
+      # - router-side paired dispatch returning (breaks atomic pair promise)
+      # ---------------------------------------------------------------------
+      - name: Backend — Notification bundle + admission contract
+        working-directory: Backend_FastAPI
+        run: >-
+          python -m pytest
+          tests/services/test_notification_bundle.py
+          tests/services/test_admission_bundle_contract.py
+          -q --tb=short
+
       # =====================================================================
       # FRONTEND: Type Check + Lint + Contract Tests (Phase 2)
       # =====================================================================
