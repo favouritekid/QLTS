@@ -23,6 +23,13 @@ service still returns its business result and the router still
 commits the business mutation. The bundle just contributes ``None``
 to the post-commit callback chain.
 
+Each ``dispatch()`` call inside the bundle runs with ``strict=True``
+so that a persistence failure re-raises instead of calling the
+dispatcher's internal ``db.rollback()``. Without this, a bulk-insert
+error inside ``_bulk_create_notifications`` would issue a full
+rollback on the shared session and wipe the outer admission mutation
+as a side effect, contradicting the "outer txn stays alive" promise.
+
 This complements rather than replaces ``safe_dispatch()`` — that
 helper remains the right tool for genuinely fire-and-forget
 post-commit notifications (alerts, single-event flows). Use a
@@ -72,6 +79,22 @@ class BundleDispatchResult:
     ``persist_status="ok"`` does NOT imply user-visible delivery —
     recipient filters, cooldowns, and channel handlers still run
     post-commit via the composed ``callback``.
+
+    Redis side-effect caveat (rolled_back case)
+    -------------------------------------------
+    The SAVEPOINT covers **DB rows only** (Notification, Delivery,
+    etc.). Redis cooldown and rate-limit keys acquired by earlier
+    intents inside the bundle — via ``safe_redis_set(nx=True)`` at
+    ``notification_dispatcher.py:~683`` — are **NOT** released when
+    the savepoint rolls back. A caller that retries the same dedupe
+    key within ``NOTIFICATION_COOLDOWN_SECONDS`` will find those
+    users suppressed, producing a small no-notification window.
+
+    Fixing this would require moving cooldown acquisition to the
+    post-commit callback (a larger dispatch refactor); deferred to
+    a follow-up. For now, callers should treat ``rolled_back`` as
+    "DB atomically rolled back; Redis state may still reflect the
+    failed attempt".
     """
 
     bundle_label: str
@@ -190,12 +213,18 @@ async def dispatch_bundle(
         async with db.begin_nested():
             for intent in intents:
                 try:
+                    # strict=True: persistence failure re-raises instead of
+                    # triggering dispatch()'s internal db.rollback(). The
+                    # surrounding savepoint absorbs the rollback so the
+                    # outer business transaction (admission mutation)
+                    # survives per the bundle contract.
                     ids, child_cb = await dispatch(
                         db=db,
                         event=intent.event,
                         payload=intent.payload,
                         dedupe_key=intent.dedupe_key,
                         skip_preference_check=intent.skip_preference_check,
+                        strict=True,
                     )
                 except Exception as exc:
                     failed_event = intent.event.value
