@@ -450,6 +450,7 @@ async def dispatch(
     payload: dict,
     dedupe_key: Optional[str] = None,
     skip_preference_check: bool = False,
+    strict: bool = False,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification event — caller-controlled transaction.
@@ -473,6 +474,13 @@ async def dispatch(
                    If provided, prevents duplicate notifications for same key+user
         skip_preference_check: If True, skip user preference filtering
                               Use for critical system notifications
+        strict: If True, DB persistence failures (e.g. bulk insert
+                IntegrityError) are re-raised to the caller instead of
+                being absorbed by an internal ``db.rollback()``. Used by
+                ``dispatch_bundle()`` so a failed notification insert
+                rolls back only the surrounding SAVEPOINT, leaving the
+                outer business transaction alive. Default False preserves
+                legacy best-effort behavior for all non-bundle callers.
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
@@ -482,6 +490,10 @@ async def dispatch(
         - Caller owns transaction: service flushes, caller commits
         - Caller runs callback AFTER commit (socket.io, email, worker enqueue)
         - On exception: caller handles rollback
+        - When ``strict=True``: persistence errors propagate; the caller
+          (typically ``dispatch_bundle``) must wrap the call in
+          ``db.begin_nested()`` so the savepoint absorbs the rollback
+          instead of the outer transaction.
 
     Example (service pattern)::
 
@@ -767,7 +779,8 @@ async def dispatch(
             message=message,
             notification_type=notification_type,
             link=link,
-            data=notification_data
+            data=notification_data,
+            strict=strict,
         )
 
     # Phase C1: notification_ids can be empty (no browser recipients) while
@@ -816,7 +829,16 @@ async def dispatch(
             channel_delivery_ids.setdefault(action.channel, []).extend(delivery_ids)
         except Exception as e:
             log.error("Failed to create delivery rows for action",
-                     step=action.step, channel=action.channel, error=str(e))
+                     step=action.step, channel=action.channel, error=str(e),
+                     strict=strict)
+            if strict:
+                # Bundle atomicity: a delivery_row insert failure would
+                # leave Notification rows in the savepoint without their
+                # paired delivery_rows. Re-raise so the caller's
+                # SAVEPOINT rolls back the whole bundle and the outer
+                # business txn survives. Non-strict callers keep the
+                # best-effort skip for legacy parity.
+                raise
 
     # Step 6.6: External recipient resolution (Phase C1/G3)
     # For non-browser actions with external_resolver in config, resolve external
@@ -1017,7 +1039,17 @@ async def dispatch(
                 channel=action.channel,
                 resolver_type=ext_resolver_type,
                 error=str(e),
+                strict=strict,
             )
+            if strict:
+                # Bundle atomicity parity: external deliveries persist
+                # rows via ``prepare_external_deliveries`` (line ~997),
+                # so a failure here is not purely a resolver lookup
+                # miss — it can also be an insert failure that would
+                # leave a partially-persisted bundle. Surface it so the
+                # SAVEPOINT rolls back. Legacy callers keep the
+                # non-critical skip.
+                raise
 
     # Merge external delivery IDs into channel_delivery_ids for worker enqueueing
     for ch, ext_ids in _external_delivery_ids.items():
@@ -1212,7 +1244,8 @@ async def _bulk_create_notifications(
     message: str,
     notification_type: str,
     link: Optional[str],
-    data: dict
+    data: dict,
+    strict: bool = False,
 ) -> List[int]:
     """
     Bulk insert notifications for multiple users.
@@ -1228,6 +1261,12 @@ async def _bulk_create_notifications(
         notification_type: Type (info, success, warning, error)
         link: Optional navigation link
         data: Additional data payload
+        strict: If True, re-raise on chunk insert failure instead of
+                swallowing with ``db.rollback()``. The rollback path
+                aborts the **outer** transaction and is unsafe when
+                called inside a ``db.begin_nested()`` savepoint
+                (``dispatch_bundle``), because it blows away the
+                business mutation that was supposed to survive.
 
     Returns:
         List of created notification IDs
@@ -1274,9 +1313,17 @@ async def _bulk_create_notifications(
                 chunk_number=i // BULK_INSERT_CHUNK_SIZE + 1,
                 chunk_size=len(chunk),
                 error=str(e),
-                notification_type=notification_type
+                notification_type=notification_type,
+                strict=strict,
             )
-            # Rollback to clear session error state so subsequent
+            if strict:
+                # Propagate so the surrounding SAVEPOINT (dispatch_bundle)
+                # can ROLLBACK TO SAVEPOINT and keep the outer business
+                # transaction alive. Do NOT call db.rollback() here — that
+                # would discard the caller's business mutations too.
+                raise
+            # Legacy best-effort behavior for non-bundle callers:
+            # rollback to clear session error state so subsequent
             # operations (delivery tracking, other chunks) can proceed.
             try:
                 await db.rollback()
