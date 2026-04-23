@@ -435,7 +435,7 @@ class TestUserEventsHaveDispatchCallers:
         "consultation_created", "consultation_updated",
         "consultation_deleted", "consultation_reminder",
         "application_created", "application_status_changed", "application_deleted",
-        "application_fee_paid",
+        "application_fee_paid", "application_survey_due",
         "payment_received", "payment_verified",
         "payment_rejected",
         "fee_fully_paid", "invoice_issued", "payment_overdue",
