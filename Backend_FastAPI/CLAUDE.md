@@ -138,18 +138,18 @@ docker compose exec backend python -c "import pytest" 2>/dev/null || \
 
 ```bash
 # All tests
-docker compose exec backend pytest tests/ -v
+docker compose exec backend python -m pytest tests/ -v
 
 # Specific file
-docker compose exec backend pytest tests/api/test_leads.py -v
+docker compose exec backend python -m pytest tests/api/test_leads.py -v
 
 # By marker
-docker compose exec backend pytest -m unit
-docker compose exec backend pytest -m integration
-docker compose exec backend pytest -m security
+docker compose exec backend python -m pytest -m unit
+docker compose exec backend python -m pytest -m integration
+docker compose exec backend python -m pytest -m security
 
 # Single test function
-docker compose exec backend pytest tests/api/test_leads.py::test_create_lead -v
+docker compose exec backend python -m pytest tests/api/test_leads.py::test_create_lead -v
 ```
 
 ### Key facts

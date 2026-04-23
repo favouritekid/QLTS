@@ -442,7 +442,10 @@ class CasbinPolicyService:
                         """),
                         {
                             "template_id": template_id,
-                            "applied_at": datetime.utcnow(),  # Must be offset-naive for asyncpg
+                            # Naive UTC: asyncpg's TIMESTAMP WITHOUT TIME ZONE
+                            # column rejects tz-aware values, so strip the
+                            # tz after using the non-deprecated constructor.
+                            "applied_at": datetime.now(timezone.utc).replace(tzinfo=None),
                             "applied_by": applied_by,
                             "subject": subject,
                             "obj": obj,

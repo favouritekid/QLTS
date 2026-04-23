@@ -154,11 +154,11 @@ All commands use `docker compose exec` to run inside containers.
 docker compose exec backend pip install -r requirements-dev.txt
 
 # Step 2: Run tests
-docker compose exec backend pytest tests/ -v                          # All tests
-docker compose exec backend pytest tests/api/test_leads.py -v         # Specific file
-docker compose exec backend pytest tests/api/test_leads.py::test_fn -v  # Single test
-docker compose exec backend pytest -m unit                             # By marker
-docker compose exec backend pytest -m security
+docker compose exec backend python -m pytest tests/ -v                          # All tests
+docker compose exec backend python -m pytest tests/api/test_leads.py -v         # Specific file
+docker compose exec backend python -m pytest tests/api/test_leads.py::test_fn -v  # Single test
+docker compose exec backend python -m pytest -m unit                             # By marker
+docker compose exec backend python -m pytest -m security
 ```
 
 ### Backend Other

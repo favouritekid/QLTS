@@ -362,9 +362,16 @@ class TestDispatcherPerChannelIntegration:
 # =============================================================================
 
 class TestMetadataCanonicalChannels:
-    """Verify metadata sources only use canonical channel values."""
+    """Verify metadata sources only use canonical channel values.
 
-    def test_event_metadata_defaults_are_browser_not_socket(self):
+    All tests below are ``async def`` even though their bodies have no
+    I/O — module-level ``pytestmark`` applies ``@pytest.mark.asyncio``
+    to every test in this file, so a sync def emits the
+    "marked with asyncio but is not async" PytestWarning. Adding the
+    async keyword satisfies the marker without changing semantics.
+    """
+
+    async def test_event_metadata_defaults_are_browser_not_socket(self):
         """Every event's default_channels must use 'browser', never 'socket'."""
         for event, metadata in EVENT_CATALOG.items():
             for ch in metadata.default_channels:
@@ -376,7 +383,7 @@ class TestMetadataCanonicalChannels:
                     f"Event {event.value} has unknown channel '{ch}'"
                 )
 
-    def test_registered_events_have_canonical_channels(self):
+    async def test_registered_events_have_canonical_channels(self):
         """Every event in the catalog must use canonical channels only."""
         for event, metadata in EVENT_CATALOG.items():
             for ch in metadata.default_channels:
@@ -384,12 +391,12 @@ class TestMetadataCanonicalChannels:
                     f"Event {event.value} has non-canonical channel '{ch}'"
                 )
 
-    def test_notification_channel_enum_has_zalo(self):
+    async def test_notification_channel_enum_has_zalo(self):
         """NotificationChannel enum must include ZALO."""
         assert hasattr(NotificationChannel, "ZALO")
         assert NotificationChannel.ZALO.value == "zalo"
 
-    def test_default_group_channels_include_zalo(self):
+    async def test_default_group_channels_include_zalo(self):
         """Every event group must have ZALO in its default channel config."""
         for group, channels in DEFAULT_GROUP_CHANNELS.items():
             assert NotificationChannel.ZALO in channels, (
@@ -400,7 +407,7 @@ class TestMetadataCanonicalChannels:
                 f"Group {group.value} has ZALO defaulting to True — must be False"
             )
 
-    def test_payment_verified_in_metadata(self):
+    async def test_payment_verified_in_metadata(self):
         """PAYMENT_VERIFIED event must exist in the catalog."""
         assert SystemEvents.PAYMENT_VERIFIED in EVENT_CATALOG
         metadata = EVENT_CATALOG[SystemEvents.PAYMENT_VERIFIED]
@@ -440,7 +447,12 @@ class TestSchemaRejectSocket:
     rejection coverage retained — those are the surviving guard rails.
     """
 
-    def test_action_create_rejects_socket(self):
+    # ``async def`` is intentional even though the body has no I/O —
+    # module-level ``pytestmark`` applies ``@pytest.mark.asyncio`` to
+    # every test in this file, so a sync def emits the
+    # "marked with asyncio but is not async" PytestWarning. Adding the
+    # async keyword satisfies the marker without changing semantics.
+    async def test_action_create_rejects_socket(self):
         """NotificationActionCreate must reject channel='socket'."""
         from app.schemas.notification import NotificationActionCreate
         from pydantic import ValidationError
@@ -448,7 +460,7 @@ class TestSchemaRejectSocket:
         with pytest.raises(ValidationError, match="deprecated"):
             NotificationActionCreate(channel="socket")
 
-    def test_template_create_rejects_socket(self):
+    async def test_template_create_rejects_socket(self):
         """NotificationTemplateCreate must reject supported_channels with 'socket'."""
         from app.schemas.notification import NotificationTemplateCreate
         from pydantic import ValidationError
@@ -509,7 +521,8 @@ class TestNormalizerEdgeCases:
     template-level default check below remains relevant.
     """
 
-    def test_template_default_is_browser(self):
+    # See note in TestSchemaRejectSocket above — async def is intentional.
+    async def test_template_default_is_browser(self):
         """Template schema default supported_channels is ['browser'] not ['socket']."""
         from app.schemas.notification import NotificationTemplateBase
 
