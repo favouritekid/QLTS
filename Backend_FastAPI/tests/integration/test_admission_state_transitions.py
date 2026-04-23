@@ -2046,11 +2046,11 @@ class TestDropStudentWorkflow:
         router dispatched LEAD_STATUS_CHANGED alone, so the admission
         feed had no profile-level trail of the drop transition.
 
-        This test captures dispatch intent at the router layer by
-        intercepting ``safe_dispatch``; the downstream delivery/channel
-        path is covered by the dispatcher's own integration suite so
-        there's no value recreating rule-row seeding in this harness
-        just to prove the same plumbing works.
+        Path C / Arch-3 update (2026-04-22): dispatch is now owned by the
+        service via ``dispatch_bundle`` (savepoint-atomic pair). We
+        intercept at the bundle's ``dispatch`` import seam instead of
+        the router-level ``safe_dispatch`` (which the router no longer
+        calls for paired admission events).
         """
         from unittest.mock import AsyncMock, patch
 
@@ -2062,8 +2062,12 @@ class TestDropStudentWorkflow:
 
         headers = await get_auth_headers(client, manager_user_in_db)
 
+        # Bundle dispatch returns ``(notification_ids, post_commit_cb)``;
+        # the helper unpacks the tuple, so a bare AsyncMock that returns
+        # ``([], None)`` is enough to satisfy the contract.
         with patch(
-            "app.routers.admissions.safe_dispatch", new=AsyncMock()
+            "app.services.notification_bundle.dispatch",
+            new=AsyncMock(return_value=([], None)),
         ) as mock_dispatch:
             drop_resp = await client.post(
                 f"/api/admissions/{profile.id}/drop",

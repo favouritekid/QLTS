@@ -42,7 +42,6 @@ from ..utils.exceptions import (
     ConflictError,
 )
 from ..core.constants import UserRole
-from ..services.commission_service import safe_check_commission_on_status_change
 
 log = structlog.get_logger(__name__)
 
@@ -343,51 +342,17 @@ async def bulk_approve_admissions(
 ):
     """Bulk approve multiple admission profiles."""
     try:
-        result = await admission_service.bulk_approve(
+        result, callback = await admission_service.bulk_approve(
             db=db,
             items=[item.model_dump() for item in body.items],
             approver=current_user,
             notes=body.notes,
         )
 
-        # Extract approved profiles before commit (for post-commit dispatch)
-        approved_profiles = result.pop("_approved_profiles", [])
-
         await db.commit()
 
-        # POST-COMMIT: Dispatch notifications + commission for each approved profile
-        for profile in approved_profiles:
-            if profile.lead_id:
-                _old = getattr(profile, "_pre_status", "submitted")
-                await safe_dispatch(
-                    db=db,
-                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                    payload={
-                        "application_id": profile.id,
-                        "lead_id": profile.lead_id,
-                        "old_status": _old,
-                        "new_status": "approved",
-                        "actor_id": current_user.id,
-                        "actor_name": current_user.full_name or current_user.username,
-                    },
-                    dedupe_key=f"admission_profile_approved:{profile.id}",
-                )
-                await safe_dispatch(
-                    db=db,
-                    event=SystemEvents.LEAD_STATUS_CHANGED,
-                    payload={
-                        "lead_id": profile.lead_id,
-                        "lead_name": f"Profile #{profile.id}",
-                        "old_status": _old,
-                        "new_status": "sts09",
-                        "actor_id": current_user.id,
-                        "actor_name": current_user.full_name or current_user.username,
-                    },
-                    dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
-                )
-                await safe_check_commission_on_status_change(
-                    db, profile.lead_id, _old, "sts09", current_user.id,
-                )
+        if callback:
+            await callback()
 
         return schemas.BulkActionResponse(**result)
 
@@ -419,51 +384,17 @@ async def bulk_reject_admissions(
 ):
     """Bulk reject multiple admission profiles with reason."""
     try:
-        result = await admission_service.bulk_reject(
+        result, callback = await admission_service.bulk_reject(
             db=db,
             items=[item.model_dump() for item in body.items],
             rejector=current_user,
             reason=body.reason,
         )
 
-        # Extract rejected profiles before commit (for post-commit dispatch)
-        rejected_profiles = result.pop("_rejected_profiles", [])
-
         await db.commit()
 
-        # POST-COMMIT: Dispatch notifications + commission for each rejected profile
-        for profile in rejected_profiles:
-            if profile.lead_id:
-                _old = getattr(profile, "_pre_status", "submitted")
-                await safe_dispatch(
-                    db=db,
-                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                    payload={
-                        "application_id": profile.id,
-                        "lead_id": profile.lead_id,
-                        "old_status": _old,
-                        "new_status": "rejected",
-                        "actor_id": current_user.id,
-                        "actor_name": current_user.full_name or current_user.username,
-                    },
-                    dedupe_key=f"admission_profile_rejected:{profile.id}",
-                )
-                await safe_dispatch(
-                    db=db,
-                    event=SystemEvents.LEAD_STATUS_CHANGED,
-                    payload={
-                        "lead_id": profile.lead_id,
-                        "lead_name": f"Profile #{profile.id}",
-                        "old_status": _old,
-                        "new_status": "sts16",
-                        "actor_id": current_user.id,
-                        "actor_name": current_user.full_name or current_user.username,
-                    },
-                    dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
-                )
-                await safe_check_commission_on_status_change(
-                    db, profile.lead_id, _old, "sts16", current_user.id,
-                )
+        if callback:
+            await callback()
 
         return schemas.BulkActionResponse(**result)
 
@@ -1093,11 +1024,7 @@ async def enroll_student(
     - 429: Rate limit exceeded
     """
     try:
-        # Capture pre-enroll status for accurate notification payload
-        pre_enroll_profile = await db.get(models.AdmissionProfile, profile_id)
-        pre_enroll_status = pre_enroll_profile.status if pre_enroll_profile else "confirmed"
-
-        result = await admission_service.enroll_student(
+        result, callback = await admission_service.enroll_student(
             db=db,
             profile_id=profile_id,
             current_user=current_user,
@@ -1106,44 +1033,8 @@ async def enroll_student(
         # Transaction commit (Router responsibility)
         await db.commit()
 
-        # Dispatch enrollment status change notification
-        await db.refresh(pre_enroll_profile)
-        await safe_dispatch(
-            db=db,
-            event=SystemEvents.APPLICATION_STATUS_CHANGED,
-            payload={
-                "application_id": profile_id,
-                "lead_id": pre_enroll_profile.lead_id if pre_enroll_profile else None,
-                "old_status": pre_enroll_status,
-                "new_status": "enrolled",
-                "student_id": result["student_id"],
-                "student_code": result["student_code"],
-                "actor_id": current_user.id,
-                "actor_name": current_user.full_name or current_user.username,
-            },
-            dedupe_key=f"student_enrolled:{result['student_id']}"
-        )
-
-        # Dispatch LEAD_STATUS_CHANGED for commission trigger (Path 4)
-        if pre_enroll_profile and pre_enroll_profile.lead_id:
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": pre_enroll_profile.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": pre_enroll_status,
-                    "new_status": "sts11",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{pre_enroll_profile.lead_id}:sts11",
-            )
-
-            # Commission check (Path 4 - enrollment)
-            await safe_check_commission_on_status_change(
-                db, pre_enroll_profile.lead_id, pre_enroll_status, "sts11", current_user.id,
-            )
+        if callback:
+            await callback()
 
         return result
 
@@ -1480,14 +1371,10 @@ async def approve_admission(
          raise PermissionDeniedError("Only Managers or Admins can approve profiles")
 
     try:
-        # Capture pre-transition status for accurate notification payload
-        pre_profile = await db.get(models.AdmissionProfile, profile_id)
-        pre_status = pre_profile.status if pre_profile else "submitted"
-
-        # 1. DELEGATE to Service (Service handles Locking + IDOR)
+        # 1. DELEGATE to Service (Service handles Locking + IDOR + bundle)
         result, callback = await admission_service.approve_profile(
             db=db,
-            profile_id=profile_id,  # Pass ID, not object
+            profile_id=profile_id,
             approver=current_user,
             data=data.model_dump(),
         )
@@ -1496,46 +1383,10 @@ async def approve_admission(
         await db.commit()
         await db.refresh(result)
 
-        # 3. POST-COMMIT Side Effects
-        await callback()
+        # 3. POST-COMMIT side effects (bundle + commission composed in service)
+        if callback:
+            await callback()
 
-        # 4a. Dispatch APPLICATION_STATUS_CHANGED for admission notification
-        if result.lead_id:
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": result.lead_id,
-                    "old_status": pre_status,
-                    "new_status": "approved",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_approved:{profile_id}",
-            )
-
-            # 4b. Dispatch LEAD_STATUS_CHANGED for pipeline + commission
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": pre_status,
-                    "new_status": "sts09",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{result.lead_id}:sts09",
-            )
-
-            # Commission check (Path 4 - approve)
-            await safe_check_commission_on_status_change(
-                db, result.lead_id, pre_status, "sts09", current_user.id,
-            )
-
-        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
@@ -1582,14 +1433,10 @@ async def reject_admission(
          raise PermissionDeniedError("Only Managers or Admins can reject profiles")
 
     try:
-        # Capture pre-transition status
-        pre_profile = await db.get(models.AdmissionProfile, profile_id)
-        pre_status = pre_profile.status if pre_profile else "submitted"
-
-        # 1. DELEGATE to Service (Service handles Locking + IDOR)
+        # 1. DELEGATE to Service (Service handles Locking + IDOR + bundle)
         result, callback = await admission_service.reject_profile(
             db=db,
-            profile_id=profile_id, # Pass ID
+            profile_id=profile_id,
             rejector=current_user,
             data=data.model_dump(),
         )
@@ -1598,46 +1445,10 @@ async def reject_admission(
         await db.commit()
         await db.refresh(result)
 
-        # 3. POST-COMMIT Side Effects
-        await callback()
+        # 3. POST-COMMIT side effects (bundle + commission composed in service)
+        if callback:
+            await callback()
 
-        # 4a. APPLICATION_STATUS_CHANGED for admission notification
-        if result.lead_id:
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": result.lead_id,
-                    "old_status": pre_status,
-                    "new_status": "rejected",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_rejected:{profile_id}",
-            )
-
-            # 4b. LEAD_STATUS_CHANGED for pipeline + commission
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": pre_status,
-                    "new_status": "sts16",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{result.lead_id}:sts16",
-            )
-
-            # Commission check (Path 4 - reject)
-            await safe_check_commission_on_status_change(
-                db, result.lead_id, pre_status, "sts16", current_user.id,
-            )
-
-        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
@@ -1675,10 +1486,6 @@ async def request_revision(
         raise PermissionDeniedError("Only Managers or Admins can request revision")
 
     try:
-        # Capture pre-transition status
-        pre_profile = await db.get(models.AdmissionProfile, profile_id)
-        pre_status = pre_profile.status if pre_profile else "submitted"
-
         result, callback = await admission_service.request_revision(
             db=db,
             profile_id=profile_id,
@@ -1689,42 +1496,8 @@ async def request_revision(
         await db.commit()
         await db.refresh(result)
 
-        await callback()
-
-        # Dispatch APPLICATION_STATUS_CHANGED for admission notification
-        if result.lead_id:
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": result.lead_id,
-                    "old_status": pre_status,
-                    "new_status": "revision_requested",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_revision:{profile_id}",
-            )
-
-            # LEAD_STATUS_CHANGED for pipeline + commission
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": pre_status,
-                    "new_status": "sts17",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{result.lead_id}:sts17",
-            )
-
-            await safe_check_commission_on_status_change(
-                db, result.lead_id, pre_status, "sts17", current_user.id,
-            )
+        if callback:
+            await callback()
 
         return result
 
@@ -1772,14 +1545,10 @@ async def resubmit_admission(
          raise PermissionDeniedError("Only staff can resubmit profiles")
 
     try:
-        # Capture pre-transition status
-        pre_profile = await db.get(models.AdmissionProfile, profile_id)
-        pre_status = pre_profile.status if pre_profile else "rejected"
-
-        # 1. DELEGATE to Service
+        # 1. DELEGATE to Service (Service handles bundle + commission)
         result, callback = await admission_service.resubmit_profile(
             db=db,
-            profile_id=profile_id, # Pass ID
+            profile_id=profile_id,
             officer=current_user,
             data=data.model_dump(),
         )
@@ -1788,44 +1557,10 @@ async def resubmit_admission(
         await db.commit()
         await db.refresh(result)
 
-        # 3. POST-COMMIT Side Effects
-        await callback()
+        # 3. POST-COMMIT side effects (bundle + commission composed in service)
+        if callback:
+            await callback()
 
-        # 4. Dispatch APPLICATION_STATUS_CHANGED for resubmission notification
-        if result.lead_id:
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": result.lead_id,
-                    "old_status": pre_status,
-                    "new_status": "resubmitted",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_resubmitted:{profile_id}",
-            )
-
-            # LEAD_STATUS_CHANGED for pipeline (resubmitted → sts07)
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": pre_status,
-                    "new_status": "sts07",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{result.lead_id}:sts07",
-            )
-            await safe_check_commission_on_status_change(
-                db, result.lead_id, pre_status, "sts07", current_user.id,
-            )
-
-        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
@@ -1971,11 +1706,7 @@ async def withdraw_admission(
     - 409: version conflict
     """
     try:
-        # Capture pre-transition status for accurate notification payload
-        pre_profile = await db.get(models.AdmissionProfile, profile_id)
-        pre_status = pre_profile.status if pre_profile else None
-
-        # 1. DELEGATE to Service (service handles lock + IDOR + sync)
+        # 1. DELEGATE to Service (service handles lock + IDOR + bundle)
         result, callback = await admission_service.withdraw_profile(
             db=db,
             profile_id=profile_id,
@@ -1987,42 +1718,10 @@ async def withdraw_admission(
         await db.commit()
         await db.refresh(result)
 
-        # 3. POST-COMMIT Side Effects
-        await callback()
+        # 3. POST-COMMIT side effects (bundle composed in service)
+        if callback:
+            await callback()
 
-        # 4. Dispatch notifications if the lead is still attached
-        if result.lead_id:
-            # 4a. APPLICATION_STATUS_CHANGED — admission-level notification
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": result.lead_id,
-                    "old_status": pre_status,
-                    "new_status": "withdrawn",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_withdrawn:{profile_id}",
-            )
-
-            # 4b. LEAD_STATUS_CHANGED — pipeline notification (sts08)
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": pre_status,
-                    "new_status": "sts08",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{result.lead_id}:sts08",
-            )
-
-        # 5. RETURN Pydantic Model
         return result
 
     except ResourceNotFoundError as e:
@@ -2076,10 +1775,7 @@ async def finalize_enrollment(
     - 404: Profile not found (or IDOR protection)
     """
     try:
-        # Capture pre-finalize status for accurate notification payload
-        pre_status = profile.status
-
-        # 1. DELEGATE to Service
+        # 1. DELEGATE to Service (service handles bundle + commission)
         result, callback = await admission_service.finalize_profile(
             db=db,
             profile=profile,
@@ -2091,44 +1787,10 @@ async def finalize_enrollment(
         await db.commit()
         await db.refresh(result)
 
-        # 3. POST-COMMIT Side Effects
-        await callback()
+        # 3. POST-COMMIT side effects (bundle + commission composed in service)
+        if callback:
+            await callback()
 
-        # 4. Dispatch APPLICATION_STATUS_CHANGED for finalize notification
-        if result.lead_id:
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": result.lead_id,
-                    "old_status": pre_status,
-                    "new_status": "enrolled",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_finalized:{profile_id}",
-            )
-
-            # LEAD_STATUS_CHANGED for pipeline + commission (parity with enroll)
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": pre_status,
-                    "new_status": "sts11",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{result.lead_id}:sts11",
-            )
-            await safe_check_commission_on_status_change(
-                db, result.lead_id, pre_status, "sts11", current_user.id,
-            )
-
-        # 5. RETURN Pydantic Model
         return result
 
     except BadRequest as e:
@@ -2366,55 +2028,11 @@ async def drop_student(
         await db.commit()
         await db.refresh(result)
 
-        await callback()
-
-        # Dispatch APPLICATION_STATUS_CHANGED so the admission-lifecycle
-        # feed treats drop-out as a first-class transition just like
-        # approve/reject/confirm/enroll. Applicant-facing messaging
-        # (officer browser + email) plus future reporting both key off
-        # this event; before this was added, ops only saw the LEAD-side
-        # pipeline move to sts12 with no profile-level trail.
-        #
-        # Drop is a side-channel flag (is_dropped=True) that keeps
-        # profile.status at "enrolled" per mark_student_dropped contract.
-        # The event carries old_status="enrolled" (the literal status
-        # on the row both before and after the flag flip) and a
-        # new_status="enrolled_dropped" sentinel so downstream consumers
-        # can branch on the transition without having to read is_dropped
-        # or special-case a status string that stays equal.
-        if result.lead_id:
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": result.id,
-                    "lead_id": result.lead_id,
-                    "old_status": "enrolled",
-                    "new_status": "enrolled_dropped",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_dropped:{result.id}",
-            )
-
-            # Dispatch LEAD_STATUS_CHANGED for commission trigger
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": result.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": "sts11",
-                    "new_status": "sts12",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"lead_status_changed:{result.lead_id}:sts12",
-            )
-
-            await safe_check_commission_on_status_change(
-                db, result.lead_id, "sts11", "sts12", current_user.id,
-            )
+        # Bundle (APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED) and
+        # commission callback (literal sts11 → sts12) are composed inside
+        # the service per Path C / Arch-3.
+        if callback:
+            await callback()
 
         return result
 

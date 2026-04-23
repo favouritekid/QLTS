@@ -37,8 +37,15 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from .. import models
+from ..core.events import SystemEvents
 from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole
+from .commission_service import safe_check_commission_on_status_change
+from .notification_bundle import (
+    NotificationIntent,
+    compose_post_commit_callbacks,
+    dispatch_bundle,
+)
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -3227,53 +3234,33 @@ async def reset_document(
     return profile
 
 
-async def enroll_student(
+async def _perform_enrollment_core(
     db: AsyncSession,
     profile_id: int,
     current_user: models.User,
-) -> Dict[str, Any]:
+) -> tuple[models.AdmissionProfile, Dict[str, Any], bool, str]:
     """
-    Enroll student (create Student + StudentDocument records).
+    Locked + idempotent enrollment business core.
 
-    ACID Transaction Flow:
-    1. Get and validate profile (status must be 'confirmed' or 'overridden')
-    2. Fee Gate: Verify tuition fee is paid/waived (if ENABLE_FEE_VERIFICATION=True)
-    3. BEGIN SAVEPOINT (via begin_nested)
-    4. Generate unique student_code (SV + YYYY + 4-digit random, retry on conflict)
-    5. Create Student record
-    6. Create StudentDocument records (from ProfileDocument table)
-    7. Update AdmissionProfile.status = 'enrolled'
-    8. Update Lead.status = 'converted'
-    9. COMMIT SAVEPOINT (auto if no errors)
+    Owns the ``SELECT ... FOR UPDATE`` fetch + state mutation that used
+    to live inline in ``enroll_student()``. Both ``enroll_student()`` and
+    ``finalize_profile()`` delegate here so finalize's lock/idempotency
+    semantics are identical to enroll's — accepting a pre-loaded ORM
+    object would have silently dropped that lock.
 
-    On IntegrityError:
-    - Savepoint auto-rollback
-    - Return 409 Conflict with error message
+    Returns ``(profile, result_dict, idempotent_skip, pre_status)``:
+    - ``profile``: the locked + mutated (or already-enrolled) profile
+    - ``result_dict``: ``{student_id, student_code, enrollment_date}``
+    - ``idempotent_skip``: True if profile was already enrolled and no
+      state change happened — callers MUST NOT re-dispatch notifications
+      in that case (would double-fire on retry).
+    - ``pre_status``: profile.status snapshotted BEFORE the enrollment
+      mutation. Mirrors what router used to capture via a separate
+      ``db.get()`` call before invoking the service. For idempotent
+      skips, this is "enrolled" (the already-final state).
 
-    Security:
-    - IDOR: Check lead.unit_id == user.unit_id
-    - State Check: Only confirmed/overridden profiles can be enrolled
-    - Fee Gate: Tuition fee must be paid/waived (when ENABLE_FEE_VERIFICATION=True)
-
-    Fee Gate (Phase 6):
-    Per FINANCE_MODULE_DESIGN.md Section 5.3 - Gate 2:
-    - When ENABLE_FEE_VERIFICATION=True, enrollment is blocked if tuition fee not cleared
-    - Fee is "cleared" if status == 'paid' OR status == 'waived'
-    - Default: ENABLE_FEE_VERIFICATION=False (backward compatible)
-
-    Args:
-        db: Database session
-        profile_id: AdmissionProfile ID
-        current_user: Current authenticated user
-
-    Returns:
-        Dict with student_id, student_code, enrollment_date
-
-    Raises:
-        ResourceNotFoundError: Profile not found
-        ResourceNotFoundError: User doesn't have access (IDOR protection - returns 404)
-        BadRequest: Status is not 'confirmed', or tuition fee not cleared
-        ConflictError: Unique constraint violation (student_code, citizen_id)
+    See ``enroll_student()`` docstring for ACID flow + security gates;
+    this helper is the body of that function.
     """
     # Initialize repository
     from app.repositories import AdmissionRepository
@@ -3318,11 +3305,16 @@ async def enroll_student(
                 student_id=profile.student.id,
                 student_code=profile.student.student_code,
             )
-            return {
-                "student_id": profile.student.id,
-                "student_code": profile.student.student_code,
-                "enrollment_date": profile.student.enrollment_date,
-            }
+            return (
+                profile,
+                {
+                    "student_id": profile.student.id,
+                    "student_code": profile.student.student_code,
+                    "enrollment_date": profile.student.enrollment_date,
+                },
+                True,  # idempotent_skip — caller MUST NOT re-dispatch
+                "enrolled",  # pre_status — already-final state
+            )
         else:
             # Data inconsistency: status is 'enrolled' but no student record exists
             log.error(
@@ -3506,11 +3498,16 @@ async def enroll_student(
             user_id=current_user.id,
         )
 
-        return {
-            "student_id": student.id,
-            "student_code": student.student_code,
-            "enrollment_date": student.enrollment_date,
-        }
+        return (
+            profile,
+            {
+                "student_id": student.id,
+                "student_code": student.student_code,
+                "enrollment_date": student.enrollment_date,
+            },
+            False,  # real mutation happened — caller should dispatch
+            _old_status_for_enroll,  # pre_status snapshotted before mutation
+        )
 
     except IntegrityError as e:
         # Savepoint auto-rollback
@@ -3535,6 +3532,99 @@ async def enroll_student(
             raise ConflictError(
                 "Enrollment failed due to data conflict. Please try again."
             )
+
+
+async def enroll_student(
+    db: AsyncSession,
+    profile_id: int,
+    current_user: models.User,
+) -> Tuple[Dict[str, Any], Optional[Callable]]:
+    """
+    Enroll student — public wrapper around ``_perform_enrollment_core``.
+
+    Returns ``(result_dict, post_commit_callback)``. Caller (router
+    or ``finalize_profile``) MUST commit the outer DB transaction
+    and then ``await callback()`` if non-None.
+
+    Idempotent re-enrollment (profile already in 'enrolled' state):
+    returns the existing student dict and ``callback=None`` — no
+    notification re-fires on retry, no commission re-evaluation.
+
+    See ``_perform_enrollment_core()`` for the ACID flow + security
+    gates documentation that used to live on this function.
+
+    Bundle: ``admission_enroll`` — paired
+    APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED. Mirrors router
+    admissions.py:1111+1129 (paired) + 1144 (commission).
+    """
+    profile, result_dict, idempotent_skip, pre_status = await _perform_enrollment_core(
+        db, profile_id, current_user,
+    )
+
+    # Idempotent re-enrollment: do not re-dispatch + do not re-evaluate
+    # commission. Return existing student with no callback so the caller
+    # treats the call as a pure read.
+    if idempotent_skip:
+        return result_dict, None
+
+    # Path C / Arch-3: paired notification bundle + commission callback.
+    # ``pre_status`` mirrors what the router used to capture via a
+    # separate ``db.get()`` before the service call. Payload + dedupe
+    # key shapes are byte-for-byte identical to admissions.py:1111+1129.
+    pre_status_for_payload = pre_status
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile.lead_id,
+                    "old_status": pre_status_for_payload,
+                    "new_status": "enrolled",
+                    "student_id": result_dict["student_id"],
+                    "student_code": result_dict["student_code"],
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"student_enrolled:{result_dict['student_id']}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": pre_status_for_payload,
+                    "new_status": "sts11",
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts11",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_enroll", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    commission_callback = None
+    if profile.lead_id:
+        captured_lead_id = profile.lead_id
+        captured_actor_id = current_user.id
+
+        async def _commission_callback():
+            await safe_check_commission_on_status_change(
+                db, captured_lead_id, pre_status_for_payload, "sts11", captured_actor_id,
+            )
+
+        commission_callback = _commission_callback
+
+    final_callback = compose_post_commit_callbacks(
+        label="admission_enroll",
+        callbacks=[bundle_callback, commission_callback],
+    )
+
+    return result_dict, final_callback
 
 
 # ==============================================================================
@@ -3701,18 +3791,67 @@ async def approve_profile(
         citizen_id=profile.citizen_id,
     )
 
-    # PREPARE POST-COMMIT CALLBACK
-    # Applicant notifications for approval are dispatched at the router
-    # level via APPLICATION_STATUS_CHANGED (admissions.py:~1502); this
-    # closure stays as a hook for future service-level side effects.
-    async def post_commit():
-        """Side effects after transaction commit."""
+    # Path C / Arch-3: paired notification bundle + commission callback.
+    # Mirrors router admissions.py:1504+1519 (paired dispatch) + 1534
+    # (commission). new_status="approved" / lead "sts09".
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile.lead_id,
+                    "old_status": _old_status_for_audit,
+                    "new_status": "approved",
+                    "actor_id": approver.id,
+                    "actor_name": approver.full_name or approver.username,
+                },
+                dedupe_key=f"admission_profile_approved:{profile_id}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": _old_status_for_audit,
+                    "new_status": "sts09",
+                    "actor_id": approver.id,
+                    "actor_name": approver.full_name or approver.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_approve", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    commission_callback = None
+    if profile.lead_id:
+        captured_lead_id = profile.lead_id
+        captured_old = _old_status_for_audit
+        captured_actor_id = approver.id
+
+        async def _commission_callback():
+            await safe_check_commission_on_status_change(
+                db, captured_lead_id, captured_old, "sts09", captured_actor_id,
+            )
+
+        commission_callback = _commission_callback
+
+    async def _audit_log_callback():
         log.info(
             "Post-commit: Profile approved notification",
             profile_id=profile.id,
         )
 
-    return profile, post_commit
+    final_callback = compose_post_commit_callbacks(
+        label="admission_approve",
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+    )
+
+    return profile, final_callback
 
 
 async def reject_profile(
@@ -3850,15 +3989,67 @@ async def reject_profile(
         reason_length=len(data["reason"]),
     )
 
-    # POST-COMMIT CALLBACK
-    async def post_commit():
-        """Side effects after transaction commit."""
+    # Path C / Arch-3: paired notification bundle + commission callback.
+    # Mirrors router admissions.py:1606+1621 (paired dispatch) + 1636
+    # (commission). new_status="rejected" / lead "sts16".
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile.lead_id,
+                    "old_status": _old_status_for_audit,
+                    "new_status": "rejected",
+                    "actor_id": rejector.id,
+                    "actor_name": rejector.full_name or rejector.username,
+                },
+                dedupe_key=f"admission_profile_rejected:{profile_id}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": _old_status_for_audit,
+                    "new_status": "sts16",
+                    "actor_id": rejector.id,
+                    "actor_name": rejector.full_name or rejector.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_reject", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    commission_callback = None
+    if profile.lead_id:
+        captured_lead_id = profile.lead_id
+        captured_old = _old_status_for_audit
+        captured_actor_id = rejector.id
+
+        async def _commission_callback():
+            await safe_check_commission_on_status_change(
+                db, captured_lead_id, captured_old, "sts16", captured_actor_id,
+            )
+
+        commission_callback = _commission_callback
+
+    async def _audit_log_callback():
         log.info(
             "Post-commit: Profile rejected notification",
             profile_id=profile.id,
         )
 
-    return profile, post_commit
+    final_callback = compose_post_commit_callbacks(
+        label="admission_reject",
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+    )
+
+    return profile, final_callback
 
 
 async def request_revision(
@@ -3987,14 +4178,67 @@ async def request_revision(
         reason_length=len(data["reason"]),
     )
 
-    async def post_commit():
-        """Side effects after transaction commit."""
+    # Path C / Arch-3: paired notification bundle + commission callback.
+    # Mirrors router admissions.py:1696+1711 (paired dispatch) + 1725
+    # (commission). new_status="revision_requested" / lead "sts17".
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile.lead_id,
+                    "old_status": _old_status_for_audit,
+                    "new_status": "revision_requested",
+                    "actor_id": reviewer.id,
+                    "actor_name": reviewer.full_name or reviewer.username,
+                },
+                dedupe_key=f"admission_profile_revision:{profile_id}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": _old_status_for_audit,
+                    "new_status": "sts17",
+                    "actor_id": reviewer.id,
+                    "actor_name": reviewer.full_name or reviewer.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts17",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_request_revision", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    commission_callback = None
+    if profile.lead_id:
+        captured_lead_id = profile.lead_id
+        captured_old = _old_status_for_audit
+        captured_actor_id = reviewer.id
+
+        async def _commission_callback():
+            await safe_check_commission_on_status_change(
+                db, captured_lead_id, captured_old, "sts17", captured_actor_id,
+            )
+
+        commission_callback = _commission_callback
+
+    async def _audit_log_callback():
         log.info(
             "Post-commit: Profile revision requested notification",
             profile_id=profile.id,
         )
 
-    return profile, post_commit
+    final_callback = compose_post_commit_callbacks(
+        label="admission_request_revision",
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+    )
+
+    return profile, final_callback
 
 
 # ==============================================================================
@@ -4320,15 +4564,67 @@ async def resubmit_profile(
         officer_id=officer.id,
     )
 
-    # POST-COMMIT CALLBACK
-    async def post_commit():
-        """Side effects after transaction commit."""
+    # Path C / Arch-3: paired notification bundle + commission callback.
+    # Mirrors router admissions.py:1796+1811 (paired dispatch) + 1824
+    # (commission). new_status="resubmitted" / lead "sts07".
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile.lead_id,
+                    "old_status": _old_status_for_audit,
+                    "new_status": "resubmitted",
+                    "actor_id": officer.id,
+                    "actor_name": officer.full_name or officer.username,
+                },
+                dedupe_key=f"admission_profile_resubmitted:{profile_id}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": _old_status_for_audit,
+                    "new_status": "sts07",
+                    "actor_id": officer.id,
+                    "actor_name": officer.full_name or officer.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts07",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_resubmit", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    commission_callback = None
+    if profile.lead_id:
+        captured_lead_id = profile.lead_id
+        captured_old = _old_status_for_audit
+        captured_actor_id = officer.id
+
+        async def _commission_callback():
+            await safe_check_commission_on_status_change(
+                db, captured_lead_id, captured_old, "sts07", captured_actor_id,
+            )
+
+        commission_callback = _commission_callback
+
+    async def _audit_log_callback():
         log.info(
             "Post-commit: Profile resubmitted notification",
             profile_id=profile.id,
         )
 
-    return profile, post_commit
+    final_callback = compose_post_commit_callbacks(
+        label="admission_resubmit",
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+    )
+
+    return profile, final_callback
 
 
 async def override_profile(
@@ -4635,41 +4931,103 @@ async def finalize_profile(
             "Please refresh and try again."
         )
 
-    # DELEGATE TO EXISTING ENROLL_STUDENT FUNCTION
-    # This function already handles:
-    # - Student code generation with Redis lock
-    # - Student record creation
-    # - StudentDocument creation
-    # - Lead status update
-    # - ACID transaction with savepoint
-    enrollment_result = await enroll_student(db, profile.id, admin)
+    # Path C / Arch-3: delegate to shared `_perform_enrollment_core` (NOT
+    # `enroll_student`) so finalize owns its own bundle without
+    # double-dispatching the enroll bundle. Core handles the locked fetch +
+    # student creation + state mutation; finalize just builds the
+    # finalize-specific notification + commission callback.
+    profile_id = profile.id
+    locked_profile, enrollment_result, idempotent_skip, pre_status = (
+        await _perform_enrollment_core(db, profile_id, admin)
+    )
 
     log.info(
         "Admission profile finalized (enrolled)",
-        profile_id=profile.id,
+        profile_id=profile_id,
         admin_id=admin.id,
         student_code=enrollment_result["student_code"],
     )
 
-    # Reload profile to get updated status
+    # Reload profile to get updated status (for response shape)
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
-    profile = await admission_repo.reload_profile_with_lead(profile.id)
+    profile = await admission_repo.reload_profile_with_lead(profile_id)
 
     # Populate transient computed fields so the mutation response matches GET.
     # reload_profile_with_lead already eager-loads documents, so reuse them.
     await _populate_response_fields(db, profile, admin, documents=profile.documents)
 
-    # POST-COMMIT CALLBACK
-    async def post_commit():
-        """Side effects after transaction commit."""
+    # Idempotent re-finalize (profile already in 'enrolled' state): skip
+    # bundle + commission to avoid double-firing notifications on retry.
+    if idempotent_skip:
+        async def _audit_only():
+            log.info(
+                "Post-commit: Enrollment finalized (idempotent skip)",
+                profile_id=profile_id,
+                student_code=enrollment_result["student_code"],
+            )
+        return profile, _audit_only
+
+    # Paired notification bundle (sites admissions.py:2099+2114)
+    bundle_callback = None
+    if locked_profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": locked_profile.lead_id,
+                    "old_status": pre_status,
+                    "new_status": "enrolled",
+                    "actor_id": admin.id,
+                    "actor_name": admin.full_name or admin.username,
+                },
+                dedupe_key=f"admission_profile_finalized:{profile_id}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": locked_profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": pre_status,
+                    "new_status": "sts11",
+                    "actor_id": admin.id,
+                    "actor_name": admin.full_name or admin.username,
+                },
+                dedupe_key=f"lead_status_changed:{locked_profile.lead_id}:sts11",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_finalize", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    # Commission callback (router site admissions.py:2127)
+    commission_callback = None
+    if locked_profile.lead_id:
+        captured_lead_id = locked_profile.lead_id
+        captured_actor_id = admin.id
+
+        async def _commission_callback():
+            await safe_check_commission_on_status_change(
+                db, captured_lead_id, pre_status, "sts11", captured_actor_id,
+            )
+
+        commission_callback = _commission_callback
+
+    async def _audit_log_callback():
         log.info(
             "Post-commit: Enrollment finalized notification",
-            profile_id=profile.id,
+            profile_id=profile_id,
             student_code=enrollment_result["student_code"],
         )
 
-    return profile, post_commit
+    final_callback = compose_post_commit_callbacks(
+        label="admission_finalize",
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+    )
+
+    return profile, final_callback
 
 
 async def delete_profile(
@@ -4893,14 +5251,57 @@ async def withdraw_profile(
         old_status=_old_status_for_audit,
     )
 
-    async def post_commit():
-        """Side effects after transaction commit."""
+    # Path C / Arch-3: build atomic notification bundle for the paired
+    # transition (APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED).
+    # Withdraw is the one paired flow that does NOT have a commission
+    # check (withdrawn lead does not trigger commission); only the
+    # bundle callback is composed.
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile.lead_id,
+                    "old_status": _old_status_for_audit,
+                    "new_status": "withdrawn",
+                    "actor_id": actor.id,
+                    "actor_name": actor.full_name or actor.username,
+                },
+                dedupe_key=f"admission_profile_withdrawn:{profile_id}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": _old_status_for_audit,
+                    "new_status": "sts08",
+                    "actor_id": actor.id,
+                    "actor_name": actor.full_name or actor.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts08",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_withdraw", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    async def _audit_log_callback():
+        """Existing post-commit log preserved for parity."""
         log.info(
             "Post-commit: Profile withdrawn notification",
             profile_id=profile.id,
         )
 
-    return profile, post_commit
+    final_callback = compose_post_commit_callbacks(
+        label="admission_withdraw",
+        callbacks=[_audit_log_callback, bundle_callback],
+    )
+
+    return profile, final_callback
 
 
 async def mark_student_dropped(
@@ -5009,14 +5410,75 @@ async def mark_student_dropped(
         actor_id=actor.id,
     )
 
-    async def post_commit():
-        """Side effects after transaction commit."""
+    # Path C / Arch-3: paired notification bundle.
+    # NOTE: profile.status stays "enrolled" but the notification +
+    # commission semantics treat this as a lead-status transition
+    # sts11 (đã nhập học) -> sts12 (đã thôi học). Router payload at
+    # admissions.py:2386+2401 uses literal "enrolled" / "enrolled_dropped"
+    # for the application-side and "sts11" / "sts12" for the lead-side;
+    # we preserve those exact strings here.
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile.lead_id,
+                    "old_status": "enrolled",
+                    "new_status": "enrolled_dropped",
+                    "actor_id": actor.id,
+                    "actor_name": actor.full_name or actor.username,
+                },
+                dedupe_key=f"admission_profile_dropped:{profile.id}",
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile_id}",
+                    "old_status": "sts11",
+                    "new_status": "sts12",
+                    "actor_id": actor.id,
+                    "actor_name": actor.full_name or actor.username,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts12",
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_drop_student", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    # Commission callback — SPECIAL CASE: literal sts11 -> sts12 args
+    # (NOT the generic _old_status / _new_lead_status template). Profile
+    # status stays "enrolled"; the lead transition is the meaningful one
+    # for commission purposes. Router today calls with these exact args
+    # at admissions.py:2415.
+    commission_callback = None
+    if profile.lead_id:
+        captured_lead_id = profile.lead_id
+        captured_actor_id = actor.id
+
+        async def _commission_callback():
+            await safe_check_commission_on_status_change(
+                db, captured_lead_id, "sts11", "sts12", captured_actor_id,
+            )
+
+        commission_callback = _commission_callback
+
+    async def _audit_log_callback():
         log.info(
             "Post-commit: Student dropped notification",
             profile_id=profile.id,
         )
 
-    return profile, post_commit
+    final_callback = compose_post_commit_callbacks(
+        label="admission_drop_student",
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+    )
+
+    return profile, final_callback
 
 
 # ==============================================================================
@@ -5382,7 +5844,7 @@ async def bulk_approve(
     items: List[Dict[str, Any]],
     approver: models.User,
     notes: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Optional[Callable]]:
     """
     Bulk approve multiple admission profiles.
 
@@ -5395,6 +5857,10 @@ async def bulk_approve(
 
     Each item that fails is skipped individually; does NOT rollback the batch.
 
+    Path C / Arch-3: per-profile paired notification bundle
+    (``admission_bulk_approve``) + commission callback are composed into a
+    single mega-callback. Router awaits the mega-callback after commit.
+
     Args:
         db: Database session
         items: List of dicts with profile_id and version
@@ -5402,7 +5868,8 @@ async def bulk_approve(
         notes: Optional approval notes
 
     Returns:
-        Dict with success_count, failed_count, failed_ids, errors, callbacks
+        Tuple of ``(result_dict, post_commit_callback)``. ``result_dict``
+        keys: ``success_count, failed_count, failed_ids, errors, message``.
     """
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
@@ -5416,7 +5883,8 @@ async def bulk_approve(
     success_count = 0
     failed_ids = []
     errors: Dict[int, str] = {}
-    approved_profiles: List[models.AdmissionProfile] = []
+    per_profile_callbacks: List[Optional[Callable]] = []
+    bundle_persist_results: List[str] = []
 
     for item in items:
         profile_id = item["profile_id"]
@@ -5502,9 +5970,62 @@ async def bulk_approve(
                 source="bulk_api",
             )
 
-            # Annotate for router notification dispatch
-            profile._pre_status = _old_status
-            approved_profiles.append(profile)
+            # Per-profile bundle + commission (Path C / Arch-3)
+            bundle_callback = None
+            if profile.lead_id:
+                intents = [
+                    NotificationIntent(
+                        event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                        payload={
+                            "application_id": profile.id,
+                            "lead_id": profile.lead_id,
+                            "old_status": _old_status,
+                            "new_status": "approved",
+                            "actor_id": approver.id,
+                            "actor_name": approver.full_name or approver.username,
+                        },
+                        dedupe_key=f"admission_profile_approved:{profile.id}",
+                    ),
+                    NotificationIntent(
+                        event=SystemEvents.LEAD_STATUS_CHANGED,
+                        payload={
+                            "lead_id": profile.lead_id,
+                            "lead_name": f"Profile #{profile.id}",
+                            "old_status": _old_status,
+                            "new_status": "sts09",
+                            "actor_id": approver.id,
+                            "actor_name": approver.full_name or approver.username,
+                        },
+                        dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+                    ),
+                ]
+                bundle = await dispatch_bundle(
+                    db, bundle_label="admission_bulk_approve", intents=intents,
+                )
+                bundle_callback = bundle.callback
+                bundle_persist_results.append(bundle.persist_status)
+
+            commission_callback = None
+            if profile.lead_id:
+                # Bind eagerly via default args to avoid late-binding gotcha
+                # (closure over loop variables captures the LAST iteration).
+                async def _commission_callback(
+                    p_id=profile.lead_id,
+                    old=_old_status,
+                    actor_id=approver.id,
+                ):
+                    await safe_check_commission_on_status_change(
+                        db, p_id, old, "sts09", actor_id,
+                    )
+
+                commission_callback = _commission_callback
+
+            per_profile_cb = compose_post_commit_callbacks(
+                label=f"admission_bulk_approve:{profile.id}",
+                callbacks=[bundle_callback, commission_callback],
+            )
+            per_profile_callbacks.append(per_profile_cb)
+
             success_count += 1
 
         except ResourceNotFoundError:
@@ -5517,14 +6038,29 @@ async def bulk_approve(
 
     await db.flush()
 
+    log.info(
+        "notification_bulk_bundle_summary",
+        extra={
+            "event": "notification_bulk_bundle_summary",
+            "bulk_label": "admission_bulk_approve",
+            "profile_count": len(items),
+            "bundle_ok_count": bundle_persist_results.count("ok"),
+            "bundle_rolled_back_count": bundle_persist_results.count("rolled_back"),
+        },
+    )
+
+    mega_callback = compose_post_commit_callbacks(
+        label="admission_bulk_approve",
+        callbacks=per_profile_callbacks,
+    )
+
     return {
         "success_count": success_count,
         "failed_count": len(failed_ids),
         "failed_ids": failed_ids,
         "errors": errors if errors else None,
         "message": f"Approved {success_count} of {len(items)} profiles",
-        "_approved_profiles": approved_profiles,
-    }
+    }, mega_callback
 
 
 async def bulk_reject(
@@ -5532,7 +6068,7 @@ async def bulk_reject(
     items: List[Dict[str, Any]],
     rejector: models.User,
     reason: str,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Optional[Callable]]:
     """
     Bulk reject multiple admission profiles.
 
@@ -5544,6 +6080,10 @@ async def bulk_reject(
 
     Each item that fails is skipped individually; does NOT rollback the batch.
 
+    Path C / Arch-3: per-profile paired notification bundle
+    (``admission_bulk_reject``) + commission callback are composed into a
+    single mega-callback. Router awaits the mega-callback after commit.
+
     Args:
         db: Database session
         items: List of dicts with profile_id and version
@@ -5551,7 +6091,8 @@ async def bulk_reject(
         reason: Rejection reason (required)
 
     Returns:
-        Dict with success_count, failed_count, failed_ids, errors, _rejected_profiles
+        Tuple of ``(result_dict, post_commit_callback)``. ``result_dict``
+        keys: ``success_count, failed_count, failed_ids, errors, message``.
     """
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
@@ -5565,7 +6106,8 @@ async def bulk_reject(
     success_count = 0
     failed_ids = []
     errors: Dict[int, str] = {}
-    rejected_profiles: List[models.AdmissionProfile] = []
+    per_profile_callbacks: List[Optional[Callable]] = []
+    bundle_persist_results: List[str] = []
 
     for item in items:
         profile_id = item["profile_id"]
@@ -5644,9 +6186,60 @@ async def bulk_reject(
                 source="bulk_api",
             )
 
-            # Annotate for router notification dispatch
-            profile._pre_status = _old_status
-            rejected_profiles.append(profile)
+            # Per-profile bundle + commission (Path C / Arch-3)
+            bundle_callback = None
+            if profile.lead_id:
+                intents = [
+                    NotificationIntent(
+                        event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                        payload={
+                            "application_id": profile.id,
+                            "lead_id": profile.lead_id,
+                            "old_status": _old_status,
+                            "new_status": "rejected",
+                            "actor_id": rejector.id,
+                            "actor_name": rejector.full_name or rejector.username,
+                        },
+                        dedupe_key=f"admission_profile_rejected:{profile.id}",
+                    ),
+                    NotificationIntent(
+                        event=SystemEvents.LEAD_STATUS_CHANGED,
+                        payload={
+                            "lead_id": profile.lead_id,
+                            "lead_name": f"Profile #{profile.id}",
+                            "old_status": _old_status,
+                            "new_status": "sts16",
+                            "actor_id": rejector.id,
+                            "actor_name": rejector.full_name or rejector.username,
+                        },
+                        dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+                    ),
+                ]
+                bundle = await dispatch_bundle(
+                    db, bundle_label="admission_bulk_reject", intents=intents,
+                )
+                bundle_callback = bundle.callback
+                bundle_persist_results.append(bundle.persist_status)
+
+            commission_callback = None
+            if profile.lead_id:
+                async def _commission_callback(
+                    p_id=profile.lead_id,
+                    old=_old_status,
+                    actor_id=rejector.id,
+                ):
+                    await safe_check_commission_on_status_change(
+                        db, p_id, old, "sts16", actor_id,
+                    )
+
+                commission_callback = _commission_callback
+
+            per_profile_cb = compose_post_commit_callbacks(
+                label=f"admission_bulk_reject:{profile.id}",
+                callbacks=[bundle_callback, commission_callback],
+            )
+            per_profile_callbacks.append(per_profile_cb)
+
             success_count += 1
 
         except ResourceNotFoundError:
@@ -5659,14 +6252,29 @@ async def bulk_reject(
 
     await db.flush()
 
+    log.info(
+        "notification_bulk_bundle_summary",
+        extra={
+            "event": "notification_bulk_bundle_summary",
+            "bulk_label": "admission_bulk_reject",
+            "profile_count": len(items),
+            "bundle_ok_count": bundle_persist_results.count("ok"),
+            "bundle_rolled_back_count": bundle_persist_results.count("rolled_back"),
+        },
+    )
+
+    mega_callback = compose_post_commit_callbacks(
+        label="admission_bulk_reject",
+        callbacks=per_profile_callbacks,
+    )
+
     return {
         "success_count": success_count,
         "failed_count": len(failed_ids),
         "failed_ids": failed_ids,
         "errors": errors if errors else None,
         "message": f"Rejected {success_count} of {len(items)} profiles",
-        "_rejected_profiles": rejected_profiles,
-    }
+    }, mega_callback
 
 
 async def bulk_assign(
