@@ -216,16 +216,25 @@ def check_admission_surveys_due_task(self):
         validate_keys=["checked", "sent", "failed", "skipped_no_phone"],
     )
 
-    # ``outcome`` is the queryable bit: "idle" means the task ran cleanly
-    # but the eligibility window was empty (expected during the first ~30
-    # days after baseline), "dispatched" means at least one row was acted
-    # on. ``failed > 0`` does not flip outcome — per-profile failures are
-    # tolerated by design (savepoint + continue) and surfaced via the
-    # ``failed`` count in the same line.
-    if result["checked"] == 0:
+    # ``outcome`` is the queryable bit, derived from ``sent`` (not
+    # ``checked``), so a run that scanned profiles but couldn't actually
+    # dispatch any (all missing phone, or dispatch errored) does NOT
+    # masquerade as a successful send day.
+    #   - "dispatched": at least one row reached the dispatcher
+    #   - "idle":       eligibility window was empty (expected during the
+    #                   first ~30 days after baseline)
+    #   - "no_send":    rows scanned but every one was either skipped for
+    #                   missing phone or threw during dispatch — drill in
+    #                   via ``failed`` / ``skipped_no_phone`` in the same
+    #                   line. Distinct from "idle" so ops alerting can
+    #                   page on a Phase-E warm-up regression without
+    #                   confusing it with the normal pre-30d quiet days.
+    if result["sent"] > 0:
+        outcome = "dispatched"
+    elif result["checked"] == 0:
         outcome = "idle"
     else:
-        outcome = "dispatched"
+        outcome = "no_send"
     task_log.info(
         "admission_survey_due heartbeat: end (%s)",
         outcome,
