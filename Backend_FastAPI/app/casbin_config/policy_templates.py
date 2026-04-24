@@ -144,6 +144,11 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # (requires_upload=false); service-layer guard enforces the
         # owning-officer + profile-editable + missing-status contract.
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/paper-submitted", "action": "POST"},
+        # PR #7 — officer can create the official fee record for their own
+        # assigned profile. Casbin admits the route; _fee_calc_authorized +
+        # _compute_permissions narrow the scope to the owning officer on a
+        # profile in approved/confirmed/enrolled status.
+        {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
         # Admission aggregate endpoints (read-only)
         {"subject": "{role}", "object": "/api/admissions/stats", "action": "GET"},  # Stats dashboard
         {"subject": "{role}", "object": "/api/admissions/status-counts", "action": "GET"},  # Tab badges

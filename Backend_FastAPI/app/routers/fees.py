@@ -55,6 +55,53 @@ def get_client_ip(request: Request) -> str:
 
 
 # ==============================================================================
+# PR #7 — per-profile authorization for POST /fees/calculate
+# ==============================================================================
+
+def _fee_calc_authorized(
+    profile: models.AdmissionProfile,
+    user: models.User,
+) -> bool:
+    """Return True if `user` may create an official Fee for `profile`.
+
+    Mirrors the ``calculate_fee`` key in ``_compute_permissions`` exactly —
+    any drift will surface as "FE hides button / API 404s" or vice versa.
+
+    Rules:
+    * Profile must be in a post-decision state
+      (``approved`` | ``confirmed`` | ``enrolled``). Earlier states would
+      create a fee for a profile that might still be rejected.
+    * admin: any profile.
+    * manager / accountant: profile whose lead is in the user's unit.
+    * officer: lead in the user's unit AND assigned to the user — matches
+      the existing ``get_admission_for_user`` IDOR convention so officers
+      can't spin up invoices for profiles they don't own.
+    * everyone else: denied.
+    """
+    if profile.status not in ("approved", "confirmed", "enrolled"):
+        return False
+
+    if user.role == UserRole.ADMIN:
+        return True
+
+    lead = profile.lead
+    if lead is None or lead.unit_id is None:
+        return False
+
+    if user.role in (UserRole.MANAGER, UserRole.ACCOUNTANT):
+        return lead.unit_id == user.unit_id
+
+    if user.role == UserRole.OFFICER:
+        return (
+            lead.unit_id == user.unit_id
+            and lead.assigned_officer_id is not None
+            and lead.assigned_officer_id == user.id
+        )
+
+    return False
+
+
+# ==============================================================================
 # FEE LIST
 # ==============================================================================
 
@@ -180,19 +227,25 @@ async def calculate_fee(
     fee_service = FeeCalculationService(db)
     invoice_service = InvoiceService(db)
 
-    # Determine unit_id for IDOR protection
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
-
     try:
         # Get installment plan by code
         plan = await fee_service.fee_repo.get_installment_plan_by_code(data.installment_plan_code)
         plan_id = plan.id if plan else None
 
-        # Get base amount from offering (or use provided amount)
-        # For now, we'll need the profile to get the base amount
-        profile = await fee_service._get_profile(data.admission_profile_id, unit_id)
-        if not profile:
+        # PR #7 — unscoped eager-load first so we can run authz on the actual
+        # profile/lead attributes, then decide 404 explicitly. The old
+        # prefilter unit_id = None|user.unit_id bundled authz into the query
+        # and narrowed too wide for officers (same-unit but not assigned).
+        profile = await fee_service._get_profile(data.admission_profile_id, unit_id=None)
+        if not profile or not _fee_calc_authorized(profile, current_user):
+            # 404 not 403: no existence leak beyond scope, same as other IDOR sites.
             raise ResourceNotFoundError("Admission profile not found")
+
+        # Service-layer unit_id kept for downstream IDOR inside
+        # calculate_fee / generate_invoices_for_fee — admin skips, everyone
+        # else passes their unit. This mirrors what the function did before;
+        # only the profile lookup is unscoped now.
+        unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
         # Resolve base_amount + discount_policy_ids depending on fee type.
         # For tuition: service looks up amount from offering_semester_tuition

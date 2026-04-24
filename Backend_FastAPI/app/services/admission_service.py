@@ -782,6 +782,32 @@ def _compute_frontend_fields(
             and profile.lead.unit_id is not None
             and profile.lead.unit_id == current_user.unit_id
         ),
+        # PR #7 — official fee/invoice creation via POST /api/fees/calculate.
+        # Mirrors _fee_calc_authorized in routers/fees.py: admin always,
+        # manager/accountant same-unit, officer same-unit AND assigned.
+        # Status-gated to post-decision (approved/confirmed/enrolled) so we
+        # don't create finance records for profiles that might still flip
+        # to rejected.
+        "calculate_fee": (
+            status in ("approved", "confirmed", "enrolled")
+            and (
+                is_admin
+                or (
+                    profile.lead is not None
+                    and profile.lead.unit_id is not None
+                    and (
+                        (user_role in (UserRole.MANAGER, UserRole.ACCOUNTANT)
+                         and profile.lead.unit_id == current_user.unit_id)
+                        or (
+                            is_officer
+                            and profile.lead.unit_id == current_user.unit_id
+                            and profile.lead.assigned_officer_id is not None
+                            and profile.lead.assigned_officer_id == current_user.id
+                        )
+                    )
+                )
+            )
+        ),
         "delete": status == "draft" and is_admin,
         "view": True,
     }

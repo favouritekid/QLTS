@@ -10,9 +10,17 @@
  */
 
 import Link from "next/link"
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { CalculateFeeDialog } from "@/components/admissions/CalculateFeeDialog"
 import {
   CreditCard,
   Receipt,
@@ -39,6 +47,18 @@ interface TuitionTabProps {
 
 export function TuitionTab({ profile }: TuitionTabProps) {
   const { data: summary, isLoading, error } = useProfileFinanceSummary(profile.id)
+  // PR #7 — inline calculation. Button visibility is driven entirely by
+  // backend `available_actions`; no role-checking in the FE.
+  const [calcDialogOpen, setCalcDialogOpen] = useState(false)
+  const canCalculateFee = profile.available_actions?.includes("calculate_fee") ?? false
+  const disabledReason =
+    !canCalculateFee
+      ? profile.status === "approved" ||
+        profile.status === "confirmed" ||
+        profile.status === "enrolled"
+        ? "Bạn không có quyền tính phí cho hồ sơ này"
+        : "Hồ sơ cần được duyệt trước khi tính phí"
+      : undefined
 
   // Loading state
   if (isLoading) {
@@ -60,18 +80,23 @@ export function TuitionTab({ profile }: TuitionTabProps) {
             <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" />
             <h3 className="text-lg font-medium mb-2">Chưa có thông tin học phí</h3>
             <p className="text-muted-foreground text-sm mb-6 max-w-md mx-auto">
-              Học phí chưa được tính cho hồ sơ này. Chuyển đến module Tài chính để tính phí.
+              Học phí chưa được tính cho hồ sơ này.
             </p>
-            <Button asChild>
-              <Link href={`/finance/fees?action=calculate&profile_id=${profile.id}`}>
-                <Calculator className="h-4 w-4 mr-2" />
-                Tính học phí
-              </Link>
-            </Button>
+            <InlineCalculateButton
+              canCalculateFee={canCalculateFee}
+              disabledReason={disabledReason}
+              onOpen={() => setCalcDialogOpen(true)}
+            />
           </CardContent>
         </Card>
 
         <NoticeCard />
+
+        <CalculateFeeDialog
+          open={calcDialogOpen}
+          onOpenChange={setCalcDialogOpen}
+          profileId={profile.id}
+        />
       </div>
     )
   }
@@ -92,16 +117,21 @@ export function TuitionTab({ profile }: TuitionTabProps) {
             <p className="text-muted-foreground text-sm mb-6 max-w-md mx-auto">
               Hồ sơ cần được tính học phí trước khi có thể thanh toán.
             </p>
-            <Button asChild>
-              <Link href={`/finance/fees?action=calculate&profile_id=${profile.id}`}>
-                <Calculator className="h-4 w-4 mr-2" />
-                Tính học phí
-              </Link>
-            </Button>
+            <InlineCalculateButton
+              canCalculateFee={canCalculateFee}
+              disabledReason={disabledReason}
+              onOpen={() => setCalcDialogOpen(true)}
+            />
           </CardContent>
         </Card>
 
         <NoticeCard />
+
+        <CalculateFeeDialog
+          open={calcDialogOpen}
+          onOpenChange={setCalcDialogOpen}
+          profileId={profile.id}
+        />
       </div>
     )
   }
@@ -185,8 +215,14 @@ export function TuitionTab({ profile }: TuitionTabProps) {
             </div>
           )}
 
-          {/* Action button */}
-          <div className="mt-6 flex justify-end">
+          {/* Action buttons */}
+          <div className="mt-6 flex justify-end gap-2">
+            {canCalculateFee && (
+              <Button variant="outline" onClick={() => setCalcDialogOpen(true)}>
+                <Calculator className="h-4 w-4 mr-2" />
+                Tính lại
+              </Button>
+            )}
             <Button asChild>
               <Link href={`/finance/fees?profile_id=${profile.id}`}>
                 <ExternalLink className="h-4 w-4 mr-2" />
@@ -273,6 +309,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
       ) : null}
 
       <NoticeCard />
+
+      {/* Dialog mount for the happy-path "Tính lại" trigger above. */}
+      <CalculateFeeDialog
+        open={calcDialogOpen}
+        onOpenChange={setCalcDialogOpen}
+        profileId={profile.id}
+      />
     </div>
   )
 }
@@ -280,6 +323,47 @@ export function TuitionTab({ profile }: TuitionTabProps) {
 // =============================================================================
 // HELPER COMPONENTS
 // =============================================================================
+
+/**
+ * Trigger button shared by the empty-state cards. Renders a disabled
+ * button + tooltip when the backend didn't grant `calculate_fee`
+ * (status gate or role/assignment mismatch) so officers get a reason
+ * rather than a silent no-op.
+ */
+function InlineCalculateButton({
+  canCalculateFee,
+  disabledReason,
+  onOpen,
+}: {
+  canCalculateFee: boolean
+  disabledReason: string | undefined
+  onOpen: () => void
+}) {
+  if (canCalculateFee) {
+    return (
+      <Button onClick={onOpen}>
+        <Calculator className="h-4 w-4 mr-2" />
+        Tính học phí
+      </Button>
+    )
+  }
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* span wraps the disabled button so the tooltip still fires */}
+          <span>
+            <Button disabled>
+              <Calculator className="h-4 w-4 mr-2" />
+              Tính học phí
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{disabledReason ?? "Không thể tính phí"}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
 
 interface StatCardProps {
   label: string
