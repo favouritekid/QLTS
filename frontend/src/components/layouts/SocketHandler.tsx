@@ -11,6 +11,7 @@ import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
+import { admissionsKeys } from "@/hooks/admissions/useAdmissions";
 import { isSafeUrl } from "@/lib/utils";
 
 // =============================================================================
@@ -519,10 +520,9 @@ export function SocketHandler() {
     }) => {
       console.log("[SocketHandler] application_created → invalidating queries (silent sync)");
 
-      // Invalidate application-related queries
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
-      queryClient.invalidateQueries({ queryKey: ["lead", data.lead_id] });
+      // Invalidate admission-related queries (hooks use `admissionsKeys` / ["admissions"])
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -540,10 +540,9 @@ export function SocketHandler() {
         "[SocketHandler] application_status_changed → invalidating queries (silent sync)"
       );
 
-      // Invalidate application-related queries
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.invalidateQueries({ queryKey: ["application", data.application_id] });
-      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
+      // Invalidate admission-related queries (hooks use `admissionsKeys` / ["admissions"])
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(data.application_id) });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -904,9 +903,9 @@ export function SocketHandler() {
     }) => {
       console.log("[SocketHandler] application_deleted → invalidating queries (silent sync)");
 
-      // Invalidate application and lead queries
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.removeQueries({ queryKey: ["application", data.application_id] });
+      // Invalidate admission and lead queries (hooks use `admissionsKeys` / ["admissions"])
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      queryClient.removeQueries({ queryKey: admissionsKeys.detail(data.application_id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       // ✅ NO TOAST - Per-user notification will show toast via "notification" event
