@@ -131,6 +131,10 @@ export function useLeads(
     staleTime: 1000 * 5, // 5 seconds - shorter for real-time updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
     initialData: options?.initialData,
+    // Keep the previous page visible while a new query is fetching so the
+    // table does not flash back to a skeleton when filters switch (e.g.
+    // post-hydration localStorage restore, pagination, sort, etc.).
+    placeholderData: (previousData) => previousData,
   });
 }
 

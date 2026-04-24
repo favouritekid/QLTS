@@ -13,7 +13,14 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useSearchParams, usePathname } from "next/navigation";
-import type { LeadStatus } from "@/types/lead.types";
+import type { LeadListParams, LeadStatus } from "@/types/lead.types";
+import {
+  formatLeadsDateFromApiParam,
+  formatLeadsDateToApiParam,
+  LEADS_DEFAULT_PAGE_SIZE,
+  LEADS_DEFAULT_SORT_BY,
+  LEADS_DEFAULT_SORT_ORDER,
+} from "@/app/(dashboard)/leads/page.helpers";
 
 // =============================================================================
 // TYPES
@@ -69,7 +76,7 @@ export interface LeadsFilterHandlers {
 export interface DashboardContext {
   navSource?: string;
   action?: string;
-  scope?: string;
+  scope?: LeadListParams["scope"];
   scopeOfficerId?: number;
   scopeUnitId?: number;
   includeDescendants: boolean;
@@ -80,7 +87,7 @@ export interface UseLeadsFilterReturn {
   state: LeadsFilterState;
   handlers: LeadsFilterHandlers;
   hasActiveFilters: boolean;
-  apiFilters: Record<string, unknown>;
+  apiFilters: LeadListParams;
   /** V12: Dashboard context from URL (read-only) */
   dashboardContext: DashboardContext | null;
 }
@@ -168,6 +175,10 @@ function clearFiltersFromStorage() {
   }
 }
 
+function arraysEqual<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 // =============================================================================
 // URL HELPERS
 // =============================================================================
@@ -191,13 +202,13 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
 }
 
 /** V12: Parse dashboard context from URL (read-only state) */
-function parseDashboardContext(searchParams: URLSearchParams) {
+function parseDashboardContext(searchParams: URLSearchParams): DashboardContext {
   const rawScope = searchParams.get("scope");
   const normalizedScope = rawScope === "team" ? "unit" : rawScope;
   return {
     navSource: searchParams.get("nav_source") || undefined,
     action: searchParams.get("action") || undefined,
-    scope: normalizedScope || undefined,
+    scope: (normalizedScope as LeadListParams["scope"]) || undefined,
     scopeOfficerId: searchParams.get("scope_officer_id") ? Number(searchParams.get("scope_officer_id")) : undefined,
     scopeUnitId: searchParams.get("scope_unit_id") ? Number(searchParams.get("scope_unit_id")) : undefined,
     includeDescendants: searchParams.get("include_descendants") === "1" || searchParams.get("include_descendants") === "true",
@@ -236,7 +247,9 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
 // MAIN HOOK
 // =============================================================================
 
-export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterReturn {
+export function useLeadsFilter(
+  defaultPageSize: number = LEADS_DEFAULT_PAGE_SIZE,
+): UseLeadsFilterReturn {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isInitialMount = useRef(true);
@@ -246,6 +259,12 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   // state into hook state, even if the initial lazy state was built from stale params.
   const prevSearchParamsStr = useRef<string | null>(null);
 
+  // Storage-sync bookkeeping: skip clearing storage on the first mount so the
+  // restore effect below gets a chance to hydrate from localStorage before
+  // the debounced "should save?" check decides we have no filters.
+  const isStorageSyncInitialMount = useRef(true);
+  const hasInitialUrlFilters = useRef(hasUrlFilterParams(searchParams));
+
   const initialDashboardContext = useMemo<DashboardContext | null>(() => {
     if (!hasRecognizedContextParams(searchParams)) return null;
     return parseDashboardContext(searchParams);
@@ -253,18 +272,14 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   }, []);
   const [dashboardContext, setDashboardContext] = useState<DashboardContext | null>(initialDashboardContext);
 
-  // V12: URL (context or filter or action) > localStorage > defaults
-  // If URL has ANY recognized param, skip localStorage entirely
+  // SSR-safe initial values: URL params > defaults. localStorage is deferred
+  // to a post-mount effect (see below) so server and client first renders
+  // produce identical DOM — otherwise the client would diverge whenever
+  // stored filters exist and React would flag a hydration mismatch.
   const initialValues = useMemo(() => {
     if (hasUrlFilterParams(searchParams)) {
       return parseSearchParams(searchParams);
     }
-
-    const storedFilters = loadFiltersFromStorage();
-    if (storedFilters) {
-      return storedFilters;
-    }
-
     return DEFAULT_FILTERS;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -292,8 +307,63 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   const [dateField, setDateField] = useState<"created_at" | "last_consultation_at">(
     initialValues.dateField === "created_at" ? "created_at" : "last_consultation_at"
   );
-  const [sortBy, setSortBy] = useState(initialValues.sortBy || "created_at");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">(initialValues.sortOrder || "desc");
+  const [sortBy, setSortBy] = useState(initialValues.sortBy || LEADS_DEFAULT_SORT_BY);
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">(initialValues.sortOrder || LEADS_DEFAULT_SORT_ORDER);
+
+  // ==========================================================================
+  // POST-HYDRATION STORAGE RESTORE
+  // ==========================================================================
+  //
+  // If the URL has no filter/context params, pull saved filters from
+  // localStorage and apply them AFTER mount. Doing this in an effect (not
+  // the initial render) keeps SSR markup and client first-render in sync —
+  // React treats the follow-up setStates as normal state updates, not as a
+  // hydration mismatch.
+  //
+  // URL params always win: when the current URL already carries filters
+  // (deep-link from a dashboard card, shared URL, etc.) we bail out so the
+  // URL stays the source of truth and storage cannot silently override it.
+
+  useEffect(() => {
+    if (hasUrlFilterParams(searchParams)) return;
+
+    const stored = loadFiltersFromStorage();
+    if (!stored) return;
+
+    setPage((current) => (current === stored.page ? current : stored.page));
+    setSearch((current) => (current === stored.search ? current : stored.search));
+    setStatusFilters((current) =>
+      arraysEqual(current, stored.statusFilters) ? current : [...(stored.statusFilters || [])],
+    );
+    setSourceFilters((current) =>
+      arraysEqual(current, stored.sourceFilters) ? current : [...(stored.sourceFilters || [])],
+    );
+    setValidityFilters((current) =>
+      arraysEqual(current, stored.validityFilters) ? current : [...(stored.validityFilters || [])],
+    );
+    setOfferingFilters((current) =>
+      arraysEqual(current, stored.offeringFilters) ? current : [...(stored.offeringFilters || [])],
+    );
+    setStageFilters((current) =>
+      arraysEqual(current, stored.stageFilters) ? current : [...(stored.stageFilters || [])],
+    );
+    setOfficerFilters((current) =>
+      arraysEqual(current, stored.officerFilters) ? current : [...(stored.officerFilters || [])],
+    );
+    setUnitId((current) => (current === stored.unitId ? current : stored.unitId));
+    setDateFrom((current) => (current === stored.dateFrom ? current : stored.dateFrom));
+    setDateTo((current) => (current === stored.dateTo ? current : stored.dateTo));
+    setDateField((current) => (current === stored.dateField ? current : stored.dateField));
+    setScoreRange((current) => {
+      const nextMin = stored.scoreMin ?? 0;
+      const nextMax = stored.scoreMax ?? 100;
+      if (current[0] === nextMin && current[1] === nextMax) return current;
+      return [nextMin, nextMax];
+    });
+    setSortBy((current) => (current === stored.sortBy ? current : stored.sortBy));
+    setSortOrder((current) => (current === stored.sortOrder ? current : stored.sortOrder));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ==========================================================================
   // EXTERNAL URL CHANGE DETECTION (e.g., navigation from dashboard)
@@ -518,8 +588,19 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
       dateFrom ||
       dateTo ||
       hasScoreFilterActive ||
-      sortBy !== "created_at" ||
-      sortOrder !== "desc";
+      sortBy !== LEADS_DEFAULT_SORT_BY ||
+      sortOrder !== LEADS_DEFAULT_SORT_ORDER;
+
+    // Skip clear on the very first mount when the URL had no filter params.
+    // Without this guard, the storage-sync effect would wipe out the saved
+    // filters BEFORE the post-hydration restore effect has a chance to copy
+    // them into state.
+    if (isStorageSyncInitialMount.current) {
+      isStorageSyncInitialMount.current = false;
+      if (!hasInitialUrlFilters.current && !shouldSave) {
+        return;
+      }
+    }
 
     if (shouldSave) {
       saveFiltersToStorage(filtersToSave);
@@ -660,8 +741,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     stageFilters, officerFilters, unitId, hasScoreFilter, dateFrom, dateTo,
   ]);
 
-  const apiFilters = useMemo(() => {
-    const params: Record<string, unknown> = {
+  const apiFilters = useMemo<LeadListParams>(() => {
+    const params: LeadListParams = {
       page,
       page_size: pageSize,
       sort_by: sortBy,
@@ -677,15 +758,12 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     if (officerFilters.length > 0) params.assigned_officer_id = officerFilters.join(",");
     if (unitId) params.unit_id = parseInt(unitId, 10);
 
-    if (dateFrom) {
-      // Parse as local date (not UTC) to match VN timezone
-      const [y, m, d] = dateFrom.split("-").map(Number);
-      params.date_from = new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
-    }
-    if (dateTo) {
-      const [y, m, d] = dateTo.split("-").map(Number);
-      params.date_to = new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
-    }
+    // Use the shared +07:00 formatter so SSR prefetch and client query keys
+    // produce byte-identical strings. `new Date(...).toISOString()` would
+    // drift based on the runtime timezone (server UTC vs browser VN) even
+    // though the underlying instants are equal.
+    if (dateFrom) params.date_from = formatLeadsDateFromApiParam(dateFrom);
+    if (dateTo) params.date_to = formatLeadsDateToApiParam(dateTo);
     if (dateFrom || dateTo) params.date_field = dateField;
 
     // === SCORE RANGE FILTER (server-side) ===

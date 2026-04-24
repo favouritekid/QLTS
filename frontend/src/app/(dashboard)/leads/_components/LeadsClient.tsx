@@ -47,17 +47,17 @@ import { useLeads, useDeleteLead, useExportLeads, useImportLeads, useDownloadImp
 import { leadsApi } from "@/lib/api/leads";
 import { useLeadsFilter } from "@/hooks/useLeadsFilter";
 import { LeadDialog } from "@/components/leads/LeadDialog";
-import { shouldUseInitialLeadsData } from "./LeadsClient.helpers";
+import { areLeadsListParamsEqual } from "@/app/(dashboard)/leads/page.helpers";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
-import { 
-  LeadStats, 
-  LeadDetailPanel, 
-  LeadFilterBar, 
+import {
+  LeadStats,
+  LeadDetailPanel,
+  LeadFilterBar,
   LeadsTable,
   BulkStageDialog,
   BulkDeleteDialog,
 } from "@/components/leads/command-center";
-import type { Lead, LeadsPage } from "@/types/lead.types";
+import type { Lead, LeadListParams, LeadsPage } from "@/types/lead.types";
 import { toast } from "sonner";
 
 // =============================================================================
@@ -66,13 +66,20 @@ import { toast } from "sonner";
 
 interface LeadsClientProps {
   initialData: LeadsPage;
+  /**
+   * The exact query params the Server Component used when prefetching
+   * `initialData`. The client attaches `initialData` to React Query only
+   * when its current `apiFilters` shape matches this — otherwise fetch
+   * runs fresh under the correct key.
+   */
+  initialQueryParams?: LeadListParams;
 }
 
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
-export function LeadsClient({ initialData }: LeadsClientProps) {
+export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProps) {
   // ✅ Option D: Use extracted filter hook
   const { state: filterState, handlers: filterHandlers, apiFilters, dashboardContext } = useLeadsFilter();
 
@@ -117,7 +124,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     isError,
     error,
   } = useLeads(apiFilters, {
-    initialData: shouldUseInitialLeadsData(filterState, apiFilters)
+    initialData: areLeadsListParamsEqual(apiFilters, initialQueryParams)
       ? initialData
       : undefined,
   });

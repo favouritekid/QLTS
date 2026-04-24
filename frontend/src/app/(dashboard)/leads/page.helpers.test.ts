@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSearchParamsToApiParams } from "./page.helpers";
+import {
+  areLeadsListParamsEqual,
+  formatLeadsDateFromApiParam,
+  formatLeadsDateToApiParam,
+  LEADS_DEFAULT_PAGE_SIZE,
+  LEADS_DEFAULT_SORT_BY,
+  LEADS_DEFAULT_SORT_ORDER,
+  parseSearchParamsToApiParams,
+} from "./page.helpers";
 
 describe("parseSearchParamsToApiParams", () => {
   it("converts VN day bounds and preserves false dashboard snapshot filters", () => {
@@ -35,5 +43,91 @@ describe("parseSearchParamsToApiParams", () => {
     expect(params.is_final).toBe(true);
     expect(params.counts_for_funnel).toBe(true);
     expect(params.pipeline_stage_id).toBe("stg01");
+  });
+});
+
+describe("lead date formatters", () => {
+  it("formats the from-date at midnight VN time", () => {
+    expect(formatLeadsDateFromApiParam("2026-03-17")).toBe(
+      "2026-03-17T00:00:00+07:00",
+    );
+  });
+
+  it("formats the to-date at end-of-day VN time", () => {
+    expect(formatLeadsDateToApiParam("2026-03-23")).toBe(
+      "2026-03-23T23:59:59.999+07:00",
+    );
+  });
+});
+
+describe("areLeadsListParamsEqual", () => {
+  const defaults = {
+    page: 1,
+    page_size: LEADS_DEFAULT_PAGE_SIZE,
+    sort_by: LEADS_DEFAULT_SORT_BY,
+    order: LEADS_DEFAULT_SORT_ORDER,
+  };
+
+  it("returns true for the SSR default shape matching the client default shape", () => {
+    expect(areLeadsListParamsEqual(defaults, defaults)).toBe(true);
+  });
+
+  it("treats missing keys and undefined values as equal", () => {
+    expect(
+      areLeadsListParamsEqual(defaults, { ...defaults, search: undefined }),
+    ).toBe(true);
+  });
+
+  it("treats empty string and missing key as equal", () => {
+    expect(
+      areLeadsListParamsEqual(defaults, { ...defaults, search: "" }),
+    ).toBe(true);
+  });
+
+  it("returns false when one side carries a filter the other lacks", () => {
+    expect(
+      areLeadsListParamsEqual(defaults, { ...defaults, status: "sts02" }),
+    ).toBe(false);
+  });
+
+  it("returns false when date bounds differ", () => {
+    const ssr = {
+      ...defaults,
+      date_from: formatLeadsDateFromApiParam("2026-03-17"),
+      date_to: formatLeadsDateToApiParam("2026-03-23"),
+      date_field: "created_at" as const,
+    };
+    const client = {
+      ...defaults,
+      date_from: formatLeadsDateFromApiParam("2026-03-18"),
+      date_to: formatLeadsDateToApiParam("2026-03-23"),
+      date_field: "created_at" as const,
+    };
+    expect(areLeadsListParamsEqual(ssr, client)).toBe(false);
+  });
+
+  it("returns true when SSR and client format the same date bounds identically", () => {
+    const ssr = {
+      ...defaults,
+      date_from: formatLeadsDateFromApiParam("2026-03-17"),
+      date_to: formatLeadsDateToApiParam("2026-03-23"),
+    };
+    const client = { ...ssr };
+    expect(areLeadsListParamsEqual(ssr, client)).toBe(true);
+  });
+
+  it("returns false when dashboard scope differs", () => {
+    expect(
+      areLeadsListParamsEqual(
+        { ...defaults, scope: "unit", scope_officer_id: 18 },
+        { ...defaults, scope: "unit", scope_officer_id: 19 },
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false when either side is undefined/null but not both", () => {
+    expect(areLeadsListParamsEqual(undefined, defaults)).toBe(false);
+    expect(areLeadsListParamsEqual(defaults, undefined)).toBe(false);
+    expect(areLeadsListParamsEqual(undefined, undefined)).toBe(true);
   });
 });

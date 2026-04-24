@@ -10,7 +10,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { renderHook, act, waitFor } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -26,6 +28,31 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { useLeadsFilter } from "./useLeadsFilter";
+
+function makeStoredFilters(overrides: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    version: 5,
+    data: {
+      page: 1,
+      search: "",
+      statusFilters: [],
+      sourceFilters: [],
+      validityFilters: [],
+      offeringFilters: [],
+      stageFilters: [],
+      officerFilters: [],
+      unitId: "",
+      dateFrom: "",
+      dateTo: "",
+      dateField: "created_at",
+      scoreMin: 0,
+      scoreMax: 100,
+      sortBy: "created_at",
+      sortOrder: "desc",
+      ...overrides,
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -55,6 +82,100 @@ describe("useLeadsFilter", () => {
 
     // Default: no URL params
     useSearchParamsMock.mockReturnValue(new URLSearchParams());
+  });
+
+  describe("SSR-safe persisted filters", () => {
+    it("does not read localStorage during the server render path", () => {
+      useSearchParamsMock.mockReturnValue(new URLSearchParams());
+      getItemSpy.mockReturnValue(makeStoredFilters({ statusFilters: ["sts02"] }));
+
+      function Probe() {
+        const { state } = useLeadsFilter();
+        return createElement("span", null, state.statusFilters.join(",") || "none");
+      }
+
+      // renderToString bypasses effects so the initial render must NOT touch
+      // localStorage — otherwise the client's first render would diverge
+      // from the SSR HTML and trigger a hydration mismatch.
+      expect(renderToString(createElement(Probe))).toContain("none");
+      expect(getItemSpy).not.toHaveBeenCalled();
+    });
+
+    it("restores stored filters after hydration when URL has no params", async () => {
+      useSearchParamsMock.mockReturnValue(new URLSearchParams());
+      getItemSpy.mockReturnValue(
+        makeStoredFilters({
+          page: 2,
+          search: "Nguyen",
+          statusFilters: ["sts02"],
+          stageFilters: ["stg01"],
+          unitId: "3",
+          dateFrom: "2026-04-01",
+          dateTo: "2026-04-30",
+          dateField: "last_consultation_at",
+          scoreMin: 20,
+          scoreMax: 80,
+          sortBy: "full_name",
+          sortOrder: "asc",
+        }),
+      );
+
+      const { result } = renderHook(() => useLeadsFilter());
+
+      await waitFor(() => {
+        expect(result.current.state.statusFilters).toEqual(["sts02"]);
+      });
+
+      expect(result.current.state.page).toBe(2);
+      expect(result.current.state.search).toBe("Nguyen");
+      expect(result.current.state.stageFilters).toEqual(["stg01"]);
+      expect(result.current.state.unitId).toBe("3");
+      expect(result.current.state.dateFrom).toBe("2026-04-01");
+      expect(result.current.state.dateTo).toBe("2026-04-30");
+      expect(result.current.state.dateField).toBe("last_consultation_at");
+      expect(result.current.state.scoreRange).toEqual([20, 80]);
+      expect(result.current.state.sortBy).toBe("full_name");
+      expect(result.current.state.sortOrder).toBe("asc");
+    });
+
+    it("URL params override localStorage — stored filters are not restored", async () => {
+      useSearchParamsMock.mockReturnValue(new URLSearchParams("stage=stg05"));
+      getItemSpy.mockReturnValue(
+        makeStoredFilters({ statusFilters: ["sts02"], stageFilters: ["stg01"] }),
+      );
+
+      const { result } = renderHook(() => useLeadsFilter());
+
+      // Give the restore effect a microtask to run — it should bail out.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(result.current.state.stageFilters).toEqual(["stg05"]);
+      expect(result.current.state.statusFilters).toEqual([]);
+    });
+
+    it("emits +07:00 ISO strings for date bounds to match the SSR parser", () => {
+      useSearchParamsMock.mockReturnValue(
+        new URLSearchParams("from=2026-03-17&to=2026-03-23"),
+      );
+
+      const { result } = renderHook(() => useLeadsFilter());
+
+      expect(result.current.apiFilters.date_from).toBe("2026-03-17T00:00:00+07:00");
+      expect(result.current.apiFilters.date_to).toBe("2026-03-23T23:59:59.999+07:00");
+    });
+
+    it("does not clear storage on first mount while no URL filters are present", () => {
+      useSearchParamsMock.mockReturnValue(new URLSearchParams());
+      getItemSpy.mockReturnValue(makeStoredFilters({ statusFilters: ["sts02"] }));
+
+      renderHook(() => useLeadsFilter());
+
+      // First mount must NOT wipe storage — otherwise the restore effect
+      // would read `null` and miss the persisted filters entirely.
+      expect(removeItemSpy).not.toHaveBeenCalledWith("leads_filters");
+    });
   });
 
   it("should include scoreRange in localStorage when score filter active", async () => {
