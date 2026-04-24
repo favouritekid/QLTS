@@ -174,6 +174,53 @@ async def test_officer_owner_has_upload_but_not_verify(
 
 
 @pytest.mark.asyncio
+async def test_officer_cannot_verify_reject_or_reset_even_with_casbin_allow(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    doc_perm_config: dict,
+):
+    """Service-layer guard keeps reviewer actions out of officer reach.
+
+    Before PR #5 review follow-up, the 4 doc-mutation routes only ran
+    Casbin + an IDOR check. Even after we relax Casbin to let the
+    officer hit /paper-submitted (needed for the can_mark_paper_submitted
+    flag), a separate `_authorize_document_action` guard must still
+    reject officer attempts on verify-format / reject / reset — the
+    can_* flags the FE receives would be false for those actions, and
+    the API must honour that, not just hide the buttons.
+    """
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, doc_perm_config)
+    pid = prof["id"]
+
+    oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
+    current = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["documents_checklist"]
+    target = next(d for d in current if d.get("requires_upload"))
+
+    # Officer uploads first so verify/reject/reset have a non-missing target.
+    upload = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{target['code']}/upload",
+        headers=oh,
+        files={"file": (f"{target['code']}.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+        data={"actual_submission_format": "photo"},
+    )
+    assert upload.status_code in (200, 201), upload.text
+
+    # Casbin may also reject officer — either way, the action is forbidden.
+    # Accept any 4xx that is NOT 200 so behaviour is robust to whether
+    # Casbin seed has been applied yet.
+    for route, method, body in [
+        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/verify-format", "PATCH", {"format": "photo"}),
+        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/reject", "POST", {"reason": "officer-not-allowed"}),
+        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/reset", "POST", {}),
+    ]:
+        resp = await client.request(method, route, headers=oh, json=body)
+        assert resp.status_code in (403, 404), (
+            f"{method} {route}: expected 403/404 for officer, got {resp.status_code}: {resp.text[:200]}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_admin_has_reviewer_actions_after_upload(
     client: AsyncClient,
     admin_token_headers: dict,

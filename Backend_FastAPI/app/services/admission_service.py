@@ -63,6 +63,84 @@ log = structlog.get_logger(__name__)
 # HELPER FUNCTIONS
 # ==============================================================================
 
+def _authorize_document_action(
+    *,
+    action: str,
+    profile: models.AdmissionProfile,
+    doc_status: str,
+    doc_code: str,
+    current_user: models.User,
+) -> None:
+    """Enforce the PR #5 document-action matrix at the service layer.
+
+    Mirrors ``_compute_document_permissions`` in ``_compute_frontend_fields``
+    so the ``can_*`` flag promised to the FE is always backed by a route
+    that actually authorises the call. Casbin gates the route at role
+    level (officer can hit /paper-submitted, manager /verify-format,
+    /reject, /reset); this helper adds the fine-grained rules Casbin
+    can't express: unit scope for manager, owner check for officer,
+    allowed ``doc_status`` transition, and ``requires_upload`` flag for
+    paper-submit.
+
+    ``action`` is one of: "upload", "paper_submitted", "verify",
+    "reject", "reset". Raises :class:`PermissionDeniedError` on fail —
+    the router maps that to 404 (no existence leak).
+    """
+    lead = profile.__dict__.get("lead")
+    is_admin = current_user.role == UserRole.ADMIN
+    is_manager = current_user.role == UserRole.MANAGER
+    is_officer = current_user.role == UserRole.OFFICER
+    is_owner = bool(
+        lead
+        and lead.assigned_officer_id is not None
+        and lead.assigned_officer_id == current_user.id
+    )
+    manager_in_scope = bool(
+        is_manager
+        and lead is not None
+        and lead.unit_id is not None
+        and lead.unit_id == current_user.unit_id
+    )
+    reviewer_scope = is_admin or manager_in_scope
+    profile_editable = profile.status in ("draft", "rejected", "revision_requested")
+
+    applied_rules = profile.applied_rules or {}
+    doc_configs = applied_rules.get("doc_configs", {}) or {}
+    config = doc_configs.get(doc_code, {}) or {}
+    requires_upload = bool(config.get("requires_upload", True))
+
+    if action == "upload":
+        ok = (
+            requires_upload
+            and profile_editable
+            and (is_owner or is_admin or manager_in_scope)
+            and doc_status in ("missing", "rejected")
+        )
+    elif action == "paper_submitted":
+        ok = (
+            (not requires_upload)
+            and profile_editable
+            and (is_owner or is_admin or manager_in_scope)
+            and doc_status == "missing"
+        )
+    elif action == "verify":
+        ok = reviewer_scope and doc_status in ("uploaded", "paper_submitted")
+    elif action == "reject":
+        ok = reviewer_scope and doc_status in ("uploaded", "paper_submitted", "verified")
+    elif action == "reset":
+        ok = reviewer_scope and doc_status != "missing"
+    else:
+        raise PermissionDeniedError(f"Unknown document action '{action}'")
+
+    if not ok:
+        # 404 per IDOR convention — router translates.
+        raise PermissionDeniedError(
+            f"Action '{action}' not permitted on document '{doc_code}' "
+            f"(status={doc_status}, profile_status={profile.status}, "
+            f"role={current_user.role})"
+        )
+
+
 def _resolve_idor_filters(current_user: models.User) -> tuple[Optional[int], Optional[int]]:
     """
     Resolve IDOR filter parameters based on user role.
@@ -2869,6 +2947,19 @@ async def upload_document(
     if profile.status not in ["draft", "rejected", "revision_requested"]:
         raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
 
+    # Find document record early — needed for doc_status-based guard check.
+    doc_record = await admission_repo.get_document_by_type(profile_id, doc_code)
+    if not doc_record:
+        raise BadRequest(f"Document code '{doc_code}' not found in profile documents")
+
+    _authorize_document_action(
+        action="upload",
+        profile=profile,
+        doc_status=doc_record.status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
+
     # File validation constants
     ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -2891,11 +2982,7 @@ async def upload_document(
             f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
         )
 
-    # Find document in ProfileDocument table (replaces JSONB checklist)
-    doc_record = await admission_repo.get_document_by_type(profile_id, doc_code)
-
-    if not doc_record:
-        raise BadRequest(f"Document code '{doc_code}' not found in profile documents")
+    # doc_record was already fetched above for the authz guard — no need to re-query.
 
     # Prepare file path with security measures
     import os
@@ -3015,6 +3102,18 @@ async def confirm_document_format(
     # 1. Access Check
     profile = await get_profile(db, profile_id, current_user)
 
+    # PR #5 guard — same rule matrix as the can_verify flag on documents_checklist.
+    existing = await admission_repo.get_document_by_type(profile_id, doc_code)
+    if not existing:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found")
+    _authorize_document_action(
+        action="verify",
+        profile=profile,
+        doc_status=existing.status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
+
     # 2. Verify Document Format (full verification)
     doc = await admission_repo.confirm_document_format(
         profile_id=profile_id,
@@ -3097,6 +3196,16 @@ async def mark_paper_submitted(
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "missing"
 
+    # PR #5 guard — matches can_mark_paper_submitted (requires_upload=false,
+    # status=missing, owning officer in scope).
+    _authorize_document_action(
+        action="paper_submitted",
+        profile=profile,
+        doc_status=old_status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
+
     # Mark paper submitted
     doc = await admission_repo.mark_paper_submitted(
         profile_id=profile_id,
@@ -3177,6 +3286,16 @@ async def reject_document(
     # Get document to capture old status
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "unknown"
+
+    # PR #5 guard — matches can_reject (reviewer scope + doc status
+    # in uploaded/paper_submitted/verified).
+    _authorize_document_action(
+        action="reject",
+        profile=profile,
+        doc_status=old_status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
 
     # Reject document
     doc = await admission_repo.reject_document(
@@ -3264,6 +3383,15 @@ async def reset_document(
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "unknown"
     old_file_path = doc_before.file_path if doc_before else None
+
+    # PR #5 guard — matches can_reset (reviewer scope + non-missing status).
+    _authorize_document_action(
+        action="reset",
+        profile=profile,
+        doc_status=old_status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
 
     # Reset document
     doc = await admission_repo.reset_document(

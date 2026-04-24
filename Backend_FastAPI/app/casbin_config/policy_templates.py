@@ -140,6 +140,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # REMOVED: enroll is ADMIN-ONLY per Decision 10 (Admission State ≠ Authorization)
         # {"subject": "{role}", "object": "/api/admissions/{id}/enroll", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
+        # PR #5 — paper-submitted is officer-initiated for paper-only docs
+        # (requires_upload=false); service-layer guard enforces the
+        # owning-officer + profile-editable + missing-status contract.
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/paper-submitted", "action": "POST"},
         # Admission aggregate endpoints (read-only)
         {"subject": "{role}", "object": "/api/admissions/stats", "action": "GET"},  # Stats dashboard
         {"subject": "{role}", "object": "/api/admissions/status-counts", "action": "GET"},  # Tab badges
@@ -295,6 +299,12 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile
         {"subject": "{role}", "object": "/api/admissions/{id}/drop", "action": "POST"},  # Drop enrolled student
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
+        # PR #5 — reviewer actions on individual documents. Casbin admits
+        # the route at role level; admission_service enforces unit scope +
+        # allowed doc_status per _compute_document_permissions.
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/verify-format", "action": "PATCH"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reject", "action": "POST"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reset", "action": "POST"},
         # Admission Configuration Console (Phase 1: Admission Path Management)
         # NOTE: Manager can create/edit paths, but ONLY ADMIN can activate/deactivate
         {"subject": "{role}", "object": "/api/admission-config/years", "action": "GET"},  # Academic years
