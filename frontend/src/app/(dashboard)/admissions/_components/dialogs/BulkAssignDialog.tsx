@@ -45,16 +45,20 @@ export function BulkAssignDialog({
 }: BulkAssignDialogProps) {
   const [selectedOfficerId, setSelectedOfficerId] = useState<string>("")
 
-  // Fetch officers
+  // Fetch active officers only. Backend /admissions/bulk/assign now
+  // rejects non-officer and inactive targets, so surfacing admin/manager
+  // in the dropdown would guarantee a 400 on submit.
   const { data: usersData, isLoading: usersLoading } = useAdminUsersList({
     page: 1,
     page_size: 100,
     status: "active",
+    role: "officer",
   })
 
-  // Filter for officers and admins
+  // Defensive second pass in case the API returns an extra role through
+  // pagination edge cases; keep only officer + active.
   const officers = usersData?.users?.filter(
-    (user) => user.role === "officer" || user.role === "admin" || user.role === "manager" // architecture-allow legacy
+    (user) => user.role === "officer" && user.status === "active"
   ) || []
 
   const handleSubmit = () => {

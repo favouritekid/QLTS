@@ -6342,6 +6342,16 @@ async def bulk_assign(
     if not officer:
         raise ResourceNotFoundError("Officer not found")
 
+    # Target must actually be an active officer. lead_service enforces the
+    # same rule on direct/auto assignment; bulk assign used to accept any
+    # in-unit user and would silently set lead.assigned_officer_id to a
+    # manager/admin/inactive account — leaving workload metrics and
+    # downstream officer-scoped queries in a confused state.
+    if officer.role != UserRole.OFFICER:
+        raise BadRequest("Target user is not an officer")
+    if getattr(officer, "status", None) != "active":
+        raise BadRequest("Target officer is not active")
+
     # M4: Validate officer unit matches assigner unit (Admin bypass)
     if assigner.role != UserRole.ADMIN:
         if officer.unit_id != assigner.unit_id:

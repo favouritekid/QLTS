@@ -77,17 +77,16 @@ async def test_assign_officer_action_role_matrix(
     client: AsyncClient,
     admin_token_headers: dict,
     officer_user_in_db: dict,
+    manager_user_in_db: dict,
     adm_config: dict,
 ):
     """Create a draft admission profile and inspect its available_actions
-    as admin / manager / officer in sequence.
+    as admin / manager (same unit) / officer in sequence.
 
     Expectations driven by ``_compute_frontend_fields`` rules:
-    - admin → ``assign_officer`` present
-    - officer (even if assigned) → ``assign_officer`` absent
-    - manager is exercised in the IDOR-scoped integration test suite
-      when a same-unit manager fixture is available; here we cover the
-      two roles the unit test can assert deterministically.
+    - admin → ``assign_officer`` present (regardless of unit)
+    - manager in the same unit as the lead → ``assign_officer`` present
+    - officer (even the assigned one) → ``assign_officer`` absent
     """
     # Arrange — seed a lead + draft profile via admin.
     lead_resp = await client.post(LeadsURLs.LEADS, json={
@@ -129,6 +128,15 @@ async def test_assign_officer_action_role_matrix(
     )
     assert admin_detail.get("permissions", {}).get("assign_officer") is True
 
+    # Manager (same unit as the lead) → assign_officer must be present.
+    mh = await _login(client, manager_user_in_db["username"], manager_user_in_db["password"])
+    manager_detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=mh)).json()
+    assert "assign_officer" in manager_detail.get("available_actions", []), (
+        "Manager in the same unit as the lead should have assign_officer; "
+        f"got: {manager_detail.get('available_actions')}"
+    )
+    assert manager_detail.get("permissions", {}).get("assign_officer") is True
+
     # Officer GET → assign_officer must be absent.
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
     officer_detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
@@ -137,3 +145,62 @@ async def test_assign_officer_action_role_matrix(
         f"got: {officer_detail.get('available_actions')}"
     )
     assert officer_detail.get("permissions", {}).get("assign_officer") is False
+
+
+@pytest.mark.asyncio
+async def test_bulk_assign_rejects_non_officer_target(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    manager_user_in_db: dict,
+    officer_user_in_db: dict,
+    adm_config: dict,
+):
+    """bulk_assign must refuse to set lead.assigned_officer_id to a user
+    whose role is not OFFICER. Historically the route only checked unit
+    membership, which silently allowed a manager or admin to be stored
+    as the assigned officer — breaking workload metrics and later
+    officer-scoped queries. Mirrors the validation lead_service has
+    always enforced on direct/auto assignment.
+    """
+    # Seed a lead + draft profile so bulk_assign has a target row.
+    from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
+    lead = (await client.post(LeadsURLs.LEADS, json={
+        "full_name": "PR3 Assign Validation",
+        "phone": "0988123451",
+        "source": "website",
+        "unit_id": adm_config["unit_id"],
+        "assigned_officer_id": officer_user_in_db["id"],
+        "offering_id": adm_config["offering_id"],
+    }, headers=admin_token_headers)).json()
+    await client.post(
+        f"{LeadsURLs.LEADS}/{lead['id']}/consultations",
+        json={
+            "status_id": INITIAL_LEAD_STATUS_ID,
+            "method": "phone",
+            "notes": "Pre-admission consultation",
+        },
+        headers=admin_token_headers,
+    )
+    prof = (await client.post(ADMISSIONS, json={
+        "lead_id": lead["id"],
+        "admission_method_id": adm_config["method_id"],
+    }, headers=admin_token_headers)).json()
+
+    # Attempt to assign the manager (not an officer) → 400.
+    resp = await client.post(
+        f"{ADMISSIONS}/bulk/assign",
+        json={"profile_ids": [prof["id"]], "officer_id": manager_user_in_db["id"]},
+        headers=admin_token_headers,
+    )
+    assert resp.status_code == 400, (
+        f"Expected 400 for non-officer target; got {resp.status_code}: {resp.text}"
+    )
+    assert "officer" in resp.text.lower(), resp.text
+
+    # Sanity: the legitimate officer target still succeeds.
+    ok = await client.post(
+        f"{ADMISSIONS}/bulk/assign",
+        json={"profile_ids": [prof["id"]], "officer_id": officer_user_in_db["id"]},
+        headers=admin_token_headers,
+    )
+    assert ok.status_code == 200, f"Officer target should succeed: {ok.text}"
