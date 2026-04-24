@@ -1274,6 +1274,31 @@ _BROADCAST_EVENTS: tuple = tuple(
         # even though notification_class says broadcast_only (broadcast_only = no persistence, not no-scoping).
         privacy="sensitive",
     ),
+    # PR #8 — realtime cache invalidation for admission detail + finance
+    # dashboard after POST /api/fees/calculate. No DB rule (broadcast_only),
+    # but carries lead/profile IDs → must scope to unit + owning officer.
+    EventDefinition(
+        event=SystemEvents.FEE_CALCULATED,
+        category="finance",
+        display_name="Đã tính học phí",
+        description="Realtime sync cho admission detail sau khi tính phí",
+        variables=(
+            _var("admission_profile_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("fee_id", "integer", "ID phí"),
+            _var("fee_status", "string", "Trạng thái fee mới tạo"),
+            _var(
+                "lead_stage_changed",
+                "boolean",
+                "Lead pipeline stage đổi sau khi tính phí",
+            ),
+            _var("actor_id", "integer", "ID người tính phí"),
+        ),
+        link_strategy="/admissions/${admission_profile_id}",
+        notification_class="broadcast_only",
+        # Sensitive: payload carries lead/profile/fee IDs linked to PII.
+        privacy="sensitive",
+    ),
 )
 
 # -------------------------------------------------------------------

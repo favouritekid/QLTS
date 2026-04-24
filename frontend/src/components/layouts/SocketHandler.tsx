@@ -12,6 +12,9 @@ import type { Notification } from "@/types/api.types";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions";
+import { feesKeys } from "@/hooks/finance/useFees";
+import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard";
+import { pipelineKeys } from "@/hooks/usePipeline";
 import { isSafeUrl } from "@/lib/utils";
 
 // =============================================================================
@@ -548,6 +551,33 @@ export function SocketHandler() {
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
+    // PR #8 — realtime sync after POST /api/fees/calculate.
+    // Broadcast-only event; no toast. Invalidates admission detail + list,
+    // the finance caches that drive the Tuition tab, the finance dashboard
+    // overview, and — only when backend says the lead pipeline actually
+    // advanced — the lead pipeline caches. The conditional lead invalidation
+    // avoids a pipeline refetch storm every time an officer calculates a
+    // non-HK1 or non-tuition fee that doesn't move the lead stage.
+    const handleFeeCalculated = (data: {
+      admission_profile_id: number;
+      lead_id: number;
+      fee_id: number;
+      fee_status: string;
+      lead_stage_changed: boolean;
+    }) => {
+      console.log("[SocketHandler] fee_calculated → invalidating finance + admission caches");
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(data.admission_profile_id) });
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: feesKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(data.admission_profile_id) });
+      queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(data.admission_profile_id) });
+      queryClient.invalidateQueries({ queryKey: financeDashboardKeys.all });
+      if (data.lead_stage_changed) {
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+        queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline() });
+      }
+    };
+
     // ✅ REAL-TIME PIPELINE CONFIG (Week 3): Lắng nghe sự kiện pipeline_config_updated
     const handlePipelineConfigUpdated = (data: {
       config_type: "pipeline_stage" | "consultation_status" | "allowed_transition";
@@ -1030,6 +1060,7 @@ export function SocketHandler() {
     socket.on("lead_status_changed", handleLeadStatusChanged);
     socket.on("application_created", handleApplicationCreated);
     socket.on("application_status_changed", handleApplicationStatusChanged);
+    socket.on("fee_calculated", handleFeeCalculated);
     socket.on("pipeline_config_updated", handlePipelineConfigUpdated);
     socket.on("consultation_created", handleConsultationCreated);
     socket.on("consultation_deleted", handleConsultationDeleted);
@@ -1075,6 +1106,7 @@ export function SocketHandler() {
       socket.off("lead_status_changed", handleLeadStatusChanged);
       socket.off("application_created", handleApplicationCreated);
       socket.off("application_status_changed", handleApplicationStatusChanged);
+      socket.off("fee_calculated", handleFeeCalculated);
       socket.off("pipeline_config_updated", handlePipelineConfigUpdated);
       socket.off("consultation_created", handleConsultationCreated);
       socket.off("consultation_deleted", handleConsultationDeleted);
