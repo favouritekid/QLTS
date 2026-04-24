@@ -8,7 +8,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { renderHook, act } from "@testing-library/react"
+import { createElement } from "react"
+import { renderToString } from "react-dom/server"
+import { renderHook, act, waitFor } from "@testing-library/react"
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -40,6 +42,72 @@ describe("useAdmissionsFilter", () => {
     vi.spyOn(Storage.prototype, "getItem").mockReturnValue(null)
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {})
     vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {})
+  })
+
+  describe("SSR-safe persisted filters", () => {
+    it("does not read localStorage during the server render path", () => {
+      const getItemSpy = vi.spyOn(Storage.prototype, "getItem").mockReturnValue(
+        JSON.stringify({
+          version: 1,
+          data: {
+            page: 1,
+            search: "",
+            statusFilters: ["draft"],
+            majorFilter: "",
+            academicYear: new Date().getFullYear(),
+            degreeLevelFilter: "",
+            paymentStatusFilter: "",
+            dateFrom: "",
+            dateTo: "",
+            activeTab: "draft",
+          },
+        }),
+      )
+
+      function Probe() {
+        const { state } = useAdmissionsFilter()
+        return createElement("span", null, state.activeTab)
+      }
+
+      expect(renderToString(createElement(Probe))).toContain("all")
+      expect(getItemSpy).not.toHaveBeenCalled()
+    })
+
+    it("restores localStorage filters after hydration", async () => {
+      vi.spyOn(Storage.prototype, "getItem").mockReturnValue(
+        JSON.stringify({
+          version: 1,
+          data: {
+            page: 2,
+            search: "Nguyen",
+            statusFilters: ["draft"],
+            majorFilter: "3",
+            academicYear: new Date().getFullYear() - 1,
+            degreeLevelFilter: "bachelor",
+            paymentStatusFilter: "paid",
+            dateFrom: "2026-01-01",
+            dateTo: "2026-01-31",
+            activeTab: "draft",
+          },
+        }),
+      )
+
+      const { result } = renderHook(() => useAdmissionsFilter())
+
+      await waitFor(() => {
+        expect(result.current.state.activeTab).toBe("draft")
+      })
+
+      expect(result.current.state.page).toBe(2)
+      expect(result.current.state.search).toBe("Nguyen")
+      expect(result.current.state.statusFilters).toEqual(["draft"])
+      expect(result.current.state.majorFilter).toBe("3")
+      expect(result.current.state.academicYear).toBe(new Date().getFullYear() - 1)
+      expect(result.current.state.degreeLevelFilter).toBe("bachelor")
+      expect(result.current.state.paymentStatusFilter).toBe("paid")
+      expect(result.current.state.dateFrom).toBe("2026-01-01")
+      expect(result.current.state.dateTo).toBe("2026-01-31")
+    })
   })
 
   describe("STATUS_TABS mapping (BUG-18)", () => {

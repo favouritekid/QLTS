@@ -3,7 +3,7 @@
  * Admissions Filter Hook
  *
  * Manages all filter state for the Admissions list page:
- * - 3-tier init: URL params > localStorage > defaults
+ * - SSR-safe init: URL params > defaults, then localStorage after hydration
  * - URL sync via debounced History.replaceState (no RSC refetch)
  * - Versioned localStorage persistence
  * - Tab ↔ statusFilter synchronisation
@@ -17,6 +17,10 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { useSearchParams, usePathname } from "next/navigation"
 import type { AdmissionListParams } from "@/lib/zod/admissions"
+import {
+  ADMISSIONS_DEFAULT_PAGE_SIZE,
+  CURRENT_ADMISSIONS_YEAR,
+} from "./filterDefaults"
 
 // =============================================================================
 // TYPES
@@ -70,7 +74,6 @@ export interface UseAdmissionsFilterReturn {
 
 const STORAGE_KEY = "admissions_filters"
 const STORAGE_VERSION = 1
-const CURRENT_YEAR = new Date().getFullYear()
 
 interface VersionedStorage {
   version: number
@@ -95,7 +98,7 @@ const DEFAULT_FILTERS: StoredFilters = {
   search: "",
   statusFilters: [],
   majorFilter: "",
-  academicYear: CURRENT_YEAR,
+  academicYear: CURRENT_ADMISSIONS_YEAR,
   degreeLevelFilter: "",
   paymentStatusFilter: "",
   dateFrom: "",
@@ -144,6 +147,18 @@ function clearFiltersFromStorage() {
   }
 }
 
+function arraysEqual<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+function normalizeStoredFilters(filters: StoredFilters): StoredFilters {
+  return {
+    ...DEFAULT_FILTERS,
+    ...filters,
+    statusFilters: Array.isArray(filters.statusFilters) ? filters.statusFilters : [],
+  }
+}
+
 // =============================================================================
 // URL HELPERS
 // =============================================================================
@@ -170,7 +185,7 @@ function parseSearchParams(sp: URLSearchParams): StoredFilters {
     search: sp.get("q") || "",
     statusFilters: sp.get("status")?.split(",").filter(Boolean) || [],
     majorFilter: sp.get("major") || "",
-    academicYear: yearStr ? Number(yearStr) : CURRENT_YEAR,
+    academicYear: yearStr ? Number(yearStr) : CURRENT_ADMISSIONS_YEAR,
     degreeLevelFilter: sp.get("degree") || "",
     paymentStatusFilter: sp.get("payment") || "",
     dateFrom: sp.get("from") || "",
@@ -184,21 +199,21 @@ function parseSearchParams(sp: URLSearchParams): StoredFilters {
 // =============================================================================
 
 export function useAdmissionsFilter(
-  defaultPageSize: number = 20,
+  defaultPageSize: number = ADMISSIONS_DEFAULT_PAGE_SIZE,
 ): UseAdmissionsFilterReturn {
   const searchParams = useSearchParams()
   const pathname = usePathname()
   const isInitialMount = useRef(true)
+  const isStorageSyncInitialMount = useRef(true)
+  const hasInitialUrlFilters = useRef(hasUrlFilterParams(searchParams))
   const urlUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const prevSearchParamsStr = useRef(searchParams.toString())
 
-  // ── Determine initial values: URL > localStorage > defaults ───────────
+  // Determine initial values without reading localStorage, so SSR and hydration match.
   const initialValues = useMemo(() => {
     if (hasUrlFilterParams(searchParams)) {
       return parseSearchParams(searchParams)
     }
-    const stored = loadFiltersFromStorage()
-    if (stored) return stored
     return DEFAULT_FILTERS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -217,6 +232,37 @@ export function useAdmissionsFilter(
   const [activeTab, setActiveTab] = useState(initialValues.activeTab)
   const [sortBy, setSortBy] = useState("created_at")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
+
+  // Restore persisted filters only after hydration. URL params stay as the
+  // source of truth because the server can render them, while localStorage cannot.
+  useEffect(() => {
+    if (hasUrlFilterParams(searchParams)) return
+
+    const stored = loadFiltersFromStorage()
+    if (!stored) return
+
+    const restored = normalizeStoredFilters(stored)
+
+    setPage((current) => (current === restored.page ? current : restored.page))
+    setSearch((current) => (current === restored.search ? current : restored.search))
+    setStatusFilters((current) =>
+      arraysEqual(current, restored.statusFilters) ? current : [...restored.statusFilters],
+    )
+    setMajorFilter((current) => (current === restored.majorFilter ? current : restored.majorFilter))
+    setAcademicYear((current) =>
+      current === restored.academicYear ? current : restored.academicYear,
+    )
+    setDegreeLevelFilter((current) =>
+      current === restored.degreeLevelFilter ? current : restored.degreeLevelFilter,
+    )
+    setPaymentStatusFilter((current) =>
+      current === restored.paymentStatusFilter ? current : restored.paymentStatusFilter,
+    )
+    setDateFrom((current) => (current === restored.dateFrom ? current : restored.dateFrom))
+    setDateTo((current) => (current === restored.dateTo ? current : restored.dateTo))
+    setActiveTab((current) => (current === restored.activeTab ? current : restored.activeTab))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ── EXTERNAL URL CHANGE DETECTION ─────────────────────────────────────
   const isInternalUrlChange = useRef(false)
@@ -262,7 +308,7 @@ export function useAdmissionsFilter(
       if (search) params.set("q", search)
       if (statusFilters.length > 0) params.set("status", statusFilters.join(","))
       if (majorFilter) params.set("major", majorFilter)
-      if (academicYear !== undefined && academicYear !== CURRENT_YEAR) {
+      if (academicYear !== undefined && academicYear !== CURRENT_ADMISSIONS_YEAR) {
         params.set("year", academicYear.toString())
       }
       if (degreeLevelFilter) params.set("degree", degreeLevelFilter)
@@ -299,12 +345,17 @@ export function useAdmissionsFilter(
       search ||
       statusFilters.length > 0 ||
       majorFilter ||
-      (academicYear !== undefined && academicYear !== CURRENT_YEAR) ||
+      (academicYear !== undefined && academicYear !== CURRENT_ADMISSIONS_YEAR) ||
       degreeLevelFilter ||
       paymentStatusFilter ||
       dateFrom ||
       dateTo ||
       activeTab !== "all"
+
+    if (isStorageSyncInitialMount.current) {
+      isStorageSyncInitialMount.current = false
+      if (!hasInitialUrlFilters.current) return
+    }
 
     if (shouldSave) {
       saveFiltersToStorage(data)
@@ -375,7 +426,7 @@ export function useAdmissionsFilter(
     setSearch("")
     setStatusFilters([])
     setMajorFilter("")
-    setAcademicYear(CURRENT_YEAR)
+    setAcademicYear(CURRENT_ADMISSIONS_YEAR)
     setDegreeLevelFilter("")
     setPaymentStatusFilter("")
     setDateFrom("")
@@ -397,7 +448,7 @@ export function useAdmissionsFilter(
       paymentStatusFilter ||
       dateFrom ||
       dateTo ||
-      (academicYear !== undefined && academicYear !== CURRENT_YEAR)
+      (academicYear !== undefined && academicYear !== CURRENT_ADMISSIONS_YEAR)
     )
   }, [
     search, statusFilters, majorFilter, degreeLevelFilter,
