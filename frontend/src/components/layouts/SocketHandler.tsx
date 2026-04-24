@@ -520,8 +520,9 @@ export function SocketHandler() {
     }) => {
       console.log("[SocketHandler] application_created → invalidating queries (silent sync)");
 
-      // Invalidate admission-related queries (hooks use `admissionsKeys` / ["admissions"])
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      // Cascade to list + status-counts + stats + details via `admissionsKeys.all` root —
+      // mirrors the mutation-hook invalidation pattern in useAdmissions.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
@@ -540,8 +541,9 @@ export function SocketHandler() {
         "[SocketHandler] application_status_changed → invalidating queries (silent sync)"
       );
 
-      // Invalidate admission-related queries (hooks use `admissionsKeys` / ["admissions"])
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      // Cascade to list + status-counts + stats via `admissionsKeys.all` root;
+      // detail gets a targeted refresh too so the open page updates instantly.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(data.application_id) });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
@@ -903,8 +905,10 @@ export function SocketHandler() {
     }) => {
       console.log("[SocketHandler] application_deleted → invalidating queries (silent sync)");
 
-      // Invalidate admission and lead queries (hooks use `admissionsKeys` / ["admissions"])
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      // Cascade to list + status-counts + stats via `admissionsKeys.all` root;
+      // removeQueries on the detail drops the stale cached page so a later
+      // visit refetches from scratch (GC the deleted profile).
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
       queryClient.removeQueries({ queryKey: admissionsKeys.detail(data.application_id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
