@@ -62,7 +62,7 @@ async function LeadsPageContent({
 
   const initialData = await serverApi.leads.getLeads(apiParams);
 
-  return <LeadsClient initialData={initialData} />;
+  return <LeadsClient initialData={initialData} initialQueryParams={apiParams} />;
 }
 
 /**
