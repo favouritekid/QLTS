@@ -210,6 +210,19 @@ export const documentItemSchema = z.object({
    * ID of officer who verified the document.
    */
   verified_by: z.number().int().nullable().optional(),
+  // ---------------------------------------------------------------------
+  // PR #5 — explicit per-document permission flags.
+  // Backend computes these per (role × doc status × profile status × unit
+  // scope) in admission_service._compute_document_permissions. FE must
+  // gate the matching button iff the flag is true. Defaulting missing
+  // flags to `false` via .optional() so legacy rows (pre-deploy) render
+  // in read-only mode rather than leaking buttons.
+  // ---------------------------------------------------------------------
+  can_upload: z.boolean().optional(),
+  can_verify: z.boolean().optional(),
+  can_reject: z.boolean().optional(),
+  can_reset: z.boolean().optional(),
+  can_mark_paper_submitted: z.boolean().optional(),
 })
 
 export type DocumentItem = z.infer<typeof documentItemSchema>

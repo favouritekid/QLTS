@@ -200,6 +200,7 @@ class DocumentItemSchema(BaseModel):
     - uploaded: File uploaded, pending verification
     - verified: Officer verified the document
     - rejected: Officer rejected the document
+    - paper_submitted: Applicant submitted a paper copy (not a digital upload)
 
     Security:
     - File Path Validation: Max 512 chars (prevent path traversal in display)
@@ -217,7 +218,7 @@ class DocumentItemSchema(BaseModel):
         max_length=255,
         description="Human-readable label (e.g., 'Học bạ THPT')"
     )
-    status: Literal["missing", "uploaded", "verified", "rejected"] = Field(
+    status: Literal["missing", "uploaded", "verified", "rejected", "paper_submitted"] = Field(
         default="missing",
         description="Upload status"
     )
@@ -240,6 +241,62 @@ class DocumentItemSchema(BaseModel):
     verified_format: Optional[Literal["original", "certified_copy", "photo"]] = Field(
         None,
         description="Format verified by officer (original/certified_copy/photo)"
+    )
+
+    # =========================================================================
+    # Checklist-only display fields populated by _compute_frontend_fields.
+    # These live alongside the raw document status so the FE can render the
+    # row without a second API call.
+    # =========================================================================
+    is_mandatory: Optional[bool] = Field(
+        default=None,
+        description="Whether this document is mandatory for the admission path",
+    )
+    requires_upload: Optional[bool] = Field(
+        default=None,
+        description="True if an online upload is required; False for paper-only docs",
+    )
+    submission_format: Optional[str] = Field(
+        default=None,
+        description="Allowed physical format (original/certified_copy/photo) when specified",
+    )
+    rejection_reason: Optional[str] = Field(
+        default=None,
+        description="Reason shown to the applicant when status = rejected",
+    )
+    submission_format_confirmed: Optional[bool] = Field(
+        default=None,
+        description="True once the officer verified the physical format",
+    )
+
+    # =========================================================================
+    # PR #5 — explicit per-document permission flags
+    # FE previously inferred action visibility from a generic `can('edit')`
+    # check, which leaked buttons for roles that couldn't actually invoke the
+    # underlying endpoint. The flags below are authoritative: backend computes
+    # them per (role × doc status × profile status × unit/assignment scope),
+    # and FE renders Upload / Verify / Reject / Reset / Paper-submit buttons
+    # iff the matching flag is true.
+    # =========================================================================
+    can_upload: Optional[bool] = Field(
+        default=None,
+        description="Officer may upload a file for this doc (profile editable + owning officer)",
+    )
+    can_verify: Optional[bool] = Field(
+        default=None,
+        description="Manager/admin may mark status=verified (requires uploaded or paper_submitted)",
+    )
+    can_reject: Optional[bool] = Field(
+        default=None,
+        description="Manager/admin may mark status=rejected (requires uploaded/paper_submitted/verified)",
+    )
+    can_reset: Optional[bool] = Field(
+        default=None,
+        description="Manager/admin may clear the doc back to status=missing",
+    )
+    can_mark_paper_submitted: Optional[bool] = Field(
+        default=None,
+        description="Officer may record paper submission (paper-doc + missing status + owning officer)",
     )
 
     @field_validator('label')
@@ -692,10 +749,17 @@ class AdmissionProfileResponse(BaseModel):
         description="Step status map: {1: 'error', 2: 'warning', 3: 'success', ...}"
     )
     
-    # Documents checklist for frontend display
-    documents_checklist: List[Dict[str, Any]] = Field(
+    # Documents checklist for frontend display. Items follow
+    # DocumentItemSchema — including the 5 per-document permission flags
+    # the FE uses to gate Upload/Verify/Reject/Reset/Paper-submit buttons.
+    documents_checklist: List[DocumentItemSchema] = Field(
         default_factory=list,
-        description="List of required documents with status {code, label, is_mandatory, requires_upload, submission_format, status, file_path, uploaded_at, rejection_reason}"
+        description=(
+            "Required-document items enriched with backend-computed display "
+            "fields (is_mandatory, requires_upload, submission_format, "
+            "rejection_reason) and permission flags (can_upload, can_verify, "
+            "can_reject, can_reset, can_mark_paper_submitted)."
+        ),
     )
     
     # ✅ Ticket #3.1: Document Status Summary (Computed by Backend)

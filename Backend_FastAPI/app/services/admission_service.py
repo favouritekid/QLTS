@@ -869,25 +869,91 @@ def _compute_frontend_fields(
                     "label_from_db": doc.document_type.name,
                 }
     
+    # PR #5 — scope gate for manager/admin on per-document actions.
+    # Admin sees all profiles; manager is scoped to the lead's unit.
+    _lead = profile.__dict__.get("lead")
+    _manager_in_scope = (
+        is_manager
+        and _lead is not None
+        and _lead.unit_id is not None
+        and _lead.unit_id == current_user.unit_id
+    )
+    _reviewer_scope = is_admin or _manager_in_scope
+    _profile_editable = status in ("draft", "rejected", "revision_requested")
+
+    def _compute_document_permissions(
+        doc_status: str,
+        requires_upload: bool,
+    ) -> dict[str, bool]:
+        """Per-document action flags for the current user.
+
+        Mirrors the route contracts exactly:
+        - Upload  : POST /admissions/{id}/documents/{code}/upload
+                    officer assigned to the lead, profile in editable state,
+                    doc expects an upload and isn't already verified/paper.
+        - Verify  : POST /admissions/{id}/documents/{code}/verify-format
+                    manager/admin in scope, doc status uploaded|paper_submitted.
+        - Reject  : POST /admissions/{id}/documents/{code}/reject
+                    manager/admin in scope, doc status uploaded|paper_submitted|verified.
+        - Reset   : POST /admissions/{id}/documents/{code}/reset
+                    manager/admin in scope, doc status != missing.
+        - Paper   : POST /admissions/{id}/documents/{code}/paper-submitted
+                    officer assigned to the lead, paper-only doc (requires_upload=False),
+                    status still missing.
+        """
+        can_upload = bool(
+            requires_upload
+            and _profile_editable
+            and (is_owner or is_admin or _manager_in_scope)
+            and doc_status in ("missing", "rejected")
+        )
+        can_verify = bool(
+            _reviewer_scope and doc_status in ("uploaded", "paper_submitted")
+        )
+        can_reject = bool(
+            _reviewer_scope
+            and doc_status in ("uploaded", "paper_submitted", "verified")
+        )
+        can_reset = bool(
+            _reviewer_scope and doc_status != "missing"
+        )
+        can_mark_paper_submitted = bool(
+            (not requires_upload)
+            and _profile_editable
+            and (is_owner or is_admin or _manager_in_scope)
+            and doc_status == "missing"
+        )
+        return {
+            "can_upload": can_upload,
+            "can_verify": can_verify,
+            "can_reject": can_reject,
+            "can_reset": can_reset,
+            "can_mark_paper_submitted": can_mark_paper_submitted,
+        }
+
     # Build documents_checklist
     documents_checklist = []
     for i, doc_code in enumerate(all_mandatory_docs):
         config = doc_configs.get(doc_code, {})
         uploaded_doc = doc_by_code.get(doc_code, {})
-        
+        _doc_status = uploaded_doc.get("status", "missing")
+        _requires_upload = config.get("requires_upload", True)
+        _perms = _compute_document_permissions(_doc_status, _requires_upload)
+
         documents_checklist.append({
             "code": doc_code,
             "label": config.get("label") or uploaded_doc.get("label_from_db") or doc_code,
             "is_mandatory": True,
-            "requires_upload": config.get("requires_upload", True),
+            "requires_upload": _requires_upload,
             "submission_format": config.get("submission_format"),
-            "status": uploaded_doc.get("status", "missing"),
+            "status": _doc_status,
             "file_path": uploaded_doc.get("file_path"),
             "uploaded_at": uploaded_doc.get("uploaded_at"),
             "rejection_reason": uploaded_doc.get("rejection_reason"),
-            "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False)
+            "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False),
+            **_perms,
         })
-    
+
     profile.documents_checklist = documents_checklist
 
     # ✅ Ticket #3.1: Document Status Summary (Backend Computed)

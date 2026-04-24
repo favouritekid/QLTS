@@ -34,7 +34,6 @@ import {
 } from "lucide-react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { useUploadAdmissionDocument, useMarkPaperSubmitted, useRejectDocument, useResetDocument } from "@/hooks/admissions/useAdmissions"
-import { usePermissions } from "@/hooks/usePermissions"
 import { useRef, useState } from "react"
 import { toast } from "sonner"
 import { isSafeFilePath } from "@/lib/utils"
@@ -119,9 +118,10 @@ function getFormatConfig(format: string | null | undefined) {
 // COMPONENT
 // ============================================================================
 
-export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
+export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabProps) {
+  // `isEditable` is retained on the props contract for parent callers, but
+  // per-row visibility is now fully driven by `doc.can_*` flags (PR #5).
   const documents = profile.documents_checklist || []
-  const { can } = usePermissions(profile)
   const uploadMutation = useUploadAdmissionDocument(profile.id)
   const paperMutation = useMarkPaperSubmitted(profile.id)
   const rejectMutation = useRejectDocument(profile.id)
@@ -348,7 +348,13 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                 const hasFile = doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
                 const requiresUpload = doc.requires_upload !== false // Default true if undefined
                 const isPaperDoc = !requiresUpload
-                const canReject = can('edit') && (doc.status === "uploaded" || doc.status === "paper_submitted" || doc.status === "verified")
+                // PR #5: per-row permission flags from backend replace the
+                // coarse `can('edit')` gate — the matching button shows iff
+                // the route would authorise the action for this user.
+                const canUpload = doc.can_upload ?? false
+                const canReject = doc.can_reject ?? false
+                const canReset = doc.can_reset ?? false
+                const canMarkPaperSubmitted = doc.can_mark_paper_submitted ?? false
                 
                 return (
                   <div
@@ -432,7 +438,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                       )}
                       
                       {/* Upload button for online documents */}
-                      {requiresUpload && isEditable && (doc.status === "missing" || doc.status === "rejected") && (
+                      {canUpload && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -449,7 +455,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                       )}
                       
                       {/* Paper submission checkbox (Officer only) */}
-                      {isPaperDoc && can('edit') && doc.status === "missing" && (
+                      {canMarkPaperSubmitted && (
                         <div className="flex items-center gap-1">
                           <Checkbox
                             id={`paper-${doc.code}`}
@@ -486,12 +492,8 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                         </Button>
                       )}
 
-                      {/* Reset/Undo Button - Show for uploaded/paper_submitted/verified/rejected */}
-                      {can('edit') &&
-                       (doc.status === "uploaded" ||
-                        doc.status === "paper_submitted" ||
-                        doc.status === "verified" ||
-                        doc.status === "rejected") && (
+                      {/* Reset/Undo Button — gated by backend can_reset flag */}
+                      {canReset && (
                         <Button
                           size="sm"
                           variant="ghost"
