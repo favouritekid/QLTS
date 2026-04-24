@@ -47,6 +47,9 @@ const mockAdmissionPathResponse: AdmissionPathResponse = {
   can_edit: true,
   can_activate: false,
   validation_errors: [],
+  // PR #6: strict submit gate per path; default False in the fixture
+  // mirrors the backend default for newly-created paths.
+  allow_unverified_submission: false,
 };
 
 /** The shape that PUT /paths/:id/documents returns. */
