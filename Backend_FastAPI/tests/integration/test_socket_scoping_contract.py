@@ -80,11 +80,55 @@ def _is_notification_intent(call: ast.Call) -> bool:
 
 
 def test_every_catalog_event_has_explicit_privacy():
-    """Every EventDefinition must declare privacy (no silent default)."""
+    """Every EventDefinition call must pass ``privacy=`` explicitly.
+
+    The dataclass field has a default value ("sensitive") for safety,
+    but an explicit tag prevents the case where a catalog entry is
+    added and silently inherits the default — a review-time reader
+    can't tell whether the author considered privacy or just forgot.
+    This AST scan enforces the intent: every catalog entry is
+    classified by hand.
+    """
+    catalog_path = BACKEND_ROOT / "core" / "event_catalog.py"
+    tree = ast.parse(catalog_path.read_text(encoding="utf-8"))
+
+    # Walk every EventDefinition(...) call literal in the module.
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_eventdef = (
+            (isinstance(func, ast.Name) and func.id == "EventDefinition")
+            or (isinstance(func, ast.Attribute) and func.attr == "EventDefinition")
+        )
+        if not is_eventdef:
+            continue
+        kwarg_names = {kw.arg for kw in node.keywords if kw.arg}
+        if "privacy" not in kwarg_names:
+            # Identify the event by the `event=...` kwarg for a readable error.
+            label = f"line {node.lineno}"
+            for kw in node.keywords:
+                if kw.arg == "event":
+                    label = f"{ast.unparse(kw.value)} (line {node.lineno})"
+                    break
+            offenders.append(label)
+
+    # Sanity: runtime sanity check that resolved values are valid enums.
     for evt, defn in EVENT_CATALOG.items():
         assert defn.privacy in ("public", "sensitive"), (
             f"Event {evt.value} has invalid privacy={defn.privacy!r}; "
             "must be 'public' or 'sensitive'."
+        )
+
+    if offenders:
+        detail = "\n  ".join(offenders)
+        pytest.fail(
+            "EventDefinition calls missing explicit `privacy=` kwarg:\n  "
+            + detail
+            + "\n\nAdd `privacy=\"public\"` or `privacy=\"sensitive\"` to "
+            "each entry. Default-inheriting silently is forbidden so "
+            "reviewers can verify the classification was intentional."
         )
 
 

@@ -576,6 +576,10 @@ def check_notification_alerts(self):
             from app.services.notification_dispatcher import safe_dispatch
             from app.core.events import SystemEvents
 
+            # Notification health alerts target operators — scope to admin
+            # room only (the others are end-user roles that don't action
+            # pipeline health metrics).
+            _alert_rooms = ["role_admin"]
             for alert in alerts:
                 try:
                     await safe_dispatch(
@@ -585,6 +589,7 @@ def check_notification_alerts(self):
                             "severity": alert.get("severity", "warning"),
                             "message": alert["message"],
                         },
+                        rooms=_alert_rooms,
                     )
                 except Exception as e:
                     task_log.error(f"Failed to dispatch alert: {e}")

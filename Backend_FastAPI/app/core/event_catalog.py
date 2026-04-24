@@ -182,6 +182,8 @@ _LEAD_EVENTS: tuple = (
         priority=50,
         dedup_key_template="lead:${lead_id}:assigned:${officer_id}",
         link_strategy="/leads/${lead_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
@@ -202,6 +204,8 @@ _LEAD_EVENTS: tuple = (
         default_channels=("browser",),
         priority=30,
         link_strategy="/leads/${lead_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.LEAD_REASSIGNED,
@@ -228,6 +232,8 @@ _LEAD_EVENTS: tuple = (
         priority=60,
         dedup_key_template="lead:${lead_id}:reassigned",
         link_strategy="/leads/${lead_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -260,6 +266,8 @@ _LEAD_EVENTS: tuple = (
         priority=100,
         dedup_key_template="lead:${lead_id}:status:${new_status}",
         link_strategy="/leads/${lead_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.LEAD_CREATED,
@@ -283,6 +291,8 @@ _LEAD_EVENTS: tuple = (
         default_channels=("browser",),
         priority=80,
         link_strategy="/leads/${lead_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.LEAD_DELETED,
@@ -303,6 +313,8 @@ _LEAD_EVENTS: tuple = (
         default_channels=("browser",),
         priority=100,
         link_strategy="/leads",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.LEAD_RESTORED,
@@ -323,6 +335,8 @@ _LEAD_EVENTS: tuple = (
         default_channels=("browser",),
         priority=100,
         link_strategy="/leads/${lead_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.LEAD_IMPORTED,
@@ -347,6 +361,8 @@ _LEAD_EVENTS: tuple = (
         default_channels=("browser",),
         priority=120,
         link_strategy="/leads",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.OFFICER_AVAILABILITY_CHANGED,
@@ -366,6 +382,8 @@ _LEAD_EVENTS: tuple = (
         default_channels=("browser",),
         priority=100,
         link_strategy="/admin/users",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
@@ -394,6 +412,8 @@ _CONSULTATION_EVENTS: tuple = (
         default_channels=("browser",),
         priority=100,
         link_strategy="/leads/${lead_id}?tab=consultations",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CONSULTATION_UPDATED,
@@ -418,6 +438,8 @@ _CONSULTATION_EVENTS: tuple = (
         default_channels=("browser",),
         priority=120,
         link_strategy="/leads/${lead_id}?tab=consultations",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CONSULTATION_DELETED,
@@ -437,6 +459,8 @@ _CONSULTATION_EVENTS: tuple = (
         default_channels=("browser",),
         priority=100,
         link_strategy="/leads/${lead_id}?tab=consultations",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CONSULTATION_REMINDER,
@@ -471,6 +495,8 @@ _CONSULTATION_EVENTS: tuple = (
         priority=10,
         dedup_key_template="reminder:${lead_id}:${consultation_id}",
         link_strategy="/leads/${lead_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
@@ -496,6 +522,8 @@ _ADMISSION_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=70,
         link_strategy="/admissions/${application_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.APPLICATION_STATUS_CHANGED,
@@ -519,6 +547,8 @@ _ADMISSION_EVENTS: tuple = (
         priority=80,
         dedup_key_template="app:${application_id}:status:${new_status}",
         link_strategy="/admissions/${application_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.APPLICATION_DELETED,
@@ -537,6 +567,8 @@ _ADMISSION_EVENTS: tuple = (
         default_channels=("browser",),
         priority=100,
         link_strategy="/admissions",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.APPLICATION_FEE_PAID,
@@ -559,6 +591,8 @@ _ADMISSION_EVENTS: tuple = (
         priority=75,
         dedup_key_template="app:${application_id}:fee_paid",
         link_strategy="/admissions/${application_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.APPLICATION_SURVEY_DUE,
@@ -583,6 +617,8 @@ _ADMISSION_EVENTS: tuple = (
         priority=50,
         dedup_key_template="survey_due:${application_id}",
         link_strategy=None,
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
@@ -608,6 +644,8 @@ _FINANCE_USER_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=70,
         link_strategy="/finance/payments/${payment_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.PAYMENT_VERIFIED,
@@ -630,6 +668,8 @@ _FINANCE_USER_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=60,
         link_strategy="/finance/payments/${payment_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.PAYMENT_REJECTED,
@@ -655,6 +695,8 @@ _FINANCE_USER_EVENTS: tuple = (
         priority=65,
         dedup_key_template="payment:${payment_id}:rejected",
         link_strategy="/finance/payments/${payment_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     # PR 8: FEE_FULLY_PAID — fires when fee reaches zero balance
     EventDefinition(
@@ -677,6 +719,8 @@ _FINANCE_USER_EVENTS: tuple = (
         priority=50,
         dedup_key_template="fee:${fee_id}:fully_paid",
         link_strategy="/finance/fees/${fee_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     # PR 8: INVOICE_ISSUED — fires when invoice transitions to issued
     EventDefinition(
@@ -708,6 +752,8 @@ _FINANCE_USER_EVENTS: tuple = (
         priority=55,
         dedup_key_template="invoice:${invoice_id}:issued",
         link_strategy="/finance/invoices/${invoice_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     # PR 8: PAYMENT_OVERDUE promoted from internal_future to user
     EventDefinition(
@@ -737,6 +783,8 @@ _FINANCE_USER_EVENTS: tuple = (
         priority=20,
         dedup_key_template="overdue:${invoice_id}:${days_overdue_bucket}",
         link_strategy="/finance/fees/${fee_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
@@ -772,6 +820,8 @@ _FINANCE_FUTURE_EVENTS: tuple = (
         # not require a reachable production caller. Promote to "user" class
         # when the refund router ships (tracked as PR B or later follow-up).
         notification_class="internal_future",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.DORM_FEE_CREATED,
@@ -791,6 +841,8 @@ _FINANCE_FUTURE_EVENTS: tuple = (
         priority=60,
         link_strategy="/finance/fees/${fee_id}",
         notification_class="internal_future",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     # PAYMENT_OVERDUE promoted to _FINANCE_USER_EVENTS in PR 8
 )
@@ -819,6 +871,8 @@ _CTV_USER_EVENTS: tuple = (
         priority=60,
         dedup_key_template="ctv:claim:${claim_id}:submitted",
         link_strategy="/admin/collaborators/claims/${claim_id}",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_CLAIM_APPROVED,
@@ -839,6 +893,8 @@ _CTV_USER_EVENTS: tuple = (
         priority=50,
         dedup_key_template="ctv:claim:${claim_id}:approved",
         link_strategy="/ctv/claims",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_CLAIM_REJECTED,
@@ -860,6 +916,8 @@ _CTV_USER_EVENTS: tuple = (
         priority=50,
         dedup_key_template="ctv:claim:${claim_id}:rejected",
         link_strategy="/ctv/claims",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_APPROVED,
@@ -877,6 +935,8 @@ _CTV_USER_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=30,
         dedup_key_template="ctv:${collaborator_id}:approved",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_SUSPENDED,
@@ -895,6 +955,8 @@ _CTV_USER_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=20,
         dedup_key_template="ctv:${collaborator_id}:suspended",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_COMMISSION_CREATED,
@@ -914,6 +976,8 @@ _CTV_USER_EVENTS: tuple = (
         priority=30,
         dedup_key_template="ctv:commission:${commission_id}:created",
         link_strategy="/ctv/commissions",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_ATTRIBUTION_EXPIRING,
@@ -932,6 +996,8 @@ _CTV_USER_EVENTS: tuple = (
         priority=35,
         dedup_key_template="ctv:attribution:${lead_id}:expiring",
         link_strategy="/ctv/leads",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_ATTRIBUTION_EXPIRED,
@@ -949,6 +1015,8 @@ _CTV_USER_EVENTS: tuple = (
         priority=40,
         dedup_key_template="ctv:attribution:${lead_id}:expired",
         link_strategy="/ctv/leads",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.CTV_WEEKLY_SUMMARY,
@@ -968,6 +1036,8 @@ _CTV_USER_EVENTS: tuple = (
         priority=90,
         dedup_key_template="ctv:weekly:${collaborator_id}:${week}",
         link_strategy="/ctv",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
@@ -991,6 +1061,8 @@ _CTV_FUTURE_EVENTS: tuple = (
         dedup_key_template="ctv:lead:${lead_id}:converted:${new_status}",
         link_strategy="/ctv/leads",
         notification_class="internal_future",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
@@ -1015,10 +1087,14 @@ _SYSTEM_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=10,
         link_strategy="${action_url}",
-        # Admin-triggered system-wide alert (severity + message, no PII);
-        # intentional broadcast to all users. Per-user SYSTEM_ALERT helper
-        # (dispatch_system_alert) plumbs rooms explicitly for scoped sends.
-        privacy="public",
+        # Sensitive by contract: SYSTEM_ALERT supports both per-user sends
+        # (dispatch_system_alert) and admin-triggered broadcasts. Both
+        # paths MUST pass explicit rooms — per-user resolves to
+        # user_room_<id>, admin broadcast resolves to the full role
+        # matrix. Classifying as "public" would let a misuse at any
+        # call site leak admin-authored payloads to connected clients
+        # with no scope check.
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE,
@@ -1074,6 +1150,8 @@ _SYSTEM_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=40,
         link_strategy="/profile",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.USER_DEACTIVATED,
@@ -1091,6 +1169,8 @@ _SYSTEM_EVENTS: tuple = (
         allowed_resolvers=_SYSTEM_RESOLVERS,
         default_channels=("browser",),
         priority=5,
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.USER_PROFILE_UPDATED,
@@ -1107,6 +1187,8 @@ _SYSTEM_EVENTS: tuple = (
         default_channels=("browser",),
         priority=40,
         link_strategy="/profile",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.PIPELINE_CONFIG_UPDATED,
@@ -1149,6 +1231,8 @@ _SYSTEM_EVENTS: tuple = (
         priority=10,
         dedup_key_template="security:${user_id}:suspicious_login:${login_history_id}",
         link_strategy="/settings/login-history",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
@@ -1213,6 +1297,8 @@ _INTERNAL_FUTURE_EVENTS: tuple = (
         priority=60,
         link_strategy="/dorm/rooms/${room_id}",
         notification_class="internal_future",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.DORM_MAINTENANCE_REQUEST,
@@ -1232,6 +1318,8 @@ _INTERNAL_FUTURE_EVENTS: tuple = (
         priority=50,
         link_strategy="/dorm/maintenance/${request_id}",
         notification_class="internal_future",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.ASSET_MAINTENANCE_ALERT,
@@ -1250,6 +1338,8 @@ _INTERNAL_FUTURE_EVENTS: tuple = (
         priority=70,
         link_strategy="/assets/${asset_id}",
         notification_class="internal_future",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
     EventDefinition(
         event=SystemEvents.ASSET_CHECKED_OUT,
@@ -1268,6 +1358,8 @@ _INTERNAL_FUTURE_EVENTS: tuple = (
         priority=120,
         link_strategy="/assets/${asset_id}",
         notification_class="internal_future",
+        # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
+        privacy="sensitive",
     ),
 )
 
