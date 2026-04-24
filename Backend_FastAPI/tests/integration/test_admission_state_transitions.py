@@ -2027,8 +2027,13 @@ class TestDropStudentWorkflow:
         )
         assert get_resp.status_code == 200
         actions = get_resp.json()["available_actions"]
-        # No workflow actions (approve, reject, drop, etc.) — only view may remain
-        workflow_actions = [a for a in actions if a != "view"]
+        # No admission-workflow actions (approve, reject, drop, enroll, etc.)
+        # remain after drop. ``view`` is always allowed; ``assign_officer``
+        # targets the lead-officer relationship (lead.assigned_officer_id),
+        # not the admission lifecycle — the route permits it at any status,
+        # so it's excluded from the workflow-empty check.
+        non_workflow = {"view", "assign_officer"}
+        workflow_actions = [a for a in actions if a not in non_workflow]
         assert workflow_actions == [], f"Dropped student should have no workflow actions, got: {actions}"
         assert get_resp.json()["is_dropped"] is True
 

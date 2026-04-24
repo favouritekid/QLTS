@@ -325,6 +325,22 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
     return selectedProfiles.map((p) => p.id)
   }, [selectedProfiles])
 
+  // Backend-driven bulk permissions: a bulk action is exposed only when EVERY
+  // selected row grants it. One profile without `approve` collapses the whole
+  // selection — avoids triggering a 404 on the first ineligible item.
+  const bulkPermissions = useMemo(() => {
+    if (selectedProfiles.length === 0) {
+      return { canApprove: false, canReject: false, canAssign: false }
+    }
+    const every = (action: string) =>
+      selectedProfiles.every((p) => p.available_actions?.includes(action) ?? false)
+    return {
+      canApprove: every("approve"),
+      canReject: every("reject"),
+      canAssign: every("assign_officer"),
+    }
+  }, [selectedProfiles])
+
   const clearSelection = useCallback(() => {
     setRowSelection({})
   }, [])
@@ -850,6 +866,9 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         onBulkReject={() => setRejectDialogOpen(true)}
         onBulkAssign={() => setAssignDialogOpen(true)}
         onExport={handleExport}
+        canApprove={bulkPermissions.canApprove}
+        canReject={bulkPermissions.canReject}
+        canAssign={bulkPermissions.canAssign}
         isLoading={isAnyLoading}
       />
 

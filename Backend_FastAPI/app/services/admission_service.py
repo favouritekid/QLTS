@@ -651,6 +651,16 @@ def _compute_frontend_fields(
                   and not profile.assigned_reviewer_id),
         "unclaim": (bool(profile.assigned_reviewer_id)
                     and (profile.assigned_reviewer_id == current_user.id or is_admin)),
+        # Officer-to-lead assignment via POST /admissions/bulk/assign. Mirrors
+        # the route: admin always, manager when the lead's unit matches theirs.
+        # Not gated by profile status (route updates lead.assigned_officer_id
+        # regardless of admission state).
+        "assign_officer": is_admin or (
+            is_manager
+            and profile.lead is not None
+            and profile.lead.unit_id is not None
+            and profile.lead.unit_id == current_user.unit_id
+        ),
         "delete": status == "draft" and is_admin,
         "view": True,
     }
