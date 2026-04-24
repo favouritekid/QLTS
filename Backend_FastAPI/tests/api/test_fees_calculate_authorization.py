@@ -161,6 +161,27 @@ async def _create_approved_profile(
 
 
 @pytest.mark.asyncio
+async def test_officer_can_list_installment_plans(
+    client: AsyncClient,
+    officer_user_in_db: dict,
+):
+    """CalculateFeeDialog populates its plan Select from /api/installment-plans.
+
+    Without the PR #7 review policy, the officer token would get 403
+    here, the Select would stay empty, and the submit button would be
+    permanently disabled — the officer-scoped flow becomes a silent
+    dead-end. Test locks the Casbin read access for role:officer.
+    """
+    oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
+    resp = await client.get("/api/installment-plans", headers=oh)
+    assert resp.status_code == 200, (
+        f"Officer should be able to read installment plans, got {resp.status_code}: {resp.text[:200]}"
+    )
+    # Don't assert a specific shape — the point is Casbin admits the route.
+    assert isinstance(resp.json(), list)
+
+
+@pytest.mark.asyncio
 async def test_calculate_fee_visible_in_actions_for_owning_officer(
     client: AsyncClient,
     admin_token_headers: dict,

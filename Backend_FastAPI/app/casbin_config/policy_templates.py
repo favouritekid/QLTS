@@ -149,6 +149,13 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # _compute_permissions narrow the scope to the owning officer on a
         # profile in approved/confirmed/enrolled status.
         {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
+        # PR #7 review — CalculateFeeDialog populates the installment-plan
+        # Select from /api/installment-plans so the UI reflects the real
+        # seed (FULL / TWO_TERM / QUARTERLY) rather than guessing codes.
+        # Read-only; admin inherits via wildcard, manager/accountant via
+        # diamond inheritance on officer.
+        {"subject": "{role}", "object": "/api/installment-plans", "action": "GET"},
+        {"subject": "{role}", "object": "/api/installment-plans/{plan_id}", "action": "GET"},
         # Admission aggregate endpoints (read-only)
         {"subject": "{role}", "object": "/api/admissions/stats", "action": "GET"},  # Stats dashboard
         {"subject": "{role}", "object": "/api/admissions/status-counts", "action": "GET"},  # Tab badges
