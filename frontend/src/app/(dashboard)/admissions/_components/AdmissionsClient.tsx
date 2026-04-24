@@ -109,9 +109,13 @@ import {
   useBulkAssignAdmissions,
   useExportAdmissions,
 } from "@/hooks/admissions"
+import {
+  areAdmissionsListParamsEqual,
+  CURRENT_ADMISSIONS_YEAR,
+} from "@/hooks/admissions/filterDefaults"
 import { admissionsApi } from "@/lib/api/admissions"
 import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
-import type { AdmissionProfileResponse, AdmissionsPage } from "@/lib/zod/admissions"
+import type { AdmissionListParams, AdmissionProfileResponse, AdmissionsPage } from "@/lib/zod/admissions"
 import { getColumns, STATUS_CONFIG, ELIGIBILITY_CONFIG } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
 import { BulkRejectDialog } from "./dialogs/BulkRejectDialog"
@@ -121,7 +125,7 @@ import { BulkAssignDialog } from "./dialogs/BulkAssignDialog"
 // CONSTANTS
 // =============================================================================
 
-const CURRENT_YEAR = new Date().getFullYear()
+const CURRENT_YEAR = CURRENT_ADMISSIONS_YEAR
 
 const STATUS_OPTIONS = [
   { value: "draft", label: "Nháp" },
@@ -209,9 +213,10 @@ function formatShortDate(str: string): string {
 
 interface AdmissionsClientProps {
   initialData?: AdmissionsPage
+  initialQueryParams?: AdmissionListParams
 }
 
-export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
+export function AdmissionsClient({ initialData, initialQueryParams }: AdmissionsClientProps) {
   const queryClient = useQueryClient()
 
   // ── Filter state (URL sync + localStorage) ────────────────────────────
@@ -252,9 +257,9 @@ export function AdmissionsClient({ initialData }: AdmissionsClientProps) {
   }, [academicYears])
 
   // ── Data queries ──────────────────────────────────────────────────────
-  // Only use SSR initialData when filters match server defaults (no filters, page 1).
-  // Otherwise React Query treats stale initialData as "fresh" and skips refetch.
-  const safeInitialData = !hasActiveFilters && state.page === 1 ? initialData : undefined
+  // Only attach SSR data while the current query still matches the server query.
+  // After localStorage hydration or user edits, a new query must fetch its own data.
+  const safeInitialData = areAdmissionsListParamsEqual(apiFilters, initialQueryParams) ? initialData : undefined
   const { data, isLoading, isError, isFetching } = useListAdmissions(apiFilters, { initialData: safeInitialData })
   const { data: statusCounts } = useAdmissionStatusCounts(countFilters)
   const { data: stats } = useAdmissionStats(state.academicYear)

@@ -10,6 +10,10 @@ import { Suspense } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { serverApi } from '@/lib/api/server';
+import {
+  parseAdmissionsSearchParamsToApiParams,
+  type AdmissionsSearchParamsRecord,
+} from '@/hooks/admissions/filterDefaults';
 import { AdmissionsClient } from './_components/AdmissionsClient';
 
 /**
@@ -56,22 +60,29 @@ function AdmissionsLoading() {
 /**
  * Server Component - Fetches initial admissions data
  */
-async function AdmissionsPageContent() {
-  const initialData = await serverApi.admissions.listProfiles({
-    page: 1,
-    page_size: 20,
-  });
+async function AdmissionsPageContent({
+  searchParams,
+}: {
+  searchParams: Promise<AdmissionsSearchParamsRecord>;
+}) {
+  const resolvedParams = await searchParams;
+  const initialQueryParams = parseAdmissionsSearchParamsToApiParams(resolvedParams);
+  const initialData = await serverApi.admissions.listProfiles(initialQueryParams);
 
-  return <AdmissionsClient initialData={initialData} />;
+  return <AdmissionsClient initialData={initialData} initialQueryParams={initialQueryParams} />;
 }
 
 /**
  * Page Component (Server Component)
  */
-export default function AdmissionsPage() {
+export default function AdmissionsPage({
+  searchParams,
+}: {
+  searchParams: Promise<AdmissionsSearchParamsRecord>;
+}) {
   return (
     <Suspense fallback={<AdmissionsLoading />}>
-      <AdmissionsPageContent />
+      <AdmissionsPageContent searchParams={searchParams} />
     </Suspense>
   );
 }
