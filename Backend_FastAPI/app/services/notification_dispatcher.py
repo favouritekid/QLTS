@@ -228,49 +228,176 @@ def _extract_source_from_payload(
 async def _emit_domain_event(
     event: SystemEvents,
     payload: dict,
+    *,
+    rooms: Optional[List[str]] = None,
 ) -> None:
     """
     ✅ REAL-TIME SYNC: Emit domain event via Socket.IO for instant UI refresh.
-    
-    This broadcasts to ALL connected clients, enabling real-time data sync:
-    - Frontend receives event (e.g., "lead_created")
-    - React Query invalidates relevant queries
-    - UI automatically refetches fresh data
-    
-    Race condition prevention:
+
+    Behavior (PR #2 — socket scoping, PII leak mitigation):
+
+    - When `settings.SOCKET_SCOPED_EMIT=True` (default):
+      * Sensitive events (`event_catalog.is_public_event(event)` is False)
+        REQUIRE a non-empty ``rooms`` list. Calling without rooms logs a
+        security error and **skips the emit entirely** (fail-closed) — a
+        silent global broadcast would leak lead/applicant PII to every
+        connected client.
+      * Public events (org/pipeline/system-announcement config) MAY pass
+        ``rooms=None`` and still broadcast globally — intended for
+        all-users config metadata.
+      * When ``rooms`` is a non-empty list, the event is emitted once per
+        room. Duplicate rooms are de-duplicated to avoid double-fire.
+
+    - When `settings.SOCKET_SCOPED_EMIT=False` (legacy escape hatch):
+      ``rooms`` is ignored and every event broadcasts globally. Intended
+      only for emergency rollback without redeploy.
+
+    Race condition prevention (unchanged):
     - Includes timestamp for event ordering
     - Includes event_id for deduplication
     - Only called AFTER transaction commit (data is persisted)
-    
+
     Args:
         event: SystemEvents enum (e.g., LEAD_CREATED, CONSULTATION_UPDATED)
         payload: Event payload to send to clients
+        rooms: Optional list of Socket.IO room names to target. Required for
+               sensitive events when scoping is enabled; None triggers the
+               public/legacy broadcast path.
     """
     from app.socket_manager import sio
-    
+    from app.config import settings
+    from app.core.event_catalog import is_public_event
+
+    scoped_mode = getattr(settings, "SOCKET_SCOPED_EMIT", True)
+    event_data = {
+        **payload,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event_id": f"{event.value}:{payload.get('lead_id', payload.get('consultation_id', 'unknown'))}:{int(datetime.now().timestamp() * 1000)}",
+    }
+
+    if scoped_mode:
+        target_rooms = [r for r in (rooms or []) if r]
+        # Fail-closed: sensitive events with no rooms = security bug, do not emit
+        if not target_rooms and not is_public_event(event):
+            log.error(
+                "Sensitive event broadcast blocked: missing rooms",
+                event_type=event.value,
+                payload_keys=list(payload.keys()),
+                reason="SOCKET_SCOPED_EMIT enabled; event is sensitive and no rooms provided",
+            )
+            return
+
+        try:
+            if target_rooms:
+                # De-dupe so the same room receives the event once even if
+                # helpers overlap (e.g. assigned officer also belongs to unit).
+                seen = set()
+                for room in target_rooms:
+                    if room in seen:
+                        continue
+                    seen.add(room)
+                    await sio.emit(event.value, event_data, room=room)
+                log.info(
+                    "Domain event emitted (scoped)",
+                    event_type=event.value,
+                    rooms=sorted(seen),
+                    payload_keys=list(payload.keys()),
+                )
+            else:
+                # Public event with no rooms → global broadcast is intended
+                await sio.emit(event.value, event_data)
+                log.info(
+                    "Domain event broadcast (public)",
+                    event_type=event.value,
+                    payload_keys=list(payload.keys()),
+                )
+        except Exception as e:  # pragma: no cover — non-critical
+            log.warning(
+                "Failed to emit domain event (non-critical)",
+                event_type=event.value,
+                error=str(e),
+            )
+        return
+
+    # Legacy path — SOCKET_SCOPED_EMIT disabled (rollback escape hatch)
     try:
-        # Create event data with timestamp for race condition handling
-        event_data = {
-            **payload,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event_id": f"{event.value}:{payload.get('lead_id', payload.get('consultation_id', 'unknown'))}:{int(datetime.now().timestamp() * 1000)}",
-        }
-        
-        # Broadcast to all connected clients
         await sio.emit(event.value, event_data)
-        
         log.info(
-            "Domain event broadcast",
+            "Domain event broadcast (legacy global)",
             event_type=event.value,
-            payload_keys=list(payload.keys())
+            payload_keys=list(payload.keys()),
         )
-    except Exception as e:
-        # Non-critical failure - log warning but don't raise
+    except Exception as e:  # pragma: no cover — non-critical
         log.warning(
             "Failed to emit domain event (non-critical)",
             event_type=event.value,
-            error=str(e)
+            error=str(e),
         )
+
+
+# =============================================================================
+# ROOM HELPERS — Socket.IO scoping for domain events with lead/applicant PII
+# =============================================================================
+#
+# These helpers build the `rooms=` list for `_emit_domain_event` so that
+# sensitive events (admission mutations, lead/consultation updates, finance
+# transactions) reach only the users who legitimately need realtime sync:
+#
+#   * `role_admin`                             — admin users (global visibility)
+#   * `unit_<lead.unit_id>`                    — manager/officer in the owning unit
+#   * `user_room_<lead.assigned_officer_id>`   — assigned officer across units
+#
+# Caller responsibility: eager-load `profile.lead` (selectinload) before
+# calling `_rooms_for_admission`. The helper returns `["role_admin"]` only
+# if the lead relationship or its scoping fields are unavailable — in that
+# case admins still see the event while unit/officer targeting is skipped.
+
+
+def _rooms_for_admission(profile) -> List[str]:
+    """Compute Socket.IO rooms for an admission-scoped event.
+
+    Returns a list containing `role_admin` + (if available) the owning
+    unit's room and the assigned officer's personal room.
+    """
+    rooms: List[str] = ["role_admin"]
+    lead = getattr(profile, "lead", None) if profile is not None else None
+    if lead is not None:
+        unit_id = getattr(lead, "unit_id", None)
+        if unit_id is not None:
+            rooms.append(f"unit_{unit_id}")
+        officer_id = getattr(lead, "assigned_officer_id", None)
+        if officer_id is not None:
+            rooms.append(f"user_room_{officer_id}")
+    return rooms
+
+
+def _rooms_for_lead(lead) -> List[str]:
+    """Compute Socket.IO rooms for a lead-scoped event.
+
+    Mirror of `_rooms_for_admission` for events that carry a Lead row
+    directly (e.g. LEAD_CREATED, LEAD_ASSIGNED).
+    """
+    rooms: List[str] = ["role_admin"]
+    if lead is not None:
+        unit_id = getattr(lead, "unit_id", None)
+        if unit_id is not None:
+            rooms.append(f"unit_{unit_id}")
+        officer_id = getattr(lead, "assigned_officer_id", None)
+        if officer_id is not None:
+            rooms.append(f"user_room_{officer_id}")
+    return rooms
+
+
+def _rooms_for_user(user_id: Optional[int]) -> List[str]:
+    """Rooms for user-targeted sensitive events (USER_DEACTIVATED, USER_ROLE_CHANGED, SUSPICIOUS_LOGIN).
+
+    Admin visibility + the target user's personal inbox. No unit scoping —
+    user-centric events do not derive from an admission/lead tree.
+    """
+    rooms: List[str] = ["role_admin"]
+    if user_id is not None:
+        rooms.append(f"user_room_{user_id}")
+    return rooms
 
 
 async def _send_via_channel(
@@ -451,6 +578,7 @@ async def dispatch(
     dedupe_key: Optional[str] = None,
     skip_preference_check: bool = False,
     strict: bool = False,
+    rooms: Optional[List[str]] = None,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification event — caller-controlled transaction.
@@ -481,6 +609,12 @@ async def dispatch(
                 rolls back only the surrounding SAVEPOINT, leaving the
                 outer business transaction alive. Default False preserves
                 legacy best-effort behavior for all non-bundle callers.
+        rooms: Optional Socket.IO rooms for the realtime domain emit.
+               Required for sensitive events (admission/lead/finance/user
+               PII) when ``settings.SOCKET_SCOPED_EMIT=True``; public
+               events (org/pipeline config) may pass None and broadcast.
+               Use ``_rooms_for_admission(profile)`` / ``_rooms_for_lead(lead)``
+               / ``_rooms_for_user(user_id)`` helpers at the call site.
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
@@ -518,7 +652,7 @@ async def dispatch(
     if not definition or definition.retired:
         log.warning("Unknown or retired event, skip dispatch", event_type=event.value)
         async def _domain_only_callback():
-            await _emit_domain_event(event, payload)
+            await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
     if definition.notification_class != "user":
@@ -526,7 +660,7 @@ async def dispatch(
         log.debug("Non-user event, domain-only dispatch",
                   event_type=event.value, cls=definition.notification_class)
         async def _domain_only_callback():
-            await _emit_domain_event(event, payload)
+            await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
     # Load DB rule (single source for user events)
@@ -536,7 +670,7 @@ async def dispatch(
         log.error("Config error loading rule, skip dispatch",
                   event_type=event.value, error=str(e))
         async def _domain_only_callback():
-            await _emit_domain_event(event, payload)
+            await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
     if not config:
@@ -545,7 +679,7 @@ async def dispatch(
             event_type=event.value,
         )
         async def _domain_only_callback():
-            await _emit_domain_event(event, payload)
+            await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
     rule_source = "database"
@@ -579,7 +713,7 @@ async def dispatch(
                 condition=config.condition
             )
             async def _domain_only_callback():
-                await _emit_domain_event(event, payload)
+                await _emit_domain_event(event, payload, rooms=rooms)
             return [], _domain_only_callback
 
     # Step 2: Phase 3b — per-action recipient resolution
@@ -629,7 +763,7 @@ async def dispatch(
     if not all_internal_user_ids and not has_external_actions:
         log.info("No recipients resolved for event (still emitting domain event)", event_type=event.value)
         async def _domain_only_callback():
-            await _emit_domain_event(event, payload)
+            await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
     log.info(
@@ -740,7 +874,7 @@ async def dispatch(
         log.info("All recipients filtered out (still emitting domain event)",
                 event_type=event.value, group=group.value)
         async def _domain_only_callback():
-            await _emit_domain_event(event, payload)
+            await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
     log.info(
@@ -1070,7 +1204,7 @@ async def dispatch(
         )
 
         # Step 7.25: ✅ REAL-TIME SYNC: Emit domain event for UI refresh
-        await _emit_domain_event(event, payload)
+        await _emit_domain_event(event, payload, rooms=rooms)
 
         # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
         # Only cache for browser-eligible users (bell icon / dropdown).
@@ -1551,13 +1685,16 @@ async def dispatch_to_user(
     user_id: int,
     event: SystemEvents,
     payload: dict,
-    dedupe_key: Optional[str] = None
+    dedupe_key: Optional[str] = None,
+    rooms: Optional[List[str]] = None,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification to a specific user.
 
     Convenience wrapper that ensures the user_id is in the payload
-    for SpecificUsersResolver.
+    for SpecificUsersResolver. Default Socket.IO scope is the target
+    user's personal room + admins (``_rooms_for_user``) — callers may
+    override via ``rooms=`` if the event needs broader/narrower targeting.
 
     Args:
         db: Database session
@@ -1565,13 +1702,15 @@ async def dispatch_to_user(
         event: System event
         payload: Event payload
         dedupe_key: Optional deduplication key
+        rooms: Optional explicit Socket.IO rooms override.
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
         Caller is responsible for calling db.commit() then callback().
     """
     payload["user_id"] = user_id
-    return await dispatch(db, event, payload, dedupe_key)
+    effective_rooms = rooms if rooms is not None else _rooms_for_user(user_id)
+    return await dispatch(db, event, payload, dedupe_key, rooms=effective_rooms)
 
 
 async def dispatch_to_users(
@@ -1579,13 +1718,15 @@ async def dispatch_to_users(
     user_ids: List[int],
     event: SystemEvents,
     payload: dict,
-    dedupe_key: Optional[str] = None
+    dedupe_key: Optional[str] = None,
+    rooms: Optional[List[str]] = None,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification to multiple specific users.
 
-    Convenience wrapper that ensures user_ids is in the payload
-    for SpecificUsersResolver.
+    Convenience wrapper that ensures user_ids is in the payload for
+    SpecificUsersResolver. Default Socket.IO scope emits to each target
+    user's personal room + admins.
 
     Args:
         db: Database session
@@ -1593,13 +1734,21 @@ async def dispatch_to_users(
         event: System event
         payload: Event payload
         dedupe_key: Optional deduplication key
+        rooms: Optional explicit Socket.IO rooms override.
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
         Caller is responsible for calling db.commit() then callback().
     """
     payload["user_ids"] = user_ids
-    return await dispatch(db, event, payload, dedupe_key)
+    if rooms is None:
+        effective_rooms: List[str] = ["role_admin"]
+        for uid in user_ids or []:
+            if uid is not None:
+                effective_rooms.append(f"user_room_{uid}")
+    else:
+        effective_rooms = rooms
+    return await dispatch(db, event, payload, dedupe_key, rooms=effective_rooms)
 
 
 async def dispatch_system_alert(
@@ -1607,12 +1756,19 @@ async def dispatch_system_alert(
     severity: str,
     message: str,
     action_url: Optional[str] = None,
-    user_ids: Optional[List[int]] = None
+    user_ids: Optional[List[int]] = None,
+    rooms: Optional[List[str]] = None,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a system alert to all users or specific users.
 
-    Convenience wrapper for SYSTEM_ALERT event.
+    Convenience wrapper for SYSTEM_ALERT event. SYSTEM_ALERT is classified
+    as sensitive (see event_catalog): payloads carry severity + targeted
+    action URLs that must not leak across unrelated users. When callers
+    provide ``user_ids`` the default scope is those users' personal rooms
+    plus admins; when targeting all users (``user_ids=None``) the caller
+    must pass ``rooms=`` explicitly — otherwise the fail-closed guard in
+    ``_emit_domain_event`` blocks the broadcast.
 
     Args:
         db: Database session
@@ -1620,6 +1776,7 @@ async def dispatch_system_alert(
         message: Alert message
         action_url: Optional URL for action
         user_ids: Optional list of specific users (default: all users)
+        rooms: Optional explicit Socket.IO rooms override.
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
@@ -1634,11 +1791,22 @@ async def dispatch_system_alert(
     if user_ids:
         payload["user_ids"] = user_ids
 
+    if rooms is not None:
+        effective_rooms: Optional[List[str]] = rooms
+    elif user_ids:
+        effective_rooms = ["role_admin"] + [f"user_room_{uid}" for uid in user_ids if uid is not None]
+    else:
+        # All-users alert has no implicit scope — caller must opt in via ``rooms``
+        # or flip the event to public in the catalog. Leave None so the
+        # fail-closed guard surfaces the misconfiguration.
+        effective_rooms = None
+
     return await dispatch(
         db=db,
         event=SystemEvents.SYSTEM_ALERT,
         payload=payload,
-        skip_preference_check=(severity == "error")  # Don't skip critical alerts
+        skip_preference_check=(severity == "error"),  # Don't skip critical alerts
+        rooms=effective_rooms,
     )
 
 
@@ -1652,6 +1820,7 @@ async def safe_dispatch(
     payload: dict,
     dedupe_key: Optional[str] = None,
     skip_preference_check: bool = False,
+    rooms: Optional[List[str]] = None,
 ) -> List[int]:
     """
     Fire-and-forget dispatch — commits + runs callback + swallows errors.
@@ -1693,6 +1862,7 @@ async def safe_dispatch(
             payload=payload,
             dedupe_key=dedupe_key,
             skip_preference_check=skip_preference_check,
+            rooms=rooms,
         )
         await db.commit()
         if notif_cb:

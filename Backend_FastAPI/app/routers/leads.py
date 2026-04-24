@@ -13,7 +13,7 @@ from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_
 from ..schemas.collaborator import LeadValidityUpdate
 from ..services import distribution_service, insights_service, lead_service
 from ..utils.csv_helpers import sanitize_csv_cell
-from ..services.notification_dispatcher import safe_dispatch  # ✅ NOTIFICATION 2.0
+from ..services.notification_dispatcher import safe_dispatch, _rooms_for_lead  # ✅ NOTIFICATION 2.0 + scoped rooms
 from ..services.notification_payloads import EventPayload  # ✅ Phase 1
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..core.constants import UserRole
@@ -667,6 +667,7 @@ async def update_existing_lead(
                 updated_fields=updated_fields,
             ),
             dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
+            rooms=_rooms_for_lead(result),
         )
 
         # Commission check (Path 1)
@@ -687,6 +688,7 @@ async def update_existing_lead(
             status_changed=status_changed,
         ),
         dedupe_key=f"lead_updated:{result.id}:{int(datetime.now().timestamp())}",
+        rooms=_rooms_for_lead(result),
     )
 
     return result
@@ -741,6 +743,7 @@ async def delete_lead(
         event=SystemEvents.LEAD_DELETED,
         payload=EventPayload.for_lead_deleted(deleted_lead, current_user),
         dedupe_key=f"lead_deleted:{deleted_lead.id}",
+        rooms=_rooms_for_lead(lead),
     )
 
     return None
@@ -787,6 +790,7 @@ async def restore_lead(
         event=SystemEvents.LEAD_RESTORED,
         payload=EventPayload.for_lead_restored(restored_lead, current_user),
         dedupe_key=EventPayload.dedupe_key("lead_restored", restored_lead.id),
+        rooms=_rooms_for_lead(lead),
     )
 
     return restored_lead
@@ -823,6 +827,7 @@ async def add_new_consultation(
         event=SystemEvents.CONSULTATION_CREATED,
         payload=EventPayload.for_consultation_created(consultation, lead, current_user),
         dedupe_key=f"consultation_created:{consultation.id}",
+        rooms=_rooms_for_lead(lead),
     )
 
     # Cascade: if consultation caused lead pipeline change, dispatch LEAD_STATUS_CHANGED
@@ -843,6 +848,7 @@ async def add_new_consultation(
                 "actor_name": current_user.full_name or current_user.username,
             },
             dedupe_key=f"lead_status_changed:{lead.id}:{lead.consultation_status_id}",
+            rooms=_rooms_for_lead(lead),
         )
 
     return schemas.ConsultationCreateResult(
@@ -1033,6 +1039,7 @@ async def update_a_consultation(
             event=SystemEvents.CONSULTATION_UPDATED,
             payload=EventPayload.for_consultation_updated(result, lead, current_user, old_status_id=old_status_id),
             dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
+            rooms=_rooms_for_lead(result),
         )
 
         # Commission check (Path 3 - consultation update)
@@ -1062,6 +1069,7 @@ async def update_a_consultation(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"lead_status_changed:{lead.id}:{lead.consultation_status_id}",
+                rooms=_rooms_for_lead(lead),
             )
 
     return result
@@ -1099,6 +1107,7 @@ async def delete_a_consultation(
         event=SystemEvents.CONSULTATION_DELETED,
         payload=EventPayload.for_consultation_deleted(consultation_id, lead, current_user),
         dedupe_key=f"consultation_deleted:{consultation_id}",
+        rooms=_rooms_for_lead(lead),
     )
 
     return None
@@ -1498,6 +1507,7 @@ async def officer_import_leads(
                     filename=file.filename or "unknown",
                     created_lead_ids=result.created_lead_ids,
                 ),
+                rooms=_rooms_for_lead(lead),
             )
 
         return result
@@ -1642,6 +1652,7 @@ async def update_lead_consultation_status(
             officer_name=lead.assigned_officer.full_name if lead.assigned_officer else "Unknown",
         ),
         dedupe_key=f"lead_status_changed:{lead.id}:{validated_status.id}",
+        rooms=_rooms_for_lead(lead),
     )
 
     # Commission check (Path 2 - FSM)

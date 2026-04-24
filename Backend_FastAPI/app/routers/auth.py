@@ -185,6 +185,9 @@ async def _complete_login_flow(
                 "actor_id": _notif_user_id,
             }
 
+            from ..services.notification_dispatcher import _rooms_for_user
+            _notif_rooms = _rooms_for_user(_notif_user_id)
+
             async def _dispatch_suspicious_login():
                 try:
                     async with database.AsyncSessionLocal() as notif_db:
@@ -192,6 +195,7 @@ async def _complete_login_flow(
                             db=notif_db,
                             event=SystemEvents.SUSPICIOUS_LOGIN,
                             payload=_notif_payload,
+                            rooms=_notif_rooms,
                         )
                 except Exception as notif_error:
                     log.error("Failed to dispatch suspicious login notification",

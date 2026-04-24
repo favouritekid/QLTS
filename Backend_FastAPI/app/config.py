@@ -369,6 +369,20 @@ class Settings(BaseSettings):
     FINANCE_MAKER_CHECKER_ENABLED: bool = Field(
         default=True, validation_alias="FINANCE_MAKER_CHECKER_ENABLED"
     )  # Require two-person verification for manual payments
+
+    # ---------------------------------------------------------------------
+    # Socket.IO — PII leak mitigation (PR #2 admission audit)
+    # ---------------------------------------------------------------------
+    # When True, `_emit_domain_event` honors the `rooms=` kwarg and fails
+    # closed for sensitive events that reach the emitter without explicit
+    # targeting. When False (legacy), rooms are ignored and every event
+    # broadcasts globally — the pre-fix behavior kept only as a rollback
+    # escape hatch. Default True per PR #2 acceptance: the fix must be
+    # active in production after deploy, not deferred behind a manual flip.
+    SOCKET_SCOPED_EMIT: bool = Field(
+        default=True, validation_alias="SOCKET_SCOPED_EMIT"
+    )
+
     ENABLE_FEE_VERIFICATION: bool = Field(
         default=False, validation_alias="ENABLE_FEE_VERIFICATION"
     )  # Block enrollment if tuition fee not paid/waived (Phase 6)

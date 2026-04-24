@@ -46,6 +46,7 @@ from .notification_bundle import (
     compose_post_commit_callbacks,
     dispatch_bundle,
 )
+from .notification_dispatcher import _rooms_for_admission
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -3588,6 +3589,7 @@ async def enroll_student(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"student_enrolled:{result_dict['student_id']}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -3600,6 +3602,7 @@ async def enroll_student(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts11",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -3808,6 +3811,7 @@ async def approve_profile(
                     "actor_name": approver.full_name or approver.username,
                 },
                 dedupe_key=f"admission_profile_approved:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -3820,6 +3824,7 @@ async def approve_profile(
                     "actor_name": approver.full_name or approver.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4006,6 +4011,7 @@ async def reject_profile(
                     "actor_name": rejector.full_name or rejector.username,
                 },
                 dedupe_key=f"admission_profile_rejected:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4018,6 +4024,7 @@ async def reject_profile(
                     "actor_name": rejector.full_name or rejector.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4195,6 +4202,7 @@ async def request_revision(
                     "actor_name": reviewer.full_name or reviewer.username,
                 },
                 dedupe_key=f"admission_profile_revision:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4207,6 +4215,7 @@ async def request_revision(
                     "actor_name": reviewer.full_name or reviewer.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts17",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4379,6 +4388,7 @@ async def record_application_fee_payment(
         ),
     }
     _db = db
+    _rooms = _rooms_for_admission(profile)
 
     async def post_commit():
         from app.services.notification_dispatcher import safe_dispatch
@@ -4392,6 +4402,7 @@ async def record_application_fee_payment(
             db=_db,
             event=SystemEvents.APPLICATION_FEE_PAID,
             payload=_notify_payload,
+            rooms=_rooms,
         )
 
     return profile, post_commit
@@ -4581,6 +4592,7 @@ async def resubmit_profile(
                     "actor_name": officer.full_name or officer.username,
                 },
                 dedupe_key=f"admission_profile_resubmitted:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4593,6 +4605,7 @@ async def resubmit_profile(
                     "actor_name": officer.full_name or officer.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts07",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4983,6 +4996,7 @@ async def finalize_profile(
                     "actor_name": admin.full_name or admin.username,
                 },
                 dedupe_key=f"admission_profile_finalized:{profile_id}",
+                rooms=_rooms_for_admission(locked_profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4995,6 +5009,7 @@ async def finalize_profile(
                     "actor_name": admin.full_name or admin.username,
                 },
                 dedupe_key=f"lead_status_changed:{locked_profile.lead_id}:sts11",
+                rooms=_rooms_for_admission(locked_profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -5270,6 +5285,7 @@ async def withdraw_profile(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"admission_profile_withdrawn:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -5282,6 +5298,7 @@ async def withdraw_profile(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts08",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -5431,6 +5448,7 @@ async def mark_student_dropped(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"admission_profile_dropped:{profile.id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -5443,6 +5461,7 @@ async def mark_student_dropped(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts12",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -5985,6 +6004,7 @@ async def bulk_approve(
                             "actor_name": approver.full_name or approver.username,
                         },
                         dedupe_key=f"admission_profile_approved:{profile.id}",
+                        rooms=_rooms_for_admission(profile),
                     ),
                     NotificationIntent(
                         event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -5997,6 +6017,7 @@ async def bulk_approve(
                             "actor_name": approver.full_name or approver.username,
                         },
                         dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+                        rooms=_rooms_for_admission(profile),
                     ),
                 ]
                 bundle = await dispatch_bundle(
@@ -6201,6 +6222,7 @@ async def bulk_reject(
                             "actor_name": rejector.full_name or rejector.username,
                         },
                         dedupe_key=f"admission_profile_rejected:{profile.id}",
+                        rooms=_rooms_for_admission(profile),
                     ),
                     NotificationIntent(
                         event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -6213,6 +6235,7 @@ async def bulk_reject(
                             "actor_name": rejector.full_name or rejector.username,
                         },
                         dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+                        rooms=_rooms_for_admission(profile),
                     ),
                 ]
                 bundle = await dispatch_bundle(

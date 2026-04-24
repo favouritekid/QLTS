@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from string import Template
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from app.core.events import SystemEvents
 
@@ -73,6 +73,17 @@ class EventDefinition:
     # Classification (3-tier)
     notification_class: str = "user"             # "user" | "broadcast_only" | "internal_future"
     retired: bool = False
+
+    # Privacy (Socket.IO scoping — PR #2 socket_scoped_emit):
+    # - "public": safe to broadcast globally via `sio.emit(event, data)` — no PII.
+    #             Examples: pipeline_config_updated, change_template_*, system_announcement,
+    #             organization structure changes (unit/program/offering CRUD).
+    # - "sensitive": carries lead/applicant/user PII — MUST be emitted with explicit
+    #                `rooms` targeting (unit_<id> + role_admin + user_room_<id>).
+    #                When `SOCKET_SCOPED_EMIT=true`, dispatcher fails closed if a
+    #                sensitive event reaches `_emit_domain_event` without rooms.
+    # Default "sensitive" forces explicit opt-in for anything that should broadcast.
+    privacy: Literal["public", "sensitive"] = "sensitive"
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1015,10 @@ _SYSTEM_EVENTS: tuple = (
         default_channels=("browser", "email"),
         priority=10,
         link_strategy="${action_url}",
+        # Admin-triggered system-wide alert (severity + message, no PII);
+        # intentional broadcast to all users. Per-user SYSTEM_ALERT helper
+        # (dispatch_system_alert) plumbs rooms explicitly for scoped sends.
+        privacy="public",
     ),
     EventDefinition(
         event=SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE,
@@ -1021,6 +1036,8 @@ _SYSTEM_EVENTS: tuple = (
         default_channels=("browser",),
         priority=20,
         link_strategy="${action_url}",
+        # Holiday calendar config — meant for all admins, no PII
+        privacy="public",
     ),
     EventDefinition(
         event=SystemEvents.SYSTEM_ANNOUNCEMENT,
@@ -1037,6 +1054,8 @@ _SYSTEM_EVENTS: tuple = (
         allowed_resolvers=_SYSTEM_RESOLVERS,
         default_channels=("browser", "email"),
         priority=50,
+        # System-wide announcement — intended broadcast, no lead/user PII
+        privacy="public",
     ),
     EventDefinition(
         event=SystemEvents.USER_ROLE_CHANGED,
@@ -1106,6 +1125,8 @@ _SYSTEM_EVENTS: tuple = (
         default_channels=("browser",),
         priority=100,
         link_strategy="/admin/pipeline",
+        # Pipeline config metadata — no PII, all admins need realtime sync
+        privacy="public",
     ),
     EventDefinition(
         event=SystemEvents.SUSPICIOUS_LOGIN,
@@ -1142,6 +1163,8 @@ _BROADCAST_EVENTS: tuple = tuple(
         display_name=ev.value.replace("_", " ").title(),
         description=f"Broadcast-only: {ev.value}",
         notification_class="broadcast_only",
+        # Org structure CRUD — no lead/applicant PII, safe to broadcast globally
+        privacy="public",
     )
     for ev in (
         SystemEvents.UNIT_CREATED, SystemEvents.UNIT_UPDATED, SystemEvents.UNIT_DELETED,
@@ -1163,6 +1186,9 @@ _BROADCAST_EVENTS: tuple = tuple(
         ),
         link_strategy="/leads/${lead_id}",
         notification_class="broadcast_only",
+        # LEAD_UPDATED carries lead_id + updated_fields → must scope to unit/officer
+        # even though notification_class says broadcast_only (broadcast_only = no persistence, not no-scoping).
+        privacy="sensitive",
     ),
 )
 
@@ -1284,6 +1310,22 @@ def get_event_by_key(key: str) -> Optional[EventDefinition]:
         if ev.value == key:
             return defn
     return None
+
+
+def is_public_event(event: SystemEvents) -> bool:
+    """
+    True when the event is safe to broadcast globally via Socket.IO.
+
+    Used by `notification_dispatcher._emit_domain_event` to enforce the
+    fail-closed guard when `SOCKET_SCOPED_EMIT=true` — a sensitive event
+    that reaches the emitter without explicit `rooms=` must be blocked
+    rather than silently broadcast. Unknown events (missing from catalog)
+    are treated as sensitive (safe default).
+    """
+    defn = EVENT_CATALOG.get(event)
+    if defn is None:
+        return False  # Unknown event → treat as sensitive
+    return defn.privacy == "public"
 
 
 def get_notifiable_events() -> List[EventDefinition]:

@@ -46,7 +46,7 @@ from app.schemas.collaborator import (
 from app.core.events import SystemEvents
 from app.core.rate_limits import limiter, RateLimits
 from app.services import collaborator_service
-from app.services.notification_dispatcher import safe_dispatch
+from app.services.notification_dispatcher import safe_dispatch, _rooms_for_user
 from app.utils.exceptions import ResourceNotFoundError
 
 # ============================================================================
@@ -201,6 +201,7 @@ async def review_claim(
 
     # Dispatch notification to CTV
     ctv_user_id = claim.collaborator.user_id if claim.collaborator else None
+    _ctv_rooms = _rooms_for_user(ctv_user_id) if ctv_user_id else ["role_admin"]
     if review_data.status == "approved":
         await safe_dispatch(
             db=db,
@@ -213,6 +214,7 @@ async def review_claim(
                 "actor_id": current_user.id,
             },
             dedupe_key=f"ctv_claim_approved:{claim.id}",
+            rooms=_ctv_rooms,
         )
     else:
         await safe_dispatch(
@@ -227,6 +229,7 @@ async def review_claim(
                 "actor_id": current_user.id,
             },
             dedupe_key=f"ctv_claim_rejected:{claim.id}",
+            rooms=_ctv_rooms,
         )
 
     # Reload for response
@@ -289,6 +292,7 @@ async def approve_collaborator_endpoint(
                 "actor_id": current_user.id,
             },
             dedupe_key=f"ctv_approved:{approved.id}",
+            rooms=_rooms_for_user(approved.user_id),
         )
 
     # Reload with relationships
@@ -343,6 +347,7 @@ async def suspend_collaborator_endpoint(
                 "actor_id": current_user.id,
             },
             dedupe_key=f"ctv_suspended:{collaborator.id}",
+            rooms=_rooms_for_user(collaborator.user_id),
         )
 
     repo = CollaboratorRepository(db)
@@ -411,7 +416,10 @@ async def submit_lead(
     if callback:
         await callback()
 
-    # Dispatch notification
+    # Dispatch notification — recipients are unit managers + admins reviewing CTV submissions.
+    _submit_rooms = ["role_admin"]
+    if collaborator.unit_id:
+        _submit_rooms.append(f"unit_{collaborator.unit_id}")
     await safe_dispatch(
         db=db,
         event=SystemEvents.CTV_CLAIM_SUBMITTED,
@@ -425,6 +433,7 @@ async def submit_lead(
             "actor_id": collaborator.user_id or 0,
         },
         dedupe_key=f"ctv_claim_submitted:{claim.id}",
+        rooms=_submit_rooms,
     )
 
     # Reload for response

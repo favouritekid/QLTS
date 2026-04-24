@@ -266,6 +266,7 @@ def check_consultation_reminders_task(self):
                             minutes_until=minutes_until,
                             major_name=major_name,
                         ),
+                        rooms=notification_dispatcher._rooms_for_lead(lead),
                     )
                     if notif_cb:
                         post_commit_callbacks.append(notif_cb)

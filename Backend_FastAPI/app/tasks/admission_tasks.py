@@ -186,6 +186,7 @@ def check_admission_surveys_due_task(self):
                                 submitted_at=submitted_ref,
                                 tracking_id=tracking_id,
                             ),
+                            rooms=notification_dispatcher._rooms_for_admission(profile),
                         )
                         if notif_cb:
                             post_commit_callbacks.append(notif_cb)

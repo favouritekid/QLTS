@@ -33,7 +33,7 @@ from ..core.deps import (
     get_admission_for_user,
 )
 from ..services import admission_service
-from ..services.notification_dispatcher import safe_dispatch
+from ..services.notification_dispatcher import safe_dispatch, _rooms_for_admission, _rooms_for_lead
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
     ResourceNotFoundError,
@@ -289,7 +289,8 @@ async def create_admission_profile(
                 "actor_id": current_user.id,
                 "actor_name": current_user.full_name or current_user.username,
             },
-            dedupe_key=f"admission_profile_created:{profile.id}"
+            dedupe_key=f"admission_profile_created:{profile.id}",
+            rooms=_rooms_for_admission(profile),
         )
 
         return profile
@@ -695,6 +696,9 @@ async def submit_admission_profile(
         # Service returns status="submitted" on success (not "approved"/"rejected").
         if result["status"] == "submitted":
             profile_row = await db.get(models.AdmissionProfile, profile_id)
+            _submit_lead = None
+            if profile_row and profile_row.lead_id:
+                _submit_lead = await db.get(models.Lead, profile_row.lead_id)
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.APPLICATION_STATUS_CHANGED,
@@ -706,7 +710,8 @@ async def submit_admission_profile(
                     "actor_id": current_user.id,
                     "actor_name": current_user.full_name or current_user.username,
                 },
-                dedupe_key=f"admission_profile_submitted:{profile_id}"
+                dedupe_key=f"admission_profile_submitted:{profile_id}",
+                rooms=_rooms_for_lead(_submit_lead),
             )
 
         return result
@@ -1105,6 +1110,9 @@ async def delete_admission_profile(
 
         # Dispatch APPLICATION_DELETED (profile is gone, use snapshot)
         if _snapshot_lead_id:
+            # Lead row still exists (FK was profile→lead, profile gone but lead kept).
+            # Fetch it so scoped emit can include unit + assigned officer rooms.
+            _deleted_lead = await db.get(models.Lead, _snapshot_lead_id)
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.APPLICATION_DELETED,
@@ -1116,6 +1124,7 @@ async def delete_admission_profile(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"admission_profile_deleted:{profile_id}",
+                rooms=_rooms_for_lead(_deleted_lead),
             )
 
         log.info(
@@ -1654,6 +1663,7 @@ async def override_admission(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"admission_profile_overridden:{profile_id}",
+                rooms=_rooms_for_admission(result),
             )
 
         # 5. RETURN Pydantic Model
@@ -1904,6 +1914,7 @@ async def confirm_admission_by_token(
                     "actor_name": "Ứng viên xác nhận",
                 },
                 dedupe_key=f"admission_profile_confirmed:{profile.id}",
+                rooms=_rooms_for_admission(profile),
             )
 
         # 5. RETURN Response
