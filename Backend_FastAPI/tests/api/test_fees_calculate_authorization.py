@@ -212,6 +212,68 @@ async def test_calculate_fee_hidden_for_officer_on_draft(
 
 
 @pytest.mark.asyncio
+async def test_calculate_fee_hidden_for_same_unit_unassigned_officer(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Officer in the same unit but NOT assigned to the lead must NOT see
+    calculate_fee nor be able to hit the route.
+
+    Catches the regression where the scope formula gets loosened from
+    `same-unit AND assigned` to `same-unit`. Approves the profile via
+    admin, then un-assigns the officer from the lead (lead.assigned_
+    officer_id = NULL) and re-queries both the admission detail and the
+    fee-calc route.
+    """
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="PR7 UnassignedProbe",
+    )
+
+    # Un-assign the officer from the lead — officer keeps same unit_id.
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            from sqlalchemy import select, update
+            prof = (await s.execute(
+                select(models.AdmissionProfile).where(models.AdmissionProfile.id == pid)
+            )).scalar_one()
+            await s.execute(
+                update(models.Lead)
+                .where(models.Lead.id == prof.lead_id)
+                .values(assigned_officer_id=None)
+            )
+
+    oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
+    # GET: flag removed from available_actions.
+    # IDOR on GET for officer requires lead.assigned_officer_id match when
+    # unit_id matches — unassigning drops them out of scope entirely, so
+    # the profile read itself returns 404.
+    detail = await client.get(f"{ADMISSIONS}/{pid}", headers=oh)
+    assert detail.status_code == 404, (
+        f"Same-unit but unassigned officer should lose profile access entirely; "
+        f"got {detail.status_code}: {detail.text[:200]}"
+    )
+
+    # POST /fees/calculate: service-layer _fee_calc_authorized rejects
+    # even if Casbin admits the route.
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=oh,
+    )
+    assert resp.status_code in (403, 404), (
+        f"Same-unit unassigned officer should be denied, got {resp.status_code}: {resp.text[:200]}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_calculate_fee_route_404_for_cross_unit_officer(
     client: AsyncClient,
     admin_token_headers: dict,

@@ -25,6 +25,19 @@ vi.mock("@/hooks/finance/useFees", async () => {
   };
 });
 
+// PR #7 review: dialog fetches active plans instead of hard-coding codes.
+// Stub them so the Select renders without a real network call.
+vi.mock("@/hooks/finance/useInstallmentPlans", () => ({
+  useInstallmentPlans: () => ({
+    data: [
+      { id: 1, code: "FULL", name: "Thanh toán 1 lần", is_active: true, schedule: [] },
+      { id: 2, code: "TWO_TERM", name: "Thanh toán 2 đợt", is_active: true, schedule: [] },
+      { id: 3, code: "QUARTERLY", name: "Thanh toán theo quý", is_active: true, schedule: [] },
+    ],
+    isLoading: false,
+  }),
+}));
+
 describe("CalculateFeeDialog", () => {
   beforeEach(() => {
     mutateAsync.mockReset();

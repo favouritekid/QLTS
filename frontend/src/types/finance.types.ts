@@ -366,6 +366,9 @@ export interface FeeCalculateRequest {
   admission_profile_id: number
   fee_type?: FeeType
   installment_plan_code?: string // defaults to "FULL"
+  // PR #7 — semester number for tuition fees. Defaults to 1 (HK1) on the
+  // backend when omitted; must stay null/undefined for non-tuition types.
+  semester_no?: number | null
 }
 
 export interface FeeWaiveRequest {

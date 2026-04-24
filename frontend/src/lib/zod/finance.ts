@@ -514,6 +514,10 @@ export const feeCalculateRequestSchema = z.object({
   admission_profile_id: z.number().int().positive("Vui lòng chọn hồ sơ"),
   fee_type: feeTypeSchema.optional(),
   installment_plan_code: z.string().optional(), // defaults to "FULL"
+  // PR #7 — HK number for tuition. Optional + nullable mirrors the backend
+  // contract (defaults to 1 when omitted for tuition; must be null/unset
+  // for non-tuition types).
+  semester_no: z.number().int().positive().nullable().optional(),
 })
 
 export type FeeCalculateRequest = z.infer<typeof feeCalculateRequestSchema>

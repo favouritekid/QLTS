@@ -228,18 +228,35 @@ async def calculate_fee(
     invoice_service = InvoiceService(db)
 
     try:
-        # Get installment plan by code
-        plan = await fee_service.fee_repo.get_installment_plan_by_code(data.installment_plan_code)
-        plan_id = plan.id if plan else None
-
         # PR #7 — unscoped eager-load first so we can run authz on the actual
         # profile/lead attributes, then decide 404 explicitly. The old
         # prefilter unit_id = None|user.unit_id bundled authz into the query
         # and narrowed too wide for officers (same-unit but not assigned).
+        # Authorization runs BEFORE plan-code validation so unauthorized
+        # callers get a uniform 404 and can't distinguish "valid plan but
+        # not my profile" from "invalid plan".
         profile = await fee_service._get_profile(data.admission_profile_id, unit_id=None)
         if not profile or not _fee_calc_authorized(profile, current_user):
             # 404 not 403: no existence leak beyond scope, same as other IDOR sites.
             raise ResourceNotFoundError("Admission profile not found")
+
+        # Get installment plan by code. PR #7 review: reject unknown or
+        # inactive codes explicitly instead of falling through to plan_id=None
+        # (which InvoiceService silently downgrades to a single-payment
+        # invoice). Previously the dialog could post INSTALLMENT (not a real
+        # seed code) and the user would still see the fee created but with a
+        # single-installment schedule — actively misleading.
+        plan = await fee_service.fee_repo.get_installment_plan_by_code(data.installment_plan_code)
+        if plan is None:
+            raise BadRequest(
+                f"Kế hoạch thanh toán '{data.installment_plan_code}' không tồn tại "
+                "hoặc không còn hoạt động."
+            )
+        if getattr(plan, "is_active", True) is False:
+            raise BadRequest(
+                f"Kế hoạch thanh toán '{data.installment_plan_code}' đã ngừng hoạt động."
+            )
+        plan_id = plan.id
 
         # Service-layer unit_id kept for downstream IDOR inside
         # calculate_fee / generate_invoices_for_fee — admin skips, everyone

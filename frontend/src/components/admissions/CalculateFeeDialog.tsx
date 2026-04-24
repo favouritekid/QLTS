@@ -9,17 +9,17 @@
  * `calculate_fee` see the trigger button and can generate the
  * official Fee + invoices without leaving the admissions module.
  *
- * Scope decisions (PR #7):
- *  - Controlled dialog (parent owns `open` state) so the trigger can
- *    live in the StatCard area of TuitionTab.
- *  - React-Hook-Form + Zod for parity with other admission dialogs.
- *  - Success path invalidates admission detail + finance caches so
- *    the just-calculated fee appears immediately in the current tab.
+ * PR #7 review (2026-04-24):
+ *  - Installment plan codes now come from `useInstallmentPlans` rather
+ *    than a hard-coded list. Backend seed currently ships FULL /
+ *    TWO_TERM / QUARTERLY; the dialog no longer guesses codes that
+ *    might not exist. Backend also now rejects unknown codes with 400
+ *    so a drift gets surfaced instead of silently creating a
+ *    single-payment invoice.
+ *  - Form schema no longer uses z.coerce + default() defaults so the
+ *    RHF<Values> generic resolves cleanly under strict tsc.
  */
-import { useMemo } from "react"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { z } from "zod"
+import { useEffect, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Loader2, Calculator } from "lucide-react"
 
@@ -42,18 +42,11 @@ import {
 } from "@/components/ui/select"
 
 import { useCalculateFee, feesKeys } from "@/hooks/finance/useFees"
+import { useInstallmentPlans } from "@/hooks/finance/useInstallmentPlans"
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard"
 
-// Inline dialog schema — narrower than the backend FeeCalculateRequest
-// because `admission_profile_id` is provided by the caller.
-const schema = z.object({
-  fee_type: z.enum(["tuition", "application", "dormitory", "other"]).default("tuition"),
-  semester_no: z.coerce.number().int().min(1).max(12).default(1),
-  installment_plan_code: z.enum(["FULL", "INSTALLMENT"]).default("FULL"),
-})
-
-type FormValues = z.infer<typeof schema>
+type FeeType = "tuition" | "application" | "dormitory" | "other"
 
 interface Props {
   open: boolean
@@ -61,35 +54,64 @@ interface Props {
   profileId: number
 }
 
+const SEMESTER_OPTIONS = [
+  { value: 1, label: "Học kỳ 1" },
+  { value: 2, label: "Học kỳ 2" },
+  { value: 3, label: "Học kỳ 3+" },
+]
+
 export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
   const queryClient = useQueryClient()
   const calculateFee = useCalculateFee()
+  const plansQuery = useInstallmentPlans({ enabled: open })
 
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      fee_type: "tuition",
-      semester_no: 1,
-      installment_plan_code: "FULL",
-    },
-  })
+  // Local state — simpler than RHF for 3 controlled selects and avoids
+  // the strict-tsc friction with zod `z.coerce` + `.default()` generics.
+  const [feeType, setFeeType] = useState<FeeType>("tuition")
+  const [semesterNo, setSemesterNo] = useState<number>(1)
+  const [planCode, setPlanCode] = useState<string>("")
 
-  const isTuition = form.watch("fee_type") === "tuition"
+  const activePlans = useMemo(
+    () => (plansQuery.data ?? []).filter((p) => p.is_active !== false),
+    [plansQuery.data]
+  )
+
+  // Default plan selection as soon as the list loads — prefer FULL if
+  // present (matches backend FeeCalculateRequest.installment_plan_code
+  // default), otherwise the first active option.
+  useEffect(() => {
+    if (!planCode && activePlans.length > 0) {
+      const full = activePlans.find((p) => p.code === "FULL")
+      setPlanCode((full ?? activePlans[0]).code)
+    }
+  }, [activePlans, planCode])
+
+  const isTuition = feeType === "tuition"
   const isPending = calculateFee.isPending
+  const canSubmit = planCode !== "" && !isPending && activePlans.length > 0
 
-  const onSubmit = form.handleSubmit(async (values) => {
+  const reset = () => {
+    setFeeType("tuition")
+    setSemesterNo(1)
+    setPlanCode("")
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!canSubmit) return
+
     await calculateFee.mutateAsync({
       admission_profile_id: profileId,
-      fee_type: values.fee_type,
-      // Only tuition uses semester_no; normalise to undefined for the rest
-      // so the backend's validate_semester discriminator stays happy.
-      semester_no: values.fee_type === "tuition" ? values.semester_no : undefined,
-      installment_plan_code: values.installment_plan_code,
+      fee_type: feeType,
+      // Only tuition carries semester_no; backend validator rejects it
+      // for non-tuition fee types, so omit entirely when switching away.
+      semester_no: isTuition ? semesterNo : undefined,
+      installment_plan_code: planCode,
     })
 
     // useCalculateFee already invalidates finance caches + toasts on
-    // success. Extend to the admission detail + finance dashboard so
-    // the current tab + overview cards refresh without a reload.
+    // success. Extend to the admission detail + dashboard so the
+    // Tuition tab refreshes without a reload.
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(profileId) }),
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() }),
@@ -99,21 +121,9 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
       queryClient.invalidateQueries({ queryKey: financeDashboardKeys.all }),
     ])
 
-    form.reset()
+    reset()
     onOpenChange(false)
-  })
-
-  // Semester dropdown — keep the default 1..3 visible; backend supports
-  // higher numbers but the UI defers that until semester-tuition config
-  // exposes per-path semester counts.
-  const semesterOptions = useMemo(
-    () => [
-      { value: 1, label: "Học kỳ 1" },
-      { value: 2, label: "Học kỳ 2" },
-      { value: 3, label: "Học kỳ 3+" },
-    ],
-    []
-  )
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => (isPending ? null : onOpenChange(next))}>
@@ -129,12 +139,12 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={onSubmit} className="space-y-4 py-2">
+        <form onSubmit={handleSubmit} className="space-y-4 py-2">
           <div className="space-y-2">
             <Label htmlFor="fee_type">Loại phí</Label>
             <Select
-              value={form.watch("fee_type")}
-              onValueChange={(v) => form.setValue("fee_type", v as FormValues["fee_type"])}
+              value={feeType}
+              onValueChange={(v) => setFeeType(v as FeeType)}
               disabled={isPending}
             >
               <SelectTrigger id="fee_type">
@@ -153,15 +163,15 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
             <div className="space-y-2">
               <Label htmlFor="semester_no">Học kỳ</Label>
               <Select
-                value={String(form.watch("semester_no"))}
-                onValueChange={(v) => form.setValue("semester_no", parseInt(v, 10))}
+                value={String(semesterNo)}
+                onValueChange={(v) => setSemesterNo(parseInt(v, 10))}
                 disabled={isPending}
               >
                 <SelectTrigger id="semester_no">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {semesterOptions.map((opt) => (
+                  {SEMESTER_OPTIONS.map((opt) => (
                     <SelectItem key={opt.value} value={String(opt.value)}>
                       {opt.label}
                     </SelectItem>
@@ -174,18 +184,30 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
           <div className="space-y-2">
             <Label htmlFor="installment_plan_code">Kế hoạch thanh toán</Label>
             <Select
-              value={form.watch("installment_plan_code")}
-              onValueChange={(v) =>
-                form.setValue("installment_plan_code", v as FormValues["installment_plan_code"])
-              }
-              disabled={isPending}
+              value={planCode}
+              onValueChange={setPlanCode}
+              disabled={isPending || plansQuery.isLoading || activePlans.length === 0}
             >
               <SelectTrigger id="installment_plan_code">
-                <SelectValue />
+                <SelectValue
+                  placeholder={
+                    plansQuery.isLoading
+                      ? "Đang tải kế hoạch…"
+                      : activePlans.length === 0
+                      ? "Chưa có kế hoạch nào"
+                      : "Chọn kế hoạch"
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="FULL">Thanh toán một lần</SelectItem>
-                <SelectItem value="INSTALLMENT">Trả góp nhiều đợt</SelectItem>
+                {activePlans.map((plan) => (
+                  <SelectItem key={plan.code} value={plan.code}>
+                    {plan.name}
+                    <span className="text-muted-foreground ml-2 text-xs">
+                      ({plan.code})
+                    </span>
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -199,7 +221,7 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
             >
               Hủy
             </Button>
-            <Button type="submit" disabled={isPending}>
+            <Button type="submit" disabled={!canSubmit}>
               {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Tính học phí
             </Button>
