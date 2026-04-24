@@ -5,6 +5,7 @@ import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 
 import { toast } from "sonner"
+import { AlertTriangle } from "lucide-react"
 
 import {
   AlertDialog,
@@ -24,7 +25,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 
@@ -472,20 +474,31 @@ export function AdmissionDetailClient({
         />
       </AdmissionLayout>
 
-      {/* Unsaved Changes Dialog */}
+      {/* Unsaved Changes Dialog
+        * Safe-default: Cancel ("Ở lại và lưu") is the primary button so
+        * that pressing Enter / clicking the default target keeps the
+        * user's in-progress work. The destructive branch is styled red
+        * + icon and labeled explicitly so it can never be chosen by
+        * accident. handleConfirmStepChange logic unchanged — only UI
+        * emphasis swapped.
+        */}
       <AlertDialog open={unsavedDialogOpen} onOpenChange={setUnsavedDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Thay đổi chưa lưu</AlertDialogTitle>
             <AlertDialogDescription>
-              Bạn có thay đổi chưa lưu. Bạn có chắc muốn chuyển sang bước khác? Thay đổi sẽ bị mất.
+              Thay đổi ở bước hiện tại sẽ bị mất nếu bạn bỏ qua. Chọn &quot;Ở lại và lưu&quot; để giữ lại dữ liệu, hoặc bỏ thay đổi để chuyển bước.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Ở lại và lưu</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmStepChange}>
-              Tiếp tục
+            <AlertDialogAction
+              onClick={handleConfirmStepChange}
+              className={cn(buttonVariants({ variant: "destructive" }))}
+            >
+              <AlertTriangle className="mr-2 h-4 w-4" />
+              Bỏ thay đổi và tiếp tục
             </AlertDialogAction>
+            <AlertDialogCancel>Ở lại và lưu</AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
