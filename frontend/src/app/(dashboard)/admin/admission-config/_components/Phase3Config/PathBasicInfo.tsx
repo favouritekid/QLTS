@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Loader2, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { useCreateAdmissionPath, useUpdateAdmissionPath } from "@/hooks/admissions/useAdmissionPaths";
@@ -26,6 +27,11 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
   const [selectedMethodId, setSelectedMethodId] = useState<number | null>(path?.admission_method?.id || null);
   const [displayOrder, setDisplayOrder] = useState(path?.display_order || 1);
   const [visibility, setVisibility] = useState<"public" | "internal">(path?.visibility || "internal");
+  // PR #6 — path-level submit strictness. Default strict (false) for new paths;
+  // edits read the current value from backend.
+  const [allowUnverified, setAllowUnverified] = useState<boolean>(
+    path?.allow_unverified_submission ?? false
+  );
 
   const createMutation = useCreateAdmissionPath();
   const updateMutation = useUpdateAdmissionPath();
@@ -47,6 +53,7 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
             display_name: displayName || undefined,
             display_order: displayOrder,
             visibility: visibility,
+            allow_unverified_submission: allowUnverified,
           },
         });
         savedId = path.id;
@@ -59,6 +66,7 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
           display_name: displayName || undefined,
           display_order: displayOrder,
           visibility: visibility,
+          allow_unverified_submission: allowUnverified,
         });
         savedId = newPath.id;
         toast.success("Tạo đợt tuyển sinh thành công");
@@ -149,6 +157,28 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
             <p className="text-xs text-muted-foreground">
               Công khai: Hiển thị cho thí sinh. Nội bộ: Chỉ admin/manager thấy.
             </p>
+          </div>
+
+          {/* PR #6 — per-path submit strictness toggle */}
+          <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+            <div className="space-y-1">
+              <Label htmlFor="allow-unverified" className="text-sm font-medium">
+                Cho phép nộp hồ sơ khi tài liệu chưa xác minh
+              </Label>
+              <p className="text-xs text-muted-foreground max-w-lg">
+                Mặc định tắt: thí sinh chỉ nộp được khi tài liệu đã được quản
+                lý xác minh (hoặc đã nhận bản giấy). Bật sẽ giữ hành vi cũ,
+                chấp nhận tài liệu đang ở trạng thái &quot;đã tải lên&quot;. Các
+                hồ sơ đã tạo trước đó giữ nguyên chế độ đã snapshot — chỉ hồ
+                sơ tạo sau khi đổi mới áp dụng thiết lập mới.
+              </p>
+            </div>
+            <Switch
+              id="allow-unverified"
+              checked={allowUnverified}
+              onCheckedChange={setAllowUnverified}
+              aria-label="Cho phép nộp hồ sơ khi tài liệu chưa xác minh"
+            />
           </div>
 
           <div className="flex justify-end pt-4">

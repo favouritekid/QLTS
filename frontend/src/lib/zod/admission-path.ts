@@ -118,6 +118,10 @@ export const admissionPathCreateSchema = z.object({
   display_name: z.string().max(255).optional().nullable(),
   display_order: z.number().int().min(0).optional().nullable(),
   visibility: z.enum(["public", "internal"]).optional(),
+  // PR #6 — strict submit by default; admin toggles True to keep legacy
+  // "uploaded = submittable" behaviour on a per-path basis. Default here
+  // matches the backend default so the create form stays explicit.
+  allow_unverified_submission: z.boolean().default(false),
 })
 
 export type AdmissionPathCreate = z.infer<typeof admissionPathCreateSchema>
@@ -130,6 +134,9 @@ export const admissionPathUpdateSchema = z.object({
   display_name: z.string().max(255).optional().nullable(),
   display_order: z.number().int().min(0).optional().nullable(),
   visibility: z.enum(["public", "internal"]).optional(),
+  // Optional on update — callers that don't want to flip the flag omit
+  // it entirely and the backend leaves the current value untouched.
+  allow_unverified_submission: z.boolean().optional(),
 })
 
 export type AdmissionPathUpdate = z.infer<typeof admissionPathUpdateSchema>
@@ -204,6 +211,10 @@ export const admissionPathResponseSchema = z.object({
   can_edit: z.boolean().default(true),
   can_activate: z.boolean().default(false),
   validation_errors: z.array(z.string()).default([]),
+
+  // PR #6 — REQUIRED in the response so Zod fails loudly when the backend
+  // forgets to emit the field. Admin UI mirrors this bool as a toggle.
+  allow_unverified_submission: z.boolean(),
 })
 
 export type AdmissionPathResponse = z.infer<typeof admissionPathResponseSchema>
