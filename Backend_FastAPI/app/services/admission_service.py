@@ -440,34 +440,77 @@ def _validate_documents(
     """
     Validate document requirements.
     Returns: (doc_errors_list, validation_errors_list, uploaded_doc_codes_set, upload_required_docs_list)
+
+    PR #6 — uploaded-but-not-verified docs no longer satisfy the submit
+    gate by default. The path-level `allow_unverified_submission` flag
+    is snapshotted into ``applied_rules`` at profile creation so admin
+    changes to a path don't retroactively re-score in-flight profiles.
+
+    Schema versioning:
+      * schema_version == 1 → legacy profile created before PR #6.
+        Grandfathered: treat missing flag as True so existing drafts
+        keep submitting.
+      * schema_version >= 2 → post-PR profile. The flag MUST be present;
+        its absence is a create_profile bug and raises ConfigError so
+        the failure surfaces loudly instead of silently downgrading.
     """
     upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
     doc_errors = []
     validation_errors = []
     uploaded_doc_codes = set()
-    
+
+    schema_version = applied_rules.get("schema_version", 1)
+    if schema_version == 1:
+        # Pre-PR #6 profile, grandfathered.
+        allow_unverified = bool(applied_rules.get("allow_unverified_submission", True))
+    else:
+        if "allow_unverified_submission" not in applied_rules:
+            # Domain-level misconfiguration — create_profile forgot to
+            # snapshot the flag. Fail loudly rather than downgrade silently.
+            raise BusinessRuleViolation(
+                f"Profile {getattr(profile, 'id', '?')} applied_rules missing "
+                f"allow_unverified_submission (schema_version={schema_version}). "
+                "create_profile must snapshot this flag from the AdmissionPath."
+            )
+        allow_unverified = bool(applied_rules["allow_unverified_submission"])
+
     if documents is not None:
-        # Verified/paper_submitted documents are ALWAYS valid
-        # Only check file_path for "uploaded" status
-        uploaded_doc_codes = {
-            doc.document_type.code for doc in documents
-            if doc.status in ["verified", "paper_submitted"] or (doc.file_path and doc.status == "uploaded")
-        }
-        
-        # Log document validation details (preserved from original code)
+        if allow_unverified:
+            # Legacy behaviour: uploaded (with file) / verified / paper-submitted
+            # all count toward submission.
+            uploaded_doc_codes = {
+                doc.document_type.code for doc in documents
+                if doc.status in ("verified", "paper_submitted")
+                or (doc.file_path and doc.status == "uploaded")
+            }
+        else:
+            # Strict mode: only verified or paper_submitted count.
+            uploaded_doc_codes = {
+                doc.document_type.code for doc in documents
+                if doc.status in ("verified", "paper_submitted")
+            }
+
         log.debug(
             "Document validation check",
             profile_id=profile.id,
             upload_required_docs=upload_required_docs,
             uploaded_doc_codes=list(uploaded_doc_codes),
             total_documents=len(documents),
+            schema_version=schema_version,
+            allow_unverified=allow_unverified,
         )
-        
+
         for doc_code in upload_required_docs:
             if doc_code not in uploaded_doc_codes:
                 doc_errors.append(doc_code)
-                validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
-                
+                if allow_unverified:
+                    validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
+                else:
+                    validation_errors.append(
+                        f"Tài liệu {doc_code} chưa được xác minh. Liên hệ quản lý "
+                        f"để verify trước khi nộp hồ sơ."
+                    )
+
     return doc_errors, validation_errors, uploaded_doc_codes, upload_required_docs
 
 
@@ -1821,6 +1864,16 @@ async def create_profile(
         "snapshot_source": "relational",
         "admission_path_id": admission_path.id,
         "academic_info_id": academic_info.id,
+        # PR #6 — snapshot the path-level flag so later admin changes to
+        # the path don't retroactively block (or unblock) submissions
+        # for profiles created under the old rule. schema_version=2
+        # marks the profile as post-migration; legacy profiles were
+        # backfilled with schema_version=1 + flag=true by the alembic
+        # revision aa1i2j3k4l5m.
+        "schema_version": 2,
+        "allow_unverified_submission": bool(
+            getattr(admission_path, "allow_unverified_submission", False)
+        ),
     }
 
 
@@ -2792,16 +2845,41 @@ async def submit_and_evaluate(
                 selected_subjects=score_result.selected_subjects
             )
 
-    # Validation 2: Check mandatory documents (using relational ProfileDocument)
+    # Validation 2: Check mandatory documents (using relational ProfileDocument).
+    # PR #6 — honour the path-level allow_unverified_submission flag snapshotted
+    # in applied_rules. Strict mode requires verified or paper_submitted; lax
+    # mode (pre-PR default, grandfathered) also accepts uploaded-with-file.
     uploaded_docs = await admission_repo.get_uploaded_documents(profile.id)
-    uploaded_doc_codes = {doc.document_type.code for doc in uploaded_docs}
+    schema_version = applied_rules.get("schema_version", 1)
+    if schema_version == 1:
+        allow_unverified = bool(applied_rules.get("allow_unverified_submission", True))
+    else:
+        if "allow_unverified_submission" not in applied_rules:
+            raise BusinessRuleViolation(
+                f"Profile {profile.id} applied_rules missing allow_unverified_submission "
+                f"(schema_version={schema_version}). create_profile must snapshot the flag."
+            )
+        allow_unverified = bool(applied_rules["allow_unverified_submission"])
+
+    if allow_unverified:
+        uploaded_doc_codes = {doc.document_type.code for doc in uploaded_docs}
+    else:
+        uploaded_doc_codes = {
+            doc.document_type.code for doc in uploaded_docs
+            if doc.status in ("verified", "paper_submitted")
+        }
 
     for doc_code in mandatory_docs:
         if doc_code not in uploaded_doc_codes:
-            # Find document for label
             doc = await admission_repo.get_document_by_type(profile.id, doc_code)
             label = doc.document_type.name if doc else doc_code
-            errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
+            if allow_unverified:
+                errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
+            else:
+                errors.append(
+                    f"Tài liệu {label} ({doc_code}) chưa được xác minh. "
+                    f"Liên hệ quản lý để verify trước khi nộp hồ sơ."
+                )
 
     # Validation 3: Check citizen_id uniqueness
     if not profile.citizen_id:

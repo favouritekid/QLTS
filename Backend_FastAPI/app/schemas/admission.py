@@ -550,6 +550,13 @@ class AppliedRulesSchema(BaseModel):
     admission_path_id: Optional[int] = None
     academic_info_id: Optional[int] = None
 
+    # PR #6 — submit-gate snapshot. schema_version distinguishes pre-PR
+    # rows (backfilled to 1) from post-PR rows (2+). allow_unverified_submission
+    # freezes the path-level toggle at the time of profile creation so
+    # later admin changes don't retroactively re-score in-flight profiles.
+    schema_version: Optional[int] = None
+    allow_unverified_submission: Optional[bool] = None
+
     model_config = ConfigDict(extra="ignore")
 
 
