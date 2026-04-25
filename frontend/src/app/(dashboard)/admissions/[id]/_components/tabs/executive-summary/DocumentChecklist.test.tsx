@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@/test/utils/test-utils";
+import userEvent from "@testing-library/user-event";
 
 import { DocumentChecklist } from "./DocumentChecklist";
 
@@ -41,12 +42,15 @@ function buildProfile(docs: DocRow[]) {
 }
 
 async function openAndRender(profile: ReturnType<typeof buildProfile>) {
+  // userEvent wraps interactions in act() so React state updates flush
+  // before the next assertion — eliminates the act(...) warnings the
+  // bare HTMLElement.click() emitted on the Collapsible trigger.
+  const user = userEvent.setup();
   const utils = render(<DocumentChecklist profile={profile as never} />);
-  // Collapsible header starts closed — click it to mount the table.
   const trigger = await screen.findByRole("button", {
     name: /checklist tài liệu bắt buộc/i,
   });
-  trigger.click();
+  await user.click(trigger);
   return utils;
 }
 
