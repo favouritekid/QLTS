@@ -27,6 +27,7 @@ import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { SendConfirmationButton } from "./SendConfirmationButton"
+import { MinorCorrectionDialog } from "./MinorCorrectionDialog"
 
 interface AdmissionActionsProps {
   profile: AdmissionProfileResponse
@@ -288,6 +289,13 @@ export function AdmissionActions({
           {can('send_confirmation') && (
             <SendConfirmationButton profileId={profile.id} />
           )}
+
+          {/* Post-approval minor correction. Self-managed dialog — the
+              component checks `profile.permissions.minor_correction` +
+              `profile.minor_correction_fields` internally so no extra
+              gate here. Both flags come from the API resolver
+              (_resolve_minor_correction_state); FE never derives. */}
+          <MinorCorrectionDialog profile={profile} />
 
           {/* Enroll - can('enroll') when status ∈ {approved, confirmed, overridden}.
               Label is "Ghi danh" (not "Xác nhận nhập học") so officers don't

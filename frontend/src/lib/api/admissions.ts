@@ -114,6 +114,26 @@ export async function approveAdmission(
 }
 
 /**
+ * Apply post-approval minor correction (Officer/Manager/Admin)
+ * POST /api/admissions/{id}/minor-correction
+ *
+ * Allowed only on profiles in approved/confirmed status. Backend
+ * enforces SAFE catalog ∩ AdmissionPath allowlist; FE renders fields
+ * from ``profile.minor_correction_fields`` so the dialog never offers
+ * a key the server would reject.
+ */
+export async function minorCorrection(
+  id: number,
+  data: { version: number; reason: string; changes: Record<string, unknown> }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/minor-correction`,
+    data
+  )
+  return response.data
+}
+
+/**
  * Reject admission profile (Manager/Admin action)
  * POST /api/admissions/{id}/reject
  * 
@@ -478,6 +498,7 @@ export const admissionsApi = {
   requestRevision,
   approveAdmission,
   rejectAdmission,
+  minorCorrection,
   dropStudent,
   enrollStudent,
   deleteAdmission,

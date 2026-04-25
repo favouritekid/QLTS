@@ -14,10 +14,10 @@ Architecture Compliance:
 """
 
 from datetime import date, datetime
-from typing import List, Optional, Literal, Dict, Any
+from typing import Annotated, Any, Dict, List, Literal, Optional
 import html
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator, ConfigDict
 
 
 # ==============================================================================
@@ -723,6 +723,19 @@ class AdmissionProfileResponse(BaseModel):
         default_factory=list,
         description="List of currently available actions (e.g., ['save', 'submit'])"
     )
+
+    # Per-profile effective allowlist for the post-approval correction
+    # dialog. Resolved server-side from
+    # SAFE_MINOR_CORRECTION_FIELDS ∩ admission_path.minor_correction_allowed_fields,
+    # so FE renders only the fields admin enabled for this profile's path
+    # without needing to fetch path config separately.
+    minor_correction_fields: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Effective per-profile allowlist for minor correction. "
+            "FE renders dialog rows from this list."
+        )
+    )
     
     # Profile completion percentage (0-100)
     completion_percent: int = Field(
@@ -1273,6 +1286,61 @@ class ClaimRequest(BaseModel):
     Only version is needed for optimistic locking.
     """
     version: int = Field(..., description="Optimistic locking version")
+
+
+# StringConstraints applies strip_whitespace BEFORE checking min/max
+# length, so a payload like "          a" (9 spaces + 1 char, length 10)
+# fails the min=10 check after stripping. Defends against accidental
+# zero-effort reasons that bypass min_length when validated via
+# Field(min_length=...).
+TrimmedReason = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=10, max_length=1000),
+]
+
+
+class MinorCorrectionRequest(BaseModel):
+    """Request schema for ``POST /admissions/{id}/minor-correction``.
+
+    Three required fields:
+    - ``version`` for optimistic locking (matches the version-on-state
+      pattern used by approve/reject/etc., raises 409 on mismatch).
+    - ``reason`` whose effective length is checked AFTER strip; an
+      operator must supply real justification per audit policy.
+    - ``changes`` is a dict of ``{field_key: new_value}``. Field-level
+      type validation runs server-side via the FIELD_ADAPTERS map in
+      ``admission_correction_helpers.py``; we keep the schema as
+      ``dict[str, Any]`` here so unknown / hard-deny keys surface in
+      the service-side check rather than failing Pydantic with a
+      cryptic union error.
+    """
+
+    version: int = Field(
+        ...,
+        ge=1,
+        description="Current profile version for optimistic locking"
+    )
+    reason: TrimmedReason = Field(
+        ...,
+        description=(
+            "Why this correction is being made. Stored on the audit row. "
+            "Min 10 characters AFTER trim — pure-whitespace inputs reject."
+        ),
+    )
+    changes: Dict[str, Any] = Field(
+        ...,
+        description=(
+            "Map of {field_key: new_value}. Field validation happens "
+            "server-side after status / IDOR / allowlist gates."
+        ),
+    )
+
+    @field_validator("changes")
+    @classmethod
+    def changes_not_empty(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if not v:
+            raise ValueError("changes must contain at least one field")
+        return v
 
 
 # ==============================================================================

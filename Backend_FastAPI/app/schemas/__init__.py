@@ -182,6 +182,7 @@ from .admission import (
     WithdrawRequest,
     FinalizeRequest,
     DropStudentRequest,
+    MinorCorrectionRequest,
     # Confirmation token schemas (Magic Link)
     ConfirmTokenVerifyRequest,
     ConfirmTokenResponse,

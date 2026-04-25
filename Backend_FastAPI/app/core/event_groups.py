@@ -91,6 +91,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.APPLICATION_DELETED: NotificationEventGroup.APPLICATION,
     SystemEvents.APPLICATION_FEE_PAID: NotificationEventGroup.APPLICATION,
     SystemEvents.APPLICATION_SURVEY_DUE: NotificationEventGroup.APPLICATION,
+    SystemEvents.APPLICATION_MINOR_CORRECTED: NotificationEventGroup.APPLICATION,
 
     # Finance events
     SystemEvents.DORM_FEE_CREATED: NotificationEventGroup.FINANCE,

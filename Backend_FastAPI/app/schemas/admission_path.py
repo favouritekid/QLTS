@@ -12,7 +12,31 @@ FRONTEND_ARCHITECTURE_V3.md Compliance:
 from datetime import datetime, date
 from decimal import Decimal
 from typing import List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.admission_correction_constants import SAFE_MINOR_CORRECTION_FIELDS
+
+
+def _validate_minor_correction_allowlist(
+    cls, v: Optional[List[str]]
+) -> Optional[List[str]]:
+    """Reject fields outside the SAFE catalog.
+
+    Module-level helper attached to Create + Update via ``field_validator``
+    inside each class. Defining once and binding twice keeps the rule
+    in lockstep without relying on pydantic v2's ``check_fields=False``
+    escape hatch (which silently skips validation on classes that don't
+    declare the field).
+    """
+    if v is None:
+        return v
+    invalid = set(v) - SAFE_MINOR_CORRECTION_FIELDS
+    if invalid:
+        raise ValueError(
+            f"Fields outside safe catalog: {sorted(invalid)}. "
+            f"Allowed: {sorted(SAFE_MINOR_CORRECTION_FIELDS)}"
+        )
+    return list(v)
 
 
 # =============================================================================
@@ -130,6 +154,21 @@ class AdmissionPathCreate(BaseModel):
             "the submit gate."
         ),
     )
+    # Per-path post-approval correction allowlist (governance setting).
+    # Empty default = corrections disabled for the path. Admin opts in
+    # field-by-field; effective set = SAFE catalog ∩ this list.
+    minor_correction_allowed_fields: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Fields admin allows officer/manager to correct on profiles "
+            "in approved/confirmed status under this path. Must be a "
+            "subset of SAFE_MINOR_CORRECTION_FIELDS."
+        ),
+    )
+
+    _v_minor_correction_allowlist = field_validator(
+        "minor_correction_allowed_fields"
+    )(_validate_minor_correction_allowlist)
 
 
 class AdmissionPathUpdate(BaseModel):
@@ -152,6 +191,21 @@ class AdmissionPathUpdate(BaseModel):
             "profiles created after the flip inherit the new setting."
         ),
     )
+    # Optional on update so partial PATCH-style updates don't accidentally
+    # clear the config. Service-side guard rejects this field unless the
+    # caller is admin (governance setting).
+    minor_correction_allowed_fields: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Replace the per-path correction allowlist. Admin-only — "
+            "service raises BusinessRuleViolation for non-admin callers. "
+            "Pass `[]` to clear; omit to leave unchanged."
+        ),
+    )
+
+    _v_minor_correction_allowlist = field_validator(
+        "minor_correction_allowed_fields"
+    )(_validate_minor_correction_allowlist)
 
 
 class AdmissionCriteriaCreate(BaseModel):
@@ -225,6 +279,16 @@ class AdmissionPathResponse(BaseModel):
             "Current strict-mode setting for this path. False means "
             "the submit validator requires verified / paper-submitted "
             "documents; True allows uploaded."
+        ),
+    )
+    # Required (no default) so a backend that forgets to map the column
+    # surfaces in Zod parse on the FE side rather than silently rendering
+    # an empty allowlist. No validator on the response — data from DB has
+    # already passed the Create/Update gate.
+    minor_correction_allowed_fields: List[str] = Field(
+        description=(
+            "Per-path allowlist for post-approval minor corrections. "
+            "Subset of SAFE_MINOR_CORRECTION_FIELDS."
         ),
     )
 

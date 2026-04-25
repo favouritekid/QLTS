@@ -125,6 +125,20 @@ class AdmissionPathService:
                 f"method={data.admission_method_id}"
             )
         
+        # Governance guard: minor_correction_allowed_fields is admin-only,
+        # same rule as on update. Manager creating a draft path always
+        # gets an empty allowlist regardless of what they submit. FE
+        # already disables the section for non-admins; this is the
+        # belt-and-braces server side.
+        if (
+            data.minor_correction_allowed_fields
+            and user.role != UserRole.ADMIN
+        ):
+            raise BusinessRuleViolation(
+                "Chỉ admin được set allowlist minor_correction khi tạo path. "
+                "Manager liên hệ admin nếu cần thay đổi."
+            )
+
         # Create path
         path = await self.repo.create({
             "academic_info_id": data.academic_info_id,
@@ -135,6 +149,12 @@ class AdmissionPathService:
             "status": "draft",  # Always start as draft
             # PR #6 — strict-by-default; admin may flip to True on create.
             "allow_unverified_submission": data.allow_unverified_submission,
+            # Per-path correction allowlist — empty by default, admin may
+            # seed a list at create time. Schema validator already
+            # filtered out non-SAFE entries before reaching here.
+            "minor_correction_allowed_fields": list(
+                data.minor_correction_allowed_fields or []
+            ),
         })
         
         return path, _noop_callback
@@ -168,8 +188,24 @@ class AdmissionPathService:
             )
         
         update_data = data.model_dump(exclude_unset=True)
+
+        # Governance guard: minor_correction_allowed_fields is admin-only.
+        # Manager can edit a draft path's display name / fee / etc. but
+        # must not flip the per-path correction allowlist — that's a
+        # security setting (decides which fields officer can post-edit
+        # on approved profiles). Reject the field rather than silently
+        # drop it so the FE form / API caller surfaces the failure.
+        if (
+            "minor_correction_allowed_fields" in update_data
+            and user.role != UserRole.ADMIN
+        ):
+            raise BusinessRuleViolation(
+                "Chỉ admin được sửa allowlist minor_correction. "
+                "Manager liên hệ admin nếu cần thay đổi."
+            )
+
         path = await self.repo.update(path, update_data)
-        
+
         return path, _noop_callback
     
     async def upsert_criteria(

@@ -10,6 +10,7 @@ Export all repositories for easy import:
 
 from app.repositories.base import BaseRepository
 from app.repositories.activity_repository import ActivityRepository
+from app.repositories.admission_path_repository import AdmissionPathRepository
 from app.repositories.admission_repository import AdmissionRepository
 from app.repositories.config_repository import (
     AssignmentConfigRepository,
@@ -40,6 +41,7 @@ from app.repositories.trusted_device_repository import TrustedDeviceRepository
 __all__ = [
     "BaseRepository",
     "ActivityRepository",
+    "AdmissionPathRepository",
     "AdmissionRepository",
     "AssignmentConfigRepository",
     "DegreeLevelRepository",

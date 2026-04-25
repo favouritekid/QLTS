@@ -38,8 +38,10 @@ from ..core.events import SystemEvents
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
+    BusinessRuleViolation,
     PermissionDeniedError,
     ConflictError,
+    ValidationError,
 )
 from ..core.constants import UserRole
 
@@ -1576,6 +1578,73 @@ async def resubmit_admission(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/minor-correction",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Apply post-approval minor correction (Officer/Manager/Admin)",
+)
+async def minor_correction(
+    request: Request,
+    profile_id: int,
+    payload: schemas.MinorCorrectionRequest,
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """Apply a SAFE-catalog-bounded correction to an approved/confirmed profile.
+
+    Three-layer gate before the service runs:
+    - **Casbin** admits the route (role:admin/manager/officer have policy
+      `/api/admissions/{id}/minor-correction POST` seeded by alembic).
+    - **IDOR** via ``get_admission_for_user`` (admin all / manager unit /
+      officer unit + assigned). Returns 404 (not 403) on miss to avoid
+      leaking profile existence.
+    - **Lock** — same dependency uses ``with_for_update`` so concurrent
+      corrections on the same profile serialize.
+
+    Service then enforces:
+    - Status whitelist (approved/confirmed only)
+    - Optimistic version match (409 on mismatch)
+    - SAFE catalog ∩ AdmissionPath allowlist (live, not snapshotted)
+    - HARD_DENY blocklist (citizen_id, dob, status, etc.)
+    - Per-field type + business-rule validation
+
+    Post-commit emits a broadcast-only ``application_minor_corrected``
+    socket event scoped to admin + unit + assigned officer rooms — no
+    DB notification rule, payload carries field NAMES only (no PII).
+    """
+    try:
+        result, socket_envelope = await admission_service.apply_minor_correction(
+            db=db,
+            profile=profile,
+            payload=payload,
+            current_user=current_user,
+        )
+
+        await db.commit()
+
+        # Best-effort post-commit fanout. Network/socket glitch never
+        # rolls back the business mutation. Rooms are mandatory because
+        # the catalog tags this event privacy="sensitive" — dispatcher
+        # fail-closed guard would block a no-rooms emit otherwise.
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.APPLICATION_MINOR_CORRECTED,
+            payload=socket_envelope["payload"],
+            rooms=socket_envelope["rooms"],
+        )
+
+        return result
+
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

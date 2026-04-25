@@ -38,6 +38,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from .. import models
 from ..core.events import SystemEvents
+from ..core.admission_correction_constants import (
+    SAFE_MINOR_CORRECTION_FIELDS,
+    HARD_DENY_FIELDS,
+)
 from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole
 from .commission_service import safe_check_commission_on_status_change
@@ -47,12 +51,18 @@ from .notification_bundle import (
     dispatch_bundle,
 )
 from .notification_dispatcher import _rooms_for_admission
+from .admission_correction_helpers import (
+    parse_and_normalize,
+    post_parse_business_check,
+    safe_serialize,
+)
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
     PermissionDeniedError,
     ConflictError,
+    ValidationError,
 )
 from ..utils.masking import mask_citizen_id
 
@@ -743,6 +753,91 @@ async def check_lead_level_admission_eligibility(
     return LeadAdmissionEligibility(True, None, None)
 
 
+def _sync_available_actions(profile: models.AdmissionProfile) -> None:
+    """Rebuild ``profile.available_actions`` from ``profile.permissions``.
+
+    Mirror of the line in ``_compute_frontend_fields`` (~line 858) that
+    derives ``available_actions`` from the permissions dict. Extracted
+    so the async ``_resolve_minor_correction_state`` resolver can flip
+    a permission flag and resync the action list without duplicating
+    the comprehension.
+
+    Safe to call repeatedly — idempotent given the same ``permissions``
+    dict.
+    """
+    perms = getattr(profile, "permissions", None) or {}
+    profile.available_actions = [
+        action for action, allowed in perms.items() if allowed
+    ]
+
+
+async def _resolve_minor_correction_state(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    current_user: Optional[models.User],
+) -> None:
+    """Resolve per-profile ``minor_correction_fields`` + flip the permission
+    flag based on the live AdmissionPath allowlist.
+
+    Must be called AFTER ``_compute_frontend_fields`` has populated
+    ``profile.permissions`` (the resolver only refines, never invents).
+    Safe defaults if context is missing: empty allowlist + permission =
+    False so FE renders no button rather than crashing.
+
+    Why async: AdmissionPath is fetched live (governance setting, not
+    snapshotted to applied_rules) so any admin change applies
+    immediately to all profiles tied to the path. Single-row fetch in
+    detail; the list endpoint should batch through ``get_by_ids`` and
+    then call this resolver per profile with the cached path object —
+    helper accepts ``path`` injection via ``_resolve_with_path`` below.
+    """
+    profile.minor_correction_fields = []
+
+    if current_user is None or not getattr(profile, "permissions", None):
+        return
+
+    if profile.status not in ("approved", "confirmed"):
+        profile.permissions["minor_correction"] = False
+        _sync_available_actions(profile)
+        return
+
+    path_id = (profile.applied_rules or {}).get("admission_path_id")
+    if path_id is None:
+        profile.permissions["minor_correction"] = False
+        _sync_available_actions(profile)
+        return
+
+    from app.repositories import AdmissionPathRepository
+    path = await AdmissionPathRepository(db).get_by_id(path_id)
+    _apply_minor_correction_state(profile, path)
+
+
+def _apply_minor_correction_state(
+    profile: models.AdmissionProfile,
+    path: Optional[Any],
+) -> None:
+    """Sync helper for the resolver — splits the path-application step
+    so the list endpoint can batch-fetch paths and apply state per row
+    without redundant async hops.
+
+    CONTRACT: action visible only when the effective allowlist is
+    NON-empty. A path with empty config (default after migration)
+    keeps the action hidden so officers don't see a button that opens
+    an empty dialog.
+    """
+    effective: set[str] = set()
+    if path is not None:
+        effective = SAFE_MINOR_CORRECTION_FIELDS & set(
+            getattr(path, "minor_correction_allowed_fields", []) or []
+        )
+
+    perms = profile.permissions
+    role_ok = perms.get("minor_correction", False)
+    perms["minor_correction"] = role_ok and len(effective) > 0
+    profile.minor_correction_fields = sorted(effective)
+    _sync_available_actions(profile)
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
@@ -838,6 +933,19 @@ def _compute_frontend_fields(
             )
         ),
         "delete": status == "draft" and is_admin,
+        # Tentative — true only when role + status + path_id snapshot
+        # exists. Async resolver _resolve_minor_correction_state flips
+        # this back to False if the per-path effective allowlist is
+        # empty, so FE never sees a button without renderable fields.
+        "minor_correction": (
+            status in ("approved", "confirmed")
+            and (profile.applied_rules or {}).get("admission_path_id") is not None
+            and (
+                is_admin
+                or is_manager
+                or (is_officer and is_owner)
+            )
+        ),
         "view": True,
     }
     profile.permissions = permissions
@@ -1313,6 +1421,11 @@ async def _populate_response_fields(
         documents = await admission_repo.get_all_documents(profile.id)
 
     _compute_frontend_fields(profile, current_user, documents)
+
+    # Refine the tentative minor_correction permission flag against the
+    # live AdmissionPath allowlist. Must run AFTER _compute_frontend_fields
+    # since it reads profile.permissions and writes available_actions.
+    await _resolve_minor_correction_state(db, profile, current_user)
 
 
 async def _create_admission_milestone_consultation(
@@ -2140,6 +2253,25 @@ async def get_profiles(
         if current_user:
             _compute_frontend_fields(profile, current_user, docs)
 
+    # Batch-resolve minor_correction state for the page in ONE query rather
+    # than N path lookups. This keeps the list endpoint at exactly one
+    # extra round-trip regardless of page size, and keeps
+    # `permissions.minor_correction` + `minor_correction_fields` in sync
+    # with what detail returns. See _resolve_minor_correction_state for
+    # the per-row contract.
+    if current_user and profiles:
+        from app.repositories import AdmissionPathRepository
+        path_ids = {
+            (p.applied_rules or {}).get("admission_path_id")
+            for p in profiles
+        }
+        path_ids.discard(None)
+        paths = await AdmissionPathRepository(db).get_by_ids(path_ids)
+        path_by_id = {p.id: p for p in paths}
+        for profile in profiles:
+            pid = (profile.applied_rules or {}).get("admission_path_id")
+            _apply_minor_correction_state(profile, path_by_id.get(pid))
+
     return profiles, total_count
 
 
@@ -2333,6 +2465,11 @@ async def get_profile(
     # Fetch documents for completion calculation
     documents = await admission_repo.get_all_documents(profile_id)
     _compute_frontend_fields(profile, current_user, documents)
+
+    # Refine minor_correction permission against live AdmissionPath config
+    # (governance setting, not snapshotted) — keeps detail in lockstep
+    # with list endpoint resolver above.
+    await _resolve_minor_correction_state(db, profile, current_user)
 
     return profile
 
@@ -5686,6 +5823,208 @@ async def withdraw_profile(
     )
 
     return profile, final_callback
+
+
+# ==============================================================================
+# MINOR CORRECTION (post-approval governed update)
+# ==============================================================================
+
+async def apply_minor_correction(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    payload: "MinorCorrectionRequest",  # forward-ref to avoid import cycle below
+    current_user: models.User,
+) -> Tuple[models.AdmissionProfile, Dict[str, Any]]:
+    """Apply a post-approval correction governed by SAFE catalog ∩ per-path allowlist.
+
+    Contract:
+    - ``profile`` MUST be eager-loaded with ``lead.assigned_officer`` and
+      ``assigned_reviewer`` (router calls ``get_admission_for_user`` which
+      already does this + ``with_for_update`` lock).
+    - Returns ``(profile, socket_envelope)``. The router commits, then
+      uses ``socket_envelope["payload"]`` + ``["rooms"]`` for a
+      ``safe_dispatch`` post-commit. We do NOT dispatch here because the
+      bundle pattern is overkill — minor correction emits one
+      broadcast-only event with no DB rule.
+
+    Status whitelist (NOT blacklist) — only ``approved`` and ``confirmed``
+    accept corrections. ``draft`` / ``submitted`` go through update_profile;
+    ``rejected`` / ``revision_requested`` use resubmit; ``enrolled`` /
+    ``overridden`` / ``withdrawn`` / ``dropped`` are out of scope for v1.
+
+    Order of checks matters — defence in depth:
+    1. Status whitelist (cheapest)
+    2. Optimistic version (avoids wasted parsing on stale request)
+    3. Path resolution (live, never snapshotted) → effective allowlist
+    4. HARD_DENY check BEFORE allowlist check so a hard-denied key
+       always rejects with the same message regardless of path config
+    5. Per-field type parse + business-rule check
+    6. Diff old vs normalized new — empty diff means caller resent the
+       same values; reject so admin doesn't see noise audit rows.
+    """
+    # Local import: schema lives in same package, but defining the
+    # forward-ref string above keeps the type hint happy if the schema
+    # module is imported at a different time.
+    from ..schemas.admission import MinorCorrectionRequest  # noqa: F401
+    from ..services import audit_service
+
+    # 1. Status whitelist
+    if profile.status not in {"approved", "confirmed"}:
+        raise BusinessRuleViolation(
+            "Hiệu chỉnh chỉ áp dụng cho hồ sơ đã duyệt (approved) hoặc đã xác nhận (confirmed)"
+        )
+
+    # 2. Optimistic lock — pattern khớp admission_service.py:2424 / 4091 /
+    # 4309 / 4501 / 4877 (approve / reject / etc).
+    if payload.version != profile.version:
+        raise ConflictError(
+            f"Expected version {payload.version}, but current version is "
+            f"{profile.version}. Refresh and try again."
+        )
+
+    # 3. Resolve effective allowlist live from AdmissionPath.
+    # admission_path_id sits in applied_rules snapshot (admission_service.py:1956).
+    path_id = (profile.applied_rules or {}).get("admission_path_id")
+    if not path_id:
+        raise BusinessRuleViolation(
+            "Hồ sơ thiếu admission_path_id trong applied_rules — không thể hiệu chỉnh"
+        )
+
+    from ..repositories import AdmissionPathRepository
+    path = await AdmissionPathRepository(db).get_by_id(path_id)
+    if path is None:
+        raise BusinessRuleViolation(
+            "AdmissionPath gắn với hồ sơ đã bị xoá — không thể hiệu chỉnh"
+        )
+
+    effective_allowlist = SAFE_MINOR_CORRECTION_FIELDS & set(
+        path.minor_correction_allowed_fields or []
+    )
+    if not effective_allowlist:
+        raise BusinessRuleViolation(
+            "AdmissionPath chưa bật field nào cho hiệu chỉnh — liên hệ admin"
+        )
+
+    # 4. Hard-deny first — even if a future bug puts a hard-denied key
+    # in the path config, this check still rejects.
+    requested = set(payload.changes.keys())
+    hard_denied = requested & HARD_DENY_FIELDS
+    if hard_denied:
+        raise ValidationError(
+            f"Các trường sau không thể sửa qua flow hiệu chỉnh: {sorted(hard_denied)}"
+        )
+
+    not_allowed = requested - effective_allowlist
+    if not_allowed:
+        raise ValidationError(
+            f"Các trường sau không nằm trong allowlist của path này: {sorted(not_allowed)}"
+        )
+
+    # 5. Per-field parse + normalize, business-rule check.
+    from pydantic import ValidationError as PydanticValidationError
+
+    normalized: Dict[str, Any] = {}
+    for field_key, raw_value in payload.changes.items():
+        try:
+            normalized[field_key] = parse_and_normalize(field_key, raw_value)
+        except PydanticValidationError as exc:
+            # Surface the first error message in human-readable form.
+            errors = exc.errors()
+            first_msg = errors[0]["msg"] if errors else "invalid value"
+            raise ValidationError(f"{field_key}: {first_msg}")
+
+        biz_err = post_parse_business_check(field_key, normalized[field_key])
+        if biz_err:
+            raise ValidationError(biz_err)
+
+    # 5b. Cross-field invariants on the candidate state (existing values
+    # overlaid with normalized changes). Per-field validators above only
+    # see the value being changed; sneaking only `party_entry_date`
+    # backward could leave a profile where union > party in spite of
+    # `AdmissionProfileUpdate.validate_logical_dates` rejecting the
+    # same combination on a normal update.
+    def _candidate(field_key: str) -> Any:
+        return normalized[field_key] if field_key in normalized else getattr(profile, field_key)
+
+    cand_union = _candidate("union_entry_date")
+    cand_party = _candidate("party_entry_date")
+    cand_party_official = _candidate("party_official_entry_date")
+    cand_dob = profile.dob  # `dob` is HARD_DENY so always the original
+
+    if cand_union and cand_party and cand_union > cand_party:
+        raise ValidationError(
+            "Ngày vào Đoàn phải trước Ngày vào Đảng (dự bị)"
+        )
+    if cand_party and cand_party_official and cand_party > cand_party_official:
+        raise ValidationError(
+            "Ngày vào Đảng (dự bị) phải trước Ngày vào Đảng (chính thức)"
+        )
+    # `dob` is a `date`; entry dates are `datetime`. Compare on date
+    # boundary so the same comparison rule used in
+    # AdmissionProfileUpdate.validate_logical_dates applies.
+    if cand_dob and cand_union and cand_dob > cand_union.date():
+        raise ValidationError("Ngày sinh phải trước Ngày vào Đoàn")
+
+    # 6. Diff — compare AFTER normalization so e.g. "2025-09-01" parsing
+    # to datetime(2025,9,1) doesn't false-diff against an existing
+    # datetime(2025,9,1). Apply only fields that actually changed.
+    diff: Dict[str, Dict[str, Any]] = {}
+    for field_key, new_val in normalized.items():
+        old_val = getattr(profile, field_key)
+        if old_val != new_val:
+            diff[field_key] = {
+                "old": safe_serialize(old_val),
+                "new": safe_serialize(new_val),
+            }
+            setattr(profile, field_key, new_val)
+
+    if not diff:
+        raise BusinessRuleViolation(
+            "Không có thay đổi nào — giá trị mới trùng giá trị cũ"
+        )
+
+    # 7. Version bump + flush
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    # 8. Audit log — past-tense action keeps log_changes convention.
+    await audit_service.log_changes(
+        db,
+        entity_type="AdmissionProfile",
+        entity_id=profile.id,
+        action="minor_corrected",
+        changes=diff,
+        actor_user_id=current_user.id,
+        reason=payload.reason,
+    )
+
+    # 9. Pre-resolve socket envelope IN-TRANSACTION while profile.lead is
+    # still loaded. Router will safe_dispatch post-commit so a network /
+    # socket glitch never rolls back the business mutation.
+    socket_envelope = {
+        "payload": {
+            "application_id": profile.id,
+            "lead_id": profile.lead_id,
+            "changed_fields": sorted(diff.keys()),  # KEYS ONLY — no PII
+            "actor_id": current_user.id,
+            "corrected_at": datetime.now(timezone.utc).isoformat(),
+        },
+        # Required because catalog marks the event privacy="sensitive";
+        # dispatcher fail-closed guard would block a no-rooms emit.
+        "rooms": _rooms_for_admission(profile),
+    }
+
+    # 10. Re-populate response fields. Pass documents=None — get_admission_for_user
+    # eager-loaded lead/officer/reviewer but NOT documents, so passing
+    # profile.documents would lazy-load (MissingGreenlet). The helper
+    # falls through to AdmissionRepository.get_all_documents.
+    # NOTE: _populate_response_fields calls _resolve_minor_correction_state
+    # at its tail (see plumbing in next section), so we DO NOT call the
+    # resolver again here — would be one wasted path query.
+    await _populate_response_fields(db, profile, current_user, documents=None)
+
+    return profile, socket_envelope
 
 
 async def mark_student_dropped(
