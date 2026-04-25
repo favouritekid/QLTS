@@ -6,6 +6,12 @@ import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   Calculator,
   ExternalLink,
   AlertTriangle,
@@ -17,6 +23,28 @@ import { AmountDisplay } from "./AmountDisplay"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/lib/stores/auth.store"
 import { hasFinanceAccess } from "@/lib/config/roles"
+
+// Officer (and any role without finance access) can't open /finance/* —
+// the proxy gate redirects them. Wrap the read-only badge/card in a
+// tooltip that explains where to find detail + who to contact, so the
+// click-without-response moment doesn't feel broken.
+const NO_FINANCE_TOOLTIP =
+  "Chi tiết tài chính nằm ở module Finance — chỉ kế toán/quản lý/admin truy cập."
+
+function withReadOnlyTooltip(node: React.ReactNode) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* span wrapper preserves the trigger boundary even when child
+              is a non-interactive element. */}
+          <span>{node}</span>
+        </TooltipTrigger>
+        <TooltipContent>{NO_FINANCE_TOOLTIP}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
 
 // =============================================================================
 // TYPES
@@ -89,7 +117,7 @@ export function FeeStatusLink({
       return canAccessFinanceModule ? (
         <Link href={`/finance/fees?profile_id=${profileId}`}>{badge}</Link>
       ) : (
-        badge
+        withReadOnlyTooltip(badge)
       )
     }
 
@@ -119,7 +147,7 @@ export function FeeStatusLink({
     return canAccessFinanceModule ? (
       <Link href={`/finance/fees?profile_id=${profileId}`}>{badge}</Link>
     ) : (
-      badge
+      withReadOnlyTooltip(badge)
     )
   }
 
@@ -181,7 +209,7 @@ export function FeeStatusLink({
   return canAccessFinanceModule ? (
     <Link href={`/finance/fees?profile_id=${profileId}`}>{card}</Link>
   ) : (
-    card
+    withReadOnlyTooltip(card)
   )
 }
 

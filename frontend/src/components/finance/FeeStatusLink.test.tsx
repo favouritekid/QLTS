@@ -45,6 +45,24 @@ describe("FeeStatusLink", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument()
   })
 
+  it("wraps officer-mode badge in a tooltip explaining where finance lives", () => {
+    useAuthStore.setState({
+      user: { id: 1, role: "officer", username: "officer" } as any,
+      isAuthenticated: true,
+    })
+
+    render(<FeeStatusLink profileId={178} variant="badge" />)
+
+    // Radix Tooltip propagates the trigger label via aria-describedby on
+    // open, but the trigger itself exists in the DOM regardless. The
+    // span wrapper used by withReadOnlyTooltip becomes the trigger.
+    const trigger = screen.getByText(/chưa tính phí/i).closest("span")
+    expect(trigger).not.toBeNull()
+    // cursor-default carries over to the badge so the unclickable state
+    // is visually distinct from the link variant's cursor-pointer.
+    expect(screen.getByText(/chưa tính phí/i).className).toMatch(/cursor-default/)
+  })
+
   it("keeps the finance deep link for finance-capable roles", () => {
     useAuthStore.setState({
       user: { id: 2, role: "accountant", username: "accountant" } as any,
