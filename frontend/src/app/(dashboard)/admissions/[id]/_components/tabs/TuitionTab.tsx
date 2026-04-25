@@ -41,12 +41,7 @@ import type { FeeStatus } from "@/types/finance.types"
 import { FEE_TYPE_LABELS } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/lib/stores/auth.store"
-
-// PR #7 review — `/finance/*` is proxy-blocked for officers. Gate the
-// "manage in Finance" + per-row fee links by the user's role so the
-// officer flow doesn't end at a redirect/403 page after they calculate
-// the fee inline. Manager / accountant / admin keep the deep links.
-const FINANCE_ACCESS_ROLES = new Set(["admin", "manager", "accountant"])
+import { hasFinanceAccess } from "@/lib/config/roles"
 
 interface TuitionTabProps {
   profile: AdmissionProfileResponse
@@ -62,7 +57,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   // proxy blocks officers from that area entirely — surfacing a button
   // that redirects them out of the page is a worse UX than hiding it.
   const userRole = useAuthStore((s) => s.user?.role)
-  const canAccessFinanceModule = userRole != null && FINANCE_ACCESS_ROLES.has(userRole)
+  const canAccessFinanceModule = hasFinanceAccess(userRole)
   const disabledReason =
     !canCalculateFee
       ? profile.status === "approved" ||
@@ -102,7 +97,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
           </CardContent>
         </Card>
 
-        <NoticeCard />
+        <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
 
         <CalculateFeeDialog
           open={calcDialogOpen}
@@ -137,7 +132,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
           </CardContent>
         </Card>
 
-        <NoticeCard />
+        <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
 
         <CalculateFeeDialog
           open={calcDialogOpen}
@@ -339,7 +334,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
         </Card>
       ) : null}
 
-      <NoticeCard />
+      <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
 
       {/* Dialog mount for the happy-path "Tính lại" trigger above. */}
       <CalculateFeeDialog
@@ -438,7 +433,11 @@ function StatCard({ label, value, variant = "default" }: StatCardProps) {
   )
 }
 
-function NoticeCard() {
+function NoticeCard({
+  canAccessFinanceModule,
+}: {
+  canAccessFinanceModule: boolean
+}) {
   return (
     <Card className="border-dashed border-primary/30 bg-primary/5">
       <CardContent className="pt-4">
@@ -449,7 +448,15 @@ function NoticeCard() {
             <p className="text-muted-foreground">
               Tab này hiển thị thông tin học phí từ module Tài chính. Để thực hiện các
               thao tác như ghi nhận thanh toán, xác minh, hoặc hoàn tiền, vui lòng sử
-              dụng module <Link href="/finance" className="text-primary hover:underline">Finance</Link>.
+              dụng module{" "}
+              {canAccessFinanceModule ? (
+                <Link href="/finance" className="text-primary hover:underline">
+                  Finance
+                </Link>
+              ) : (
+                <span className="font-medium text-foreground">Finance</span>
+              )}
+              .
             </p>
           </div>
         </div>
