@@ -19,7 +19,7 @@
  *  - Form schema no longer uses z.coerce + default() defaults so the
  *    RHF<Values> generic resolves cleanly under strict tsc.
  */
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Loader2, Calculator } from "lucide-react"
 
@@ -76,19 +76,21 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
     [plansQuery.data]
   )
 
-  // Default plan selection as soon as the list loads — prefer FULL if
-  // present (matches backend FeeCalculateRequest.installment_plan_code
-  // default), otherwise the first active option.
-  useEffect(() => {
-    if (!planCode && activePlans.length > 0) {
-      const full = activePlans.find((p) => p.code === "FULL")
-      setPlanCode((full ?? activePlans[0]).code)
-    }
-  }, [activePlans, planCode])
+  // Derived default (no useEffect — avoids react-hooks/incompatible-library
+  // setState-in-effect lint error). When user hasn't explicitly picked,
+  // prefer FULL (matches backend FeeCalculateRequest.installment_plan_code
+  // default), otherwise the first active option. setPlanCode only fires on
+  // explicit user choice, so derived value flips back to default if the
+  // plan list reloads after a reset.
+  const effectivePlanCode = useMemo(() => {
+    if (planCode) return planCode
+    if (activePlans.length === 0) return ""
+    return (activePlans.find((p) => p.code === "FULL") ?? activePlans[0]).code
+  }, [planCode, activePlans])
 
   const isTuition = feeType === "tuition"
   const isPending = calculateFee.isPending
-  const canSubmit = planCode !== "" && !isPending && activePlans.length > 0
+  const canSubmit = effectivePlanCode !== "" && !isPending && activePlans.length > 0
 
   const reset = () => {
     setFeeType("tuition")
@@ -106,7 +108,7 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
       // Only tuition carries semester_no; backend validator rejects it
       // for non-tuition fee types, so omit entirely when switching away.
       semester_no: isTuition ? semesterNo : undefined,
-      installment_plan_code: planCode,
+      installment_plan_code: effectivePlanCode,
     })
 
     // useCalculateFee already invalidates finance caches + toasts on
@@ -186,7 +188,7 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
           <div className="space-y-2">
             <Label htmlFor="installment_plan_code">Kế hoạch thanh toán</Label>
             <Select
-              value={planCode}
+              value={effectivePlanCode}
               onValueChange={setPlanCode}
               disabled={isPending || plansQuery.isLoading || activePlans.length === 0}
             >
