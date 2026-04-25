@@ -46,6 +46,7 @@ from .notification_bundle import (
     compose_post_commit_callbacks,
     dispatch_bundle,
 )
+from .notification_dispatcher import _rooms_for_admission
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -61,6 +62,84 @@ log = structlog.get_logger(__name__)
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
+
+def _authorize_document_action(
+    *,
+    action: str,
+    profile: models.AdmissionProfile,
+    doc_status: str,
+    doc_code: str,
+    current_user: models.User,
+) -> None:
+    """Enforce the PR #5 document-action matrix at the service layer.
+
+    Mirrors ``_compute_document_permissions`` in ``_compute_frontend_fields``
+    so the ``can_*`` flag promised to the FE is always backed by a route
+    that actually authorises the call. Casbin gates the route at role
+    level (officer can hit /paper-submitted, manager /verify-format,
+    /reject, /reset); this helper adds the fine-grained rules Casbin
+    can't express: unit scope for manager, owner check for officer,
+    allowed ``doc_status`` transition, and ``requires_upload`` flag for
+    paper-submit.
+
+    ``action`` is one of: "upload", "paper_submitted", "verify",
+    "reject", "reset". Raises :class:`PermissionDeniedError` on fail —
+    the router maps that to 404 (no existence leak).
+    """
+    lead = profile.__dict__.get("lead")
+    is_admin = current_user.role == UserRole.ADMIN
+    is_manager = current_user.role == UserRole.MANAGER
+    is_officer = current_user.role == UserRole.OFFICER
+    is_owner = bool(
+        lead
+        and lead.assigned_officer_id is not None
+        and lead.assigned_officer_id == current_user.id
+    )
+    manager_in_scope = bool(
+        is_manager
+        and lead is not None
+        and lead.unit_id is not None
+        and lead.unit_id == current_user.unit_id
+    )
+    reviewer_scope = is_admin or manager_in_scope
+    profile_editable = profile.status in ("draft", "rejected", "revision_requested")
+
+    applied_rules = profile.applied_rules or {}
+    doc_configs = applied_rules.get("doc_configs", {}) or {}
+    config = doc_configs.get(doc_code, {}) or {}
+    requires_upload = bool(config.get("requires_upload", True))
+
+    if action == "upload":
+        ok = (
+            requires_upload
+            and profile_editable
+            and (is_owner or is_admin or manager_in_scope)
+            and doc_status in ("missing", "rejected")
+        )
+    elif action == "paper_submitted":
+        ok = (
+            (not requires_upload)
+            and profile_editable
+            and (is_owner or is_admin or manager_in_scope)
+            and doc_status == "missing"
+        )
+    elif action == "verify":
+        ok = reviewer_scope and doc_status in ("uploaded", "paper_submitted")
+    elif action == "reject":
+        ok = reviewer_scope and doc_status in ("uploaded", "paper_submitted", "verified")
+    elif action == "reset":
+        ok = reviewer_scope and doc_status != "missing"
+    else:
+        raise PermissionDeniedError(f"Unknown document action '{action}'")
+
+    if not ok:
+        # 404 per IDOR convention — router translates.
+        raise PermissionDeniedError(
+            f"Action '{action}' not permitted on document '{doc_code}' "
+            f"(status={doc_status}, profile_status={profile.status}, "
+            f"role={current_user.role})"
+        )
+
 
 def _resolve_idor_filters(current_user: models.User) -> tuple[Optional[int], Optional[int]]:
     """
@@ -357,39 +436,111 @@ def _validate_documents(
     profile: models.AdmissionProfile,
     documents: list | None,
     applied_rules: dict,
-) -> tuple[list[str], list[str], set[str], list[str]]:
+) -> tuple[list[str], list[str], set[str], list[str], list[str]]:
     """
     Validate document requirements.
-    Returns: (doc_errors_list, validation_errors_list, uploaded_doc_codes_set, upload_required_docs_list)
+    Returns: ``(doc_errors, validation_errors, uploaded_doc_codes,
+              upload_required_docs, unverified_doc_codes)``.
+
+    ``doc_errors`` is the union of truly-missing and (in strict mode)
+    uploaded-but-unverified codes — submit-gate consumers want a single
+    "anything blocks submit" list. ``unverified_doc_codes`` is the
+    subset that *was* uploaded but is still pending officer
+    verification; UI consumers (``document_stats``,
+    ``grouped_validation_errors``) split the two so a doc waiting on
+    verify isn't double-counted as "missing".
+
+    PR #6 — uploaded-but-not-verified docs no longer satisfy the submit
+    gate by default. The path-level `allow_unverified_submission` flag
+    is snapshotted into ``applied_rules`` at profile creation so admin
+    changes to a path don't retroactively re-score in-flight profiles.
+
+    Schema versioning:
+      * schema_version == 1 → legacy profile created before PR #6.
+        Grandfathered: treat missing flag as True so existing drafts
+        keep submitting.
+      * schema_version >= 2 → post-PR profile. The flag MUST be present;
+        its absence is a create_profile bug and raises ConfigError so
+        the failure surfaces loudly instead of silently downgrading.
     """
     upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
-    doc_errors = []
-    validation_errors = []
-    uploaded_doc_codes = set()
-    
+    doc_errors: list[str] = []
+    unverified_doc_codes: list[str] = []
+    validation_errors: list[str] = []
+    uploaded_doc_codes: set[str] = set()
+    # Separate set of codes that exist in the uploads table with a file
+    # but have not yet been verified — used to distinguish "missing" vs
+    # "pending verify" in strict mode for UI counts/labels.
+    pending_verify_codes: set[str] = set()
+
+    schema_version = applied_rules.get("schema_version", 1)
+    if schema_version == 1:
+        # Pre-PR #6 profile, grandfathered.
+        allow_unverified = bool(applied_rules.get("allow_unverified_submission", True))
+    else:
+        if "allow_unverified_submission" not in applied_rules:
+            # Domain-level misconfiguration — create_profile forgot to
+            # snapshot the flag. Fail loudly rather than downgrade silently.
+            raise BusinessRuleViolation(
+                f"Profile {getattr(profile, 'id', '?')} applied_rules missing "
+                f"allow_unverified_submission (schema_version={schema_version}). "
+                "create_profile must snapshot this flag from the AdmissionPath."
+            )
+        allow_unverified = bool(applied_rules["allow_unverified_submission"])
+
     if documents is not None:
-        # Verified/paper_submitted documents are ALWAYS valid
-        # Only check file_path for "uploaded" status
-        uploaded_doc_codes = {
-            doc.document_type.code for doc in documents
-            if doc.status in ["verified", "paper_submitted"] or (doc.file_path and doc.status == "uploaded")
-        }
-        
-        # Log document validation details (preserved from original code)
+        if allow_unverified:
+            # Legacy behaviour: uploaded (with file) / verified / paper-submitted
+            # all count toward submission.
+            uploaded_doc_codes = {
+                doc.document_type.code for doc in documents
+                if doc.status in ("verified", "paper_submitted")
+                or (doc.file_path and doc.status == "uploaded")
+            }
+        else:
+            # Strict mode: only verified or paper_submitted count.
+            uploaded_doc_codes = {
+                doc.document_type.code for doc in documents
+                if doc.status in ("verified", "paper_submitted")
+            }
+            # Track uploaded-with-file rows that strict mode rejected so
+            # the UI can label them as "pending verify" rather than
+            # "missing".
+            pending_verify_codes = {
+                doc.document_type.code for doc in documents
+                if doc.file_path and doc.status == "uploaded"
+            }
+
         log.debug(
             "Document validation check",
             profile_id=profile.id,
             upload_required_docs=upload_required_docs,
             uploaded_doc_codes=list(uploaded_doc_codes),
             total_documents=len(documents),
+            schema_version=schema_version,
+            allow_unverified=allow_unverified,
         )
-        
+
         for doc_code in upload_required_docs:
-            if doc_code not in uploaded_doc_codes:
-                doc_errors.append(doc_code)
+            if doc_code in uploaded_doc_codes:
+                continue
+            doc_errors.append(doc_code)
+            if not allow_unverified and doc_code in pending_verify_codes:
+                unverified_doc_codes.append(doc_code)
+                validation_errors.append(
+                    f"Tài liệu {doc_code} chưa được xác minh. Liên hệ quản lý "
+                    f"để verify trước khi nộp hồ sơ."
+                )
+            else:
                 validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
-                
-    return doc_errors, validation_errors, uploaded_doc_codes, upload_required_docs
+
+    return (
+        doc_errors,
+        validation_errors,
+        uploaded_doc_codes,
+        upload_required_docs,
+        unverified_doc_codes,
+    )
 
 
 def _validate_personal_info(
@@ -440,7 +591,7 @@ def _compute_completion_percent(
     """
     applied_rules = profile.applied_rules or {}
     gpa_error, _, _ = _validate_scores(profile, applied_rules)
-    doc_errors, _, _, _ = _validate_documents(profile, documents, applied_rules)
+    doc_errors, _, _, _, _ = _validate_documents(profile, documents, applied_rules)
     missing_personal, _ = _validate_personal_info(profile)
 
     # Eligibility (simplified — mirrors _compute_frontend_fields logic)
@@ -650,6 +801,42 @@ def _compute_frontend_fields(
                   and not profile.assigned_reviewer_id),
         "unclaim": (bool(profile.assigned_reviewer_id)
                     and (profile.assigned_reviewer_id == current_user.id or is_admin)),
+        # Officer-to-lead assignment via POST /admissions/bulk/assign. Mirrors
+        # the route: admin always, manager when the lead's unit matches theirs.
+        # Not gated by profile status (route updates lead.assigned_officer_id
+        # regardless of admission state).
+        "assign_officer": is_admin or (
+            is_manager
+            and profile.lead is not None
+            and profile.lead.unit_id is not None
+            and profile.lead.unit_id == current_user.unit_id
+        ),
+        # PR #7 — official fee/invoice creation via POST /api/fees/calculate.
+        # Mirrors _fee_calc_authorized in routers/fees.py: admin always,
+        # manager/accountant same-unit, officer same-unit AND assigned.
+        # Status-gated to post-decision (approved/confirmed/enrolled) so we
+        # don't create finance records for profiles that might still flip
+        # to rejected.
+        "calculate_fee": (
+            status in ("approved", "confirmed", "enrolled")
+            and (
+                is_admin
+                or (
+                    profile.lead is not None
+                    and profile.lead.unit_id is not None
+                    and (
+                        (user_role in (UserRole.MANAGER, UserRole.ACCOUNTANT)
+                         and profile.lead.unit_id == current_user.unit_id)
+                        or (
+                            is_officer
+                            and profile.lead.unit_id == current_user.unit_id
+                            and profile.lead.assigned_officer_id is not None
+                            and profile.lead.assigned_officer_id == current_user.id
+                        )
+                    )
+                )
+            )
+        ),
         "delete": status == "draft" and is_admin,
         "view": True,
     }
@@ -682,7 +869,12 @@ def _compute_frontend_fields(
     
     # --- Execute Validation Helpers ---
     gpa_error, score_ve, gpa_errors = _validate_scores(profile, applied_rules)
-    doc_errors, doc_ve, uploaded_doc_codes, upload_required_docs = _validate_documents(profile, documents, applied_rules)
+    doc_errors, doc_ve, uploaded_doc_codes, upload_required_docs, unverified_doc_codes = _validate_documents(profile, documents, applied_rules)
+    # PR #6 review — split missing vs pending-verify so downstream
+    # stats/messages don't conflate the two ("đã nộp 1/1" + "Còn thiếu 1"
+    # was reachable for a doc that's uploaded-but-pending-verify in
+    # strict mode).
+    missing_doc_codes = [code for code in doc_errors if code not in unverified_doc_codes]
     missing_personal, personal_ve = _validate_personal_info(profile)
     
     # Aggregate validation errors
@@ -743,8 +935,19 @@ def _compute_frontend_fields(
         },
         "documents": {
             "category": "Tài liệu",
-            "errors": [f"Thiếu tài liệu bắt buộc: {doc_code}" for doc_code in doc_errors],
-            "count": len(doc_errors)
+            # PR #6 review — distinguish missing vs pending-verify in the
+            # grouped list. Same render order as doc_errors so existing
+            # consumers that index by position don't drift.
+            "errors": (
+                [f"Thiếu tài liệu bắt buộc: {doc_code}" for doc_code in missing_doc_codes]
+                + [
+                    f"Tài liệu {doc_code} đã tải lên nhưng chưa được xác minh"
+                    for doc_code in unverified_doc_codes
+                ]
+            ),
+            "count": len(doc_errors),
+            "missing_count": len(missing_doc_codes),
+            "unverified_count": len(unverified_doc_codes),
         },
         "scores": {
             "category": "Điểm số",
@@ -858,25 +1061,91 @@ def _compute_frontend_fields(
                     "label_from_db": doc.document_type.name,
                 }
     
+    # PR #5 — scope gate for manager/admin on per-document actions.
+    # Admin sees all profiles; manager is scoped to the lead's unit.
+    _lead = profile.__dict__.get("lead")
+    _manager_in_scope = (
+        is_manager
+        and _lead is not None
+        and _lead.unit_id is not None
+        and _lead.unit_id == current_user.unit_id
+    )
+    _reviewer_scope = is_admin or _manager_in_scope
+    _profile_editable = status in ("draft", "rejected", "revision_requested")
+
+    def _compute_document_permissions(
+        doc_status: str,
+        requires_upload: bool,
+    ) -> dict[str, bool]:
+        """Per-document action flags for the current user.
+
+        Mirrors the route contracts exactly:
+        - Upload  : POST /admissions/{id}/documents/{code}/upload
+                    officer assigned to the lead, profile in editable state,
+                    doc expects an upload and isn't already verified/paper.
+        - Verify  : POST /admissions/{id}/documents/{code}/verify-format
+                    manager/admin in scope, doc status uploaded|paper_submitted.
+        - Reject  : POST /admissions/{id}/documents/{code}/reject
+                    manager/admin in scope, doc status uploaded|paper_submitted|verified.
+        - Reset   : POST /admissions/{id}/documents/{code}/reset
+                    manager/admin in scope, doc status != missing.
+        - Paper   : POST /admissions/{id}/documents/{code}/paper-submitted
+                    officer assigned to the lead, paper-only doc (requires_upload=False),
+                    status still missing.
+        """
+        can_upload = bool(
+            requires_upload
+            and _profile_editable
+            and (is_owner or is_admin or _manager_in_scope)
+            and doc_status in ("missing", "rejected")
+        )
+        can_verify = bool(
+            _reviewer_scope and doc_status in ("uploaded", "paper_submitted")
+        )
+        can_reject = bool(
+            _reviewer_scope
+            and doc_status in ("uploaded", "paper_submitted", "verified")
+        )
+        can_reset = bool(
+            _reviewer_scope and doc_status != "missing"
+        )
+        can_mark_paper_submitted = bool(
+            (not requires_upload)
+            and _profile_editable
+            and (is_owner or is_admin or _manager_in_scope)
+            and doc_status == "missing"
+        )
+        return {
+            "can_upload": can_upload,
+            "can_verify": can_verify,
+            "can_reject": can_reject,
+            "can_reset": can_reset,
+            "can_mark_paper_submitted": can_mark_paper_submitted,
+        }
+
     # Build documents_checklist
     documents_checklist = []
     for i, doc_code in enumerate(all_mandatory_docs):
         config = doc_configs.get(doc_code, {})
         uploaded_doc = doc_by_code.get(doc_code, {})
-        
+        _doc_status = uploaded_doc.get("status", "missing")
+        _requires_upload = config.get("requires_upload", True)
+        _perms = _compute_document_permissions(_doc_status, _requires_upload)
+
         documents_checklist.append({
             "code": doc_code,
             "label": config.get("label") or uploaded_doc.get("label_from_db") or doc_code,
             "is_mandatory": True,
-            "requires_upload": config.get("requires_upload", True),
+            "requires_upload": _requires_upload,
             "submission_format": config.get("submission_format"),
-            "status": uploaded_doc.get("status", "missing"),
+            "status": _doc_status,
             "file_path": uploaded_doc.get("file_path"),
             "uploaded_at": uploaded_doc.get("uploaded_at"),
             "rejection_reason": uploaded_doc.get("rejection_reason"),
-            "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False)
+            "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False),
+            **_perms,
         })
-    
+
     profile.documents_checklist = documents_checklist
 
     # ✅ Ticket #3.1: Document Status Summary (Backend Computed)
@@ -888,13 +1157,20 @@ def _compute_frontend_fields(
          submitted_count = len([d for d in mandatory_docs if d.status in ["uploaded", "verified", "paper_submitted"]])
          verified_count = len([d for d in mandatory_docs if d.status == "verified"])
          mandatory_count = len(upload_required_docs)
-         missing_count = len(doc_errors) # Already computed via validation helper
-         
+         # PR #6 review — split: pending-verify shouldn't count as
+         # "missing" because the file IS uploaded; UI prior to the fix
+         # rendered "1/1 đã nộp" + "Còn thiếu: 1" simultaneously for the
+         # same row. unverified_count surfaces that bucket explicitly so
+         # the FE can label it "Chờ xác minh".
+         missing_count = len(missing_doc_codes)
+         unverified_count = len(unverified_doc_codes)
+
          profile.document_stats = {
              "submitted_count": submitted_count,
-             "verified_count": verified_count, 
+             "verified_count": verified_count,
              "mandatory_count": mandatory_count,
-             "missing_count": missing_count
+             "missing_count": missing_count,
+             "unverified_count": unverified_count,
          }
 
     # =========================================================================
@@ -924,8 +1200,15 @@ def _compute_frontend_fields(
     critical_blockers = []
     if personal_error_count > 0:
         critical_blockers.append(f"Thiếu {personal_error_count} thông tin cá nhân bắt buộc")
-    if len(doc_errors) > 0:
-        critical_blockers.append(f"Thiếu {len(doc_errors)} tài liệu bắt buộc")
+    # PR #6 review — phrase the blocker per bucket so the dashboard
+    # accurately reflects whether the user needs to upload OR ask the
+    # manager to verify.
+    if len(missing_doc_codes) > 0:
+        critical_blockers.append(f"Thiếu {len(missing_doc_codes)} tài liệu bắt buộc")
+    if len(unverified_doc_codes) > 0:
+        critical_blockers.append(
+            f"{len(unverified_doc_codes)} tài liệu chờ xác minh từ quản lý"
+        )
     if gpa_error:
         critical_blockers.append("Điểm số chưa đạt yêu cầu")
 
@@ -1666,6 +1949,16 @@ async def create_profile(
         "snapshot_source": "relational",
         "admission_path_id": admission_path.id,
         "academic_info_id": academic_info.id,
+        # PR #6 — snapshot the path-level flag so later admin changes to
+        # the path don't retroactively block (or unblock) submissions
+        # for profiles created under the old rule. schema_version=2
+        # marks the profile as post-migration; legacy profiles were
+        # backfilled with schema_version=1 + flag=true by the alembic
+        # revision aa1i2j3k4l5m.
+        "schema_version": 2,
+        "allow_unverified_submission": bool(
+            getattr(admission_path, "allow_unverified_submission", False)
+        ),
     }
 
 
@@ -2637,16 +2930,41 @@ async def submit_and_evaluate(
                 selected_subjects=score_result.selected_subjects
             )
 
-    # Validation 2: Check mandatory documents (using relational ProfileDocument)
+    # Validation 2: Check mandatory documents (using relational ProfileDocument).
+    # PR #6 — honour the path-level allow_unverified_submission flag snapshotted
+    # in applied_rules. Strict mode requires verified or paper_submitted; lax
+    # mode (pre-PR default, grandfathered) also accepts uploaded-with-file.
     uploaded_docs = await admission_repo.get_uploaded_documents(profile.id)
-    uploaded_doc_codes = {doc.document_type.code for doc in uploaded_docs}
+    schema_version = applied_rules.get("schema_version", 1)
+    if schema_version == 1:
+        allow_unverified = bool(applied_rules.get("allow_unverified_submission", True))
+    else:
+        if "allow_unverified_submission" not in applied_rules:
+            raise BusinessRuleViolation(
+                f"Profile {profile.id} applied_rules missing allow_unverified_submission "
+                f"(schema_version={schema_version}). create_profile must snapshot the flag."
+            )
+        allow_unverified = bool(applied_rules["allow_unverified_submission"])
+
+    if allow_unverified:
+        uploaded_doc_codes = {doc.document_type.code for doc in uploaded_docs}
+    else:
+        uploaded_doc_codes = {
+            doc.document_type.code for doc in uploaded_docs
+            if doc.status in ("verified", "paper_submitted")
+        }
 
     for doc_code in mandatory_docs:
         if doc_code not in uploaded_doc_codes:
-            # Find document for label
             doc = await admission_repo.get_document_by_type(profile.id, doc_code)
             label = doc.document_type.name if doc else doc_code
-            errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
+            if allow_unverified:
+                errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
+            else:
+                errors.append(
+                    f"Tài liệu {label} ({doc_code}) chưa được xác minh. "
+                    f"Liên hệ quản lý để verify trước khi nộp hồ sơ."
+                )
 
     # Validation 3: Check citizen_id uniqueness
     if not profile.citizen_id:
@@ -2792,6 +3110,19 @@ async def upload_document(
     if profile.status not in ["draft", "rejected", "revision_requested"]:
         raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
 
+    # Find document record early — needed for doc_status-based guard check.
+    doc_record = await admission_repo.get_document_by_type(profile_id, doc_code)
+    if not doc_record:
+        raise BadRequest(f"Document code '{doc_code}' not found in profile documents")
+
+    _authorize_document_action(
+        action="upload",
+        profile=profile,
+        doc_status=doc_record.status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
+
     # File validation constants
     ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -2814,11 +3145,7 @@ async def upload_document(
             f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
         )
 
-    # Find document in ProfileDocument table (replaces JSONB checklist)
-    doc_record = await admission_repo.get_document_by_type(profile_id, doc_code)
-
-    if not doc_record:
-        raise BadRequest(f"Document code '{doc_code}' not found in profile documents")
+    # doc_record was already fetched above for the authz guard — no need to re-query.
 
     # Prepare file path with security measures
     import os
@@ -2938,6 +3265,18 @@ async def confirm_document_format(
     # 1. Access Check
     profile = await get_profile(db, profile_id, current_user)
 
+    # PR #5 guard — same rule matrix as the can_verify flag on documents_checklist.
+    existing = await admission_repo.get_document_by_type(profile_id, doc_code)
+    if not existing:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found")
+    _authorize_document_action(
+        action="verify",
+        profile=profile,
+        doc_status=existing.status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
+
     # 2. Verify Document Format (full verification)
     doc = await admission_repo.confirm_document_format(
         profile_id=profile_id,
@@ -3020,6 +3359,16 @@ async def mark_paper_submitted(
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "missing"
 
+    # PR #5 guard — matches can_mark_paper_submitted (requires_upload=false,
+    # status=missing, owning officer in scope).
+    _authorize_document_action(
+        action="paper_submitted",
+        profile=profile,
+        doc_status=old_status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
+
     # Mark paper submitted
     doc = await admission_repo.mark_paper_submitted(
         profile_id=profile_id,
@@ -3100,6 +3449,16 @@ async def reject_document(
     # Get document to capture old status
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "unknown"
+
+    # PR #5 guard — matches can_reject (reviewer scope + doc status
+    # in uploaded/paper_submitted/verified).
+    _authorize_document_action(
+        action="reject",
+        profile=profile,
+        doc_status=old_status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
 
     # Reject document
     doc = await admission_repo.reject_document(
@@ -3187,6 +3546,15 @@ async def reset_document(
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "unknown"
     old_file_path = doc_before.file_path if doc_before else None
+
+    # PR #5 guard — matches can_reset (reviewer scope + non-missing status).
+    _authorize_document_action(
+        action="reset",
+        profile=profile,
+        doc_status=old_status,
+        doc_code=doc_code,
+        current_user=current_user,
+    )
 
     # Reset document
     doc = await admission_repo.reset_document(
@@ -3588,6 +3956,7 @@ async def enroll_student(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"student_enrolled:{result_dict['student_id']}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -3600,6 +3969,7 @@ async def enroll_student(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts11",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -3808,6 +4178,7 @@ async def approve_profile(
                     "actor_name": approver.full_name or approver.username,
                 },
                 dedupe_key=f"admission_profile_approved:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -3820,6 +4191,7 @@ async def approve_profile(
                     "actor_name": approver.full_name or approver.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4006,6 +4378,7 @@ async def reject_profile(
                     "actor_name": rejector.full_name or rejector.username,
                 },
                 dedupe_key=f"admission_profile_rejected:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4018,6 +4391,7 @@ async def reject_profile(
                     "actor_name": rejector.full_name or rejector.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4195,6 +4569,7 @@ async def request_revision(
                     "actor_name": reviewer.full_name or reviewer.username,
                 },
                 dedupe_key=f"admission_profile_revision:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4207,6 +4582,7 @@ async def request_revision(
                     "actor_name": reviewer.full_name or reviewer.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts17",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4379,6 +4755,7 @@ async def record_application_fee_payment(
         ),
     }
     _db = db
+    _rooms = _rooms_for_admission(profile)
 
     async def post_commit():
         from app.services.notification_dispatcher import safe_dispatch
@@ -4392,6 +4769,7 @@ async def record_application_fee_payment(
             db=_db,
             event=SystemEvents.APPLICATION_FEE_PAID,
             payload=_notify_payload,
+            rooms=_rooms,
         )
 
     return profile, post_commit
@@ -4581,6 +4959,7 @@ async def resubmit_profile(
                     "actor_name": officer.full_name or officer.username,
                 },
                 dedupe_key=f"admission_profile_resubmitted:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4593,6 +4972,7 @@ async def resubmit_profile(
                     "actor_name": officer.full_name or officer.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts07",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -4983,6 +5363,7 @@ async def finalize_profile(
                     "actor_name": admin.full_name or admin.username,
                 },
                 dedupe_key=f"admission_profile_finalized:{profile_id}",
+                rooms=_rooms_for_admission(locked_profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -4995,6 +5376,7 @@ async def finalize_profile(
                     "actor_name": admin.full_name or admin.username,
                 },
                 dedupe_key=f"lead_status_changed:{locked_profile.lead_id}:sts11",
+                rooms=_rooms_for_admission(locked_profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -5270,6 +5652,7 @@ async def withdraw_profile(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"admission_profile_withdrawn:{profile_id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -5282,6 +5665,7 @@ async def withdraw_profile(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts08",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -5431,6 +5815,7 @@ async def mark_student_dropped(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"admission_profile_dropped:{profile.id}",
+                rooms=_rooms_for_admission(profile),
             ),
             NotificationIntent(
                 event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -5443,6 +5828,7 @@ async def mark_student_dropped(
                     "actor_name": actor.full_name or actor.username,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts12",
+                rooms=_rooms_for_admission(profile),
             ),
         ]
         bundle = await dispatch_bundle(
@@ -5985,6 +6371,7 @@ async def bulk_approve(
                             "actor_name": approver.full_name or approver.username,
                         },
                         dedupe_key=f"admission_profile_approved:{profile.id}",
+                        rooms=_rooms_for_admission(profile),
                     ),
                     NotificationIntent(
                         event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -5997,6 +6384,7 @@ async def bulk_approve(
                             "actor_name": approver.full_name or approver.username,
                         },
                         dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+                        rooms=_rooms_for_admission(profile),
                     ),
                 ]
                 bundle = await dispatch_bundle(
@@ -6201,6 +6589,7 @@ async def bulk_reject(
                             "actor_name": rejector.full_name or rejector.username,
                         },
                         dedupe_key=f"admission_profile_rejected:{profile.id}",
+                        rooms=_rooms_for_admission(profile),
                     ),
                     NotificationIntent(
                         event=SystemEvents.LEAD_STATUS_CHANGED,
@@ -6213,6 +6602,7 @@ async def bulk_reject(
                             "actor_name": rejector.full_name or rejector.username,
                         },
                         dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+                        rooms=_rooms_for_admission(profile),
                     ),
                 ]
                 bundle = await dispatch_bundle(
@@ -6308,6 +6698,16 @@ async def bulk_assign(
     officer = await db.get(models.User, officer_id)
     if not officer:
         raise ResourceNotFoundError("Officer not found")
+
+    # Target must actually be an active officer. lead_service enforces the
+    # same rule on direct/auto assignment; bulk assign used to accept any
+    # in-unit user and would silently set lead.assigned_officer_id to a
+    # manager/admin/inactive account — leaving workload metrics and
+    # downstream officer-scoped queries in a confused state.
+    if officer.role != UserRole.OFFICER:
+        raise BadRequest("Target user is not an officer")
+    if getattr(officer, "status", None) != "active":
+        raise BadRequest("Target officer is not active")
 
     # M4: Validate officer unit matches assigner unit (Admin bypass)
     if assigner.role != UserRole.ADMIN:

@@ -6,6 +6,12 @@ import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   Calculator,
   ExternalLink,
   AlertTriangle,
@@ -15,6 +21,30 @@ import {
 import { useProfileFinanceSummary } from "@/hooks/finance/useFees"
 import { AmountDisplay } from "./AmountDisplay"
 import { cn } from "@/lib/utils"
+import { useAuthStore } from "@/lib/stores/auth.store"
+import { hasFinanceAccess } from "@/lib/config/roles"
+
+// Officer (and any role without finance access) can't open /finance/* —
+// the proxy gate redirects them. Wrap the read-only badge/card in a
+// tooltip that explains where to find detail + who to contact, so the
+// click-without-response moment doesn't feel broken.
+const NO_FINANCE_TOOLTIP =
+  "Chi tiết tài chính nằm ở module Finance — chỉ kế toán/quản lý/admin truy cập."
+
+function withReadOnlyTooltip(node: React.ReactNode) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* span wrapper preserves the trigger boundary even when child
+              is a non-interactive element. */}
+          <span>{node}</span>
+        </TooltipTrigger>
+        <TooltipContent>{NO_FINANCE_TOOLTIP}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
 
 // =============================================================================
 // TYPES
@@ -49,6 +79,8 @@ export function FeeStatusLink({
   variant = "badge",
 }: FeeStatusLinkProps) {
   const { data: summary, isLoading, error } = useProfileFinanceSummary(profileId)
+  const userRole = useAuthStore((s) => s.user?.role)
+  const canAccessFinanceModule = hasFinanceAccess(userRole)
 
   if (isLoading) {
     return variant === "badge" ? (
@@ -70,49 +102,61 @@ export function FeeStatusLink({
   // Badge variant - minimal display
   if (variant === "badge") {
     if (!hasFee) {
-      return (
-        <Link href={`/finance/fees?profile_id=${profileId}`}>
-          <Badge variant="outline" className={cn("cursor-pointer hover:bg-muted", className)}>
-            <Calculator className="h-3 w-3 mr-1" />
-            Chưa tính phí
-          </Badge>
-        </Link>
+      const badge = (
+        <Badge
+          variant="outline"
+          className={cn(
+            canAccessFinanceModule ? "cursor-pointer hover:bg-muted" : "cursor-default",
+            className
+          )}
+        >
+          <Calculator className="h-3 w-3 mr-1" />
+          Chưa tính phí
+        </Badge>
+      )
+      return canAccessFinanceModule ? (
+        <Link href={`/finance/fees?profile_id=${profileId}`}>{badge}</Link>
+      ) : (
+        withReadOnlyTooltip(badge)
       )
     }
 
-    return (
-      <Link href={`/finance/fees?profile_id=${profileId}`}>
-        <Badge
-          variant={isPaid ? "default" : hasOverdue ? "destructive" : "secondary"}
-          className={cn("cursor-pointer", className)}
-        >
-          {isPaid ? (
-            <>
-              <CheckCircle className="h-3 w-3 mr-1" />
-              Đã thanh toán
-            </>
-          ) : hasOverdue ? (
-            <>
-              <AlertTriangle className="h-3 w-3 mr-1" />
-              Quá hạn
-            </>
-          ) : (
-            <>
-              <Clock className="h-3 w-3 mr-1" />
-              Còn nợ
-            </>
-          )}
-        </Badge>
-      </Link>
+    const badge = (
+      <Badge
+        variant={isPaid ? "default" : hasOverdue ? "destructive" : "secondary"}
+        className={cn(canAccessFinanceModule ? "cursor-pointer" : "cursor-default", className)}
+      >
+        {isPaid ? (
+          <>
+            <CheckCircle className="h-3 w-3 mr-1" />
+            Đã thanh toán
+          </>
+        ) : hasOverdue ? (
+          <>
+            <AlertTriangle className="h-3 w-3 mr-1" />
+            Quá hạn
+          </>
+        ) : (
+          <>
+            <Clock className="h-3 w-3 mr-1" />
+            Còn nợ
+          </>
+        )}
+      </Badge>
+    )
+    return canAccessFinanceModule ? (
+      <Link href={`/finance/fees?profile_id=${profileId}`}>{badge}</Link>
+    ) : (
+      withReadOnlyTooltip(badge)
     )
   }
 
   // Card variant - detailed display
-  return (
-    <Link
-      href={`/finance/fees?profile_id=${profileId}`}
+  const card = (
+    <div
       className={cn(
-        "block p-4 rounded-lg border hover:bg-muted/50 transition-colors",
+        "block p-4 rounded-lg border",
+        canAccessFinanceModule && "hover:bg-muted/50 transition-colors",
         hasOverdue && "border-destructive/50 bg-destructive/5",
         isPaid && "border-success-500/50 bg-success-50/30 dark:bg-success-950/20",
         className
@@ -123,7 +167,7 @@ export function FeeStatusLink({
           <Calculator className="h-4 w-4 text-muted-foreground" />
           <span className="font-medium text-sm">Tài chính</span>
         </div>
-        <ExternalLink className="h-4 w-4 text-muted-foreground" />
+        {canAccessFinanceModule && <ExternalLink className="h-4 w-4 text-muted-foreground" />}
       </div>
 
       {!hasFee ? (
@@ -159,7 +203,13 @@ export function FeeStatusLink({
           )}
         </div>
       )}
-    </Link>
+    </div>
+  )
+
+  return canAccessFinanceModule ? (
+    <Link href={`/finance/fees?profile_id=${profileId}`}>{card}</Link>
+  ) : (
+    withReadOnlyTooltip(card)
   )
 }
 

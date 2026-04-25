@@ -203,6 +203,10 @@ class PaymentService:
             "actor_id": user_id,
         }
         _db = self.db
+        # Snapshot rooms pre-commit: profile may be unloaded after session close,
+        # and fail-closed guard requires non-empty rooms for sensitive events.
+        from app.services.notification_dispatcher import _rooms_for_admission
+        _rooms = _rooms_for_admission(profile) if fee and profile else None
 
         async def post_commit():
             from app.services.notification_dispatcher import safe_dispatch
@@ -212,6 +216,7 @@ class PaymentService:
                 db=_db,
                 event=SystemEvents.PAYMENT_RECEIVED,
                 payload=_notify_payload,
+                rooms=_rooms,
             )
 
         return payment, post_commit
@@ -382,6 +387,9 @@ class PaymentService:
             "user_id": _officer_id or verifier_id,
         }
         _db = self.db
+        # Snapshot rooms pre-commit for scoped domain emit.
+        from app.services.notification_dispatcher import _rooms_for_admission
+        _rooms = _rooms_for_admission(profile) if profile else None
 
         _fee_fully_paid = fee_remaining <= 0
         _fee_fully_paid_payload = {
@@ -402,6 +410,7 @@ class PaymentService:
                 db=_db,
                 event=SystemEvents.PAYMENT_VERIFIED,
                 payload=_notify_payload,
+                rooms=_rooms,
             )
 
             if _fee_fully_paid_payload:
@@ -409,6 +418,7 @@ class PaymentService:
                     db=_db,
                     event=SystemEvents.FEE_FULLY_PAID,
                     payload=_fee_fully_paid_payload,
+                    rooms=_rooms,
                 )
 
         return payment, post_commit
@@ -488,6 +498,9 @@ class PaymentService:
             "user_id": payment.created_by_id,
         }
         _db = self.db
+        # Snapshot rooms pre-commit for scoped domain emit.
+        from app.services.notification_dispatcher import _rooms_for_admission
+        _rooms = _rooms_for_admission(_profile) if _profile else None
 
         async def post_commit():
             from app.services.notification_dispatcher import safe_dispatch
@@ -496,6 +509,7 @@ class PaymentService:
                 db=_db,
                 event=SystemEvents.PAYMENT_REJECTED,
                 payload=_notify_payload,
+                rooms=_rooms,
             )
 
         return payment, post_commit
@@ -958,6 +972,9 @@ class RefundService:
             "user_ids": _recipient_ids,
         }
         _db = self.db
+        # Snapshot rooms pre-commit for scoped domain emit.
+        from app.services.notification_dispatcher import _rooms_for_admission
+        _rooms = _rooms_for_admission(profile) if profile is not None else None
 
         async def post_commit():
             from app.services.notification_dispatcher import safe_dispatch
@@ -966,6 +983,7 @@ class RefundService:
                 db=_db,
                 event=SystemEvents.REFUND_PROCESSED,
                 payload=_notify_payload,
+                rooms=_rooms,
             )
 
         return refund, post_commit

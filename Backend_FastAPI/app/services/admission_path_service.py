@@ -133,6 +133,8 @@ class AdmissionPathService:
             "display_order": data.display_order,
             "visibility": data.visibility,
             "status": "draft",  # Always start as draft
+            # PR #6 — strict-by-default; admin may flip to True on create.
+            "allow_unverified_submission": data.allow_unverified_submission,
         })
         
         return path, _noop_callback

@@ -27,9 +27,12 @@ interface AdmissionsBulkActionsBarProps {
   onBulkReject: () => void
   onBulkAssign: () => void
   onExport: () => void
-  canApprove?: boolean
-  canReject?: boolean
-  canAssign?: boolean
+  // Required — derived from per-row `available_actions` intersection.
+  // Defaulting to `true` historically leaked admin/manager actions to
+  // officers with no way to perform them (404 on submit).
+  canApprove: boolean
+  canReject: boolean
+  canAssign: boolean
   isLoading?: boolean
 }
 
@@ -44,9 +47,9 @@ export function AdmissionsBulkActionsBar({
   onBulkReject,
   onBulkAssign,
   onExport,
-  canApprove = true,
-  canReject = true,
-  canAssign = true,
+  canApprove,
+  canReject,
+  canAssign,
   isLoading = false,
 }: AdmissionsBulkActionsBarProps) {
   if (selectedCount === 0) return null
@@ -120,7 +123,7 @@ export function AdmissionsBulkActionsBar({
             disabled={isLoading}
           >
             <UserPlus className="h-4 w-4" />
-            <span className="hidden sm:inline">Gán</span>
+            <span className="hidden sm:inline">Gán officer</span>
           </Button>
         )}
 

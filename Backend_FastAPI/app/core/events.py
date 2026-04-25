@@ -482,6 +482,30 @@ class SystemEvents(str, Enum):
     today.
     """
 
+    FEE_CALCULATED = "fee_calculated"
+    """
+    Triggered after ``POST /api/fees/calculate`` successfully creates the
+    official Fee record and its invoice schedule (PR #8).
+
+    Realtime-only: the admission detail + finance dashboards refresh
+    immediately so officers/managers don't have to reload after
+    calculating fees. Not a user-visible notification — no DB rule seed.
+
+    Payload Schema:
+        {
+            "admission_profile_id": int,      # Required
+            "lead_id": int,                   # Required — FE invalidates lead pipeline when stage changed
+            "fee_id": int,                    # Required
+            "fee_status": str,                # Fee.status at creation time
+            "lead_stage_changed": bool,       # Pre-computed in the service closure;
+                                              # tells FE whether to invalidate lead/pipeline caches
+            "actor_id": int                   # The user that ran the calculation
+        }
+
+    Recipients: scoped via ``_rooms_for_admission(profile)`` — admin
+    role + lead unit + assigned officer. No notification-channel fanout.
+    """
+
     FEE_FULLY_PAID = "fee_fully_paid"
     """
     Triggered when a semester fee is fully paid (remaining_amount <= 0).

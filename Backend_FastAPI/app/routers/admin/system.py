@@ -84,7 +84,18 @@ async def create_system_alert(
     }
     ```
     """
-    # ✅ NOTIFICATION 2.0: Dispatch SYSTEM_ALERT
+    # ✅ NOTIFICATION 2.0: Dispatch SYSTEM_ALERT.
+    # SYSTEM_ALERT is catalog-sensitive; admin-triggered broadcast must
+    # pass the full role matrix explicitly (no implicit all-users fanout).
+    # Socket rooms auto-joined in socket_manager.connect include
+    # role_<role_name> for each authenticated role.
+    _alert_rooms = [
+        "role_admin",
+        "role_manager",
+        "role_officer",
+        "role_accountant",
+        "role_user",
+    ]
     await safe_dispatch(
         db=db,
         event=SystemEvents.SYSTEM_ALERT,
@@ -94,7 +105,8 @@ async def create_system_alert(
             "action_url": action_url,
             "expires_at": expires_at.isoformat() if expires_at else None,
         },
-        dedupe_key=f"system_alert:{datetime.utcnow().isoformat()}"
+        dedupe_key=f"system_alert:{datetime.utcnow().isoformat()}",
+        rooms=_alert_rooms,
     )
 
     log.info(

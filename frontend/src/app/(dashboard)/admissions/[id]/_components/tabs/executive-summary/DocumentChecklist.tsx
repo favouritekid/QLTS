@@ -106,9 +106,14 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
     }))
   }
 
-  // Get pending documents (ready for bulk verification)
+  // Get pending documents (ready for bulk verification).
+  // PR #5: intersect status with the backend-computed can_verify flag so
+  // Step 7 doesn't surface the "Xác nhận kiểm tra" button to roles the
+  // /verify-format route would 403 (officer today).
   const pendingDocs = mandatoryDocs.filter(
-    (doc) => doc.status === "uploaded" || doc.status === "paper_submitted"
+    (doc) =>
+      (doc.status === "uploaded" || doc.status === "paper_submitted") &&
+      doc.can_verify === true
   )
 
   // Batch verify all pending documents
@@ -273,8 +278,13 @@ function DocumentRow({
     setRejectDialogOpen(false)
   }
 
-  // Only show inline select for pending documents
-  const isPending = status === "uploaded" || status === "paper_submitted"
+  // Only show inline select for pending documents that the viewer can act on.
+  // PR #5: gate by both status and the backend-computed can_verify flag so
+  // officers (no verify policy) don't see the format picker / reject button.
+  const canVerifyRow = doc.can_verify === true
+  const canRejectRow = doc.can_reject === true
+  const isPending =
+    (status === "uploaded" || status === "paper_submitted") && canVerifyRow
 
   return (
     <>
@@ -359,8 +369,10 @@ function DocumentRow({
               </TooltipProvider>
             )}
 
-            {/* Reject Button - Only show for pending documents */}
-            {isPending && (
+            {/* Reject Button - Only show when backend explicitly grants can_reject
+             * on this row. Status-only gating leaked the button to officers
+             * whose /documents/{code}/reject call would 403. */}
+            {canRejectRow && (doc.status === "uploaded" || doc.status === "paper_submitted" || doc.status === "verified") && (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>

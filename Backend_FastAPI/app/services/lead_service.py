@@ -1172,6 +1172,11 @@ async def create_lead(
         except Exception as e:
             log.warning("Implied consent grant failed", lead_id=db_lead.id, error=str(e))
 
+        # Snapshot rooms for LEAD_* sensitive emits (fail-closed guard requires
+        # non-empty rooms when SOCKET_SCOPED_EMIT=true).
+        from app.services.notification_dispatcher import _rooms_for_lead
+        _lead_rooms = _rooms_for_lead(db_lead)
+
         # ✅ Dispatch LEAD_CREATED notification in savepoint
         _lead_created_cb = None
         try:
@@ -1183,6 +1188,7 @@ async def create_lead(
                         db_lead, created_by, major_name=major_name,
                     ),
                     dedupe_key=f"lead_created:{db_lead.id}",
+                    rooms=_lead_rooms,
                 )
         except Exception as e:
             log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
@@ -1200,6 +1206,7 @@ async def create_lead(
                             offering_name=offering_name,
                         ),
                         dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}",
+                        rooms=_lead_rooms,
                     )
             except Exception as e:
                 log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
@@ -1688,6 +1695,7 @@ async def update_lead(
         if reassignment_triggered:
             # Dispatch notification for lead reassignment in savepoint (safe for post-commit callback)
             try:
+                from app.services.notification_dispatcher import _rooms_for_lead
                 async with db.begin_nested():
                     _, _reassign_cb = await dispatch(
                         db=db,
@@ -1702,6 +1710,7 @@ async def update_lead(
                             notify_user_ids=[old_officer_id] if old_officer_id else [],
                         ),
                         dedupe_key=f"lead_reassigned:{lead_id}",
+                        rooms=_rooms_for_lead(lead),
                     )
             except Exception as e:
                 log.error(
@@ -2149,6 +2158,7 @@ async def assign_lead_manually(
             else (lead.offering.offering_type if lead.offering else "N/A")
         )
 
+        from app.services.notification_dispatcher import _rooms_for_lead
         async with db.begin_nested():
             _, _assign_cb = await dispatch(
                 db=db,
@@ -2158,6 +2168,7 @@ async def assign_lead_manually(
                     offering_name=offering_name,
                 ),
                 dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
+                rooms=_rooms_for_lead(lead),
             )
     except Exception as e:
         log.error(

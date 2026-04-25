@@ -59,12 +59,23 @@ class NotificationIntent:
     can apply each intent without further translation. Frozen + slots
     so callers can build a list of intents at the top of a service
     method without worrying about accidental mutation downstream.
+
+    Fields
+    ------
+    rooms: Optional Socket.IO rooms for the realtime domain emit. Required
+           for sensitive events (admission/lead/finance/user PII) when
+           ``settings.SOCKET_SCOPED_EMIT=True`` — a sensitive intent without
+           rooms will be blocked by the fail-closed guard in
+           ``_emit_domain_event``. Build via
+           ``_rooms_for_admission(profile)`` / ``_rooms_for_lead(lead)`` /
+           ``_rooms_for_user(user_id)`` helpers at the call site.
     """
 
     event: SystemEvents
     payload: dict
     dedupe_key: Optional[str] = None
     skip_preference_check: bool = False
+    rooms: Optional[List[str]] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +236,7 @@ async def dispatch_bundle(
                         dedupe_key=intent.dedupe_key,
                         skip_preference_check=intent.skip_preference_check,
                         strict=True,
+                        rooms=intent.rooms,
                     )
                 except Exception as exc:
                     failed_event = intent.event.value

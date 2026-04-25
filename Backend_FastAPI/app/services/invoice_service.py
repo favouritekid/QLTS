@@ -261,6 +261,9 @@ class InvoiceService:
                 for inv in invoices
             ]
             _db = self.db
+            # Snapshot rooms pre-commit so post-commit callback doesn't lazy-fetch
+            from app.services.notification_dispatcher import _rooms_for_admission
+            _issued_rooms = _rooms_for_admission(_prof) if _prof is not None else ["role_admin"]
 
             async def _post_commit_cb_fn():
                 from app.services.notification_dispatcher import safe_dispatch
@@ -271,6 +274,7 @@ class InvoiceService:
                             db=_db,
                             event=SystemEvents.INVOICE_ISSUED,
                             payload=payload,
+                            rooms=_issued_rooms,
                         )
 
             _post_commit_cb = _post_commit_cb_fn
@@ -467,6 +471,8 @@ class InvoiceService:
             degree_level=_degree_level,
         )
         _db = self.db
+        from app.services.notification_dispatcher import _rooms_for_admission
+        _invoice_rooms = _rooms_for_admission(_profile) if _profile is not None else ["role_admin"]
 
         async def post_commit():
             if not _invoice_payload.get("user_id"):
@@ -477,6 +483,7 @@ class InvoiceService:
                 db=_db,
                 event=SystemEvents.INVOICE_ISSUED,
                 payload=_invoice_payload,
+                rooms=_invoice_rooms,
             )
 
         return invoice, post_commit
@@ -640,8 +647,11 @@ class InvoiceService:
             as_of_date=check_date,
         )
 
+        from app.services.notification_dispatcher import _rooms_for_admission
+
         marked = []
         overdue_payloads = []
+        overdue_rooms_list: List[List[str]] = []  # parallel to overdue_payloads
 
         for invoice in overdue_invoices:
             newly_overdue = invoice.status != InvoiceStatusEnum.overdue.value
@@ -661,6 +671,7 @@ class InvoiceService:
             _officer_id = None
             _lead_id = None
             _profile_id = None
+            _rooms_this: List[str] = ["role_admin"]
             if fee and fee.admission_profile_id:
                 _profile_id = fee.admission_profile_id
                 prof_result = await self.db.execute(
@@ -673,6 +684,7 @@ class InvoiceService:
                     _lead_id = _prof.lead_id
                     if getattr(_prof, "lead", None):
                         _officer_id = _prof.lead.assigned_officer_id
+                    _rooms_this = _rooms_for_admission(_prof)
 
             overdue_payloads.append({
                 "invoice_id": invoice.id,
@@ -690,6 +702,7 @@ class InvoiceService:
                 "unit_id": unit_id,
                 "user_id": _officer_id,
             })
+            overdue_rooms_list.append(_rooms_this)
 
         await self.db.flush()
 
@@ -707,12 +720,13 @@ class InvoiceService:
         async def _post_commit():
             from app.services.notification_dispatcher import safe_dispatch
             from app.core.events import SystemEvents
-            for payload in overdue_payloads:
+            for payload, rooms_this in zip(overdue_payloads, overdue_rooms_list):
                 if payload.get("user_id"):
                     await safe_dispatch(
                         db=_db,
                         event=SystemEvents.PAYMENT_OVERDUE,
                         payload=payload,
+                        rooms=rooms_this,
                     )
 
         return marked, _post_commit

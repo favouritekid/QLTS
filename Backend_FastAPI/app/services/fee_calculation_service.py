@@ -286,6 +286,12 @@ class FeeCalculationService:
         )
 
         # ADR-002 PR 5: Only HK1 fee creation projects into admission pipeline.
+        # PR #8 — capture pipeline stage around the sync call so the closure
+        # below can tell the FE whether to invalidate lead/pipeline caches.
+        # The lead object may not be loaded; profile.__dict__.get avoids
+        # an async lazy-load that would raise MissingGreenlet.
+        _lead_obj = profile.__dict__.get("lead")
+        _old_stage_id = getattr(_lead_obj, "pipeline_stage_id", None) if _lead_obj else None
         if fee_type == FeeTypeEnum.tuition and semester_no == 1:
             from app.services.lead_admission_sync import sync_lead_tuition_calculated
             await sync_lead_tuition_calculated(
@@ -295,9 +301,36 @@ class FeeCalculationService:
                 changed_by_user_id=user_id,
                 reason=f"Tuition fee calculated: {final_amount:,.0f} VND (HK{semester_no})",
             )
+        _new_stage_id = getattr(_lead_obj, "pipeline_stage_id", None) if _lead_obj else None
+        _lead_stage_changed = _old_stage_id != _new_stage_id
+
+        # Pre-compute everything the closure needs while the session is
+        # still attached; rooms must come from the admission helper since
+        # the emit runs AFTER the router commits.
+        from app.services.notification_dispatcher import _rooms_for_admission
+        _rooms = _rooms_for_admission(profile)
+        _event_payload = {
+            "admission_profile_id": admission_profile_id,
+            "lead_id": getattr(_lead_obj, "id", None) if _lead_obj else None,
+            "fee_id": fee.id,
+            "fee_status": fee.status,
+            "lead_stage_changed": _lead_stage_changed,
+            "actor_id": user_id,
+        }
+        _db = self.db
 
         async def post_commit():
-            pass
+            # PR #8 — broadcast realtime fee_calculated event. Fire-and-forget:
+            # safe_dispatch already absorbs errors so a socket glitch can't
+            # break the business flow the router already committed.
+            from app.services.notification_dispatcher import safe_dispatch
+            from app.core.events import SystemEvents
+            await safe_dispatch(
+                db=_db,
+                event=SystemEvents.FEE_CALCULATED,
+                payload=_event_payload,
+                rooms=_rooms,
+            )
 
         return fee, post_commit
 

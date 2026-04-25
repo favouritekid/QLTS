@@ -210,6 +210,19 @@ export const documentItemSchema = z.object({
    * ID of officer who verified the document.
    */
   verified_by: z.number().int().nullable().optional(),
+  // ---------------------------------------------------------------------
+  // PR #5 — explicit per-document permission flags.
+  // Backend computes these per (role × doc status × profile status × unit
+  // scope) in admission_service._compute_document_permissions. FE must
+  // gate the matching button iff the flag is true. Defaulting missing
+  // flags to `false` via .optional() so legacy rows (pre-deploy) render
+  // in read-only mode rather than leaking buttons.
+  // ---------------------------------------------------------------------
+  can_upload: z.boolean().optional(),
+  can_verify: z.boolean().optional(),
+  can_reject: z.boolean().optional(),
+  can_reset: z.boolean().optional(),
+  can_mark_paper_submitted: z.boolean().optional(),
 })
 
 export type DocumentItem = z.infer<typeof documentItemSchema>
@@ -481,8 +494,13 @@ export const admissionProfileResponseSchema = z.object({
   document_stats: z.object({
     submitted_count: z.number().int(),
     verified_count: z.number().int(),
-    mandatory_count: z.number().int(), 
-    missing_count: z.number().int()
+    mandatory_count: z.number().int(),
+    missing_count: z.number().int(),
+    // PR #6 review — strict-mode submit gate splits truly-missing from
+    // uploaded-pending-verify so the FE can label them differently.
+    // Optional for backwards compatibility with legacy responses that
+    // predate the split.
+    unverified_count: z.number().int().optional(),
   }).nullable().optional(),
   
   // Eligibility status (backend-computed)
@@ -526,7 +544,12 @@ export const admissionProfileResponseSchema = z.object({
     documents: z.object({
       category: z.string(),
       errors: z.array(z.string()),
-      count: z.number().int()
+      count: z.number().int(),
+      // PR #6 review — split bucket counts so the FE can render
+      // "Thiếu N" + "Chờ xác minh M" separately. Optional for
+      // legacy responses.
+      missing_count: z.number().int().optional(),
+      unverified_count: z.number().int().optional(),
     }).optional(),
     scores: z.object({
       category: z.string(),

@@ -10,9 +10,17 @@
  */
 
 import Link from "next/link"
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { CalculateFeeDialog } from "@/components/admissions/CalculateFeeDialog"
 import {
   CreditCard,
   Receipt,
@@ -32,6 +40,8 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import type { FeeStatus } from "@/types/finance.types"
 import { FEE_TYPE_LABELS } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
+import { useAuthStore } from "@/lib/stores/auth.store"
+import { hasFinanceAccess } from "@/lib/config/roles"
 
 interface TuitionTabProps {
   profile: AdmissionProfileResponse
@@ -39,6 +49,23 @@ interface TuitionTabProps {
 
 export function TuitionTab({ profile }: TuitionTabProps) {
   const { data: summary, isLoading, error } = useProfileFinanceSummary(profile.id)
+  // PR #7 — inline calculation. Button visibility is driven entirely by
+  // backend `available_actions`; no role-checking in the FE.
+  const [calcDialogOpen, setCalcDialogOpen] = useState(false)
+  const canCalculateFee = profile.available_actions?.includes("calculate_fee") ?? false
+  // Module-level role gate for the deep-link CTAs into /finance/*. The
+  // proxy blocks officers from that area entirely — surfacing a button
+  // that redirects them out of the page is a worse UX than hiding it.
+  const userRole = useAuthStore((s) => s.user?.role)
+  const canAccessFinanceModule = hasFinanceAccess(userRole)
+  const disabledReason =
+    !canCalculateFee
+      ? profile.status === "approved" ||
+        profile.status === "confirmed" ||
+        profile.status === "enrolled"
+        ? "Bạn không có quyền tính phí cho hồ sơ này"
+        : "Hồ sơ cần được duyệt trước khi tính phí"
+      : undefined
 
   // Loading state
   if (isLoading) {
@@ -60,18 +87,23 @@ export function TuitionTab({ profile }: TuitionTabProps) {
             <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" />
             <h3 className="text-lg font-medium mb-2">Chưa có thông tin học phí</h3>
             <p className="text-muted-foreground text-sm mb-6 max-w-md mx-auto">
-              Học phí chưa được tính cho hồ sơ này. Chuyển đến module Tài chính để tính phí.
+              Học phí chưa được tính cho hồ sơ này.
             </p>
-            <Button asChild>
-              <Link href={`/finance/fees?action=calculate&profile_id=${profile.id}`}>
-                <Calculator className="h-4 w-4 mr-2" />
-                Tính học phí
-              </Link>
-            </Button>
+            <InlineCalculateButton
+              canCalculateFee={canCalculateFee}
+              disabledReason={disabledReason}
+              onOpen={() => setCalcDialogOpen(true)}
+            />
           </CardContent>
         </Card>
 
-        <NoticeCard />
+        <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
+
+        <CalculateFeeDialog
+          open={calcDialogOpen}
+          onOpenChange={setCalcDialogOpen}
+          profileId={profile.id}
+        />
       </div>
     )
   }
@@ -92,16 +124,21 @@ export function TuitionTab({ profile }: TuitionTabProps) {
             <p className="text-muted-foreground text-sm mb-6 max-w-md mx-auto">
               Hồ sơ cần được tính học phí trước khi có thể thanh toán.
             </p>
-            <Button asChild>
-              <Link href={`/finance/fees?action=calculate&profile_id=${profile.id}`}>
-                <Calculator className="h-4 w-4 mr-2" />
-                Tính học phí
-              </Link>
-            </Button>
+            <InlineCalculateButton
+              canCalculateFee={canCalculateFee}
+              disabledReason={disabledReason}
+              onOpen={() => setCalcDialogOpen(true)}
+            />
           </CardContent>
         </Card>
 
-        <NoticeCard />
+        <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
+
+        <CalculateFeeDialog
+          open={calcDialogOpen}
+          onOpenChange={setCalcDialogOpen}
+          profileId={profile.id}
+        />
       </div>
     )
   }
@@ -177,22 +214,32 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                   Vui lòng thanh toán sớm để tránh phí trễ hạn
                 </p>
               </div>
-              <Button variant="destructive" size="sm" asChild>
-                <Link href={`/finance/invoices?profile_id=${profile.id}&status=overdue`}>
-                  Xem chi tiết
-                </Link>
-              </Button>
+              {canAccessFinanceModule && (
+                <Button variant="destructive" size="sm" asChild>
+                  <Link href={`/finance/invoices?profile_id=${profile.id}&status=overdue`}>
+                    Xem chi tiết
+                  </Link>
+                </Button>
+              )}
             </div>
           )}
 
-          {/* Action button */}
-          <div className="mt-6 flex justify-end">
-            <Button asChild>
-              <Link href={`/finance/fees?profile_id=${profile.id}`}>
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Quản lý trong Finance
-              </Link>
-            </Button>
+          {/* Action buttons */}
+          <div className="mt-6 flex justify-end gap-2">
+            {canCalculateFee && (
+              <Button variant="outline" onClick={() => setCalcDialogOpen(true)}>
+                <Calculator className="h-4 w-4 mr-2" />
+                Tính lại
+              </Button>
+            )}
+            {canAccessFinanceModule && (
+              <Button asChild>
+                <Link href={`/finance/fees?profile_id=${profile.id}`}>
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Quản lý trong Finance
+                </Link>
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -207,38 +254,51 @@ export function TuitionTab({ profile }: TuitionTabProps) {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {summary.fees.map((fee) => (
-              <Link
-                key={fee.id}
-                href={`/finance/fees/${fee.id}`}
-                className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-primary/10 rounded">
-                    <FileText className="h-4 w-4 text-primary" />
+            {summary.fees.map((fee) => {
+              // Officers can't open the finance detail page (proxy gate),
+              // so render a non-link card for them. Manager / accountant /
+              // admin keep the navigation affordance.
+              const rowClass =
+                "flex items-center justify-between p-3 border rounded-lg" +
+                (canAccessFinanceModule ? " hover:bg-muted/50 transition-colors" : "")
+              const rowBody = (
+                <>
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-primary/10 rounded">
+                      <FileText className="h-4 w-4 text-primary" />
+                    </div>
+                    <div>
+                      <p className="font-medium">
+                        {FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type}
+                        {fee.semester_no ? ` — HK${fee.semester_no}` : ""}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Năm học: {fee.academic_year}
+                        {fee.semester_no ? ` | HK${fee.semester_no}` : ""}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium">
-                      {FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type}
-                      {fee.semester_no ? ` — HK${fee.semester_no}` : ""}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Năm học: {fee.academic_year}
-                      {fee.semester_no ? ` | HK${fee.semester_no}` : ""}
-                    </p>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <AmountDisplay amount={fee.final_amount} size="sm" />
+                      <p className="text-xs text-muted-foreground">
+                        Còn: <AmountDisplay amount={fee.remaining_amount} size="sm" showCurrency={false} />
+                      </p>
+                    </div>
+                    <FeeStatusBadge status={fee.status} size="sm" />
                   </div>
+                </>
+              )
+              return canAccessFinanceModule ? (
+                <Link key={fee.id} href={`/finance/fees/${fee.id}`} className={rowClass}>
+                  {rowBody}
+                </Link>
+              ) : (
+                <div key={fee.id} className={rowClass}>
+                  {rowBody}
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <AmountDisplay amount={fee.final_amount} size="sm" />
-                    <p className="text-xs text-muted-foreground">
-                      Còn: <AmountDisplay amount={fee.remaining_amount} size="sm" showCurrency={false} />
-                    </p>
-                  </div>
-                  <FeeStatusBadge status={fee.status} size="sm" />
-                </div>
-              </Link>
-            ))}
+              )
+            })}
           </div>
         </CardContent>
       </Card>
@@ -261,18 +321,27 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                   </p>
                 </div>
               </div>
-              <Button variant="outline" size="sm" asChild>
-                <Link href={`/finance/invoices?profile_id=${profile.id}`}>
-                  Xem hóa đơn
-                  <ExternalLink className="h-3 w-3 ml-1" />
-                </Link>
-              </Button>
+              {canAccessFinanceModule && (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/finance/invoices?profile_id=${profile.id}`}>
+                    Xem hóa đơn
+                    <ExternalLink className="h-3 w-3 ml-1" />
+                  </Link>
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
       ) : null}
 
-      <NoticeCard />
+      <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
+
+      {/* Dialog mount for the happy-path "Tính lại" trigger above. */}
+      <CalculateFeeDialog
+        open={calcDialogOpen}
+        onOpenChange={setCalcDialogOpen}
+        profileId={profile.id}
+      />
     </div>
   )
 }
@@ -280,6 +349,47 @@ export function TuitionTab({ profile }: TuitionTabProps) {
 // =============================================================================
 // HELPER COMPONENTS
 // =============================================================================
+
+/**
+ * Trigger button shared by the empty-state cards. Renders a disabled
+ * button + tooltip when the backend didn't grant `calculate_fee`
+ * (status gate or role/assignment mismatch) so officers get a reason
+ * rather than a silent no-op.
+ */
+function InlineCalculateButton({
+  canCalculateFee,
+  disabledReason,
+  onOpen,
+}: {
+  canCalculateFee: boolean
+  disabledReason: string | undefined
+  onOpen: () => void
+}) {
+  if (canCalculateFee) {
+    return (
+      <Button onClick={onOpen}>
+        <Calculator className="h-4 w-4 mr-2" />
+        Tính học phí
+      </Button>
+    )
+  }
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* span wraps the disabled button so the tooltip still fires */}
+          <span>
+            <Button disabled>
+              <Calculator className="h-4 w-4 mr-2" />
+              Tính học phí
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{disabledReason ?? "Không thể tính phí"}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
 
 interface StatCardProps {
   label: string
@@ -323,7 +433,11 @@ function StatCard({ label, value, variant = "default" }: StatCardProps) {
   )
 }
 
-function NoticeCard() {
+function NoticeCard({
+  canAccessFinanceModule,
+}: {
+  canAccessFinanceModule: boolean
+}) {
   return (
     <Card className="border-dashed border-primary/30 bg-primary/5">
       <CardContent className="pt-4">
@@ -334,7 +448,15 @@ function NoticeCard() {
             <p className="text-muted-foreground">
               Tab này hiển thị thông tin học phí từ module Tài chính. Để thực hiện các
               thao tác như ghi nhận thanh toán, xác minh, hoặc hoàn tiền, vui lòng sử
-              dụng module <Link href="/finance" className="text-primary hover:underline">Finance</Link>.
+              dụng module{" "}
+              {canAccessFinanceModule ? (
+                <Link href="/finance" className="text-primary hover:underline">
+                  Finance
+                </Link>
+              ) : (
+                <span className="font-medium text-foreground">Finance</span>
+              )}
+              .
             </p>
           </div>
         </div>

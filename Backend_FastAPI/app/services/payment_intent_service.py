@@ -444,6 +444,9 @@ class PaymentIntentService:
                 "user_id": _officer_id,  # SpecificUsersResolver recipient
             }
         _db = self.db
+        # Snapshot rooms pre-commit for scoped domain emit.
+        from app.services.notification_dispatcher import _rooms_for_admission
+        _rooms = _rooms_for_admission(profile) if profile is not None else None
 
         _fee_fully_paid_payload: Optional[Dict[str, Any]] = None
         if fee is not None and fee.is_fully_paid:
@@ -466,12 +469,14 @@ class PaymentIntentService:
                 db=_db,
                 event=SystemEvents.PAYMENT_VERIFIED,
                 payload=_notify_payload,
+                rooms=_rooms,
             )
             if _fee_fully_paid_payload:
                 await safe_dispatch(
                     db=_db,
                     event=SystemEvents.FEE_FULLY_PAID,
                     payload=_fee_fully_paid_payload,
+                    rooms=_rooms,
                 )
 
         return intent, payment, post_commit

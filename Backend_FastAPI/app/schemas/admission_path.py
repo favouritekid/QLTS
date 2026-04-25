@@ -118,6 +118,18 @@ class AdmissionPathCreate(BaseModel):
         ge=0,
         description="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
     )
+    # PR #6 — new paths default to strict (False) unless the admin
+    # explicitly opts into the legacy lax behaviour. Snapshotted onto
+    # every profile created under this path.
+    allow_unverified_submission: bool = Field(
+        default=False,
+        description=(
+            "When True, applicants may submit the profile as soon as "
+            "documents are uploaded (pre-PR #6 behaviour). When False "
+            "(default), only verified or paper-submitted docs satisfy "
+            "the submit gate."
+        ),
+    )
 
 
 class AdmissionPathUpdate(BaseModel):
@@ -129,6 +141,16 @@ class AdmissionPathUpdate(BaseModel):
         default=None,
         ge=0,
         description="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
+    )
+    # Optional on update — callers that don't want to change the flag
+    # omit it entirely.
+    allow_unverified_submission: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Flip between strict (False) and legacy (True) submit rules. "
+            "Existing profiles retain the snapshotted value; only "
+            "profiles created after the flip inherit the new setting."
+        ),
     )
 
 
@@ -192,6 +214,18 @@ class AdmissionPathResponse(BaseModel):
     requires_application_fee: bool = Field(
         default=False,
         description="True nếu lệ phí > 0, FE dùng để hiển thị flow thanh toán"
+    )
+
+    # PR #6 — required in the response so FE Zod parse fails loudly
+    # if backend forgot to emit the field, rather than silently
+    # defaulting to False and letting admin tooling flip between modes
+    # blind.
+    allow_unverified_submission: bool = Field(
+        description=(
+            "Current strict-mode setting for this path. False means "
+            "the submit validator requires verified / paper-submitted "
+            "documents; True allows uploaded."
+        ),
     )
 
     # Relationships

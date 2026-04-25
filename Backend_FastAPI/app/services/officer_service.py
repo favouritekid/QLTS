@@ -237,6 +237,11 @@ async def update_officer_availability(
     # ✅ Dispatch notification in savepoint (records flushed with main transaction)
     _notif_cb = None
     try:
+        from app.services.notification_dispatcher import _rooms_for_user
+        _notif_rooms = ["role_admin"]
+        if user.unit_id:
+            _notif_rooms.append(f"unit_{user.unit_id}")
+        _notif_rooms.append(f"user_room_{officer_id}")
         async with db.begin_nested():
             _, _notif_cb = await dispatch(
                 db=db,
@@ -250,6 +255,7 @@ async def update_officer_availability(
                     "actor_id": officer_id,
                 },
                 dedupe_key=f"officer_availability:{officer_id}:{availability_status}",
+                rooms=_notif_rooms,
             )
     except Exception as e:
         log.warning(

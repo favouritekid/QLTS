@@ -96,7 +96,12 @@ export type AdmissionAction =
 /**
  * Document upload status.
  */
-export type DocumentStatus = "missing" | "uploaded" | "verified" | "rejected"
+export type DocumentStatus =
+  | "missing"
+  | "uploaded"
+  | "verified"
+  | "rejected"
+  | "paper_submitted"
 
 /**
  * Document submission format.

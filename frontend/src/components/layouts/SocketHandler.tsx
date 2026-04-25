@@ -11,6 +11,10 @@ import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
+import { admissionsKeys } from "@/hooks/admissions/useAdmissions";
+import { feesKeys } from "@/hooks/finance/useFees";
+import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard";
+import { pipelineKeys } from "@/hooks/usePipeline";
 import { isSafeUrl } from "@/lib/utils";
 
 // =============================================================================
@@ -519,10 +523,10 @@ export function SocketHandler() {
     }) => {
       console.log("[SocketHandler] application_created → invalidating queries (silent sync)");
 
-      // Invalidate application-related queries
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
-      queryClient.invalidateQueries({ queryKey: ["lead", data.lead_id] });
+      // Cascade to list + status-counts + stats + details via `admissionsKeys.all` root —
+      // mirrors the mutation-hook invalidation pattern in useAdmissions.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -540,11 +544,43 @@ export function SocketHandler() {
         "[SocketHandler] application_status_changed → invalidating queries (silent sync)"
       );
 
-      // Invalidate application-related queries
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.invalidateQueries({ queryKey: ["application", data.application_id] });
-      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
+      // Cascade to list + status-counts + stats via `admissionsKeys.all` root;
+      // detail gets a targeted refresh too so the open page updates instantly.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(data.application_id) });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
+    };
+
+    // PR #8 — realtime sync after POST /api/fees/calculate.
+    // Broadcast-only event; no toast. Invalidates admission detail + list,
+    // the finance caches that drive the Tuition tab, the finance dashboard
+    // overview, and — only when backend says the lead pipeline actually
+    // advanced — the lead pipeline caches. The conditional lead invalidation
+    // avoids a pipeline refetch storm every time an officer calculates a
+    // non-HK1 or non-tuition fee that doesn't move the lead stage.
+    const handleFeeCalculated = (data: {
+      admission_profile_id: number;
+      lead_id: number;
+      fee_id: number;
+      fee_status: string;
+      lead_stage_changed: boolean;
+    }) => {
+      console.log("[SocketHandler] fee_calculated → invalidating finance + admission caches");
+      // Invalidate the entire admissionsKeys tree so detail + list +
+      // status-counts + stats all refetch — calculating a fee can flip
+      // the row's payment-status tab (no_fee → unpaid/paid), and
+      // /admissions reads useAdmissionStatusCounts off the same root
+      // key. Mirrors the cascade pattern already used by the
+      // application_* handlers above.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+      queryClient.invalidateQueries({ queryKey: feesKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(data.admission_profile_id) });
+      queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(data.admission_profile_id) });
+      queryClient.invalidateQueries({ queryKey: financeDashboardKeys.all });
+      if (data.lead_stage_changed) {
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+        queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline() });
+      }
     };
 
     // ✅ REAL-TIME PIPELINE CONFIG (Week 3): Lắng nghe sự kiện pipeline_config_updated
@@ -904,9 +940,11 @@ export function SocketHandler() {
     }) => {
       console.log("[SocketHandler] application_deleted → invalidating queries (silent sync)");
 
-      // Invalidate application and lead queries
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      queryClient.removeQueries({ queryKey: ["application", data.application_id] });
+      // Cascade to list + status-counts + stats via `admissionsKeys.all` root;
+      // removeQueries on the detail drops the stale cached page so a later
+      // visit refetches from scratch (GC the deleted profile).
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+      queryClient.removeQueries({ queryKey: admissionsKeys.detail(data.application_id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       // ✅ NO TOAST - Per-user notification will show toast via "notification" event
@@ -1027,6 +1065,7 @@ export function SocketHandler() {
     socket.on("lead_status_changed", handleLeadStatusChanged);
     socket.on("application_created", handleApplicationCreated);
     socket.on("application_status_changed", handleApplicationStatusChanged);
+    socket.on("fee_calculated", handleFeeCalculated);
     socket.on("pipeline_config_updated", handlePipelineConfigUpdated);
     socket.on("consultation_created", handleConsultationCreated);
     socket.on("consultation_deleted", handleConsultationDeleted);
@@ -1072,6 +1111,7 @@ export function SocketHandler() {
       socket.off("lead_status_changed", handleLeadStatusChanged);
       socket.off("application_created", handleApplicationCreated);
       socket.off("application_status_changed", handleApplicationStatusChanged);
+      socket.off("fee_calculated", handleFeeCalculated);
       socket.off("pipeline_config_updated", handlePipelineConfigUpdated);
       socket.off("consultation_created", handleConsultationCreated);
       socket.off("consultation_deleted", handleConsultationDeleted);

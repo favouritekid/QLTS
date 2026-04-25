@@ -11,6 +11,7 @@ This is the CENTRAL ENTITY for:
 - Activation control
 """
 
+import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, Column, Integer, String, Boolean, ForeignKey, DateTime, UniqueConstraint, Numeric
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -108,6 +109,21 @@ class AdmissionPath(Base):
         nullable=True,
         default=None,
         comment="Lệ phí xét tuyển (VND). 0 hoặc NULL = miễn phí"
+    )
+
+    # PR #6 — per-path relaxation of the verified-docs submit rule.
+    # Default False (strict) for new paths; the alembic migration set
+    # existing paths to True so pre-PR profiles keep submitting.
+    allow_unverified_submission = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=sa.false(),
+        comment=(
+            "When True, the submit validator accepts documents in "
+            "`uploaded` status. When False (default), only `verified` "
+            "or `paper_submitted` count toward submission."
+        ),
     )
 
     @property
