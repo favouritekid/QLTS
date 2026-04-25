@@ -436,10 +436,19 @@ def _validate_documents(
     profile: models.AdmissionProfile,
     documents: list | None,
     applied_rules: dict,
-) -> tuple[list[str], list[str], set[str], list[str]]:
+) -> tuple[list[str], list[str], set[str], list[str], list[str]]:
     """
     Validate document requirements.
-    Returns: (doc_errors_list, validation_errors_list, uploaded_doc_codes_set, upload_required_docs_list)
+    Returns: ``(doc_errors, validation_errors, uploaded_doc_codes,
+              upload_required_docs, unverified_doc_codes)``.
+
+    ``doc_errors`` is the union of truly-missing and (in strict mode)
+    uploaded-but-unverified codes — submit-gate consumers want a single
+    "anything blocks submit" list. ``unverified_doc_codes`` is the
+    subset that *was* uploaded but is still pending officer
+    verification; UI consumers (``document_stats``,
+    ``grouped_validation_errors``) split the two so a doc waiting on
+    verify isn't double-counted as "missing".
 
     PR #6 — uploaded-but-not-verified docs no longer satisfy the submit
     gate by default. The path-level `allow_unverified_submission` flag
@@ -455,9 +464,14 @@ def _validate_documents(
         the failure surfaces loudly instead of silently downgrading.
     """
     upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
-    doc_errors = []
-    validation_errors = []
-    uploaded_doc_codes = set()
+    doc_errors: list[str] = []
+    unverified_doc_codes: list[str] = []
+    validation_errors: list[str] = []
+    uploaded_doc_codes: set[str] = set()
+    # Separate set of codes that exist in the uploads table with a file
+    # but have not yet been verified — used to distinguish "missing" vs
+    # "pending verify" in strict mode for UI counts/labels.
+    pending_verify_codes: set[str] = set()
 
     schema_version = applied_rules.get("schema_version", 1)
     if schema_version == 1:
@@ -489,6 +503,13 @@ def _validate_documents(
                 doc.document_type.code for doc in documents
                 if doc.status in ("verified", "paper_submitted")
             }
+            # Track uploaded-with-file rows that strict mode rejected so
+            # the UI can label them as "pending verify" rather than
+            # "missing".
+            pending_verify_codes = {
+                doc.document_type.code for doc in documents
+                if doc.file_path and doc.status == "uploaded"
+            }
 
         log.debug(
             "Document validation check",
@@ -501,17 +522,25 @@ def _validate_documents(
         )
 
         for doc_code in upload_required_docs:
-            if doc_code not in uploaded_doc_codes:
-                doc_errors.append(doc_code)
-                if allow_unverified:
-                    validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
-                else:
-                    validation_errors.append(
-                        f"Tài liệu {doc_code} chưa được xác minh. Liên hệ quản lý "
-                        f"để verify trước khi nộp hồ sơ."
-                    )
+            if doc_code in uploaded_doc_codes:
+                continue
+            doc_errors.append(doc_code)
+            if not allow_unverified and doc_code in pending_verify_codes:
+                unverified_doc_codes.append(doc_code)
+                validation_errors.append(
+                    f"Tài liệu {doc_code} chưa được xác minh. Liên hệ quản lý "
+                    f"để verify trước khi nộp hồ sơ."
+                )
+            else:
+                validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
 
-    return doc_errors, validation_errors, uploaded_doc_codes, upload_required_docs
+    return (
+        doc_errors,
+        validation_errors,
+        uploaded_doc_codes,
+        upload_required_docs,
+        unverified_doc_codes,
+    )
 
 
 def _validate_personal_info(
@@ -562,7 +591,7 @@ def _compute_completion_percent(
     """
     applied_rules = profile.applied_rules or {}
     gpa_error, _, _ = _validate_scores(profile, applied_rules)
-    doc_errors, _, _, _ = _validate_documents(profile, documents, applied_rules)
+    doc_errors, _, _, _, _ = _validate_documents(profile, documents, applied_rules)
     missing_personal, _ = _validate_personal_info(profile)
 
     # Eligibility (simplified — mirrors _compute_frontend_fields logic)
@@ -840,7 +869,12 @@ def _compute_frontend_fields(
     
     # --- Execute Validation Helpers ---
     gpa_error, score_ve, gpa_errors = _validate_scores(profile, applied_rules)
-    doc_errors, doc_ve, uploaded_doc_codes, upload_required_docs = _validate_documents(profile, documents, applied_rules)
+    doc_errors, doc_ve, uploaded_doc_codes, upload_required_docs, unverified_doc_codes = _validate_documents(profile, documents, applied_rules)
+    # PR #6 review — split missing vs pending-verify so downstream
+    # stats/messages don't conflate the two ("đã nộp 1/1" + "Còn thiếu 1"
+    # was reachable for a doc that's uploaded-but-pending-verify in
+    # strict mode).
+    missing_doc_codes = [code for code in doc_errors if code not in unverified_doc_codes]
     missing_personal, personal_ve = _validate_personal_info(profile)
     
     # Aggregate validation errors
@@ -901,8 +935,19 @@ def _compute_frontend_fields(
         },
         "documents": {
             "category": "Tài liệu",
-            "errors": [f"Thiếu tài liệu bắt buộc: {doc_code}" for doc_code in doc_errors],
-            "count": len(doc_errors)
+            # PR #6 review — distinguish missing vs pending-verify in the
+            # grouped list. Same render order as doc_errors so existing
+            # consumers that index by position don't drift.
+            "errors": (
+                [f"Thiếu tài liệu bắt buộc: {doc_code}" for doc_code in missing_doc_codes]
+                + [
+                    f"Tài liệu {doc_code} đã tải lên nhưng chưa được xác minh"
+                    for doc_code in unverified_doc_codes
+                ]
+            ),
+            "count": len(doc_errors),
+            "missing_count": len(missing_doc_codes),
+            "unverified_count": len(unverified_doc_codes),
         },
         "scores": {
             "category": "Điểm số",
@@ -1112,13 +1157,20 @@ def _compute_frontend_fields(
          submitted_count = len([d for d in mandatory_docs if d.status in ["uploaded", "verified", "paper_submitted"]])
          verified_count = len([d for d in mandatory_docs if d.status == "verified"])
          mandatory_count = len(upload_required_docs)
-         missing_count = len(doc_errors) # Already computed via validation helper
-         
+         # PR #6 review — split: pending-verify shouldn't count as
+         # "missing" because the file IS uploaded; UI prior to the fix
+         # rendered "1/1 đã nộp" + "Còn thiếu: 1" simultaneously for the
+         # same row. unverified_count surfaces that bucket explicitly so
+         # the FE can label it "Chờ xác minh".
+         missing_count = len(missing_doc_codes)
+         unverified_count = len(unverified_doc_codes)
+
          profile.document_stats = {
              "submitted_count": submitted_count,
-             "verified_count": verified_count, 
+             "verified_count": verified_count,
              "mandatory_count": mandatory_count,
-             "missing_count": missing_count
+             "missing_count": missing_count,
+             "unverified_count": unverified_count,
          }
 
     # =========================================================================
@@ -1148,8 +1200,15 @@ def _compute_frontend_fields(
     critical_blockers = []
     if personal_error_count > 0:
         critical_blockers.append(f"Thiếu {personal_error_count} thông tin cá nhân bắt buộc")
-    if len(doc_errors) > 0:
-        critical_blockers.append(f"Thiếu {len(doc_errors)} tài liệu bắt buộc")
+    # PR #6 review — phrase the blocker per bucket so the dashboard
+    # accurately reflects whether the user needs to upload OR ask the
+    # manager to verify.
+    if len(missing_doc_codes) > 0:
+        critical_blockers.append(f"Thiếu {len(missing_doc_codes)} tài liệu bắt buộc")
+    if len(unverified_doc_codes) > 0:
+        critical_blockers.append(
+            f"{len(unverified_doc_codes)} tài liệu chờ xác minh từ quản lý"
+        )
     if gpa_error:
         critical_blockers.append("Điểm số chưa đạt yêu cầu")
 

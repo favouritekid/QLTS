@@ -40,6 +40,13 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import type { FeeStatus } from "@/types/finance.types"
 import { FEE_TYPE_LABELS } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
+import { useAuthStore } from "@/lib/stores/auth.store"
+
+// PR #7 review — `/finance/*` is proxy-blocked for officers. Gate the
+// "manage in Finance" + per-row fee links by the user's role so the
+// officer flow doesn't end at a redirect/403 page after they calculate
+// the fee inline. Manager / accountant / admin keep the deep links.
+const FINANCE_ACCESS_ROLES = new Set(["admin", "manager", "accountant"])
 
 interface TuitionTabProps {
   profile: AdmissionProfileResponse
@@ -51,6 +58,11 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   // backend `available_actions`; no role-checking in the FE.
   const [calcDialogOpen, setCalcDialogOpen] = useState(false)
   const canCalculateFee = profile.available_actions?.includes("calculate_fee") ?? false
+  // Module-level role gate for the deep-link CTAs into /finance/*. The
+  // proxy blocks officers from that area entirely — surfacing a button
+  // that redirects them out of the page is a worse UX than hiding it.
+  const userRole = useAuthStore((s) => s.user?.role)
+  const canAccessFinanceModule = userRole != null && FINANCE_ACCESS_ROLES.has(userRole)
   const disabledReason =
     !canCalculateFee
       ? profile.status === "approved" ||
@@ -207,11 +219,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                   Vui lòng thanh toán sớm để tránh phí trễ hạn
                 </p>
               </div>
-              <Button variant="destructive" size="sm" asChild>
-                <Link href={`/finance/invoices?profile_id=${profile.id}&status=overdue`}>
-                  Xem chi tiết
-                </Link>
-              </Button>
+              {canAccessFinanceModule && (
+                <Button variant="destructive" size="sm" asChild>
+                  <Link href={`/finance/invoices?profile_id=${profile.id}&status=overdue`}>
+                    Xem chi tiết
+                  </Link>
+                </Button>
+              )}
             </div>
           )}
 
@@ -223,12 +237,14 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                 Tính lại
               </Button>
             )}
-            <Button asChild>
-              <Link href={`/finance/fees?profile_id=${profile.id}`}>
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Quản lý trong Finance
-              </Link>
-            </Button>
+            {canAccessFinanceModule && (
+              <Button asChild>
+                <Link href={`/finance/fees?profile_id=${profile.id}`}>
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Quản lý trong Finance
+                </Link>
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -243,38 +259,51 @@ export function TuitionTab({ profile }: TuitionTabProps) {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {summary.fees.map((fee) => (
-              <Link
-                key={fee.id}
-                href={`/finance/fees/${fee.id}`}
-                className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-primary/10 rounded">
-                    <FileText className="h-4 w-4 text-primary" />
+            {summary.fees.map((fee) => {
+              // Officers can't open the finance detail page (proxy gate),
+              // so render a non-link card for them. Manager / accountant /
+              // admin keep the navigation affordance.
+              const rowClass =
+                "flex items-center justify-between p-3 border rounded-lg" +
+                (canAccessFinanceModule ? " hover:bg-muted/50 transition-colors" : "")
+              const rowBody = (
+                <>
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-primary/10 rounded">
+                      <FileText className="h-4 w-4 text-primary" />
+                    </div>
+                    <div>
+                      <p className="font-medium">
+                        {FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type}
+                        {fee.semester_no ? ` — HK${fee.semester_no}` : ""}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Năm học: {fee.academic_year}
+                        {fee.semester_no ? ` | HK${fee.semester_no}` : ""}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium">
-                      {FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type}
-                      {fee.semester_no ? ` — HK${fee.semester_no}` : ""}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Năm học: {fee.academic_year}
-                      {fee.semester_no ? ` | HK${fee.semester_no}` : ""}
-                    </p>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <AmountDisplay amount={fee.final_amount} size="sm" />
+                      <p className="text-xs text-muted-foreground">
+                        Còn: <AmountDisplay amount={fee.remaining_amount} size="sm" showCurrency={false} />
+                      </p>
+                    </div>
+                    <FeeStatusBadge status={fee.status} size="sm" />
                   </div>
+                </>
+              )
+              return canAccessFinanceModule ? (
+                <Link key={fee.id} href={`/finance/fees/${fee.id}`} className={rowClass}>
+                  {rowBody}
+                </Link>
+              ) : (
+                <div key={fee.id} className={rowClass}>
+                  {rowBody}
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <AmountDisplay amount={fee.final_amount} size="sm" />
-                    <p className="text-xs text-muted-foreground">
-                      Còn: <AmountDisplay amount={fee.remaining_amount} size="sm" showCurrency={false} />
-                    </p>
-                  </div>
-                  <FeeStatusBadge status={fee.status} size="sm" />
-                </div>
-              </Link>
-            ))}
+              )
+            })}
           </div>
         </CardContent>
       </Card>
@@ -297,12 +326,14 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                   </p>
                 </div>
               </div>
-              <Button variant="outline" size="sm" asChild>
-                <Link href={`/finance/invoices?profile_id=${profile.id}`}>
-                  Xem hóa đơn
-                  <ExternalLink className="h-3 w-3 ml-1" />
-                </Link>
-              </Button>
+              {canAccessFinanceModule && (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/finance/invoices?profile_id=${profile.id}`}>
+                    Xem hóa đơn
+                    <ExternalLink className="h-3 w-3 ml-1" />
+                  </Link>
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
