@@ -110,11 +110,13 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
     })
 
     // useCalculateFee already invalidates finance caches + toasts on
-    // success. Extend to the admission detail + dashboard so the
-    // Tuition tab refreshes without a reload.
+    // success. Extend to the admission caches + dashboard so the
+    // Tuition tab refreshes without a reload. Use admissionsKeys.all
+    // (root) so status-counts + stats refetch alongside list/detail —
+    // calculating a fee flips the row's payment-status tab, so the
+    // tab badges on /admissions need to update too.
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(profileId) }),
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() }),
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all }),
       queryClient.invalidateQueries({ queryKey: feesKeys.lists() }),
       queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(profileId) }),
       queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(profileId) }),

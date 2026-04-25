@@ -566,8 +566,13 @@ export function SocketHandler() {
       lead_stage_changed: boolean;
     }) => {
       console.log("[SocketHandler] fee_calculated → invalidating finance + admission caches");
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(data.admission_profile_id) });
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() });
+      // Invalidate the entire admissionsKeys tree so detail + list +
+      // status-counts + stats all refetch — calculating a fee can flip
+      // the row's payment-status tab (no_fee → unpaid/paid), and
+      // /admissions reads useAdmissionStatusCounts off the same root
+      // key. Mirrors the cascade pattern already used by the
+      // application_* handlers above.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
       queryClient.invalidateQueries({ queryKey: feesKeys.lists() });
       queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(data.admission_profile_id) });
       queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(data.admission_profile_id) });

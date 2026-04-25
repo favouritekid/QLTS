@@ -9,6 +9,23 @@ Exercises the four interesting branches of ``_validate_documents``:
 
 Profiles are seeded with ``schema_version=2`` + the snapshotted flag,
 matching what ``create_profile`` writes on real traffic.
+
+Dirty-DB note
+-------------
+The shared ``seed_lead_dependencies`` fixture inserts
+``organization_unit`` with explicit ``id=1`` (TestOrgData.UNIT_1).
+``setup_test_database`` runs ``TRUNCATE … RESTART IDENTITY`` between
+function-scoped tests inside one pytest session, so this works
+cleanly when pytest owns the DB lifecycle. If the qlts_test database
+is left dirty by an aborted run (``id=1`` already present, sequence
+out of sync), the fixture fails on duplicate-PK before the assertion
+can run. Reset recipe (per memory `reference_test_db_schema_source`):
+
+    docker compose exec postgres psql -U qlts -c \
+        "DROP DATABASE qlts_test"
+
+The next pytest run recreates the schema via ``init_schema_once`` and
+the seed succeeds. This test passes 3/3 on a clean DB.
 """
 from __future__ import annotations
 
