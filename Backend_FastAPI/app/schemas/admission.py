@@ -442,33 +442,25 @@ class AdmissionProfileUpdate(BaseModel):
         validate_assignment=True
     )
 
-    # ✅ FIX Finding 1.5: Cross-field Date Validation
+    # Cross-field date invariants — delegate to standalone utility so
+    # service-layer partial-update flows (apply_minor_correction,
+    # update_profile candidate-state checks) share the exact same rules.
+    # See feedback memory ``partial-update-loses-cross-field-invariants``.
     from pydantic import model_validator
-    
+
     @model_validator(mode='after')
     def validate_logical_dates(self) -> 'AdmissionProfileUpdate':
-        """
-        Validate logical sequence of dates to prevent invalid data.
-        Failed validation raises ValueError (422 Unprocessable Entity).
-        """
-        # 1. Political Dates Logic
-        # Union Entry < Party Entry (Probationary) < Party Official Entry
-        if self.union_entry_date and self.party_entry_date:
-            if self.union_entry_date > self.party_entry_date:
-                raise ValueError("Ngày vào Đoàn phải trước Ngày vào Đảng (dự bị)")
-        
-        if self.party_entry_date and self.party_official_entry_date:
-            if self.party_entry_date > self.party_official_entry_date:
-                raise ValueError("Ngày vào Đảng (dự bị) phải trước Ngày vào Đảng (chính thức)")
+        """Schema-level entry point — runs on the partial payload only.
 
-        # 2. Birth Date Logic
-        # DOB must be reasonable (e.g., < Union Entry if both exist)
-        # Typically Union entry is at age 15+
-        # Note: dob is date, union_entry_date is datetime — extract .date() for comparison
-        if self.dob and self.union_entry_date:
-            if self.dob > self.union_entry_date.date():
-               raise ValueError("Ngày sinh phải trước Ngày vào Đoàn")
-
+        IMPORTANT: this catches violations within the payload itself, but
+        does NOT catch a partial update that conflicts with values
+        already in the database. Callers doing partial updates must
+        build a candidate state (DB + payload) and call
+        ``validate_logical_dates`` from
+        ``app.services.admission_invariants`` directly.
+        """
+        from app.services.admission_invariants import validate_logical_dates
+        validate_logical_dates(self.model_dump())
         return self
 
 

@@ -648,6 +648,13 @@ async def update_admission_profile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+    except ValidationError as e:
+        # Cross-field date invariant violations (candidate state check)
+        # surface as ValidationError. Map to 400 like other input errors.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
