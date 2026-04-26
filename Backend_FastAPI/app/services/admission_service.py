@@ -2605,6 +2605,42 @@ async def update_profile(
 
         profile.citizen_id = new_citizen_id
 
+    # Cross-field date invariants on the candidate state.
+    # Schema's @model_validator only sees the trimmed payload (router dumps
+    # via exclude_unset=True), so a request that updates ONLY
+    # union_entry_date can leave the row in a state where union > party
+    # (party already in DB). Build a candidate from DB attrs + payload
+    # and run the same shared utility schema uses. Lesson reference:
+    # feedback memory ``partial-update-loses-cross-field-invariants``.
+    #
+    # IMPORTANT: candidate must match setter semantics, NOT payload as-is.
+    # The dob setter (~line 2627) skips when value is None (`is not None`
+    # check), so a payload like ``{"dob": null, "union_entry_date": "..."}``
+    # leaves the existing DB dob untouched. If we naively copied payload
+    # null into the candidate, validate_logical_dates would skip the
+    # dob ≤ union check (None short-circuits), then the setter would
+    # preserve the original DB dob — re-introducing the same bypass we
+    # are trying to fix. The entry-date setters DO accept None (they
+    # clear the column), so candidate uses payload value as-is for those.
+    from .admission_invariants import validate_logical_dates
+    _date_keys = ("dob", "union_entry_date", "party_entry_date", "party_official_entry_date")
+    if any(k in data for k in _date_keys):
+        candidate_state: Dict[str, Any] = {}
+        for _k in _date_keys:
+            if _k not in data:
+                candidate_state[_k] = getattr(profile, _k)
+            elif _k == "dob" and data[_k] is None:
+                # Setter ignores ``dob: null`` — preserve existing DB value
+                # so the invariant runs against what will actually persist.
+                candidate_state[_k] = getattr(profile, _k)
+            else:
+                candidate_state[_k] = data[_k]
+        try:
+            validate_logical_dates(candidate_state)
+        except ValueError as exc:
+            from app.utils.exceptions import ValidationError as _ValidationError
+            raise _ValidationError(str(exc))
+
     # ✅ Sync with Lead: Full Name
     if "full_name" in data and data["full_name"] is not None:
         profile.full_name = data["full_name"]
@@ -5937,33 +5973,29 @@ async def apply_minor_correction(
         if biz_err:
             raise ValidationError(biz_err)
 
-    # 5b. Cross-field invariants on the candidate state (existing values
-    # overlaid with normalized changes). Per-field validators above only
-    # see the value being changed; sneaking only `party_entry_date`
-    # backward could leave a profile where union > party in spite of
-    # `AdmissionProfileUpdate.validate_logical_dates` rejecting the
-    # same combination on a normal update.
-    def _candidate(field_key: str) -> Any:
-        return normalized[field_key] if field_key in normalized else getattr(profile, field_key)
-
-    cand_union = _candidate("union_entry_date")
-    cand_party = _candidate("party_entry_date")
-    cand_party_official = _candidate("party_official_entry_date")
-    cand_dob = profile.dob  # `dob` is HARD_DENY so always the original
-
-    if cand_union and cand_party and cand_union > cand_party:
-        raise ValidationError(
-            "Ngày vào Đoàn phải trước Ngày vào Đảng (dự bị)"
-        )
-    if cand_party and cand_party_official and cand_party > cand_party_official:
-        raise ValidationError(
-            "Ngày vào Đảng (dự bị) phải trước Ngày vào Đảng (chính thức)"
-        )
-    # `dob` is a `date`; entry dates are `datetime`. Compare on date
-    # boundary so the same comparison rule used in
-    # AdmissionProfileUpdate.validate_logical_dates applies.
-    if cand_dob and cand_union and cand_dob > cand_union.date():
-        raise ValidationError("Ngày sinh phải trước Ngày vào Đoàn")
+    # 5b. Cross-field invariants on the candidate state (existing DB
+    # values overlaid with normalized changes). Delegate to shared
+    # utility — same rules schema's @model_validator runs, plus a few
+    # the schema can't see because partial dump strips DB-only fields.
+    # Lesson reference: feedback memory
+    # ``partial-update-loses-cross-field-invariants``.
+    from .admission_invariants import validate_logical_dates
+    candidate_state = {
+        "dob": profile.dob,  # HARD_DENY → always original DB value
+        "union_entry_date": normalized.get(
+            "union_entry_date", profile.union_entry_date
+        ),
+        "party_entry_date": normalized.get(
+            "party_entry_date", profile.party_entry_date
+        ),
+        "party_official_entry_date": normalized.get(
+            "party_official_entry_date", profile.party_official_entry_date
+        ),
+    }
+    try:
+        validate_logical_dates(candidate_state)
+    except ValueError as exc:
+        raise ValidationError(str(exc))
 
     # 6. Diff — compare AFTER normalization so e.g. "2025-09-01" parsing
     # to datetime(2025,9,1) doesn't false-diff against an existing

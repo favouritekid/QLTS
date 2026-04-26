@@ -99,11 +99,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
 
         <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
 
-        <CalculateFeeDialog
-          open={calcDialogOpen}
-          onOpenChange={setCalcDialogOpen}
-          profileId={profile.id}
-        />
+        {calcDialogOpen && (
+          <CalculateFeeDialog
+            open={calcDialogOpen}
+            onOpenChange={setCalcDialogOpen}
+            profileId={profile.id}
+          />
+        )}
       </div>
     )
   }
@@ -134,11 +136,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
 
         <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
 
-        <CalculateFeeDialog
-          open={calcDialogOpen}
-          onOpenChange={setCalcDialogOpen}
-          profileId={profile.id}
-        />
+        {calcDialogOpen && (
+          <CalculateFeeDialog
+            open={calcDialogOpen}
+            onOpenChange={setCalcDialogOpen}
+            profileId={profile.id}
+          />
+        )}
       </div>
     )
   }
@@ -336,12 +340,20 @@ export function TuitionTab({ profile }: TuitionTabProps) {
 
       <NoticeCard canAccessFinanceModule={canAccessFinanceModule} />
 
-      {/* Dialog mount for the happy-path "Tính lại" trigger above. */}
-      <CalculateFeeDialog
-        open={calcDialogOpen}
-        onOpenChange={setCalcDialogOpen}
-        profileId={profile.id}
-      />
+      {/* Dialog mount for the happy-path "Tính lại" trigger above.
+          Conditional mount so React Query hooks inside the dialog
+          (useCalculateFee + useInstallmentPlans + useQueryClient) only
+          fire after the user opens the dialog — mirrors PR #130 fix
+          for MinorCorrectionDialog. Avoids breaking any future test
+          fixture that imports raw `render` from @testing-library/react
+          instead of the custom render with QueryClientProvider. */}
+      {calcDialogOpen && (
+        <CalculateFeeDialog
+          open={calcDialogOpen}
+          onOpenChange={setCalcDialogOpen}
+          profileId={profile.id}
+        />
+      )}
     </div>
   )
 }
