@@ -268,13 +268,18 @@ export function NotificationRuleEditor({
       browser: { label: "Browser (Real-time)", description: "Hiển thị popup trong trình duyệt ngay lập tức" },
       email: { label: "Email", description: "Gửi email đến hộp thư của người dùng" },
       zalo: { label: "Zalo", description: "Gửi tin nhắn qua Zalo OA" },
+      // v5 Step 23: zalo_bot is staff-only — never offered in external pickers
+      // because the metadata response sets ``internal_only=true`` (verified
+      // by v5-pre-2 RecipientGroupCard filter).
+      zalo_bot: { label: "Zalo Bot", description: "Gửi tin nhắn nội bộ cho nhân viên qua Zalo Bot" },
       sms: { label: "SMS", description: "Gửi tin nhắn SMS" },
     };
     const fallback = [
-      { value: "browser", status: "live" as const },
-      { value: "email", status: "live" as const },
-      { value: "zalo", status: "live" as const },
-      { value: "sms", status: "planned" as const },
+      { value: "browser", status: "live" as const, internal_only: false },
+      { value: "email", status: "live" as const, internal_only: false },
+      { value: "zalo", status: "live" as const, internal_only: false },
+      { value: "zalo_bot", status: "planned" as const, internal_only: true },
+      { value: "sms", status: "planned" as const, internal_only: false },
     ];
     const channels = metadata?.channels || fallback;
     return channels.map((ch) => ({
@@ -282,6 +287,9 @@ export function NotificationRuleEditor({
       label: channelLabels[ch.value]?.label || ch.value,
       description: channelLabels[ch.value]?.description || "",
       status: ch.status,
+      // v5 pre-work: propagate internal_only so the recipient picker can
+      // hide internal-only channels (e.g. zalo_bot) from external groups.
+      internal_only: ch.internal_only ?? false,
     }));
   }, [metadata]);
 
@@ -716,7 +724,9 @@ export function NotificationRuleEditor({
                       onChange={setRecipientGroups}
                       resolverOptions={dynamicResolverTypes}
                       externalResolverOptions={metadata?.external_resolver_types ?? EXTERNAL_RESOLVER_FALLBACK}
-                      availableChannels={dynamicChannels.filter((c) => c.status === "live").map((c) => c.value)}
+                      availableChannels={dynamicChannels
+                        .filter((c) => c.status === "live")
+                        .map((c) => ({ value: c.value, status: c.status, internal_only: c.internal_only }))}
                       validationErrors={shouldShowStepErrors(3) ? stepErrors.step3 : undefined}
                       selectedEvent={selectedEvent}
                     />

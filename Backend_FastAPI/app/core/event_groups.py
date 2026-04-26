@@ -269,7 +269,12 @@ class NotificationChannel(str, Enum):
     """Email notification"""
 
     ZALO = "zalo"
-    """Zalo ZNS notification (Phase 1)"""
+    """Zalo ZNS notification (Phase 1) — public-facing template messages"""
+
+    ZALO_BOT = "zalo_bot"
+    """Zalo Bot Platform notification (v5) — internal staff free-text push.
+    Distinct from ``ZALO`` (ZNS): no template approval, capped at the
+    Zalo Basic free tier and gated by ``settings.ZALO_BOT_ENABLED``."""
 
     SMS = "sms"
     """SMS notification (future feature)"""
@@ -281,48 +286,56 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.CONSULTATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.APPLICATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.FINANCE: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.DORM: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.ASSET: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.SYSTEM: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.PIPELINE: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     # ORGANIZATION group excluded — domain broadcast only, not user notification channels
@@ -330,12 +343,14 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.CTV: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: True,
         NotificationChannel.ZALO: False,
+        NotificationChannel.ZALO_BOT: False,
         NotificationChannel.SMS: False,
     },
 }

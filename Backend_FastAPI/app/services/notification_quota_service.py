@@ -194,7 +194,7 @@ async def get_health_summary(db: AsyncSession) -> Dict:
     quota_map = {q["channel"]: q for q in quota_summary}
 
     channels = []
-    for ch in ("browser", "email", "zalo", "sms"):
+    for ch in ("browser", "email", "zalo", "zalo_bot", "sms"):
         item: Dict = {"channel": ch, "breaker_state": breaker_map.get(ch, "closed")}
         if ch in quota_map:
             item["quota_used"] = quota_map[ch]["quota_used"]
@@ -218,6 +218,9 @@ def _get_channel_limit(channel: str) -> Optional[int]:
     """Get configured quota limit for a channel."""
     limits = {
         "zalo": settings.ZALO_DAILY_QUOTA_LIMIT,
+        # v5 Step 14: zalo_bot daily quota — defaults to 80 (20% margin
+        # under the Zalo Basic free tier 100/day ceiling).
+        "zalo_bot": settings.ZALO_BOT_DAILY_QUOTA,
     }
     return limits.get(channel)
 

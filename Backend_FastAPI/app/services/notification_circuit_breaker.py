@@ -19,7 +19,7 @@ _BREAKER_REDIS_KEY = "notif:breaker:{channel}"
 _BREAKER_REDIS_TTL = 600  # 10 min TTL
 
 # Canonical channels
-_CANONICAL_CHANNELS = ("browser", "email", "zalo", "sms")
+_CANONICAL_CHANNELS = ("browser", "email", "zalo", "zalo_bot", "sms")
 
 # In-memory fail counters (per worker process, fast path)
 _fail_counters: Dict[str, int] = {}

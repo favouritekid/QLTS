@@ -121,6 +121,7 @@ async def should_send_notification(
         "allow_sound": sound_allowed and not in_quiet_hours,
         "allow_browser": preference.browser_enabled and not in_quiet_hours,
         "allow_zalo": getattr(preference, "zalo_enabled", False) and not in_quiet_hours,
+        "allow_zalo_bot": getattr(preference, "zalo_bot_enabled", False) and not in_quiet_hours,
         "in_quiet_hours": in_quiet_hours,
     }
 
@@ -131,16 +132,33 @@ def get_group_preference(
     channel: str
 ) -> bool:
     """
-    Get the preference setting for a specific group and channel.
+    Resolve per-group/per-channel preference for a user.
+
+    Falls back to ``DEFAULT_GROUP_CHANNELS`` instead of hardcoded ``True`` so that
+    a freshly-onboarded channel (e.g. ``zalo_bot``) without per-group user prefs
+    inherits the safe-by-default disabled state shipped in the catalog. Unknown
+    group or channel fail-closed (``False``) to prevent silent broadcast leaks
+    from misconfigured callers.
     """
+    group_lower = group.lower()
+    channel_lower = channel.lower()
+
+    try:
+        group_enum = NotificationEventGroup(group_lower)
+        channel_enum = NotificationChannel(channel_lower)
+    except ValueError:
+        return False  # unknown group or channel → fail-closed
+
+    default = DEFAULT_GROUP_CHANNELS.get(group_enum, {}).get(channel_enum, False)
+
     if not type_preferences:
-        return True
+        return default
 
-    group_prefs = type_preferences.get(group.lower())
+    group_prefs = type_preferences.get(group_lower)
     if not group_prefs:
-        return True
+        return default
 
-    return group_prefs.get(channel.lower(), True)
+    return group_prefs.get(channel_lower, default)
 
 
 async def get_user_group_preferences(
@@ -252,6 +270,10 @@ async def filter_users_by_group(
         if channel_key == "email" and not pref.email_enabled:
             continue
         if channel_key == "zalo" and not getattr(pref, "zalo_enabled", False):
+            continue
+        if channel_key == "zalo_bot" and not getattr(pref, "zalo_bot_enabled", False):
+            # v5 Step 12: gate A for zalo_bot — only deliver to staff who
+            # explicitly linked their bot account via zalo_bot_link_service.
             continue
         if channel_key == "sound" and not pref.sound_enabled:
             continue

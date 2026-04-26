@@ -80,6 +80,41 @@ class TestNotificationRuleCrudApi:
         assert isinstance(lead_assigned["allowed_resolvers"], list)
         assert "link_strategy" in lead_assigned
 
+        # v5 pre-work (Finding 2): every channel exposes ``internal_only``
+        # so the FE recipient picker can hide internal-only channels (e.g.
+        # zalo_bot when introduced) from external recipient groups without
+        # hardcoding channel names.
+        channel_values = {c["value"] for c in data["channels"]}
+        assert {"browser", "email", "zalo", "sms"} <= channel_values, (
+            "Existing channels must remain in metadata response (backward-compat)"
+        )
+        for ch in data["channels"]:
+            assert "internal_only" in ch, (
+                f"Channel {ch['value']} missing internal_only field — "
+                "FE relies on this to filter external recipient picker."
+            )
+            assert isinstance(ch["internal_only"], bool)
+        # Existing channels are NOT internal-only (browser/email/zalo/sms are
+        # all valid for external recipients in current product).
+        for ch in data["channels"]:
+            if ch["value"] in {"browser", "email", "zalo", "sms"}:
+                assert ch["internal_only"] is False, (
+                    f"{ch['value']} must default to internal_only=False; "
+                    "promoting an existing channel to internal-only is a breaking change."
+                )
+
+        # v5 Step 17: zalo_bot must be exposed AND marked internal_only=True
+        # so the FE recipient picker hides it from external recipient groups.
+        zalo_bot = next(
+            (c for c in data["channels"] if c["value"] == "zalo_bot"), None
+        )
+        assert zalo_bot is not None, "zalo_bot must appear in metadata channels"
+        assert zalo_bot["internal_only"] is True, (
+            "zalo_bot is staff-only; internal_only must be True"
+        )
+        # Status follows the env flag — in test it's typically off → "planned".
+        assert zalo_bot["status"] in {"live", "planned"}
+
     async def test_list_rules_returns_paginated(
         self, client: AsyncClient, admin_token_headers: dict,
     ):

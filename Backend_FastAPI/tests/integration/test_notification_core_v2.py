@@ -114,7 +114,14 @@ class TestPerChannelPreferenceFiltering:
     async def test_zalo_enabled_passes_filter(
         self, db: AsyncSession, officer_user_in_db: dict
     ):
-        """zalo_enabled=True → user passes zalo channel filter."""
+        """zalo_enabled=True + per-group zalo opt-in → user passes filter.
+
+        v5 Finding 1: ``get_group_preference`` now falls back to
+        ``DEFAULT_GROUP_CHANNELS`` (ZALO=False everywhere) instead of
+        hardcoded True. Passing the filter now requires BOTH the global
+        zalo_enabled toggle AND an explicit per-group opt-in — matching
+        what the UI surfaces and preventing silent broadcasts.
+        """
         user_id = officer_user_in_db["id"]
 
         pref = models.NotificationPreference(
@@ -122,13 +129,14 @@ class TestPerChannelPreferenceFiltering:
             browser_enabled=True,
             email_enabled=True,
             zalo_enabled=True,
+            type_preferences={"lead": {"zalo": True}},
         )
         db.add(pref)
         await db.commit()
 
         zalo_result = await filter_users_by_group(db, [user_id], "lead", "zalo")
 
-        assert zalo_result == [user_id], "Zalo should pass when zalo_enabled=True"
+        assert zalo_result == [user_id], "Zalo should pass when zalo_enabled=True + per-group opt-in"
 
     async def test_mixed_users_per_channel(
         self, db: AsyncSession, officer_user_in_db: dict, admin_user_in_db: dict
@@ -136,8 +144,12 @@ class TestPerChannelPreferenceFiltering:
         """
         Two users with different preferences:
         - Officer: browser=True, email=False, zalo=False
-        - Admin: browser=False, email=True, zalo=True
+        - Admin: browser=False, email=True, zalo=True (with per-group opt-in)
+
         Each channel should only include eligible users.
+
+        v5 Finding 1: zalo now requires explicit per-group opt-in via
+        ``type_preferences`` because ``DEFAULT_GROUP_CHANNELS[LEAD][ZALO]=False``.
         """
         officer_id = officer_user_in_db["id"]
         admin_id = admin_user_in_db["id"]
@@ -153,6 +165,7 @@ class TestPerChannelPreferenceFiltering:
             browser_enabled=False,
             email_enabled=True,
             zalo_enabled=True,
+            type_preferences={"lead": {"zalo": True}},
         )
         db.add_all([p1, p2])
         await db.commit()
@@ -165,7 +178,7 @@ class TestPerChannelPreferenceFiltering:
 
         assert browser_result == [officer_id], "Only officer has browser enabled"
         assert email_result == [admin_id], "Only admin has email enabled"
-        assert zalo_result == [admin_id], "Only admin has zalo enabled"
+        assert zalo_result == [admin_id], "Only admin has zalo enabled (with per-group opt-in)"
 
     async def test_should_send_notification_includes_allow_zalo(
         self, db: AsyncSession, officer_user_in_db: dict

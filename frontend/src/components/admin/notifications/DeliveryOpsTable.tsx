@@ -8,6 +8,7 @@
 import { useState } from "react";
 import {
   AlertCircle,
+  Bot,
   Filter,
   Loader2,
   Mail,
@@ -74,7 +75,16 @@ const CHANNEL_ICON: Record<string, React.ReactNode> = {
   browser: <Monitor className="h-4 w-4" />,
   email: <Mail className="h-4 w-4" />,
   zalo: <MessageSquare className="h-4 w-4" />,
+  zalo_bot: <Bot className="h-4 w-4" />,
   sms: <Smartphone className="h-4 w-4" />,
+};
+
+// v5 Step 24: only override the display string for zalo_bot (raw value
+// "zalo_bot" is technical, "Zalo Bot" is what operators read in tickets).
+// Other channels keep their lowercase raw value so the existing test
+// surface stays stable.
+const CHANNEL_LABEL: Record<string, string> = {
+  zalo_bot: "Zalo Bot",
 };
 
 function formatDate(iso: string | null): string {
@@ -210,6 +220,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
                 <SelectItem value="browser">Browser</SelectItem>
                 <SelectItem value="email">Email</SelectItem>
                 <SelectItem value="zalo">Zalo</SelectItem>
+                <SelectItem value="zalo_bot">Zalo Bot</SelectItem>
                 <SelectItem value="sms">SMS</SelectItem>
               </SelectContent>
             </Select>
@@ -315,7 +326,9 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           {CHANNEL_ICON[d.channel]}
-                          <span className="text-sm">{d.channel}</span>
+                          <span className="text-sm">
+                            {CHANNEL_LABEL[d.channel] ?? d.channel}
+                          </span>
                         </div>
                       </TableCell>
                       <TableCell className="text-sm">

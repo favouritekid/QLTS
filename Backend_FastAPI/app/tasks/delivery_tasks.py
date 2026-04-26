@@ -36,11 +36,14 @@ PERMANENT_ERRORS = frozenset({
     "invalid_phone",
     "channel_not_implemented",
     "execute_delivery_not_supported",
-    # Zalo permanent errors
+    # Zalo ZNS permanent errors
     "Zalo error -216",   # Template không tồn tại
     "Zalo error -230",   # SĐT không dùng Zalo
     "Zalo error -202",   # App không có quyền
     "Zalo error -204",   # OA bị khoá
+    # v5 Step 13: Zalo Bot permanent errors — link missing / staff opted out
+    "no_zalo_bot_link",
+    "empty_text",
 })
 # -217 (template chưa duyệt) = TRANSIENT — template có thể được duyệt sau
 # -210 (quota hết) = TRANSIENT — quota reset theo ngày
@@ -142,9 +145,16 @@ def execute_notification_delivery(self, delivery_id: int):
                 return {"status": "skipped", "reason": skip_reason, "delivery_id": delivery_id}
 
             # 4b. Check quota (D1) — external channels, fail fast
-            if delivery.channel in ("zalo", "sms"):
+            if delivery.channel in ("zalo", "zalo_bot", "sms"):
                 from app.services import notification_quota_service
-                quota_provider = "zalo_zns" if delivery.channel == "zalo" else "default"
+                # v5 Step 13: zalo_bot quota is per-bot, not per-template
+                # like ZNS, so it uses provider="zalo_bot" to keep the
+                # quota row separate from ZNS.
+                quota_provider = (
+                    "zalo_zns" if delivery.channel == "zalo"
+                    else "zalo_bot" if delivery.channel == "zalo_bot"
+                    else "default"
+                )
                 quota_ok = await notification_quota_service.check_quota(
                     session, delivery.channel, provider=quota_provider
                 )
@@ -247,9 +257,13 @@ def execute_notification_delivery(self, delivery_id: int):
                     await session.flush()
 
                 # D1: Record send for quota tracking
-                if delivery.channel in ("zalo", "sms"):
+                if delivery.channel in ("zalo", "zalo_bot", "sms"):
                     from app.services import notification_quota_service
-                    quota_provider = "zalo_zns" if delivery.channel == "zalo" else "default"
+                    quota_provider = (
+                        "zalo_zns" if delivery.channel == "zalo"
+                        else "zalo_bot" if delivery.channel == "zalo_bot"
+                        else "default"
+                    )
                     await notification_quota_service.record_send(
                         session, delivery.channel, provider=quota_provider
                     )
@@ -427,7 +441,7 @@ def reconcile_stale_deliveries(self):
                 # 1. Queued stale: external channels stuck >30min
                 stale_queued = await repo.find_stale_deliveries(
                     status="queued",
-                    channels=["email", "zalo", "sms"],
+                    channels=["email", "zalo", "zalo_bot", "sms"],
                     max_age_minutes=30,
                     limit=50,
                 )
@@ -445,9 +459,12 @@ def reconcile_stale_deliveries(self):
                 # 2. Sent stale: external channels sent >60min without webhook confirm
                 #    Age by sent_at (not created_at) — delivery may have been
                 #    created long before it was actually sent.
+                #    v5 Step 13: zalo_bot does not webhook delivery confirmation
+                #    (only command/text events), so its sent rows must also be
+                #    aged-up here to avoid the "stuck sent forever" state.
                 stale_sent = await repo.find_stale_deliveries(
                     status="sent",
-                    channels=["zalo", "sms"],
+                    channels=["zalo", "zalo_bot", "sms"],
                     max_age_minutes=60,
                     limit=50,
                     age_column="sent_at",
@@ -528,6 +545,23 @@ def sync_notification_quotas(self):
                         period="daily",
                         period_start=today,
                         quota_limit=settings.ZALO_DAILY_QUOTA_LIMIT,
+                    )
+                    synced += 1
+                    await session.commit()
+
+                # v5 Step 13: ensure zalo_bot quota row when ENABLED.
+                # Skipped while the channel is gated off so we don't
+                # accumulate empty rows for an unused channel.
+                zalo_bot_quota = await repo.get_current_quota(
+                    "zalo_bot", "zalo_bot", "daily", today,
+                )
+                if zalo_bot_quota is None and settings.ZALO_BOT_ENABLED:
+                    await repo.upsert_quota(
+                        channel="zalo_bot",
+                        provider="zalo_bot",
+                        period="daily",
+                        period_start=today,
+                        quota_limit=settings.ZALO_BOT_DAILY_QUOTA,
                     )
                     synced += 1
                     await session.commit()

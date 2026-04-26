@@ -71,6 +71,8 @@ from .routers import (
     sessions,
     users,
     zalo_webhooks,  # ✅ PHASE C1: Zalo webhook receiver
+    zalo_bot_link,  # ✅ v5 Step 19: staff Zalo Bot link API
+    zalo_bot_webhooks,  # ✅ v5 Step 18: Zalo Bot webhook receiver
 )
 
 # ✅ PHASE 2 COMPLETE: Import split admin routers
@@ -723,6 +725,8 @@ fastapi_app.include_router(notification_templates.router, prefix="/api")  # ✅ 
 fastapi_app.include_router(notification_consents.router, prefix="/api")  # ✅ PHASE B7: Consent management
 fastapi_app.include_router(notification_delivery_ops.router, prefix="/api")  # ✅ PHASE B8: Delivery ops
 fastapi_app.include_router(zalo_webhooks.router)  # ✅ PHASE C1: Zalo webhooks (no auth, HMAC-verified)
+fastapi_app.include_router(zalo_bot_webhooks.router)  # ✅ v5 Step 18: Zalo Bot webhook (shared-secret header)
+fastapi_app.include_router(zalo_bot_link.router)  # ✅ v5 Step 19: Staff Zalo Bot link API
 fastapi_app.include_router(leads.router, prefix="/api/leads")
 fastapi_app.include_router(collaborators.admin_router, prefix="/api")  # ✅ CTV: Admin/Manager CTV management
 fastapi_app.include_router(collaborators.ctv_router, prefix="/api")  # ✅ CTV: Self-service endpoints

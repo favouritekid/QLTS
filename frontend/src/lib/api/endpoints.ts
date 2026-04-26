@@ -170,6 +170,15 @@ export const API_ENDPOINTS = {
     EVENT_GROUPS: "/api/notifications/event-groups",
     EVENT_GROUPS_METADATA: "/api/notifications/event-groups/metadata",
   },
+  // ✅ v5 Step 20: Zalo Bot link API (staff-facing, auth required)
+  // NOTE: UNLINK is POST (not DELETE) — backend treats unlink as a
+  // state mutation that flips the preference column, not a resource
+  // deletion. Hook tests pin this to catch accidental DELETE drift.
+  ZALO_BOT: {
+    LINK_CODE: "/api/zalo-bot/link-code",
+    LINK_STATUS: "/api/zalo-bot/link-status",
+    UNLINK: "/api/zalo-bot/unlink",
+  },
   // ✅ PHASE 2.4: Notification Rules (Admin-only)
   NOTIFICATION_RULES: {
     LIST: "/api/notification-rules",
