@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
 from app.core.deps import CasbinAuth  # Phase 2.2
-from app.services.notification_dispatcher import safe_dispatch
+from app.services.notification_dispatcher import _all_role_rooms, safe_dispatch
 from app.core.events import SystemEvents
 
 log = structlog.get_logger(__name__)
@@ -87,15 +87,10 @@ async def create_system_alert(
     # ✅ NOTIFICATION 2.0: Dispatch SYSTEM_ALERT.
     # SYSTEM_ALERT is catalog-sensitive; admin-triggered broadcast must
     # pass the full role matrix explicitly (no implicit all-users fanout).
-    # Socket rooms auto-joined in socket_manager.connect include
-    # role_<role_name> for each authenticated role.
-    _alert_rooms = [
-        "role_admin",
-        "role_manager",
-        "role_officer",
-        "role_accountant",
-        "role_user",
-    ]
+    # Use ``_all_role_rooms()`` helper so adding a new ``UserRole`` value
+    # (e.g. ``COLLABORATOR``) automatically picks up here without
+    # forgetting to extend a hardcoded list — silent broadcast gap to
+    # the new role would otherwise be invisible until a complaint.
     await safe_dispatch(
         db=db,
         event=SystemEvents.SYSTEM_ALERT,
@@ -106,7 +101,7 @@ async def create_system_alert(
             "expires_at": expires_at.isoformat() if expires_at else None,
         },
         dedupe_key=f"system_alert:{datetime.utcnow().isoformat()}",
-        rooms=_alert_rooms,
+        rooms=_all_role_rooms(),
     )
 
     log.info(

@@ -400,6 +400,25 @@ def _rooms_for_user(user_id: Optional[int]) -> List[str]:
     return rooms
 
 
+def _all_role_rooms() -> List[str]:
+    """Rooms covering every authenticated role.
+
+    For genuinely all-hands broadcasts (SYSTEM_ALERT, system-wide
+    announcements). Derives the room list from ``UserRole`` enum so a
+    new role added to the enum (e.g. ``COLLABORATOR``) auto-picks up
+    here — eliminates the hardcoded-list drift risk where adding a
+    role + forgetting to update one broadcast site causes a silent
+    delivery gap to that role.
+
+    Format mirrors ``socket_manager.connect`` auto-join: each
+    authenticated socket joins ``role_<value>`` (e.g. ``role_admin``,
+    ``role_collaborator``). Sticking to ``UserRole`` as source of
+    truth means the helper stays self-correcting.
+    """
+    from app.core.constants import UserRole
+    return [f"role_{role.value}" for role in UserRole]
+
+
 async def _send_via_channel(
     channel_name: str,
     notifications: List[Any],
