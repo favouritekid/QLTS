@@ -50,9 +50,16 @@ class OperatorOption(BaseModel):
 
 
 class ChannelInfo(BaseModel):
-    """Channel with live/planned status"""
+    """Channel with live/planned status.
+
+    v5 pre-work: ``internal_only`` distinguishes channels that target staff
+    only (e.g. zalo_bot) from public-facing channels (browser/email/zalo/sms).
+    External recipient pickers must hide ``internal_only=True`` channels to
+    prevent leaking staff infrastructure to leads/customers.
+    """
     value: str
     status: str  # "live" | "planned"
+    internal_only: bool = False
 
 
 class ExternalResolverTypeOption(BaseModel):
@@ -122,6 +129,15 @@ async def get_notification_metadata(
             {"value": "browser", "status": "live"},
             {"value": "email", "status": "live"},
             {"value": "zalo", "status": "live" if settings.ZALO_ENABLED else "planned"},
+            # v5 Step 17: zalo_bot is internal_only=True so the FE wizard
+            # hides it from external recipient pickers. Status follows
+            # the env flag — "planned" until ZALO_BOT_ENABLED flips on
+            # in production, then "live".
+            {
+                "value": "zalo_bot",
+                "status": "live" if settings.ZALO_BOT_ENABLED else "planned",
+                "internal_only": True,
+            },
             {"value": "sms", "status": "planned"},
         ],
         "resolver_types": [

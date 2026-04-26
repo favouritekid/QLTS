@@ -5,7 +5,7 @@
 Central registry for all notification channels.
 Provides factory function to get channel instances.
 
-Canonical channel names: browser, email, zalo, sms
+Canonical channel names: browser, email, zalo, zalo_bot, sms
 Legacy value "socket" is normalized to "browser" on read and rejected on write.
 """
 from typing import Dict, List, Optional, Type
@@ -19,7 +19,7 @@ from .email_channel import EmailChannel
 # Canonical channel values
 # =============================================================================
 
-CANONICAL_CHANNELS = frozenset({"browser", "email", "zalo", "sms"})
+CANONICAL_CHANNELS = frozenset({"browser", "email", "zalo", "zalo_bot", "sms"})
 
 _CHANNEL_ALIASES = {
     "socket": "browser",  # Legacy alias — normalize on read, reject on write
@@ -108,7 +108,25 @@ def _register_zalo_channel():
     except Exception:
         pass  # Config not available yet (import time)
 
+
+def _register_zalo_bot_channel():
+    """v5 Step 9: register ZaloBotChannel only when ``ZALO_BOT_ENABLED``.
+
+    Channel sender is gated by env flag so accidental notification rule
+    creation while the bot is unconfigured cannot mass-fire deliveries
+    that would all immediately dead-letter.
+    """
+    try:
+        from app.config import settings
+        if settings.ZALO_BOT_ENABLED:
+            from .zalo_bot_channel import ZaloBotChannel
+            CHANNEL_REGISTRY["zalo_bot"] = ZaloBotChannel
+    except Exception:
+        pass  # Config not available yet (import time)
+
+
 _register_zalo_channel()
+_register_zalo_bot_channel()
 
 
 def get_channel(channel_name: str) -> Optional[BaseChannel]:

@@ -286,6 +286,13 @@ export interface NotificationPreference {
   email_enabled: boolean;
   sound_enabled: boolean;
   browser_enabled: boolean;
+  /**
+   * v5: Zalo Bot channel toggle. Read-only from the user's perspective —
+   * managed by `useZaloBotLink` (link/unlink). Deliberately omitted from
+   * `NotificationPreferenceUpdate` so the generic preference endpoint
+   * cannot flip it without going through the link flow.
+   */
+  zalo_bot_enabled: boolean;
   email_digest: "instant" | "daily" | "weekly" | "disabled";
   type_preferences: Record<string, NotificationTypePreference> | null;
   quiet_hours_enabled: boolean;
@@ -305,6 +312,29 @@ export interface NotificationPreferenceUpdate {
   quiet_hours_enabled?: boolean;
   quiet_hours_start?: string | null;
   quiet_hours_end?: string | null;
+  // NOTE: zalo_bot_enabled is intentionally absent — see NotificationPreference.
+  // Use `useZaloBotLink` hook (POST /api/zalo-bot/link-code | unlink).
+}
+
+// ============================================
+// ✅ v5 Step 20: Zalo Bot Link
+// ============================================
+
+export interface ZaloBotLinkStatus {
+  is_linked: boolean;
+  display_name: string | null;
+  linked_at: string | null; // ISO8601
+}
+
+export interface ZaloBotLinkCode {
+  code: string;
+  expires_in_seconds: number; // backend ships 600 (10 min)
+  instructions: string;
+}
+
+export interface ZaloBotUnlinkResult {
+  unlinked: boolean;
+  message: string;
 }
 
 // ============================================
@@ -580,6 +610,13 @@ export interface OperatorOption {
 export interface ChannelInfo {
   value: string;
   status: "live" | "planned";
+  /**
+   * v5 pre-work: when true, the channel targets staff only (e.g. zalo_bot)
+   * and must be hidden from external recipient (lead/customer) pickers.
+   * Optional for backward-compat with older API responses; treat undefined
+   * as ``false``.
+   */
+  internal_only?: boolean;
 }
 
 export interface ExternalResolverOption {

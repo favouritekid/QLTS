@@ -22,6 +22,17 @@ class NotificationPreference(Base):
     browser_enabled = Column(Boolean, nullable=False, default=True)
     zalo_enabled = Column(Boolean, nullable=False, default=False,
                           comment="Zalo ZNS channel — disabled by default until user opts in")
+    zalo_bot_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment=(
+            "Zalo Bot Platform channel — managed by zalo_bot_link_service "
+            "(link/unlink) only, NOT writable through the generic preference "
+            "update endpoint."
+        ),
+    )
 
     # Email digest preferences
     email_digest = Column(

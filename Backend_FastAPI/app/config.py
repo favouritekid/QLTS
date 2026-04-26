@@ -493,6 +493,23 @@ class Settings(BaseSettings):
         default="", validation_alias="ZALO_WEBHOOK_SECRET"
     )  # Secret for verifying webhook HMAC signatures
 
+    # -- Zalo Bot Platform (Internal Staff Notifications) --
+    # Separate from ZNS (ZALO_*). Zalo Bot Platform = free 3000 msg/month
+    # for staff-facing push (no template approval required). Channel
+    # registration / preference column added in later steps.
+    ZALO_BOT_ENABLED: bool = Field(
+        default=False, validation_alias="ZALO_BOT_ENABLED"
+    )  # Master switch — must be True before registering zalo_bot channel
+    ZALO_BOT_TOKEN: str = Field(
+        default="", validation_alias="ZALO_BOT_TOKEN"
+    )  # Bot token from bot.zaloplatforms.com — DO NOT log
+    ZALO_BOT_WEBHOOK_SECRET: str = Field(
+        default="", validation_alias="ZALO_BOT_WEBHOOK_SECRET"
+    )  # X-Bot-Api-Secret-Token header value — DO NOT log
+    ZALO_BOT_DAILY_QUOTA: int = Field(
+        default=80, validation_alias="ZALO_BOT_DAILY_QUOTA"
+    )  # v5 Finding 6: 80/day for 20% margin under Zalo Basic ceiling 100/day (3000/month)
+
     # -- MoMo Payment Gateway Settings --
     # Get credentials from MoMo merchant portal
     # Docs: https://developers.momo.vn/v3/docs/payment/api/collection-link/

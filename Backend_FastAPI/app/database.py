@@ -133,6 +133,20 @@ async def safe_redis_delete(key: str):
         return 0
 
 
+async def safe_redis_getdel(key: str):
+    """Atomic GET + DELETE (Redis 6.2+ ``GETDEL``).
+
+    Returns the previous value or ``None`` if the key did not exist or the
+    breaker tripped. Used by Zalo Bot link flow to consume one-shot link
+    codes without a TOCTOU window between read and delete.
+    """
+    try:
+        return await redis_breaker.call_async(redis_client.getdel, key)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis GETDEL failed", key=key, exc_info=True)
+        return None
+
+
 # ✅ PHASE 1.2.1: Redis List operations for notification inbox caching
 async def safe_redis_lpush(key: str, *values):
     """

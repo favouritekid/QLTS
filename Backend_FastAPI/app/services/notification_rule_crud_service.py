@@ -88,6 +88,17 @@ def _validate_actions(actions) -> None:
         config = action.config if hasattr(action, 'config') else action.get('config')
         if channel == "zalo":
             _validate_zalo_action_config(step, config)
+        elif channel == "zalo_bot":
+            # v5 Step 16: zalo_bot is internal-only — staff must already
+            # have linked their bot account, so any external_resolver
+            # config is meaningless and silently routes notifications
+            # nowhere. Reject loudly at rule creation time.
+            if config and isinstance(config, dict) and config.get("external_resolver"):
+                raise BadRequest(
+                    f"Action step {step}: channel 'zalo_bot' is internal-only and "
+                    "cannot be combined with an external_resolver. Use channel "
+                    "'zalo' (ZNS) for external recipients."
+                )
         elif config and isinstance(config, dict):
             # Validate external_resolver for any channel that has it
             ext_resolver = config.get("external_resolver")

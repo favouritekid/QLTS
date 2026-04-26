@@ -25,22 +25,68 @@ class TestNotificationPreferenceService:
     # =========================================================================
 
     def test_get_group_preference_logic(self):
-        """Test the pure logic of group preference resolution."""
-        # Default should be True
+        """Pure logic of group preference resolution.
+
+        v5: fallback now reads DEFAULT_GROUP_CHANNELS instead of hardcoded True
+        so new channels onboard fail-closed by default. Existing channels keep
+        their established default per the catalog.
+        """
+        # No prefs → fallback to DEFAULT_GROUP_CHANNELS[LEAD][BROWSER] = True
         assert get_group_preference(None, "lead", "browser") is True
         assert get_group_preference({}, "lead", "browser") is True
-        
+
         # Specific overrides
         prefs = {"lead": {"browser": False, "email": True}}
         assert get_group_preference(prefs, "lead", "browser") is False
         assert get_group_preference(prefs, "lead", "email") is True
-        
+
         # Case insensitivity
         assert get_group_preference(prefs, "LEAD", "BROWSER") is False
-        
-        # Missing group/channel defaults to True
+
+        # Missing group → fallback to default (FINANCE.BROWSER=True per catalog)
         assert get_group_preference(prefs, "finance", "browser") is True
-        assert get_group_preference(prefs, "lead", "sms") is True
+
+        # Missing channel within group → fallback to catalog default
+        # LEAD.SMS=False per DEFAULT_GROUP_CHANNELS — was True in pre-v5
+        assert get_group_preference(prefs, "lead", "sms") is False
+
+    def test_get_group_preference_unknown_fail_closed(self):
+        """Unknown group or channel must fail-closed (False) — v5 Finding 1."""
+        # Unknown group
+        assert get_group_preference(None, "nonexistent_group", "browser") is False
+        # Unknown channel
+        assert get_group_preference(None, "lead", "nonexistent_channel") is False
+        # Both unknown
+        assert get_group_preference(None, "foo", "bar") is False
+        # Even with explicit prefs, unknown channel still fail-closed
+        prefs = {"lead": {"browser": True}}
+        assert get_group_preference(prefs, "lead", "made_up_channel") is False
+
+    def test_get_group_preference_default_per_channel(self):
+        """Default fallback honours DEFAULT_GROUP_CHANNELS per (group, channel).
+
+        Locks in catalog values so a future plan rewriting the catalog won't
+        silently flip user-facing behaviour.
+        """
+        # ZALO defaults: False for every group in DEFAULT_GROUP_CHANNELS
+        assert get_group_preference(None, "lead", "zalo") is False
+        assert get_group_preference(None, "finance", "zalo") is False
+        assert get_group_preference(None, "system", "zalo") is False
+
+        # SMS defaults: False for every group
+        assert get_group_preference(None, "lead", "sms") is False
+        assert get_group_preference(None, "application", "sms") is False
+
+        # BROWSER defaults: True for every group in catalog
+        assert get_group_preference(None, "lead", "browser") is True
+        assert get_group_preference(None, "consultation", "browser") is True
+        assert get_group_preference(None, "application", "browser") is True
+
+        # EMAIL defaults vary: True for LEAD/APPLICATION/FINANCE/SYSTEM/SECURITY/CTV,
+        # False for CONSULTATION/DORM/ASSET/PIPELINE
+        assert get_group_preference(None, "lead", "email") is True
+        assert get_group_preference(None, "consultation", "email") is False
+        assert get_group_preference(None, "dorm", "email") is False
 
     # =========================================================================
     # FILTER USERS BY GROUP (DATABASE INTEGRATION)

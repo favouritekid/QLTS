@@ -20,6 +20,11 @@ class NotificationPreferenceBase(BaseModel):
     sound_enabled: bool = True
     browser_enabled: bool = True
     zalo_enabled: bool = False  # Disabled by default — user must opt in
+    # zalo_bot_enabled is managed by zalo_bot_link_service (link/unlink) and
+    # is NOT exposed in NotificationPreferenceUpdate — clients cannot flip it
+    # via the generic preference endpoint to prevent silent broadcast leaks
+    # to staff who never confirmed the bot binding.
+    zalo_bot_enabled: bool = False
     email_digest: str = Field(
         default="instant", pattern="^(instant|daily|weekly|disabled)$"
     )

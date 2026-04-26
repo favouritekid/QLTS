@@ -4,11 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Trash2 } from "lucide-react";
 import type { RecipientGroup, ChannelBranch, ExternalResolverOption } from "./wizard-types";
-import { DEFAULT_CHANNELS } from "./wizard-types";
+import { DEFAULT_CHANNELS_INFO } from "./wizard-types";
 import ChannelBranchCard from "./ChannelBranchCard";
 import ResolverPicker from "./ResolverPicker";
 import AddChannelBar from "./AddChannelBar";
-import type { ResolverTypeOption } from "@/types/api.types";
+import type { ChannelInfo, ResolverTypeOption } from "@/types/api.types";
 
 interface RecipientGroupCardProps {
   group: RecipientGroup;
@@ -18,7 +18,8 @@ interface RecipientGroupCardProps {
   resolverOptions: ResolverTypeOption[];
   externalResolverOptions: ExternalResolverOption[];
   browserUsedByOtherGroup: boolean;
-  availableChannels?: string[];
+  /** v5 pre-work: full ChannelInfo[] (was string[]) so we can filter internal_only. */
+  availableChannels?: ChannelInfo[];
   selectedEvent?: string; // For template picker filtering
 }
 
@@ -34,9 +35,15 @@ export default function RecipientGroupCard({
   selectedEvent,
 }: RecipientGroupCardProps) {
   const activeChannels = new Set(group.channels.map((c) => c.channel));
-  const channelList = group.recipient_kind === "external"
-    ? (availableChannelsProp ?? DEFAULT_CHANNELS.external).filter((ch) => ch !== "browser")
-    : (availableChannelsProp ?? DEFAULT_CHANNELS.internal);
+  // v5 pre-work: external recipient UI filters out browser AND any
+  // internal_only channel (e.g. zalo_bot) — replaces hardcoded
+  // ``ch !== "browser"`` filter with a metadata-driven check.
+  const channelList =
+    group.recipient_kind === "external"
+      ? (availableChannelsProp ?? DEFAULT_CHANNELS_INFO.external)
+          .filter((ch) => ch.value !== "browser" && !ch.internal_only)
+          .map((ch) => ch.value)
+      : (availableChannelsProp ?? DEFAULT_CHANNELS_INFO.internal).map((ch) => ch.value);
 
   const handleResolverChange = (value: string) => {
     if (group.recipient_kind === "internal") {

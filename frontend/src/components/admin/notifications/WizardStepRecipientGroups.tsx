@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import type { RecipientGroup, ExternalResolverOption } from "./wizard-types";
-import type { ResolverTypeOption } from "@/types/api.types";
+import type { ChannelInfo, ResolverTypeOption } from "@/types/api.types";
 import RecipientGroupCard from "./RecipientGroupCard";
 import { createInternalGroup, createExternalGroup } from "./wizard-utils";
 
@@ -12,7 +12,12 @@ interface WizardStepRecipientGroupsProps {
   onChange: (groups: RecipientGroup[]) => void;
   resolverOptions: ResolverTypeOption[];
   externalResolverOptions: ExternalResolverOption[];
-  availableChannels?: string[];
+  /**
+   * v5 pre-work: ``ChannelInfo[]`` (was ``string[]``) so the recipient card
+   * can filter internal-only channels out of external recipient pickers
+   * without hardcoding channel names.
+   */
+  availableChannels?: ChannelInfo[];
   validationErrors?: string[];
   selectedEvent?: string; // For template picker filtering
 }
