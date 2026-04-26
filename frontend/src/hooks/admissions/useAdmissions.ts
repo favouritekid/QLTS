@@ -267,6 +267,41 @@ export function useResubmitAdmission(id: number) {
 }
 
 /**
+ * Apply post-approval minor correction (Officer/Manager/Admin).
+ *
+ * Submits the diffed `changes` payload + reason + version to
+ * ``POST /admissions/{id}/minor-correction``. Status doesn't change
+ * server-side — the response is the refreshed profile with version+1.
+ *
+ * Cache invalidation uses ``admissionsKeys.all`` so list / detail /
+ * status-counts / stats all refetch in one cascade. Lead pipeline is
+ * NOT touched (verified backend doesn't project any SAFE field onto
+ * Lead state).
+ */
+export function useMinorCorrection(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: {
+      version: number
+      reason: string
+      changes: Record<string, unknown>
+    }) => admissionsApi.minorCorrection(id, data),
+    onSuccess: () => {
+      toast.success("Đã lưu hiệu chỉnh")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "hiệu chỉnh hồ sơ",
+      })
+    },
+  })
+}
+
+/**
  * Approve Admission Hook
  * Manager/Admin action - transitions from submitted/resubmitted → approved
  * 

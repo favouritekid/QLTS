@@ -10,6 +10,8 @@
 
 import { z } from "zod"
 
+import { SAFE_MINOR_CORRECTION_FIELDS } from "@/lib/constants/minor-correction"
+
 // ==============================================================================
 // STATUS ENUM
 // ==============================================================================
@@ -122,6 +124,17 @@ export const admissionPathCreateSchema = z.object({
   // "uploaded = submittable" behaviour on a per-path basis. Default here
   // matches the backend default so the create form stays explicit.
   allow_unverified_submission: z.boolean().default(false),
+  // Per-path correction allowlist. Default empty list (admin must
+  // opt-in field-by-field). Refine guards against drift — schema
+  // mirrors backend ``SAFE_MINOR_CORRECTION_FIELDS`` so any UI
+  // accidentally posting a non-safe key fails Zod before round-trip.
+  minor_correction_allowed_fields: z
+    .array(z.string())
+    .default([])
+    .refine(
+      (arr) => arr.every((f) => SAFE_MINOR_CORRECTION_FIELDS.has(f as never)),
+      { message: "Field không nằm trong safe catalog" },
+    ),
 })
 
 export type AdmissionPathCreate = z.infer<typeof admissionPathCreateSchema>
@@ -137,6 +150,19 @@ export const admissionPathUpdateSchema = z.object({
   // Optional on update — callers that don't want to flip the flag omit
   // it entirely and the backend leaves the current value untouched.
   allow_unverified_submission: z.boolean().optional(),
+  // Optional on update so partial PATCH-style updates don't accidentally
+  // clear the allowlist. Backend service raises BusinessRuleViolation
+  // if a non-admin caller submits this key, so the FE form must hide
+  // the section for non-admins.
+  minor_correction_allowed_fields: z
+    .array(z.string())
+    .optional()
+    .refine(
+      (arr) =>
+        arr === undefined ||
+        arr.every((f) => SAFE_MINOR_CORRECTION_FIELDS.has(f as never)),
+      { message: "Field không nằm trong safe catalog" },
+    ),
 })
 
 export type AdmissionPathUpdate = z.infer<typeof admissionPathUpdateSchema>
@@ -215,6 +241,11 @@ export const admissionPathResponseSchema = z.object({
   // PR #6 — REQUIRED in the response so Zod fails loudly when the backend
   // forgets to emit the field. Admin UI mirrors this bool as a toggle.
   allow_unverified_submission: z.boolean(),
+  // Required so the admin form pre-checks the right boxes. No refine
+  // on response — data from DB has already passed Create/Update
+  // validation, so re-checking here would be redundant work that
+  // surfaces no new bugs.
+  minor_correction_allowed_fields: z.array(z.string()),
 })
 
 export type AdmissionPathResponse = z.infer<typeof admissionPathResponseSchema>

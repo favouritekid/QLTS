@@ -13,6 +13,7 @@ This is the CENTRAL ENTITY for:
 
 import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, Column, Integer, String, Boolean, ForeignKey, DateTime, UniqueConstraint, Numeric
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -123,6 +124,25 @@ class AdmissionPath(Base):
             "When True, the submit validator accepts documents in "
             "`uploaded` status. When False (default), only `verified` "
             "or `paper_submitted` count toward submission."
+        ),
+    )
+
+    # Per-path allowlist for post-approval minor corrections (governance setting).
+    # Empty default = no corrections allowed. Admin opts in field-by-field per
+    # path. Effective allowlist = SAFE_MINOR_CORRECTION_FIELDS ∩ this list,
+    # so admin cannot widen scope beyond the system-level safe catalog.
+    # NOT snapshotted to AdmissionProfile.applied_rules: admin changes apply
+    # live across all profiles attached to the path (different from PR #6's
+    # allow_unverified_submission which IS snapshotted).
+    minor_correction_allowed_fields = Column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=sa.text("'[]'::jsonb"),
+        comment=(
+            "Per-path allowlist for post-approval minor corrections. "
+            "Effective = SAFE_MINOR_CORRECTION_FIELDS ∩ this list. "
+            "Live config (not snapshotted to applied_rules)."
         ),
     )
 

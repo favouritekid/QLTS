@@ -8,7 +8,7 @@ Provides data access for AdmissionPath entities with:
 - No business logic (pure data access)
 """
 
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 from sqlalchemy import select, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -44,8 +44,23 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
     # STANDARD CRUD WITH EAGER LOADING
     # =========================================================================
     
+    async def get_by_ids(self, ids: Iterable[int]) -> List[AdmissionPath]:
+        """Batch fetch paths by ID list — used by the list-endpoint
+        minor-correction resolver to avoid N+1 path queries.
+
+        Returns the matching rows in undefined order; callers that need
+        a dict keyed by id should build it from the result. Empty input
+        short-circuits to avoid emitting an ``IN ()`` clause.
+        """
+        unique_ids = list({i for i in ids if i is not None})
+        if not unique_ids:
+            return []
+        stmt = select(AdmissionPath).where(AdmissionPath.id.in_(unique_ids))
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_by_id_with_relations(
-        self, 
+        self,
         path_id: int
     ) -> Optional[AdmissionPath]:
         """

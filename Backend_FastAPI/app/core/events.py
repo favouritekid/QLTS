@@ -345,6 +345,32 @@ class SystemEvents(str, Enum):
     — this is a customer-facing survey, not an officer notification.
     """
 
+    APPLICATION_MINOR_CORRECTED = "application_minor_corrected"
+    """
+    Triggered when officer/manager/admin applies a post-approval minor
+    correction to an AdmissionProfile in approved/confirmed state. The
+    flow only allows a strict allowlist of low-risk demographic +
+    address fields (configured per AdmissionPath); document, finance,
+    and identity fields are hard-denied. See
+    ``app/core/admission_correction_constants.py`` for the safe catalog.
+
+    Payload Schema:
+        {
+            "application_id": int,         # AdmissionProfile.id
+            "lead_id": int,                # Lead.id (room scoping key)
+            "changed_fields": List[str],   # KEY NAMES ONLY — no values, no PII
+            "actor_id": int,               # User.id who applied the correction
+            "corrected_at": str,           # ISO 8601 UTC timestamp
+        }
+
+    Recipients: broadcast-only (socket). No DB notification rule, no
+    seed default — purely a realtime cache-invalidation signal so other
+    sessions viewing the profile refresh. Privacy: payload carries
+    field NAMES only; old/new values stay in the audit log behind RBAC.
+    Rooms scope = role_admin + unit_<lead.unit_id> +
+    user_room_<lead.assigned_officer_id> via ``_rooms_for_admission``.
+    """
+
     # =========================================================================
     # FINANCE EVENTS (Future: Dorm, Tuition, etc.)
     # =========================================================================

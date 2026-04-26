@@ -1299,6 +1299,33 @@ _BROADCAST_EVENTS: tuple = tuple(
         # Sensitive: payload carries lead/profile/fee IDs linked to PII.
         privacy="sensitive",
     ),
+    # Realtime cache hint emitted after a post-approval minor correction.
+    # Same broadcast-only treatment as FEE_CALCULATED — no DB rule, no
+    # seeded notification, just a socket signal so other sessions
+    # viewing the profile re-fetch. Payload deliberately carries field
+    # NAMES only (changed_fields), never values, so the broadcast itself
+    # leaks no PII; old/new values stay behind the audit-log RBAC gate.
+    EventDefinition(
+        event=SystemEvents.APPLICATION_MINOR_CORRECTED,
+        category="application",
+        display_name="Hồ sơ được hiệu chỉnh sau duyệt",
+        description=(
+            "Realtime sync cho admission detail sau khi sửa thông tin "
+            "nhỏ trên hồ sơ approved/confirmed"
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("changed_fields", "array", "Tên các trường đã đổi (no values)"),
+            _var("actor_id", "integer", "ID người sửa"),
+            _var("corrected_at", "string", "Thời gian sửa (ISO 8601)"),
+        ),
+        link_strategy="/admissions/${application_id}",
+        notification_class="broadcast_only",
+        # Sensitive: payload links to lead/profile rows even though
+        # values are scrubbed — must be scoped to admin + unit + officer.
+        privacy="sensitive",
+    ),
 )
 
 # -------------------------------------------------------------------

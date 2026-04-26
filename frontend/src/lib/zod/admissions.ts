@@ -511,6 +511,12 @@ export const admissionProfileResponseSchema = z.object({
   
   // Available workflow actions
   available_actions: z.array(z.string()).default([]),
+
+  // Per-profile effective allowlist for the post-approval correction
+  // dialog (mirrors AdmissionProfileResponse.minor_correction_fields).
+  // Backend resolves SAFE catalog ∩ AdmissionPath config; FE renders
+  // the dialog rows from this list, never derives anything itself.
+  minor_correction_fields: z.array(z.string()).default([]),
   
   // Profile completion percentage (0-100)
   completion_percent: z.number().int().min(0).max(100).default(0),
@@ -1092,4 +1098,29 @@ export const ConfirmTokenInfoResponseSchema = z.object({
   expires_at: z.string().datetime({ offset: true }).nullable(),
 })
 export type ConfirmTokenInfoResponse = z.infer<typeof ConfirmTokenInfoResponseSchema>
+
+/**
+ * POST /api/admissions/{id}/minor-correction — request schema.
+ *
+ * Mirrors backend ``MinorCorrectionRequest``. ``reason`` is trimmed
+ * before length check so a "          a" (length 10 with 9 spaces)
+ * fails Zod the same way it fails backend StringConstraints. ``changes``
+ * is enforced non-empty; per-field type validation is left to the
+ * server (single source of truth for SAFE catalog adapters).
+ */
+export const MinorCorrectionRequestSchema = z.object({
+  version: z.number().int().min(1),
+  reason: z
+    .string()
+    .trim()
+    .min(10, "Vui lòng nhập lý do tối thiểu 10 ký tự")
+    .max(1000, "Lý do tối đa 1000 ký tự"),
+  changes: z
+    .record(z.string(), z.unknown())
+    .refine(
+      (obj) => Object.keys(obj).length > 0,
+      { message: "Chưa có thay đổi nào" },
+    ),
+})
+export type MinorCorrectionRequest = z.infer<typeof MinorCorrectionRequestSchema>
 

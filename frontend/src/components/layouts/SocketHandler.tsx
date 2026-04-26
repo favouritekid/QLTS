@@ -583,6 +583,26 @@ export function SocketHandler() {
       }
     };
 
+    // Realtime sync after a post-approval minor correction. Payload
+    // carries field NAMES only (no PII) — broadcast emit is scoped to
+    // admin + unit + assigned officer rooms server-side, so just
+    // refetch the admission tree on receipt. No lead/finance impact:
+    // SAFE catalog excludes any field that lead_admission_sync would
+    // project, so we don't need to touch lead/pipeline keys.
+    const handleApplicationMinorCorrected = (data: {
+      application_id: number;
+      lead_id: number;
+      changed_fields: string[];
+      actor_id: number;
+      corrected_at: string;
+    }) => {
+      console.log(
+        "[SocketHandler] application_minor_corrected → invalidating admission caches",
+        { profile: data.application_id, fields: data.changed_fields },
+      );
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+    };
+
     // ✅ REAL-TIME PIPELINE CONFIG (Week 3): Lắng nghe sự kiện pipeline_config_updated
     const handlePipelineConfigUpdated = (data: {
       config_type: "pipeline_stage" | "consultation_status" | "allowed_transition";
@@ -1065,6 +1085,7 @@ export function SocketHandler() {
     socket.on("lead_status_changed", handleLeadStatusChanged);
     socket.on("application_created", handleApplicationCreated);
     socket.on("application_status_changed", handleApplicationStatusChanged);
+    socket.on("application_minor_corrected", handleApplicationMinorCorrected);
     socket.on("fee_calculated", handleFeeCalculated);
     socket.on("pipeline_config_updated", handlePipelineConfigUpdated);
     socket.on("consultation_created", handleConsultationCreated);
@@ -1111,6 +1132,7 @@ export function SocketHandler() {
       socket.off("lead_status_changed", handleLeadStatusChanged);
       socket.off("application_created", handleApplicationCreated);
       socket.off("application_status_changed", handleApplicationStatusChanged);
+      socket.off("application_minor_corrected", handleApplicationMinorCorrected);
       socket.off("fee_calculated", handleFeeCalculated);
       socket.off("pipeline_config_updated", handlePipelineConfigUpdated);
       socket.off("consultation_created", handleConsultationCreated);

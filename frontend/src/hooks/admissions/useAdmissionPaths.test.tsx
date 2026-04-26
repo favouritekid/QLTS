@@ -50,6 +50,9 @@ const mockAdmissionPathResponse: AdmissionPathResponse = {
   // PR #6: strict submit gate per path; default False in the fixture
   // mirrors the backend default for newly-created paths.
   allow_unverified_submission: false,
+  // Minor-correction allowlist — empty by default for fresh paths
+  // (admin opts in field-by-field after path creation).
+  minor_correction_allowed_fields: [],
 };
 
 /** The shape that PUT /paths/:id/documents returns. */

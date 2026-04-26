@@ -137,6 +137,11 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/resubmit", "action": "POST"},  # Resubmit after rejection
         {"subject": "{role}", "object": "/api/admissions/{id}/withdraw", "action": "POST"},  # Withdraw applicant-initiated
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
+        # Post-approval minor correction — Casbin admits the role; service
+        # narrows further with status whitelist + per-path allowlist +
+        # HARD_DENY checks. IDOR via get_admission_for_user (admin all /
+        # manager unit / officer unit + assigned).
+        {"subject": "{role}", "object": "/api/admissions/{id}/minor-correction", "action": "POST"},
         # REMOVED: enroll is ADMIN-ONLY per Decision 10 (Admission State ≠ Authorization)
         # {"subject": "{role}", "object": "/api/admissions/{id}/enroll", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
