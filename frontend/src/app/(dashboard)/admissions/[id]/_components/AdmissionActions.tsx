@@ -290,12 +290,21 @@ export function AdmissionActions({
             <SendConfirmationButton profileId={profile.id} />
           )}
 
-          {/* Post-approval minor correction. Self-managed dialog — the
-              component checks `profile.permissions.minor_correction` +
-              `profile.minor_correction_fields` internally so no extra
-              gate here. Both flags come from the API resolver
-              (_resolve_minor_correction_state); FE never derives. */}
-          <MinorCorrectionDialog profile={profile} />
+          {/* Post-approval minor correction. External `can()` gate
+              mirrors SendConfirmationButton's pattern — caller decides
+              visibility so the dialog component (and its
+              useMinorCorrection mutation hook) never mounts when the
+              backend hasn't authorized this profile. Without the gate,
+              tests without a QueryClientProvider crash on hook
+              instantiation; with the gate, only profiles whose backend
+              flag is true ever invoke the hook. The dialog also
+              double-checks `minor_correction_fields` length internally
+              so a flag=true / fields=[] state stays renderable but
+              empty (matching the contract documented in
+              `_resolve_minor_correction_state`). */}
+          {can('minor_correction') && (
+            <MinorCorrectionDialog profile={profile} />
+          )}
 
           {/* Enroll - can('enroll') when status ∈ {approved, confirmed, overridden}.
               Label is "Ghi danh" (not "Xác nhận nhập học") so officers don't
