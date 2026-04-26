@@ -83,66 +83,34 @@ def _authorize_document_action(
 ) -> None:
     """Enforce the PR #5 document-action matrix at the service layer.
 
-    Mirrors ``_compute_document_permissions`` in ``_compute_frontend_fields``
-    so the ``can_*`` flag promised to the FE is always backed by a route
-    that actually authorises the call. Casbin gates the route at role
-    level (officer can hit /paper-submitted, manager /verify-format,
-    /reject, /reset); this helper adds the fine-grained rules Casbin
-    can't express: unit scope for manager, owner check for officer,
-    allowed ``doc_status`` transition, and ``requires_upload`` flag for
+    Delegates to :class:`DocumentActionPolicy` — same matrix
+    ``_compute_document_permissions`` (in ``_compute_frontend_fields``)
+    consults to build the per-document ``can_*`` response flags.
+    Single source of truth means the FE flag promise and the BE gate
+    stay in lockstep automatically; updating one branch without the
+    other is no longer possible.
+
+    Casbin gates the route at role level (officer can hit
+    ``/paper-submitted``, manager ``/verify-format`` / ``/reject`` /
+    ``/reset``); the policy adds the fine-grained rules Casbin can't
+    express: unit scope for manager, owner check for officer, allowed
+    ``doc_status`` transition, and ``requires_upload`` flag for
     paper-submit.
 
-    ``action`` is one of: "upload", "paper_submitted", "verify",
-    "reject", "reset". Raises :class:`PermissionDeniedError` on fail —
-    the router maps that to 404 (no existence leak).
+    ``action`` is one of: ``"upload"``, ``"paper_submitted"``,
+    ``"verify"``, ``"reject"``, ``"reset"``. Raises
+    :class:`PermissionDeniedError` on fail — the router maps that to
+    404 (no existence leak).
     """
-    lead = profile.__dict__.get("lead")
-    is_admin = current_user.role == UserRole.ADMIN
-    is_manager = current_user.role == UserRole.MANAGER
-    is_officer = current_user.role == UserRole.OFFICER
-    is_owner = bool(
-        lead
-        and lead.assigned_officer_id is not None
-        and lead.assigned_officer_id == current_user.id
-    )
-    manager_in_scope = bool(
-        is_manager
-        and lead is not None
-        and lead.unit_id is not None
-        and lead.unit_id == current_user.unit_id
-    )
-    reviewer_scope = is_admin or manager_in_scope
-    profile_editable = profile.status in ("draft", "rejected", "revision_requested")
+    from .admission_document_policy import DocumentActionPolicy
 
     applied_rules = profile.applied_rules or {}
     doc_configs = applied_rules.get("doc_configs", {}) or {}
     config = doc_configs.get(doc_code, {}) or {}
     requires_upload = bool(config.get("requires_upload", True))
 
-    if action == "upload":
-        ok = (
-            requires_upload
-            and profile_editable
-            and (is_owner or is_admin or manager_in_scope)
-            and doc_status in ("missing", "rejected")
-        )
-    elif action == "paper_submitted":
-        ok = (
-            (not requires_upload)
-            and profile_editable
-            and (is_owner or is_admin or manager_in_scope)
-            and doc_status == "missing"
-        )
-    elif action == "verify":
-        ok = reviewer_scope and doc_status in ("uploaded", "paper_submitted")
-    elif action == "reject":
-        ok = reviewer_scope and doc_status in ("uploaded", "paper_submitted", "verified")
-    elif action == "reset":
-        ok = reviewer_scope and doc_status != "missing"
-    else:
-        raise PermissionDeniedError(f"Unknown document action '{action}'")
-
-    if not ok:
+    policy = DocumentActionPolicy.for_(profile, current_user)
+    if not policy.authorize(action, doc_status, requires_upload):
         # 404 per IDOR convention — router translates.
         raise PermissionDeniedError(
             f"Action '{action}' not permitted on document '{doc_code}' "
@@ -1169,25 +1137,20 @@ def _compute_frontend_fields(
                     "label_from_db": doc.document_type.name,
                 }
     
-    # PR #5 — scope gate for manager/admin on per-document actions.
-    # Admin sees all profiles; manager is scoped to the lead's unit.
-    _lead = profile.__dict__.get("lead")
-    _manager_in_scope = (
-        is_manager
-        and _lead is not None
-        and _lead.unit_id is not None
-        and _lead.unit_id == current_user.unit_id
-    )
-    _reviewer_scope = is_admin or _manager_in_scope
-    _profile_editable = status in ("draft", "rejected", "revision_requested")
+    # PR #5 — per-document action permissions delegate to the
+    # DocumentActionPolicy class so the FE can_* flag matrix and the
+    # service-side _authorize_document_action gate are computed from a
+    # single source of truth. Update one place; both stay in sync.
+    from .admission_document_policy import DocumentActionPolicy
+    _doc_policy = DocumentActionPolicy.for_(profile, current_user)
 
     def _compute_document_permissions(
         doc_status: str,
         requires_upload: bool,
     ) -> dict[str, bool]:
-        """Per-document action flags for the current user.
+        """Per-document action flags via :class:`DocumentActionPolicy`.
 
-        Mirrors the route contracts exactly:
+        Route contracts mirrored:
         - Upload  : POST /admissions/{id}/documents/{code}/upload
                     officer assigned to the lead, profile in editable state,
                     doc expects an upload and isn't already verified/paper.
@@ -1201,34 +1164,14 @@ def _compute_frontend_fields(
                     officer assigned to the lead, paper-only doc (requires_upload=False),
                     status still missing.
         """
-        can_upload = bool(
-            requires_upload
-            and _profile_editable
-            and (is_owner or is_admin or _manager_in_scope)
-            and doc_status in ("missing", "rejected")
-        )
-        can_verify = bool(
-            _reviewer_scope and doc_status in ("uploaded", "paper_submitted")
-        )
-        can_reject = bool(
-            _reviewer_scope
-            and doc_status in ("uploaded", "paper_submitted", "verified")
-        )
-        can_reset = bool(
-            _reviewer_scope and doc_status != "missing"
-        )
-        can_mark_paper_submitted = bool(
-            (not requires_upload)
-            and _profile_editable
-            and (is_owner or is_admin or _manager_in_scope)
-            and doc_status == "missing"
-        )
         return {
-            "can_upload": can_upload,
-            "can_verify": can_verify,
-            "can_reject": can_reject,
-            "can_reset": can_reset,
-            "can_mark_paper_submitted": can_mark_paper_submitted,
+            "can_upload": _doc_policy.authorize("upload", doc_status, requires_upload),
+            "can_verify": _doc_policy.authorize("verify", doc_status, requires_upload),
+            "can_reject": _doc_policy.authorize("reject", doc_status, requires_upload),
+            "can_reset": _doc_policy.authorize("reset", doc_status, requires_upload),
+            "can_mark_paper_submitted": _doc_policy.authorize(
+                "paper_submitted", doc_status, requires_upload
+            ),
         }
 
     # Build documents_checklist
