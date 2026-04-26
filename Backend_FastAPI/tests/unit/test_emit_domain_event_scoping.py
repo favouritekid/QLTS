@@ -105,3 +105,54 @@ async def test_legacy_flag_off_bypasses_scoping():
         assert mock_sio.emit.call_count == 1
         call = mock_sio.emit.await_args_list[0]
         assert "room" not in call.kwargs
+
+
+# ---------------------------------------------------------------------------
+# _all_role_rooms helper — derives room list from UserRole enum so adding a
+# new role auto-picks up everywhere the helper is used (vs hardcoded list
+# drift). Memory: project_admission_audit_followups.md item #3.
+# ---------------------------------------------------------------------------
+
+
+def test_all_role_rooms_covers_every_userrole_value():
+    """Helper must return one ``role_<value>`` per UserRole enum entry —
+    no missing role, no stale entry, no extra junk."""
+    from app.core.constants import UserRole
+    from app.services.notification_dispatcher import _all_role_rooms
+
+    rooms = _all_role_rooms()
+    expected = {f"role_{role.value}" for role in UserRole}
+
+    assert set(rooms) == expected, (
+        f"Mismatch: rooms={rooms!r}, expected={expected!r}"
+    )
+    # No duplicates — each role appears exactly once.
+    assert len(rooms) == len(set(rooms))
+
+
+def test_all_role_rooms_includes_collaborator():
+    """Regression for memory finding: hardcoded list at
+    routers/admin/system.py:88 historically had 5 entries (admin /
+    manager / officer / accountant / user) but UserRole gained
+    COLLABORATOR — silent broadcast gap.
+
+    Helper must include collaborator so SYSTEM_ALERT reaches them.
+    """
+    from app.services.notification_dispatcher import _all_role_rooms
+
+    assert "role_collaborator" in _all_role_rooms()
+
+
+def test_all_role_rooms_room_format_matches_socket_manager_join():
+    """Room name format must mirror socket_manager.connect's auto-join
+    pattern (``f\"role_{user.role}\"``). If the helper used a different
+    prefix, dispatched events would land in rooms no SID is in →
+    silent failure.
+    """
+    from app.services.notification_dispatcher import _all_role_rooms
+
+    for room in _all_role_rooms():
+        assert room.startswith("role_"), f"Unexpected format: {room!r}"
+        # Suffix must be a non-empty role name (no spaces, no upper).
+        suffix = room[len("role_"):]
+        assert suffix and suffix.islower() and " " not in suffix
