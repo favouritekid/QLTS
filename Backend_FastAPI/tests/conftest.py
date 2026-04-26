@@ -348,6 +348,80 @@ async def manager_user_in_db(
 
 
 @pytest_asyncio.fixture(scope="function")
+async def seed_other_unit(setup_test_database):
+    """Create a SECOND organization unit for cross-unit IDOR scenarios.
+
+    Distinct from ``seed_lead_dependencies['unit_id']`` so a fixture
+    user attached here truly sits outside the seeded admission/lead
+    tree. ID is picked above the auto-increment range
+    (``TestOrgData.UNIT_2 = 9001``) to avoid collision.
+
+    Idempotent: returns the existing row if a previous test already
+    inserted UNIT_2 in the same DB session.
+    """
+    from app import models
+    log.info(
+        f"--- [FIXTURE] Ensuring second unit (id={TestOrgData.UNIT_2['id']}) ---"
+    )
+    # Idempotent insert in a single transaction frame: open ``begin()``,
+    # check existence, insert if missing. ``session.get(...)`` opens an
+    # implicit transaction on its own — calling ``session.begin()``
+    # afterwards triggers SQLAlchemy's "transaction already begun"
+    # error, so we wrap the whole get-then-insert under one explicit
+    # frame.
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            existing = await session.get(
+                models.OrganizationUnit, TestOrgData.UNIT_2["id"]
+            )
+            if existing is None:
+                unit = models.OrganizationUnit(
+                    id=TestOrgData.UNIT_2["id"],
+                    name=TestOrgData.UNIT_2["name"],
+                    type=TestOrgData.UNIT_2["type"],
+                )
+                session.add(unit)
+    return {"unit_id": TestOrgData.UNIT_2["id"]}
+
+
+@pytest_asyncio.fixture(scope="function")
+async def manager_other_unit_user_in_db(
+    setup_test_database,
+    seed_other_unit: dict,
+):
+    """Manager user in a DIFFERENT unit from the default
+    ``manager_user_in_db`` fixture.
+
+    Use for cross-unit IDOR tests — pair with
+    ``seed_lead_dependencies`` (which seeds the default unit + its
+    profiles) and exercise the contract that a manager outside the
+    profile's unit gets 404 on ``GET /admissions/{id}``,
+    ``available_actions`` lists no `assign_officer`, etc.
+
+    Inline equivalents of this pattern existed in
+    ``test_commission_api.py::manager_api_unit2`` and
+    ``test_collaborator_api.py::collab_in_unit2`` — lifted to conftest
+    so admission tests + future scope can DI rather than re-seed.
+
+    Memory tracker: ``project_admission_audit_followups`` item #5.
+    """
+    log.info(
+        "--- [FIXTURE] Creating manager user in OTHER unit "
+        f"({seed_other_unit['unit_id']}) ---"
+    )
+    user_info = await _create_user_and_role(
+        TestUsers.MANAGER_OTHER_UNIT,
+        "role:manager",
+        unit_id=seed_other_unit["unit_id"],
+    )
+    log.info(
+        f"--- [FIXTURE] Manager-other-unit created (ID: {user_info['id']}) "
+        f"in Unit {seed_other_unit['unit_id']} ---"
+    )
+    return user_info
+
+
+@pytest_asyncio.fixture(scope="function")
 async def officer_user_in_db(
     setup_test_database, seed_lead_dependencies: dict
 ):  # ✅ NHẬN fixture làm tham số

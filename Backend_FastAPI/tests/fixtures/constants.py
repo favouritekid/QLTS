@@ -204,6 +204,20 @@ class TestUsers:
         "status": "active",
     }
 
+    # Manager in a DIFFERENT organization unit from the default
+    # ``seed_lead_dependencies`` unit. Use with the
+    # ``manager_other_unit_user_in_db`` fixture for cross-unit IDOR
+    # tests (manager attempting to access a profile outside their
+    # unit). Distinct username/email so it can coexist with MANAGER
+    # in the same test database without unique constraint conflicts.
+    MANAGER_OTHER_UNIT = {
+        "username": "testmanager_unit2",
+        "email": "manager_unit2@example.com",
+        "password": "ManagerPassword!789",
+        "role": "manager",
+        "status": "active",
+    }
+
     # --- User Officer (Bổ sung) ---
     OFFICER = {
         "username": "testofficer",
@@ -293,6 +307,10 @@ class TestOrgData:
     """Dữ liệu mẫu cho Organization Units và MajorPrograms."""
 
     UNIT_1 = {"id": 1, "name": "Test Unit 1", "type": "Faculty"}
+    # Distinct second unit for cross-unit IDOR fixtures. ``id`` is
+    # picked above the seed_lead_dependencies range so it never
+    # collides with auto-allocated org unit IDs in the test DB.
+    UNIT_2 = {"id": 9001, "name": "Test Unit 2", "type": "department"}
     # ✅ FIX: Updated to match MajorProgram schema (added degree_level)
     MAJOR_1 = {
         "id": 1,
