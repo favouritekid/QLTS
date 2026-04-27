@@ -45,10 +45,30 @@ from ..utils.exceptions import (
     ValidationError,
 )
 from ..core.constants import UserRole
+from ..utils.csv_helpers import sanitize_csv_row
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admissions", tags=["Admissions"])
+
+
+# ADM-010: Single source of truth for payment_status enum values shared by
+# list, status-counts, and export endpoints. Repository helper silently
+# drops anything outside this set, so router-level validation is required
+# to keep the contract honest.
+ALLOWED_PAYMENT_STATUSES = ("paid", "unpaid", "partial", "no_fee")
+
+
+def _validate_payment_status(value: Optional[str]) -> None:
+    """Raise 400 if ``value`` is set but not in ALLOWED_PAYMENT_STATUSES."""
+    if value and value not in ALLOWED_PAYMENT_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid payment_status. Must be: "
+                + ", ".join(ALLOWED_PAYMENT_STATUSES)
+            ),
+        )
 
 
 def get_client_ip(request: Request) -> str:
@@ -109,9 +129,8 @@ async def list_admission_profiles(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid major_id format")
 
-    # Validate payment_status
-    if payment_status and payment_status not in ("paid", "unpaid", "partial", "no_fee"):
-        raise HTTPException(status_code=400, detail="Invalid payment_status. Must be: paid, unpaid, partial, no_fee")
+    # Validate payment_status (ADM-010: shared helper)
+    _validate_payment_status(payment_status)
 
     profiles, total_count = await admission_service.get_profiles(
         db=db,
@@ -180,6 +199,9 @@ async def get_status_counts(
             major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip()]
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid major_id format")
+
+    # Validate payment_status (ADM-010: keep parity with list/export)
+    _validate_payment_status(payment_status)
 
     return await admission_service.get_status_counts(
         db=db,
@@ -476,6 +498,9 @@ async def export_admissions_csv(
     statuses = [s.strip() for s in status.split(",")] if status else None
     major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip().isdigit()] if major_id else None
 
+    # Validate payment_status (ADM-010: keep parity with list/status-counts)
+    _validate_payment_status(payment_status)
+
     # Export path: no page cap, lightweight hydration (only completion_percent)
     profiles = await admission_service.get_profiles_for_export(
         db=db,
@@ -508,10 +533,12 @@ async def export_admissions_csv(
         "Ngày cập nhật",
     ])
 
-    # Data rows
+    # Data rows — sanitize_csv_row guards against formula/DDE injection
+    # via lead-controlled fields (full_name, email, phone, citizen_id,
+    # program name). See ADM-006 / app/utils/csv_helpers.py.
     for profile in profiles:
         lead = profile.lead
-        writer.writerow([
+        writer.writerow(sanitize_csv_row([
             profile.id,
             lead.full_name if lead else "",
             lead.email if lead else "",
@@ -522,7 +549,7 @@ async def export_admissions_csv(
             lead.offering.program.name if lead and lead.offering and lead.offering.program else "",
             profile.created_at.strftime("%Y-%m-%d %H:%M") if profile.created_at else "",
             profile.updated_at.strftime("%Y-%m-%d %H:%M") if profile.updated_at else "",
-        ])
+        ]))
 
     # Prepare response
     output.seek(0)
