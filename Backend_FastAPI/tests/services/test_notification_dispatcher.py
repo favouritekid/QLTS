@@ -108,6 +108,108 @@ class TestNotificationDispatcher:
         mock_domain_emit.assert_called_once()
         mock_channel_send.assert_called_once()
 
+    async def test_dispatch_suppresses_when_is_self_action_condition_set(
+        self,
+        db: AsyncSession,
+        officer_user_in_db: dict,
+        mocker,
+    ):
+        """v5: Admin can add condition ``is_self_action eq false`` on a
+        rule so the officer who self-assigns a lead doesn't get spammed.
+
+        The dispatcher injects ``is_self_action`` automatically when the
+        payload carries both ``actor_id`` and ``officer_id``. Condition
+        eval runs against this derived field and blocks the dispatch.
+        """
+        user_id = officer_user_in_db["id"]
+        event = SystemEvents.SYSTEM_ALERT  # any user-class event with a rule
+
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Lead assigned",
+            message_template="Should not arrive on self-assign",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            condition={"field": "is_self_action", "operator": "eq", "value": False},
+            enabled=True,
+        )
+        db.add(rule)
+        await db.flush()
+        db.add(models.NotificationAction(
+            rule_id=rule.id, step=1, channel="browser",
+            content_mode="inherit_default",
+        ))
+        await db.commit()
+
+        mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+        send_mock = mocker.patch(
+            "app.services.notification_dispatcher._send_via_channel",
+            new_callable=AsyncMock,
+            return_value=("browser", MagicMock(sent_count=0, failed_ids=[], success=True), None),
+        )
+
+        # actor == officer → dispatcher injects is_self_action=True →
+        # condition (is_self_action eq false) is NOT met → rule does
+        # not activate → no notification rows + no channel send.
+        payload = {"user_id": user_id, "actor_id": user_id, "officer_id": user_id}
+        notification_ids, callback = await dispatch(db, event, payload)
+        if callback:
+            await callback()
+
+        assert notification_ids == [], (
+            "Self-assign with is_self_action condition should block all notifications"
+        )
+        send_mock.assert_not_called()
+
+    async def test_dispatch_passes_when_actor_differs_from_officer(
+        self,
+        db: AsyncSession,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        mocker,
+    ):
+        """Different actor → ``is_self_action=False`` → condition met → notify."""
+        user_id = officer_user_in_db["id"]
+        actor_id = admin_user_in_db["id"]
+        event = SystemEvents.SYSTEM_ALERT
+
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Lead assigned",
+            message_template="Notify when actor differs",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            condition={"field": "is_self_action", "operator": "eq", "value": False},
+            enabled=True,
+        )
+        db.add(rule)
+        await db.flush()
+        db.add(models.NotificationAction(
+            rule_id=rule.id, step=1, channel="browser",
+            content_mode="inherit_default",
+        ))
+        await db.commit()
+
+        mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+        mocker.patch(
+            "app.services.notification_dispatcher._send_via_channel",
+            new_callable=AsyncMock,
+            return_value=("browser", MagicMock(sent_count=1, failed_ids=[], success=True), None),
+        )
+
+        payload = {"user_id": user_id, "actor_id": actor_id, "officer_id": user_id}
+        notification_ids, callback = await dispatch(db, event, payload)
+        if callback:
+            await callback()
+
+        assert len(notification_ids) == 1, (
+            "Recipient should still receive the notification when actor != officer"
+        )
+
     async def test_dispatch_deduplication(
         self, 
         db: AsyncSession, 
