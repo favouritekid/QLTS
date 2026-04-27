@@ -14,6 +14,8 @@ MASTER_ARCHITECTURE.md Compliance:
 from datetime import datetime, timezone
 from typing import Callable, Coroutine, List, Optional, Tuple, Any
 
+import structlog
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import UserRole
@@ -39,6 +41,9 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     PermissionDeniedError,
 )
+
+log = structlog.get_logger(__name__)
+
 
 # Type alias for post-commit callback
 PostCommitCallback = Callable[[], Coroutine[Any, Any, None]]
@@ -232,6 +237,97 @@ class AdmissionPathService:
         ``PUT /paths/{id}/criteria`` directly.
         """
         _check_lifecycle_guard(path, user)
+
+        # ADM-003 defensive clone:
+        # The alembic adm003path001 migration + UNIQUE constraint on
+        # admission_path.criteria_id should make ``criteria`` shared
+        # impossible going forward. We still detect-and-clone here so
+        # that (a) test data, (b) hand-edited dirty rows, or (c) any
+        # imports that bypassed the constraint do NOT silently mutate
+        # another path's criteria. Running the rebuild against a
+        # newly-cloned row also produces a clean, deterministic message
+        # in the API response instead of a raw IntegrityError.
+        if path.criteria:
+            shared_count = (
+                await self.db.execute(
+                    select(func.count(AdmissionPath.id)).where(
+                        AdmissionPath.criteria_id == path.criteria_id,
+                        AdmissionPath.id != path.id,
+                    )
+                )
+            ).scalar_one()
+            if shared_count > 0:
+                old_criteria_id = path.criteria_id
+                clone_code = f"CRIT_orig_{old_criteria_id}_path_{path.id}"
+
+                # Reuse a previous clone if one already exists for this
+                # path (defensive idempotency — same naming scheme as
+                # the migration).
+                existing = (
+                    await self.db.execute(
+                        select(AdmissionCriteria).where(
+                            AdmissionCriteria.code == clone_code
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if existing is None:
+                    source = path.criteria
+                    cloned = AdmissionCriteria(
+                        method_id=source.method_id,
+                        code=clone_code,
+                        name=source.name,
+                        min_gpa=source.min_gpa,
+                        min_score=source.min_score,
+                        conditions=source.conditions,
+                        is_active=source.is_active,
+                        required_subject_count=source.required_subject_count,
+                        subject_selection_mode=source.subject_selection_mode,
+                        scoring_method=source.scoring_method,
+                        max_possible_score=source.max_possible_score,
+                        min_subject_score=source.min_subject_score,
+                        policy_version=source.policy_version,
+                        effective_from=source.effective_from,
+                        effective_to=source.effective_to,
+                    )
+                    self.db.add(cloned)
+                    await self.db.flush()
+
+                    # Clone subject-group mappings so the new criteria
+                    # has the same allowed groups before we wipe + rebuild
+                    # them below.
+                    src_mappings = (
+                        await self.db.execute(
+                            select(CriteriaSubjectGroup).where(
+                                CriteriaSubjectGroup.criteria_id == old_criteria_id
+                            )
+                        )
+                    ).scalars().all()
+                    for m in src_mappings:
+                        self.db.add(
+                            CriteriaSubjectGroup(
+                                criteria_id=cloned.id,
+                                subject_group_id=m.subject_group_id,
+                            )
+                        )
+                    await self.db.flush()
+                    cloned_obj = cloned
+                else:
+                    cloned_obj = existing
+
+                log.warning(
+                    "admission_path.criteria was shared; cloned before mutate "
+                    "(ADM-003 defensive)",
+                    path_id=path.id,
+                    old_criteria_id=old_criteria_id,
+                    new_criteria_id=cloned_obj.id,
+                    shared_with_paths=shared_count,
+                )
+
+                path.criteria = cloned_obj
+                path.criteria_id = cloned_obj.id
+                self.db.add(path)
+                await self.db.flush()
 
         # 1. Update/Create Criteria
         if path.criteria:
