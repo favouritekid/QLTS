@@ -31,6 +31,7 @@ from ..core.deps import (
     CasbinAuth,  # ✅ Phase 2.2: Use standard alias
     get_admission_for_manager,
     get_admission_for_user,
+    get_admission_for_user_read,
 )
 from ..services import admission_service
 from ..services.notification_dispatcher import safe_dispatch, _rooms_for_admission, _rooms_for_lead
@@ -1253,12 +1254,18 @@ async def unclaim_admission_review(
 )
 async def get_fee_status(
     request: Request,
-    profile_id: int,
+    profile: models.AdmissionProfile = Depends(get_admission_for_user_read),  # Layer 3: IDOR
     current_user: models.User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(database.get_db),
 ):
     """
     Get application fee status for an admission profile.
+
+    **Authorization (3-tier IDOR via ``get_admission_for_user_read``):**
+    - Admin: any profile
+    - Manager: profiles in their unit
+    - Officer: profiles assigned to them in their unit
+    - Returns 404 (fake) for out-of-scope access.
 
     Returns:
     - requires_fee: Whether this profile requires application fee
@@ -1269,7 +1276,7 @@ async def get_fee_status(
     try:
         result = await admission_service.check_application_fee_status(
             db=db,
-            profile_id=profile_id,
+            profile_id=profile.id,
         )
         return result
     except ResourceNotFoundError as e:

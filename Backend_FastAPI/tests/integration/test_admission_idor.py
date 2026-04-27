@@ -10,15 +10,46 @@ Uses real database via fixtures.
 """
 
 import pytest
+import pytest_asyncio
 from datetime import datetime, timezone
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from app.security import get_password_hash
 
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture
+async def non_staff_user_same_unit_in_db(seed_lead_dependencies: dict):
+    """ADM-001 review fix: a ``role=user`` user that lives in the seeded
+    lead's unit. Used to verify the dependency role allow-list rejects
+    accountant / regular user / collaborator even when their ``unit_id``
+    matches the profile's unit (``get_current_active_user`` alone is not
+    enough to gate fee-status).
+    """
+    unit_id = seed_lead_dependencies["unit_id"]
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            user = models.User(
+                username="testuser_non_staff_idor",
+                email="non_staff_idor@test.com",
+                password_hash=get_password_hash("NonStaffPwd!123"),
+                role="user",
+                status="active",
+                unit_id=unit_id,
+            )
+            session.add(user)
+            await session.flush()
+            return {
+                "id": user.id,
+                "username": "testuser_non_staff_idor",
+                "password": "NonStaffPwd!123",
+                "unit_id": unit_id,
+            }
 
 
 # ==============================================================================
@@ -416,3 +447,145 @@ class TestOfficerAssignmentIDOR:
 
         assert response.status_code in [403, 404], \
             f"Officer should not submit unassigned lead's profile: {response.status_code}"
+
+
+# ==============================================================================
+# TEST: FEE-STATUS IDOR (ADM-001 regression)
+# ==============================================================================
+
+
+class TestFeeStatusIDOR:
+    """GET /admissions/{id}/fee-status must enforce 3-tier IDOR scope.
+
+    Regression for ADM-001: previously the route only required login, so any
+    authenticated user could read fee fields of profiles outside their scope.
+    """
+
+    async def test_cross_unit_officer_cannot_read_fee_status(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        unit_b_id = await create_second_unit()
+        lead_b = await create_test_lead(unit_b_id)
+        profile_b_id = await create_admission_profile(lead_b, "777700001111")
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+        response = await client.get(
+            f"/api/admissions/{profile_b_id}/fee-status",
+            headers=headers,
+        )
+        assert response.status_code == 404, (
+            "ADM-001 regression: officer must not read fee-status across units"
+        )
+
+    async def test_same_unit_unassigned_officer_cannot_read_fee_status(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        unit_id = seed_lead_dependencies["unit_id"]
+        # Lead in same unit but assigned to no one (or someone else)
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=None)
+        profile_id = await create_admission_profile(lead_id, "777700002222")
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+        response = await client.get(
+            f"/api/admissions/{profile_id}/fee-status",
+            headers=headers,
+        )
+        assert response.status_code == 404, (
+            "ADM-001 regression: officer must not read fee-status of unassigned profile"
+        )
+
+    async def test_cross_unit_manager_cannot_read_fee_status(
+        self,
+        client: AsyncClient,
+        manager_other_unit_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=None)
+        profile_id = await create_admission_profile(lead_id, "777700003333")
+
+        headers = await get_auth_headers(client, manager_other_unit_user_in_db)
+        response = await client.get(
+            f"/api/admissions/{profile_id}/fee-status",
+            headers=headers,
+        )
+        assert response.status_code == 404, (
+            "ADM-001 regression: cross-unit manager must not read fee-status"
+        )
+
+    async def test_admin_can_read_fee_status_any_unit(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        unit_b_id = await create_second_unit()
+        lead_b = await create_test_lead(unit_b_id)
+        profile_b_id = await create_admission_profile(lead_b, "777700004444")
+
+        headers = await get_auth_headers(client, admin_user_in_db)
+        response = await client.get(
+            f"/api/admissions/{profile_b_id}/fee-status",
+            headers=headers,
+        )
+        assert response.status_code == 200, (
+            f"Admin must read any unit's fee-status, got {response.status_code}"
+        )
+
+    async def test_assigned_officer_can_read_fee_status(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(
+            unit_id, assigned_officer_id=officer_user_in_db["id"]
+        )
+        profile_id = await create_admission_profile(lead_id, "777700005555")
+
+        headers = await get_auth_headers(client, officer_user_in_db)
+        response = await client.get(
+            f"/api/admissions/{profile_id}/fee-status",
+            headers=headers,
+        )
+        assert response.status_code == 200, (
+            f"Assigned officer must read fee-status, got {response.status_code}"
+        )
+
+    async def test_same_unit_non_staff_role_cannot_read_fee_status(
+        self,
+        client: AsyncClient,
+        non_staff_user_same_unit_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """ADM-001 review fix: a ``role=user`` user in the SAME unit as
+        the lead used to slip through because the dependency only special-
+        cased OFFICER. Now the role allow-list rejects anything outside
+        {ADMIN, MANAGER, OFFICER} up front with a fake 404 — even though
+        the route itself only uses ``get_current_active_user`` (no Casbin
+        gate).
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        lead_id = await create_test_lead(unit_id, assigned_officer_id=None)
+        profile_id = await create_admission_profile(lead_id, "777700006666")
+
+        headers = await get_auth_headers(client, non_staff_user_same_unit_in_db)
+        response = await client.get(
+            f"/api/admissions/{profile_id}/fee-status",
+            headers=headers,
+        )
+        # Dependency raises ResourceNotFoundError → 404. Treat 403 as
+        # acceptable in case a future Casbin gate lands on the route, but
+        # 200 must never happen.
+        assert response.status_code in (403, 404), (
+            "ADM-001 review fix: non-admission role with matching unit "
+            f"must NOT read fee-status; got {response.status_code} - "
+            f"{response.text[:200]}"
+        )
