@@ -113,18 +113,25 @@ async def get_subjects(
 @router.get("/subjects/{code}", response_model=SubjectResponse)
 async def get_subject_by_code(
     code: str,
+    active_only: bool = Depends(get_config_filter),
     repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
-    # current_user unused
 ):
-    """Get subject by code."""
+    """Get subject by code.
+
+    ADM-009: detail endpoint mirrors the list-scope filter — non-admin
+    callers must not see inactive items via the by-code route while the
+    list route hides them. ``active_only`` is True for non-admin per
+    ``get_config_filter``; an inactive item then 404s with the same
+    message as a missing one to avoid leaking existence.
+    """
     subject = await repo.get_subject_by_code(code)
-    
-    if not subject:
+
+    if not subject or (active_only and not subject.is_active):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Subject '{code}' not found"
         )
-    
+
     return SubjectResponse.model_validate(subject)
 
 
@@ -223,12 +230,17 @@ async def get_subject_groups(
 @router.get("/subject-groups/{code}", response_model=SubjectGroupResponse)
 async def get_subject_group_by_code(
     code: str,
+    active_only: bool = Depends(get_config_filter),
     repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
 ):
-    """Get subject group by code with subjects."""
+    """Get subject group by code with subjects.
+
+    ADM-009: see ``get_subject_by_code``. Inactive groups 404 for
+    non-admin to keep parity with the list-scope filter.
+    """
     group = await repo.get_subject_group_by_code(code, with_subjects=True)
-    
-    if not group:
+
+    if not group or (active_only and not group.is_active):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Subject group '{code}' not found"
@@ -355,18 +367,22 @@ async def get_admission_methods(
 @router.get("/methods/{code}", response_model=AdmissionMethodResponse)
 async def get_method_by_code(
     code: str,
+    active_only: bool = Depends(get_config_filter),
     repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
-    # current_user unused
 ):
-    """Get admission method by code."""
+    """Get admission method by code.
+
+    ADM-009: see ``get_subject_by_code``. Inactive methods 404 for
+    non-admin to keep parity with the list-scope filter.
+    """
     method = await repo.get_method_by_code(code)
-    
-    if not method:
+
+    if not method or (active_only and not method.is_active):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Method '{code}' not found"
         )
-    
+
     return AdmissionMethodResponse.model_validate(method)
 
 
@@ -809,18 +825,22 @@ def _build_doc_group_response(group) -> Optional[SharedDocumentGroupResponse]:
 @router.get("/document-groups/shared/{offering_type_id}", response_model=Optional[SharedDocumentGroupResponse])
 async def get_shared_document_group(
     offering_type_id: int,
+    active_only: bool = Depends(get_config_filter),
     db: AsyncSession = Depends(get_db),
-    # Read access allowed for all
 ):
     """
     Get shared document group configuration for an Offering Type.
+
+    ADM-009: non-admin must not see inactive shared document groups.
+    Returns ``None`` (the list-shape contract) when filtered out, same
+    as when no group exists for the offering type.
     """
     service = AdmissionConfigService(db)
     group = await service.get_shared_document_group(offering_type_id)
-    
-    if not group:
+
+    if not group or (active_only and not group.is_active):
         return None
-        
+
     return _build_doc_group_response(group)
 
 

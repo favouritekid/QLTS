@@ -22,6 +22,7 @@ from app.core.constants import UserRole
 from app.core.deps import (
     get_current_active_user,
     check_permission,
+    require_admin,
     require_admin_or_manager,
 )
 from app.schemas.admission_path import (
@@ -409,15 +410,20 @@ async def update_admission_documents(
 @router.post(
     "/paths/{path_id}/activate",
     response_model=AdmissionPathResponse,
-    summary="Activate admission path"
+    summary="Activate admission path (admin-only)"
 )
 async def activate_admission_path(
     path: models.AdmissionPath = Depends(get_admission_path_for_user),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    current_user: models.User = Depends(require_admin),  # ADM-008: admin-only per Q3=a
 ):
     """
     Activate an admission path.
+
+    **Authorization (ADM-008 / Q3=a):** Admin only. Manager can create/edit
+    draft paths but cannot activate or deactivate — Admin "approves =
+    activates". Manager attempting this route gets 403 from
+    ``require_admin``.
 
     Validation:
     - Must have criteria
@@ -446,15 +452,18 @@ async def activate_admission_path(
 @router.post(
     "/paths/{path_id}/deactivate",
     response_model=AdmissionPathResponse,
-    summary="Deactivate admission path"
+    summary="Deactivate admission path (admin-only)"
 )
 async def deactivate_admission_path(
     path: models.AdmissionPath = Depends(get_admission_path_for_user),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    current_user: models.User = Depends(require_admin),  # ADM-008: admin-only per Q3=a
 ):
     """
     Deactivate an active admission path.
+
+    **Authorization (ADM-008 / Q3=a):** Admin only. Symmetric to activate —
+    once a path goes live, only Admin may take it back down.
 
     IDOR: Protected via get_admission_path_for_user dependency.
     """

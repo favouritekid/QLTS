@@ -37,6 +37,7 @@ from app.utils.exceptions import (
     ResourceNotFoundError,
     DuplicateResourceError,
     BusinessRuleViolation,
+    PermissionDeniedError,
 )
 
 # Type alias for post-commit callback
@@ -435,26 +436,38 @@ class AdmissionPathService:
     ) -> Tuple[AdmissionPath, PostCommitCallback]:
         """
         Activate an AdmissionPath.
-        
+
+        ADM-008 (Q3=a): admin-only. Manager creates/edits drafts but
+        cannot activate — Admin "approves = activates". Service-level
+        gate is defense-in-depth; the route also guards via
+        ``Depends(require_admin)``.
+
         Raises:
-            BusinessRuleViolation: If validation fails
+            PermissionDeniedError: If caller is not admin
+            BusinessRuleViolation: If readiness validation fails
         """
+        if user.role != UserRole.ADMIN:
+            raise PermissionDeniedError(
+                "Chỉ admin được activate admission path. "
+                "Manager tạo/sửa draft, admin duyệt = activate."
+            )
+
         can_activate, errors = await self.validate_activation(path)
-        
+
         if not can_activate:
             raise BusinessRuleViolation(
                 f"Cannot activate path: {'; '.join(errors)}"
             )
-        
+
         # Activate
         path = await self.repo.update(path, {
             "status": "active",
             "activated_at": datetime.now(timezone.utc),
             "activated_by": user.id,
         })
-        
+
         return path, _noop_callback
-    
+
     async def deactivate_path(
         self,
         path: AdmissionPath,
@@ -462,19 +475,27 @@ class AdmissionPathService:
     ) -> Tuple[AdmissionPath, PostCommitCallback]:
         """
         Deactivate an active AdmissionPath.
-        
+
+        ADM-008 (Q3=a): admin-only, symmetric to ``activate_path``.
+
         Raises:
+            PermissionDeniedError: If caller is not admin
             BusinessRuleViolation: If path is not active
         """
+        if user.role != UserRole.ADMIN:
+            raise PermissionDeniedError(
+                "Chỉ admin được deactivate admission path."
+            )
+
         if path.status != "active":
             raise BusinessRuleViolation(
                 f"Cannot deactivate path with status '{path.status}'"
             )
-        
+
         path = await self.repo.update(path, {
             "status": "inactive",
         })
-        
+
         return path, _noop_callback
     
     async def archive_path(
