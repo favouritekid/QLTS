@@ -37,14 +37,14 @@ export default function AlertBanner() {
   if (!hasIssue || dismissed) return null;
 
   const messages: string[] = [];
-  if (failRate > FAIL_RATE_ALERT_THRESHOLD) messages.push(`Failure rate ${(failRate * 100).toFixed(0)}%`);
+  if (failRate > FAIL_RATE_ALERT_THRESHOLD) messages.push(`Tỷ lệ lỗi ${(failRate * 100).toFixed(0)}%`);
   if (openBreakers.length > 0) {
     // H6: channel names are backend enum values, but escape via textContent for safety
     const channelNames = openBreakers.map((b) => String(b.channel)).join(", ");
-    messages.push(`Breaker open: ${channelNames}`);
+    messages.push(`Ngắt mạch kênh: ${channelNames}`);
   }
-  if (queued > BACKLOG_ALERT_THRESHOLD) messages.push(`Backlog: ${queued} queued`);
-  if (alertCount > 0 && messages.length === 0) messages.push(`${alertCount} alert(s) active`);
+  if (queued > BACKLOG_ALERT_THRESHOLD) messages.push(`Tồn đọng: ${queued} mục đang chờ`);
+  if (alertCount > 0 && messages.length === 0) messages.push(`${alertCount} cảnh báo đang hoạt động`);
 
   return (
     <div role="alert" className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
@@ -52,7 +52,7 @@ export default function AlertBanner() {
       <span className="flex-1">{messages.join(" · ")}</span>
       <button
         onClick={handleDismiss}
-        aria-label="Dismiss alert"
+        aria-label="Đóng cảnh báo"
         className="shrink-0 rounded p-1 hover:bg-red-100 dark:hover:bg-red-900"
       >
         <X className="h-4 w-4" />

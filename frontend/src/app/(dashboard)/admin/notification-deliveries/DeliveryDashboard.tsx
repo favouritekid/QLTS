@@ -5,7 +5,7 @@
  *
  * Overview: charts + health panel + alert banner + top events
  * Deliveries: existing DeliveryOpsTable
- * Configuration: breaker states + quota readonly view
+ * Channels: breaker states + quota readonly view (per-channel focus)
  */
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -20,7 +20,7 @@ export default function DeliveryDashboard() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight" data-testid="dashboard-heading">Delivery Monitoring</h1>
+        <h1 className="text-2xl font-bold tracking-tight" data-testid="dashboard-heading">Giám sát gửi thông báo</h1>
         <p className="text-muted-foreground">
           Theo dõi sức khỏe hệ thống thông báo
         </p>
@@ -31,9 +31,9 @@ export default function DeliveryDashboard() {
 
       <Tabs defaultValue="overview" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="deliveries">Deliveries</TabsTrigger>
-          <TabsTrigger value="configuration">Configuration</TabsTrigger>
+          <TabsTrigger value="overview">Tổng quan</TabsTrigger>
+          <TabsTrigger value="deliveries">Lịch sử gửi</TabsTrigger>
+          <TabsTrigger value="configuration">Kênh</TabsTrigger>
         </TabsList>
 
         {/* Overview tab */}
@@ -48,7 +48,9 @@ export default function DeliveryDashboard() {
           <DeliveryOpsTable />
         </TabsContent>
 
-        {/* Configuration tab — breakers + quotas readonly */}
+        {/* Channels tab — breakers + quotas readonly (per-channel focus).
+            Tab value kept as "configuration" to preserve any deep links /
+            test selectors; only the user-visible label changed. */}
         <TabsContent value="configuration" className="space-y-6">
           <ChannelHealthPanel />
         </TabsContent>

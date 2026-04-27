@@ -65,7 +65,7 @@ const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secon
   delivered: { label: "Đã nhận", variant: "default" },
   read: { label: "Đã đọc", variant: "default" },
   failed: { label: "Thất bại", variant: "destructive" },
-  dead_lettered: { label: "Dead Letter", variant: "destructive" },
+  dead_lettered: { label: "Hết hạn xử lý", variant: "destructive" },
   skipped: { label: "Bỏ qua", variant: "outline" },
 };
 
@@ -140,7 +140,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
-            Delivery Tracking
+            Theo dõi gửi thông báo
           </h1>
           <p className="text-muted-foreground">
             Theo dõi trạng thái gửi thông báo theo kênh
@@ -152,7 +152,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Tổng deliveries</CardDescription>
+            <CardDescription>Tổng số bản gửi</CardDescription>
             <CardTitle className="text-3xl">{stats?.total ?? total}</CardTitle>
           </CardHeader>
         </Card>
@@ -174,7 +174,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Success Rate</CardDescription>
+            <CardDescription>Tỷ lệ thành công</CardDescription>
             <CardTitle className="text-3xl">
               {stats?.success_rate != null ? `${stats.success_rate}%` : "—"}
             </CardTitle>
@@ -195,7 +195,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Lọc theo event..."
+                placeholder="Lọc theo sự kiện..."
                 value={eventFilter}
                 onChange={(e) => {
                   setEventFilter(e.target.value);
@@ -241,7 +241,7 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
                 <SelectItem value="sent">Đã gửi</SelectItem>
                 <SelectItem value="delivered">Đã nhận</SelectItem>
                 <SelectItem value="failed">Thất bại</SelectItem>
-                <SelectItem value="dead_lettered">Dead Letter</SelectItem>
+                <SelectItem value="dead_lettered">Hết hạn xử lý</SelectItem>
                 <SelectItem value="skipped">Bỏ qua</SelectItem>
               </SelectContent>
             </Select>
@@ -304,12 +304,12 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[160px]">Thời gian</TableHead>
-                  <TableHead>Event</TableHead>
+                  <TableHead>Sự kiện</TableHead>
                   <TableHead className="w-[100px]">Kênh</TableHead>
                   <TableHead>Người nhận</TableHead>
                   <TableHead className="w-[110px]">Trạng thái</TableHead>
                   <TableHead>Lỗi</TableHead>
-                  <TableHead className="w-[80px]">Actions</TableHead>
+                  <TableHead className="w-[80px]">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -349,9 +349,10 @@ export default function DeliveryOpsTable({ initialData }: DeliveryOpsTableProps)
                             size="sm"
                             className="h-7 text-xs"
                             onClick={() => handleReplay(d.id)}
+                            aria-label="Gửi lại"
                             disabled={replayMutation.isPending}
                           >
-                            Replay
+                            Gửi lại
                           </Button>
                         )}
                       </TableCell>
