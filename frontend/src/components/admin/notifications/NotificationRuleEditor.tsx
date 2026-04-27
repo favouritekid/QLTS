@@ -11,7 +11,7 @@
  */
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -239,9 +239,20 @@ export function NotificationRuleEditor({
   const titleTemplate = form.watch("title_template");
   const messageTemplate = form.watch("message_template");
 
-  // Reset condition state on event change (only if not hydrating)
+  // Reset condition state when the user picks a different event.
+  // `null` sentinel = "not yet observed" so the first run after
+  // edit-mode hydration (or the first run in create mode) only records
+  // the current event without resetting — preventing the just-hydrated
+  // condition state from being wiped when `isHydrated` flips true.
+  const prevSelectedEvent = useRef<string | null>(null);
   useEffect(() => {
     if (isEditMode && !isHydrated) return;
+    if (prevSelectedEvent.current === null) {
+      prevSelectedEvent.current = selectedEvent;
+      return;
+    }
+    if (prevSelectedEvent.current === selectedEvent) return;
+    prevSelectedEvent.current = selectedEvent;
     setConditionField("");
     setConditionOperator("eq");
     setConditionValue("");
