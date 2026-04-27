@@ -399,10 +399,15 @@ async def update_rule(
             log.warning("Unknown event for condition validation", event=event_name)
             raise BadRequest(f"Unknown event '{event_name}' — condition validation failed. Verify event name.")
 
+    # Fields whose model column is nullable — admin can clear them by
+    # explicitly sending `null`. Other fields skip null (treated as
+    # "field not changed" rather than "wipe a non-nullable column").
+    _CLEARABLE_FIELDS = {"condition", "link_template", "template_id"}
     for field, value in update_data.items():
-        if value is not None:
-            setattr(rule, field, value)
-            updated_fields.append(field)
+        if value is None and field not in _CLEARABLE_FIELDS:
+            continue
+        setattr(rule, field, value)
+        updated_fields.append(field)
 
     # Handle actions update
     if rule_update.actions is not None:

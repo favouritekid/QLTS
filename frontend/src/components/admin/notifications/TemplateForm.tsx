@@ -316,7 +316,10 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Danh mục</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    {/* `key` forces remount when value changes from undefined→string
+                        post-mount (form.reset after async template fetch). Without
+                        it Radix Select stays stuck on the placeholder. */}
+                    <Select key={field.value ?? "__empty__"} value={field.value} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Select a category" />

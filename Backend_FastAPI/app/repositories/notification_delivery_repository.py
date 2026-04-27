@@ -572,7 +572,11 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
                 "event": r[0],
                 "total": r[1],
                 "failed": r[2],
-                "fail_rate": round(r[2] / r[1] * 100, 1) if r[1] > 0 else 0.0,
+                # Returned as ratio (0–1) to match the convention used by
+                # `get_failure_rate` and the frontend `TopEventsTable` /
+                # `AlertBanner` consumers, which apply ×100 themselves. The
+                # earlier `* 100` here caused a "5000.0%" double-percent display.
+                "fail_rate": round(r[2] / r[1], 4) if r[1] > 0 else 0.0,
             }
             for r in rows
         ]
