@@ -174,8 +174,30 @@ _LEAD_EVENTS: tuple = (
             _var("lead_name", "string", "Tên lead", False),
             _var("lead_phone", "string", "SĐT lead", False),
             _var("offering_name", "string", "Tên chương trình", False),
+            # v5: Derived flag auto-injected by the dispatcher when
+            # ``actor_id == officer_id``. Admin can add a condition
+            # ``is_self_action eq false`` in the rule wizard to
+            # suppress notifications when an officer self-assigns a
+            # lead (avoid self-spam).
+            _var(
+                "is_self_action",
+                "boolean",
+                "True nếu officer tự assign lead cho chính mình. Dùng để filter self-spam qua condition.",
+                False,
+            ),
         ),
-        condition_fields=_ACTOR_CONDS + _LEAD_CONDS,
+        # ``is_self_action`` is also exposed as a condition field so the
+        # admin wizard can offer it in the rule builder dropdown and the
+        # rule-CRUD validator accepts ``{field: "is_self_action", ...}``
+        # without rejecting it as unknown. Boolean operators only.
+        condition_fields=_ACTOR_CONDS + _LEAD_CONDS + (
+            _cond(
+                "is_self_action",
+                "boolean",
+                "Officer tự assign lead cho chính mình (dispatcher derives from actor_id == officer_id)",
+                _OPS_BOOL,
+            ),
+        ),
         default_resolver="lead_owner",
         allowed_resolvers=_LEAD_RESOLVERS,
         default_channels=("browser", "email"),

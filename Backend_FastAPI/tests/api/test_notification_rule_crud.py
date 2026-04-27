@@ -115,6 +115,65 @@ class TestNotificationRuleCrudApi:
         # Status follows the env flag — in test it's typically off → "planned".
         assert zalo_bot["status"] in {"live", "planned"}
 
+        # v5: ``is_self_action`` is a derived boolean condition field on
+        # LEAD_ASSIGNED. The wizard reads this list to populate the
+        # condition-builder dropdown; backend validation rejects any
+        # condition referencing a field NOT in this list. Pin the shape.
+        lead_assigned_event = lead_assigned  # alias for readability
+        cond_fields = lead_assigned_event.get("condition_fields", [])
+        is_self = next(
+            (cf for cf in cond_fields if cf.get("path") == "is_self_action"),
+            None,
+        )
+        assert is_self is not None, (
+            "lead_assigned.condition_fields must expose is_self_action so the "
+            "admin wizard can offer it for self-exclude conditions"
+        )
+        assert is_self.get("type") == "boolean", (
+            "is_self_action must be typed boolean — wizard renders true/false"
+        )
+        ops = set(is_self.get("operators", []))
+        assert {"eq", "ne"} <= ops, (
+            f"is_self_action needs eq/ne operators, got {sorted(ops)}"
+        )
+
+    async def test_create_rule_with_is_self_action_condition_accepted(
+        self, client: AsyncClient, admin_token_headers: dict,
+    ):
+        """v5: rule CRUD accepts ``{is_self_action eq false}`` as the
+        admin's path to suppress officer self-spam without code change.
+        """
+        body = {
+            "event": "lead_assigned",
+            "title_template": "Lead mới",
+            "message_template": "Bạn có lead mới: ${lead_name}",
+            "notification_type": "info",
+            "recipient_config": {"resolver_type": "lead_owner", "params": {}},
+            "condition": {
+                "field": "is_self_action",
+                "operator": "eq",
+                "value": False,
+            },
+            "actions": [
+                {"step": 1, "channel": "browser", "delay_minutes": 0,
+                 "content_mode": "inherit_default"},
+            ],
+            "enabled": False,  # don't activate — keep test isolated
+        }
+        resp = await client.post(
+            "/api/notification-rules",
+            headers=admin_token_headers,
+            json=body,
+        )
+        # 200/201 = created; 409 = lead_assigned already has a rule (acceptable
+        # — an existing rule means the validator accepted the condition shape
+        # too). Anything else (400/422) means the validator wrongly rejected
+        # is_self_action as an unknown condition field.
+        assert resp.status_code in (200, 201, 409), (
+            f"is_self_action condition rejected by rule CRUD: "
+            f"status={resp.status_code} body={resp.text}"
+        )
+
     async def test_list_rules_returns_paginated(
         self, client: AsyncClient, admin_token_headers: dict,
     ):

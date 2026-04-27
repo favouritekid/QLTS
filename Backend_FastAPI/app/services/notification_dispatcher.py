@@ -711,6 +711,23 @@ async def dispatch(
         channels=config.channel_values
     )
 
+    # v5: Inject ``is_self_action`` derived field so admins can add a
+    # condition like ``is_self_action eq false`` to suppress notifications
+    # when the actor and the recipient are the same person (officer
+    # self-assigns a lead → don't spam themselves).
+    #
+    # We compute this from payload alone (NOT from resolver output) so it
+    # is available before condition eval. Currently only events whose
+    # payload contains both ``actor_id`` and ``officer_id`` are covered —
+    # that's LEAD_ASSIGNED today. Other events that want this filter can
+    # adopt by including ``officer_id`` in their payload, or via a future
+    # field-vs-field condition operator.
+    if "is_self_action" not in payload:
+        actor_id = payload.get("actor_id")
+        officer_id = payload.get("officer_id")
+        if isinstance(actor_id, int) and isinstance(officer_id, int):
+            payload["is_self_action"] = (actor_id == officer_id)
+
     # Step 1.5: ✅ PHASE 2.3: Check activation condition (database rules only)
     # Phase 2: Build evaluation context (nested dicts) for condition evaluation
     if rule_source == "database" and hasattr(config, 'should_activate'):
