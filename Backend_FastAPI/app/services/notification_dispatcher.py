@@ -777,6 +777,29 @@ async def dispatch(
                 resolved = []
         action_user_map[action.step] = resolved
 
+    # v5: Exclude the actor from their own notifications. Officer self-assigns
+    # a lead → don't spam themselves. Manager self-creates a lead → same.
+    # Applies universally because every current EventDefinition with a
+    # ``user_id_int`` actor follows the "tell others, not the actor" pattern.
+    # If a future event genuinely needs to notify the actor (e.g. an audit
+    # confirmation), gate this with a per-event opt-out flag — none today.
+    actor_id = payload.get("actor_id")
+    if isinstance(actor_id, int):
+        excluded_count = 0
+        for step in list(action_user_map.keys()):
+            before = action_user_map[step]
+            after = [uid for uid in before if uid != actor_id]
+            if len(after) != len(before):
+                excluded_count += len(before) - len(after)
+                action_user_map[step] = after
+        if excluded_count:
+            log.debug(
+                "Excluded actor from recipients",
+                event_type=event.value,
+                actor_id=actor_id,
+                excluded_count=excluded_count,
+            )
+
     all_internal_user_ids = sorted(set(uid for uids in action_user_map.values() for uid in uids))
 
     if not all_internal_user_ids and not has_external_actions:

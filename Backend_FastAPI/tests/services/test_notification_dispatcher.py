@@ -108,6 +108,104 @@ class TestNotificationDispatcher:
         mock_domain_emit.assert_called_once()
         mock_channel_send.assert_called_once()
 
+    async def test_dispatch_excludes_actor_self_assignment(
+        self,
+        db: AsyncSession,
+        officer_user_in_db: dict,
+        mocker,
+    ):
+        """v5: Actor must not receive notification of their own action.
+
+        Officer self-assigns a lead → don't spam themselves. Generic
+        across every event with ``actor_id``: dispatcher filters the
+        actor out of the resolved recipient list before persistence.
+        """
+        user_id = officer_user_in_db["id"]
+        event = SystemEvents.SYSTEM_ALERT
+
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Self-action",
+            message_template="Should not arrive in inbox",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=True,
+        )
+        db.add(rule)
+        await db.flush()
+        db.add(models.NotificationAction(
+            rule_id=rule.id, step=1, channel="browser",
+            content_mode="inherit_default",
+        ))
+        await db.commit()
+
+        mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+        mocker.patch(
+            "app.services.notification_dispatcher._send_via_channel",
+            new_callable=AsyncMock,
+            return_value=("browser", MagicMock(sent_count=0, failed_ids=[], success=True), None),
+        )
+
+        # actor_id == user_id → resolver returns [user_id], dispatcher
+        # then filters it out → no notification rows, no channel send.
+        payload = {"user_id": user_id, "actor_id": user_id}
+        notification_ids, callback = await dispatch(db, event, payload)
+        if callback:
+            await callback()
+
+        assert notification_ids == [], (
+            f"Actor {user_id} should be excluded from their own notification, "
+            f"got ids: {notification_ids}"
+        )
+
+    async def test_dispatch_keeps_recipient_when_actor_is_different(
+        self,
+        db: AsyncSession,
+        officer_user_in_db: dict,
+        admin_user_in_db: dict,
+        mocker,
+    ):
+        """Different actor → recipient still notified (no over-exclusion)."""
+        user_id = officer_user_in_db["id"]
+        actor_id = admin_user_in_db["id"]
+        event = SystemEvents.SYSTEM_ALERT
+
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Different actor",
+            message_template="Recipient should still get this",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=True,
+        )
+        db.add(rule)
+        await db.flush()
+        db.add(models.NotificationAction(
+            rule_id=rule.id, step=1, channel="browser",
+            content_mode="inherit_default",
+        ))
+        await db.commit()
+
+        mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+        mocker.patch(
+            "app.services.notification_dispatcher._send_via_channel",
+            new_callable=AsyncMock,
+            return_value=("browser", MagicMock(sent_count=1, failed_ids=[], success=True), None),
+        )
+
+        payload = {"user_id": user_id, "actor_id": actor_id}
+        notification_ids, callback = await dispatch(db, event, payload)
+        if callback:
+            await callback()
+
+        assert len(notification_ids) == 1, (
+            "Officer should still be notified when actor (admin) is a different user"
+        )
+
     async def test_dispatch_deduplication(
         self, 
         db: AsyncSession, 
