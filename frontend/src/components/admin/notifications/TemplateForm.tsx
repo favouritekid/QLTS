@@ -71,7 +71,7 @@ const CATEGORIES = [
 ];
 
 const formSchema = z.object({
-  name: z.string().min(1, "Name is required").max(100, "Name must be under 100 characters"),
+  name: z.string().min(1, "Tên template là bắt buộc").max(100, "Tên template tối đa 100 ký tự"),
   template_code: z.string().min(1, "Mã template là bắt buộc").max(100, "Mã template tối đa 100 ký tự"),
   description: z.string().optional(),
   title_template: z.string().min(1, "Title template is required").max(255),
@@ -176,7 +176,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
           template_type: data.template_type,
         };
         await updateMutation.mutateAsync({ templateId, data: updateData });
-        toast.success("Template updated successfully");
+        toast.success("Đã cập nhật template");
       } else {
         // Create new template
         const createData: NotificationTemplateCreate = {
@@ -193,12 +193,12 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
           is_system: data.is_system,
         };
         await createMutation.mutateAsync(createData);
-        toast.success("Template created successfully");
+        toast.success("Đã tạo template mới");
       }
       onOpenChange(false);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
-      toast.error(err.response?.data?.detail || `Failed to ${isEditMode ? "update" : "create"} template`);
+      toast.error(err.response?.data?.detail || (isEditMode ? "Không thể cập nhật template" : "Không thể tạo template"));
     }
   };
 
@@ -208,7 +208,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
 
     const currentVariables = form.getValues("variables") || [];
     if (currentVariables.includes(trimmed)) {
-      toast.warning(`Variable "${trimmed}" already exists`);
+      toast.warning(`Biến "${trimmed}" đã tồn tại`);
       return;
     }
 
@@ -238,12 +238,12 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {isEditMode ? "Edit Template" : "Create Template"}
+            {isEditMode ? "Chỉnh sửa template" : "Tạo template mới"}
           </DialogTitle>
           <DialogDescription>
             {isEditMode
-              ? "Update the notification template. Changes will affect all rules using this template."
-              : "Create a reusable notification template that can be shared across multiple rules."}
+              ? "Cập nhật template thông báo. Thay đổi sẽ áp dụng cho tất cả rule đang dùng template này."
+              : "Tạo template tái sử dụng để dùng chung cho nhiều rule thông báo."}
           </DialogDescription>
         </DialogHeader>
 
@@ -262,10 +262,10 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                   <FormItem>
                     <FormLabel>Tên template *</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., lead_assignment" {...field} />
+                      <Input placeholder="VD: Lead được phân công" {...field} />
                     </FormControl>
                     <FormDescription>
-                      Unique identifier for this template (used internally)
+                      Tên dễ đọc cho admin (dùng trong danh sách)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -299,7 +299,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <FormLabel>Mô tả</FormLabel>
                     <FormControl>
                       <Textarea
-                        placeholder="Human-readable description for administrators"
+                        placeholder="Mô tả ngắn gọn để admin dễ tra cứu"
                         rows={2}
                         {...field}
                       />
@@ -322,7 +322,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <Select key={field.value ?? "__empty__"} value={field.value} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select a category" />
+                          <SelectValue placeholder="Chọn danh mục..." />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -334,7 +334,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                       </SelectContent>
                     </Select>
                     <FormDescription>
-                      Organize templates by category (e.g., lead, consultation)
+                      Phân loại template theo nhóm sự kiện (Lead, Tư vấn, ...)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -404,12 +404,12 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <FormLabel>Template tiêu đề *</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g., Lead assigned: $lead_name"
+                        placeholder="VD: Lead được phân công: $lead_name"
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      Use $variable_name for placeholders (e.g., $lead_name)
+                      Dùng $tên_biến để chèn placeholder (VD: $lead_name)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -425,13 +425,13 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <FormLabel>Template nội dung *</FormLabel>
                     <FormControl>
                       <Textarea
-                        placeholder="e.g., You have been assigned to lead $lead_name (Phone: $lead_phone)"
+                        placeholder="VD: Bạn đã được phân công lead $lead_name (SĐT: $lead_phone)"
                         rows={4}
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      Use $variable_name for placeholders
+                      Dùng $tên_biến để chèn placeholder
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -447,12 +447,12 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                     <FormLabel>Template đường dẫn</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g., /leads/$lead_id"
+                        placeholder="VD: /leads/$lead_id"
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      Optional navigation link with placeholders
+                      Đường dẫn điều hướng (tuỳ chọn) — có thể chứa placeholder
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -465,12 +465,12 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                 name="variables"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Template Variables</FormLabel>
+                    <FormLabel>Biến của template</FormLabel>
                     <div className="space-y-2">
                       {/* Variable input */}
                       <div className="flex gap-2">
                         <Input
-                          placeholder="e.g., lead_name, officer_id"
+                          placeholder="VD: lead_name, officer_id"
                           value={variableInput}
                           onChange={(e) => setVariableInput(e.target.value)}
                           onKeyDown={handleKeyDown}
@@ -505,7 +505,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                       )}
                     </div>
                     <FormDescription>
-                      List of variables available in this template (for documentation)
+                      Danh sách biến có thể dùng trong template (dùng làm tài liệu)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -526,11 +526,11 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                       />
                     </FormControl>
                     <div className="space-y-1 leading-none">
-                      <FormLabel>System Template</FormLabel>
+                      <FormLabel>Template hệ thống</FormLabel>
                       <FormDescription>
                         {isEditMode
-                          ? "System flag cannot be changed after template creation"
-                          : "System templates cannot be deleted and are protected from accidental removal"}
+                          ? "Cờ template hệ thống không thể đổi sau khi tạo"
+                          : "Template hệ thống không bị xoá để tránh mất dữ liệu ngoài ý muốn"}
                       </FormDescription>
                     </div>
                   </FormItem>

@@ -66,13 +66,13 @@ import type { NotificationTemplate } from "@/types/api.types";
 import { TemplateForm } from "./TemplateForm";
 
 const CATEGORIES = [
-  { value: "all", label: "All Categories" },
+  { value: "all", label: "Tất cả danh mục" },
   { value: "lead", label: "Lead" },
-  { value: "consultation", label: "Consultation" },
-  { value: "application", label: "Application" },
-  { value: "finance", label: "Finance" },
-  { value: "dorm", label: "Dorm" },
-  { value: "system", label: "System" },
+  { value: "consultation", label: "Tư vấn" },
+  { value: "application", label: "Hồ sơ" },
+  { value: "finance", label: "Tài chính" },
+  { value: "dorm", label: "Ký túc xá" },
+  { value: "system", label: "Hệ thống" },
   { value: "asset", label: "Tài sản" },
   { value: "security", label: "Bảo mật" },
   { value: "pipeline", label: "Pipeline" },
@@ -119,11 +119,11 @@ export function TemplateList({ initialData }: TemplateListProps) {
 
     try {
       await deleteMutation.mutateAsync(deleteTemplateId);
-      toast.success("Template deleted successfully");
+      toast.success("Đã xoá template");
       setDeleteTemplateId(null);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
-      toast.error(err.response?.data?.detail || "Failed to delete template");
+      toast.error(err.response?.data?.detail || "Không thể xoá template");
     }
   };
 
@@ -168,32 +168,32 @@ export function TemplateList({ initialData }: TemplateListProps) {
         <div>
           <h1 className="text-3xl font-bold font-display tracking-tight flex items-center gap-2">
             <FileText className="h-8 w-8" />
-            Notification Templates
+            Mẫu thông báo
           </h1>
           <p className="text-muted-foreground">
-            Manage reusable templates for notification rules
+            Quản lý các template tái sử dụng cho rule thông báo
           </p>
         </div>
         <Button onClick={handleCreateClick}>
           <Plus className="mr-2 h-4 w-4" />
-          Create Template
+          Tạo template
         </Button>
       </div>
 
       {/* Filters */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Filters</CardTitle>
+          <CardTitle className="text-lg">Bộ lọc</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Search */}
             <div className="space-y-2">
-              <label className="text-sm font-medium">Search</label>
+              <label className="text-sm font-medium">Tìm kiếm</label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search by name or description..."
+                  placeholder="Tìm theo tên hoặc mô tả..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-9"
@@ -211,7 +211,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
 
             {/* Category Filter */}
             <div className="space-y-2">
-              <label className="text-sm font-medium">Category</label>
+              <label className="text-sm font-medium">Danh mục</label>
               <Select value={category} onValueChange={setCategory}>
                 <SelectTrigger>
                   <SelectValue />
@@ -228,15 +228,15 @@ export function TemplateList({ initialData }: TemplateListProps) {
 
             {/* System Filter */}
             <div className="space-y-2">
-              <label className="text-sm font-medium">Type</label>
+              <label className="text-sm font-medium">Loại template</label>
               <Select value={isSystem} onValueChange={setIsSystem}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Templates</SelectItem>
-                  <SelectItem value="false">Custom Templates</SelectItem>
-                  <SelectItem value="true">System Templates</SelectItem>
+                  <SelectItem value="all">Tất cả</SelectItem>
+                  <SelectItem value="false">Tuỳ chỉnh</SelectItem>
+                  <SelectItem value="true">Hệ thống</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -247,9 +247,9 @@ export function TemplateList({ initialData }: TemplateListProps) {
       {/* Main Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Templates ({data?.total_count || 0})</CardTitle>
+          <CardTitle>Mẫu thông báo ({data?.total_count || 0})</CardTitle>
           <CardDescription>
-            Reusable templates that can be shared across multiple notification rules
+            Các template tái sử dụng có thể dùng chung cho nhiều rule thông báo
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -262,15 +262,15 @@ export function TemplateList({ initialData }: TemplateListProps) {
           {error && (
             <div className="flex items-center gap-2 text-destructive py-4">
               <AlertCircle className="h-5 w-5" />
-              <span>Failed to load templates: {error.message}</span>
+              <span>Không tải được danh sách template: {error.message}</span>
             </div>
           )}
 
           {!isLoading && !error && data && data.templates.length === 0 && (
             <div className="text-center py-12 text-muted-foreground">
               <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No templates found</p>
-              <p className="text-sm">Try adjusting your filters or create a new template</p>
+              <p>Chưa có template nào</p>
+              <p className="text-sm">Đổi bộ lọc hoặc tạo template mới để bắt đầu</p>
             </div>
           )}
 
@@ -278,12 +278,12 @@ export function TemplateList({ initialData }: TemplateListProps) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[200px]">Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="w-[120px]">Category</TableHead>
-                  <TableHead className="w-[100px] text-center">Usage</TableHead>
-                  <TableHead className="w-[100px] text-center">Type</TableHead>
-                  <TableHead className="w-[120px] text-right">Actions</TableHead>
+                  <TableHead className="w-[200px]">Tên</TableHead>
+                  <TableHead>Mô tả</TableHead>
+                  <TableHead className="w-[120px]">Danh mục</TableHead>
+                  <TableHead className="w-[100px] text-center">Đang dùng</TableHead>
+                  <TableHead className="w-[100px] text-center">Loại</TableHead>
+                  <TableHead className="w-[120px] text-right">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -302,23 +302,23 @@ export function TemplateList({ initialData }: TemplateListProps) {
                     {/* Category */}
                     <TableCell>
                       <Badge className={getCategoryColor(template.category)} variant="secondary">
-                        {template.category || "None"}
+                        {CATEGORIES.find(c => c.value === template.category)?.label || "Không"}
                       </Badge>
                     </TableCell>
 
                     {/* Usage Count */}
                     <TableCell className="text-center">
                       <Badge variant="outline">
-                        {template.usage_count} rule{template.usage_count !== 1 ? "s" : ""}
+                        {template.usage_count} rule
                       </Badge>
                     </TableCell>
 
                     {/* System Flag */}
                     <TableCell className="text-center">
                       {template.is_system ? (
-                        <Badge variant="secondary">System</Badge>
+                        <Badge variant="secondary">Hệ thống</Badge>
                       ) : (
-                        <Badge variant="outline">Custom</Badge>
+                        <Badge variant="outline">Tuỳ chỉnh</Badge>
                       )}
                     </TableCell>
 
@@ -346,10 +346,10 @@ export function TemplateList({ initialData }: TemplateListProps) {
                           aria-label="Xóa"
                           title={
                             template.is_system
-                              ? "Cannot delete system template"
+                              ? "Không thể xoá template hệ thống"
                               : template.usage_count > 0
-                              ? "Cannot delete template in use"
-                              : "Delete template"
+                              ? "Không thể xoá template đang được dùng"
+                              : "Xoá template"
                           }
                         >
                           <Trash2
@@ -391,18 +391,17 @@ export function TemplateList({ initialData }: TemplateListProps) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Template?</AlertDialogTitle>
+            <AlertDialogTitle>Xoá template?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this notification template. This action
-              cannot be undone.
+              Template này sẽ bị xoá vĩnh viễn. Hành động này không thể hoàn tác.
               <br />
               <br />
-              <strong>Note:</strong> System templates and templates currently in use
-              cannot be deleted.
+              <strong>Lưu ý:</strong> Template hệ thống và template đang được rule
+              sử dụng sẽ không thể xoá.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Huỷ</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -410,10 +409,10 @@ export function TemplateList({ initialData }: TemplateListProps) {
               {deleteMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Deleting…
+                  Đang xoá…
                 </>
               ) : (
-                "Delete Template"
+                "Xoá template"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
