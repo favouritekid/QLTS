@@ -58,6 +58,7 @@ __all__ = [
     # Admission State Machine IDOR (State Machine Implementation)
     "get_admission_for_manager",  # Manager approve/reject
     "get_admission_for_user",  # Officer resubmit
+    "get_admission_for_user_read",  # Read-only fee-status / detail (no lock)
 
     # Admission Configuration Console IDOR
     "get_admission_path_for_user",  # Phase 1: Config Console
@@ -2306,6 +2307,100 @@ async def get_admission_for_user(
             if profile.lead.assigned_officer_id != current_user.id:
                 log.warning(
                     "IDOR attempt: Officer tried to access profile not assigned to them",
+                    user_id=current_user.id,
+                    profile_id=profile_id,
+                    assigned_officer_id=profile.lead.assigned_officer_id,
+                )
+                raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
+
+
+# Roles allowed to hit admission read endpoints. Anything outside this
+# allow-list (accountant, regular user, collaborator, etc.) is rejected
+# at the dependency layer regardless of unit_id, so callers can't sneak
+# in via routes that aren't behind CasbinAuth. ADM-001 review fix.
+_ADMISSION_READ_ALLOWED_ROLES = frozenset({
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.OFFICER,
+})
+
+
+async def get_admission_for_user_read(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """
+    IDOR Protection for read-only admission endpoints (fee-status, detail).
+
+    Same 3-tier scope as ``get_admission_for_user`` but WITHOUT
+    ``SELECT FOR UPDATE``. State-changing endpoints (approve/reject/resubmit)
+    must keep using the locking variants.
+
+    Role allow-list (ADM-001 review fix): only ADMIN, MANAGER, OFFICER may
+    reach this dependency. Accountant / regular user / collaborator are
+    rejected up front so a route that forgets to add CasbinAuth doesn't
+    silently leak fee fields to staff outside the admission scope.
+
+    - Admin: Can access all profiles
+    - Officer: Can access profiles where lead.unit_id == user.unit_id
+              AND lead.assigned_officer_id == user.id
+    - Manager: Can access profiles where lead.unit_id == user.unit_id
+    - Anyone else: rejected (404 fake)
+    - Return 404 (not 403) for unauthorized access
+
+    Used by:
+    - GET /admissions/{id}/fee-status
+
+    Raises:
+        ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    # Defense-in-depth role gate (in addition to any RBAC at the route).
+    # Outside the admission allow-list → fake 404, never 403, to avoid
+    # leaking that the profile ID is real.
+    if current_user.role not in _ADMISSION_READ_ALLOWED_ROLES:
+        log.warning(
+            "IDOR attempt: non-admission role tried to read profile",
+            user_id=current_user.id,
+            user_role=str(current_user.role),
+            profile_id=profile_id,
+        )
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    if current_user.role != UserRole.ADMIN:
+        if not profile.lead or profile.lead.unit_id != current_user.unit_id:
+            log.warning(
+                "IDOR attempt: User tried to read profile from different unit",
+                user_id=current_user.id,
+                user_unit_id=current_user.unit_id,
+                profile_id=profile_id,
+                profile_unit_id=profile.lead.unit_id if profile.lead else None,
+            )
+            raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+        if current_user.role == UserRole.OFFICER:
+            if profile.lead.assigned_officer_id != current_user.id:
+                log.warning(
+                    "IDOR attempt: Officer tried to read profile not assigned to them",
                     user_id=current_user.id,
                     profile_id=profile_id,
                     assigned_officer_id=profile.lead.assigned_officer_id,
