@@ -43,7 +43,7 @@ export default function DeliveryCharts() {
   if (isLoading) {
     return (
       <Card>
-        <CardHeader><CardTitle>Delivery Trend</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Xu hướng gửi thông báo</CardTitle></CardHeader>
         <CardContent className="h-64 flex items-center justify-center text-muted-foreground">
           Đang tải...
         </CardContent>
@@ -54,7 +54,7 @@ export default function DeliveryCharts() {
   if (chartData.length === 0) {
     return (
       <Card>
-        <CardHeader><CardTitle>Delivery Trend</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Xu hướng gửi thông báo</CardTitle></CardHeader>
         <CardContent className="h-64 flex items-center justify-center text-muted-foreground">
           Chưa có dữ liệu
         </CardContent>
@@ -88,7 +88,7 @@ export default function DeliveryCharts() {
       {/* Status breakdown */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Status breakdown</CardTitle>
+          <CardTitle className="text-base">Phân loại theo trạng thái</CardTitle>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={240}>
@@ -98,9 +98,9 @@ export default function DeliveryCharts() {
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
               <Legend />
-              <Bar dataKey="success" stackId="a" fill="#22c55e" name="Sent" />
-              <Bar dataKey="failed" stackId="a" fill="#ef4444" name="Failed" />
-              <Bar dataKey="queued" stackId="a" fill="#f59e0b" name="Queued" />
+              <Bar dataKey="success" stackId="a" fill="#22c55e" name="Đã gửi" />
+              <Bar dataKey="failed" stackId="a" fill="#ef4444" name="Thất bại" />
+              <Bar dataKey="queued" stackId="a" fill="#f59e0b" name="Đang chờ" />
             </BarChart>
           </ResponsiveContainer>
         </CardContent>

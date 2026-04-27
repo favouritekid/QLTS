@@ -28,7 +28,7 @@ export default function TopEventsTable({ onEventClick }: TopEventsTableProps) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Top Events (by volume)</CardTitle>
+        <CardTitle className="text-base">Sự kiện hàng đầu (theo lưu lượng)</CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -39,10 +39,10 @@ export default function TopEventsTable({ onEventClick }: TopEventsTableProps) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Event</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-right">Failed</TableHead>
-                <TableHead className="text-right">Fail Rate</TableHead>
+                <TableHead>Sự kiện</TableHead>
+                <TableHead className="text-right">Tổng</TableHead>
+                <TableHead className="text-right">Thất bại</TableHead>
+                <TableHead className="text-right">Tỷ lệ lỗi</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
