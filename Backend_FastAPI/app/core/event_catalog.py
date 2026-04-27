@@ -186,7 +186,18 @@ _LEAD_EVENTS: tuple = (
                 False,
             ),
         ),
-        condition_fields=_ACTOR_CONDS + _LEAD_CONDS,
+        # ``is_self_action`` is also exposed as a condition field so the
+        # admin wizard can offer it in the rule builder dropdown and the
+        # rule-CRUD validator accepts ``{field: "is_self_action", ...}``
+        # without rejecting it as unknown. Boolean operators only.
+        condition_fields=_ACTOR_CONDS + _LEAD_CONDS + (
+            _cond(
+                "is_self_action",
+                "boolean",
+                "Officer tự assign lead cho chính mình (dispatcher derives from actor_id == officer_id)",
+                _OPS_BOOL,
+            ),
+        ),
         default_resolver="lead_owner",
         allowed_resolvers=_LEAD_RESOLVERS,
         default_channels=("browser", "email"),

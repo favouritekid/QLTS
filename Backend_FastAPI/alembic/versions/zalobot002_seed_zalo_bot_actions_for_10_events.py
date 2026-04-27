@@ -4,41 +4,47 @@ Revision ID: zalobot002
 Revises: zalobot001
 Create Date: 2026-04-27
 
-Adds a ``channel='zalo_bot'`` action to 9 notification rules (rule #1
-``lead_assigned`` already had one added by hand in the smoke session, so
-this migration is idempotent and skips it). After this lands, every event
-in the pilot scope dispatches through the Zalo Bot channel for any user
+Adds a ``channel='zalo_bot'`` action to up to 10 notification rules so
+the v5 pilot events dispatch through the Zalo Bot channel for any user
 whose preferences allow it.
 
-Pilot scope (Tier 1 + Tier 2):
+Pilot scope (Tier 1 + Tier 2 — see project_zalo_bot_plan_audit memory):
 
-| Event                       | Recipient            | Self-condition needed? |
-|-----------------------------|----------------------|------------------------|
-| lead_assigned (already had) | officer              | yes (admin via wizard) |
-| lead_reassigned             | old + new officer    | (deferred)             |
-| lead_assignment_failed      | unit manager         | no                     |
-| consultation_reminder       | officer              | no                     |
-| application_created         | unit manager + own.  | (deferred)             |
-| application_status_changed  | profile owner        | (deferred)             |
-| application_fee_paid        | officer + accountant | (deferred)             |
-| payment_overdue             | accountant           | no                     |
-| suspicious_login            | affected user        | no                     |
-| system_alert                | admin                | no                     |
+| Event                       | Recipient            |
+|-----------------------------|----------------------|
+| lead_assigned               | officer              |
+| lead_reassigned             | old + new officer    |
+| lead_assignment_failed      | unit manager         |
+| consultation_reminder       | officer              |
+| application_created         | unit manager + own.  |
+| application_status_changed  | profile owner        |
+| application_fee_paid        | officer + accountant |
+| payment_overdue             | accountant           |
+| suspicious_login            | affected user        |
+| system_alert                | admin                |
 
-Each row is inserted with ``content_mode='inherit_default'`` so the bot
-reuses the rule's existing title/message templates (browser/email shape).
-We deliberately do NOT override per-channel templates yet — that's a
-follow-up after the operator decides which event needs a bot-friendly
-multi-line layout.
+Idempotency
+-----------
+Insert is gated by ``WHERE NOT EXISTS`` on the same (rule, channel)
+pair, so re-running the migration is a no-op. ``content_mode`` is
+``inherit_default`` so the bot reuses the rule's existing title /
+message templates — per-bot template overrides are deferred until the
+operator decides whether each event needs a bot-friendly multi-line
+layout.
 
-The migration uses ``INSERT ... WHERE NOT EXISTS`` so re-running is
-safe. ``step`` is computed as ``MAX(step) + 1`` per rule so we don't
-collide with existing actions; ``branch_key`` follows the existing
-convention ``group_<step>_<channel>`` used by the wizard.
+Marker / safe downgrade
+-----------------------
+Each row inserted by THIS migration is tagged via
+``config = {"seeded_by": "zalobot002"}``. ``downgrade()`` deletes only
+rows carrying this marker. Pre-existing ``zalo_bot`` actions added by
+hand earlier (rule #1 ``lead_assigned`` was seeded via SQL during the
+2026-04-27 smoke session, BEFORE this migration was written) carry
+no marker and are therefore preserved across a downgrade. Likewise,
+any zalo_bot action added later by an admin via the
+``/admin/notification-rules`` wizard is not touched.
 
-Downgrade removes only the rows this migration inserted (matched on
-rule + channel = 'zalo_bot'). Other zalo_bot actions added later by an
-admin via the wizard are left intact.
+This guarantees a downgrade of zalobot002 is reversible without
+collateral damage to operator-curated rule state.
 """
 from typing import Sequence, Union
 
@@ -52,9 +58,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 # Events that should dispatch through Zalo Bot for v5 pilot.
-# Order matches the user-confirmed Tier 1 + Tier 2 list. Rule lookup is
-# by ``event`` (string) so this works even if a fresh DB has different
-# auto-increment ids than prod.
+# Lookup is by ``event`` (string) so this works on any DB regardless
+# of auto-increment id assignment.
 PILOT_EVENTS = [
     "lead_assigned",
     "lead_reassigned",
@@ -69,13 +74,20 @@ PILOT_EVENTS = [
 ]
 
 
+# Marker stamped onto every row inserted by this migration. Downgrade
+# deletes only rows carrying this exact value, so rows created outside
+# this migration (manual SQL, admin wizard, future migrations) are
+# preserved.
+MARKER_CONFIG_JSON = '{"seeded_by": "zalobot002"}'
+
+
 def upgrade() -> None:
     for event in PILOT_EVENTS:
         op.execute(
             f"""
             INSERT INTO notification_action (
                 rule_id, step, channel, delay_minutes, content_mode,
-                branch_key, created_at, updated_at
+                branch_key, config, created_at, updated_at
             )
             SELECT
                 nr.id,
@@ -84,6 +96,7 @@ def upgrade() -> None:
                 0,
                 'inherit_default',
                 'group_' || (COALESCE(MAX(na.step), 0) + 1) || '_zalo_bot',
+                '{MARKER_CONFIG_JSON}'::json,
                 now(),
                 now()
             FROM notification_rule nr
@@ -99,17 +112,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Only delete rows that match (event in PILOT_EVENTS, channel='zalo_bot').
-    # Any zalo_bot action added by an admin via the wizard for a different
-    # event is left untouched.
-    event_list = ", ".join(f"'{e}'" for e in PILOT_EVENTS)
+    # Only rows tagged with our marker are removed. ``config->>'seeded_by'``
+    # extracts the marker value as text; rows without the marker (or
+    # with NULL config) keep config->>'seeded_by' = NULL → not matched.
     op.execute(
-        f"""
+        """
         DELETE FROM notification_action
         WHERE channel = 'zalo_bot'
-          AND rule_id IN (
-              SELECT id FROM notification_rule
-              WHERE event IN ({event_list})
-          );
+          AND config IS NOT NULL
+          AND config->>'seeded_by' = 'zalobot002';
         """
     )

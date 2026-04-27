@@ -112,6 +112,7 @@ class TestNotificationDispatcher:
         self,
         db: AsyncSession,
         officer_user_in_db: dict,
+        clear_redis_keys,
         mocker,
     ):
         """v5: Admin can add condition ``is_self_action eq false`` on a
@@ -154,7 +155,9 @@ class TestNotificationDispatcher:
         # condition (is_self_action eq false) is NOT met → rule does
         # not activate → no notification rows + no channel send.
         payload = {"user_id": user_id, "actor_id": user_id, "officer_id": user_id}
-        notification_ids, callback = await dispatch(db, event, payload)
+        notification_ids, callback = await dispatch(
+            db, event, payload, dedupe_key="test_self_action_suppress",
+        )
         if callback:
             await callback()
 
@@ -168,6 +171,7 @@ class TestNotificationDispatcher:
         db: AsyncSession,
         officer_user_in_db: dict,
         admin_user_in_db: dict,
+        clear_redis_keys,
         mocker,
     ):
         """Different actor → ``is_self_action=False`` → condition met → notify."""
@@ -202,7 +206,9 @@ class TestNotificationDispatcher:
         )
 
         payload = {"user_id": user_id, "actor_id": actor_id, "officer_id": user_id}
-        notification_ids, callback = await dispatch(db, event, payload)
+        notification_ids, callback = await dispatch(
+            db, event, payload, dedupe_key="test_self_action_pass",
+        )
         if callback:
             await callback()
 
