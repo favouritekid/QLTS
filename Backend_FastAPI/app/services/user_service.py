@@ -715,10 +715,18 @@ async def update_user(
         # This ensures DB + Assignment + Casbin operations are atomic
         async with db.begin_nested():
             # (1) Update user fields (EXCEPT role/unit_id - handled by assignment helper)
+            # Nullable columns admin can clear by sending explicit `null`. Other
+            # fields skip null (treated as "field not changed" rather than wipe
+            # a non-nullable column). `exclude_unset=True` already filters
+            # fields the client did not touch.
+            _CLEARABLE_USER_FIELDS = {"full_name", "phone_number", "skills", "max_capacity", "avatar_url"}
             for field, value in update_data.items():
                 # Skip role/unit_id - will be set by _create_or_update_user_assignment
-                if field not in ["role", "unit_id"] and value is not None:
-                    setattr(db_user, field, value)
+                if field in ("role", "unit_id"):
+                    continue
+                if value is None and field not in _CLEARABLE_USER_FIELDS:
+                    continue
+                setattr(db_user, field, value)
 
             # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
             if avatar_content and avatar_filename:
@@ -861,10 +869,15 @@ async def update_profile(
     try:
         update_data = user_in.model_dump(exclude_unset=True)
 
+        # `email` is non-nullable; user can not clear it via this profile
+        # endpoint. `full_name` and `phone_number` are nullable — explicit
+        # `null` clears them.
         for field, value in update_data.items():
-            if field in ["full_name", "phone_number", "email"]:
+            if field == "email":
                 if value is not None:
                     setattr(db_user, field, value)
+            elif field in ("full_name", "phone_number"):
+                setattr(db_user, field, value)
 
         # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
         if avatar_content and avatar_filename:
