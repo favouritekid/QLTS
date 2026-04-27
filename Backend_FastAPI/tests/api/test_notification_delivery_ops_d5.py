@@ -320,4 +320,67 @@ async def test_replay_nonexistent_returns_404(client: AsyncClient, seeded):
     resp = await client.post(f"{URL}/999999/replay", headers=seeded["headers"])
     assert resp.status_code == 404
 
+
+# ============================================
+# HEALTH SUMMARY — failure rate contract pin (Wave 2 #8)
+# ============================================
+# Pin the contract that `failure_rate_30m` and per-channel
+# `failure_rate_24h` are RATIOS in [0..1] — the FE
+# (`ChannelHealthPanel.tsx`, `AlertBanner.tsx`) multiplies by 100 to
+# render. Catches a regression to "percent" output (which would render
+# as "5000.0%") matching the protection PR #144 added for
+# `top_events.fail_rate`.
+
+@pytest.mark.asyncio
+async def test_health_failure_rates_are_ratios(client: AsyncClient, seeded):
+    resp = await client.get(f"{URL}/health", headers=seeded["headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    fr_30m = body.get("failure_rate_30m")
+    if fr_30m is not None:
+        assert 0.0 <= fr_30m <= 1.0, (
+            f"failure_rate_30m must be a ratio in [0..1], got {fr_30m}. "
+            f"Did the repository start returning percent output again?"
+        )
+
+    for ch in body.get("channels", []):
+        fr_24h = ch.get("failure_rate_24h")
+        if fr_24h is None:
+            continue
+        assert 0.0 <= fr_24h <= 1.0, (
+            f"channel '{ch['channel']}'.failure_rate_24h must be a ratio "
+            f"in [0..1], got {fr_24h}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_health_schema_rejects_out_of_range(client: AsyncClient, seeded):
+    """Pydantic schema constraints must reject any future code path that
+    accidentally writes a percent (e.g. 50.0) into these fields. Verify
+    the schema-level guard exists by parsing manually.
+    """
+    from pydantic import ValidationError
+
+    from app.schemas.notification_delivery import (
+        HealthSummaryResponse,
+        ChannelHealthItem,
+    )
+
+    # Boundaries pass
+    HealthSummaryResponse(failure_rate_30m=0.0)
+    HealthSummaryResponse(failure_rate_30m=1.0)
+    ChannelHealthItem(channel="email", failure_rate_24h=0.0)
+    ChannelHealthItem(channel="email", failure_rate_24h=1.0)
+
+    # Out-of-range rejected
+    with pytest.raises(ValidationError):
+        HealthSummaryResponse(failure_rate_30m=1.5)
+    with pytest.raises(ValidationError):
+        HealthSummaryResponse(failure_rate_30m=50.0)  # percent leak
+    with pytest.raises(ValidationError):
+        ChannelHealthItem(channel="email", failure_rate_24h=100.0)
+    with pytest.raises(ValidationError):
+        ChannelHealthItem(channel="email", failure_rate_24h=-0.1)
+
 # NOTE: Admin-only permission checks (officer denied) are in test_notification_delivery_idor.py

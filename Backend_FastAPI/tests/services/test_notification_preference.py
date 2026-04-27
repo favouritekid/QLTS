@@ -185,9 +185,41 @@ class TestNotificationPreferenceService:
         assert result == []
 
     @pytest.mark.asyncio
+    async def test_get_user_group_preferences_excludes_organization(
+        self,
+        db: AsyncSession,
+        officer_user_in_db: dict,
+    ):
+        """`get_user_group_preferences` must NOT return the
+        `organization` group — it is broadcast-only and was previously
+        defaulted to all-channels-checked via the `defaults.get(channel,
+        True)` fallback. Settings UI rendered Organization as a tunable
+        row even though dispatching is not preference-gated.
+
+        Pin the contract: response keys are exactly the groups in
+        `DEFAULT_GROUP_CHANNELS`.
+        """
+        from app.services.notification_preference_service import (
+            get_user_group_preferences,
+        )
+        from app.core.event_groups import DEFAULT_GROUP_CHANNELS
+
+        result = await get_user_group_preferences(db, officer_user_in_db["id"])
+
+        expected_groups = {g.value for g in DEFAULT_GROUP_CHANNELS.keys()}
+        assert set(result.keys()) == expected_groups, (
+            f"Response groups must match DEFAULT_GROUP_CHANNELS exactly. "
+            f"Got: {sorted(result.keys())}, expected: {sorted(expected_groups)}"
+        )
+        assert "organization" not in result, (
+            "organization is broadcast-only; must not appear in user "
+            "preference response"
+        )
+
+    @pytest.mark.asyncio
     async def test_filter_multiple_users_mixed_prefs(
-        self, 
-        db: AsyncSession, 
+        self,
+        db: AsyncSession,
         officer_user_in_db: dict,
         admin_user_in_db: dict
     ):

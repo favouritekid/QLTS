@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NotificationDeliveryResponse(BaseModel):
@@ -146,10 +146,25 @@ class ChannelHealthItem(BaseModel):
     quota_used: Optional[int] = None
     quota_limit: Optional[int] = None
     quota_blocked: bool = False
-    failure_rate_24h: Optional[float] = None
+    # Ratio (0..1), NOT percent. Frontend `ChannelHealthPanel` and
+    # `AlertBanner` apply ×100 to render as a percentage. Aligned with
+    # `top_events.fail_rate` (PR #144) and `get_failure_rate()` repo
+    # contract.
+    failure_rate_24h: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Ratio (0..1) of failed deliveries over total in the last 24 hours; FE multiplies by 100 to display percent.",
+    )
 
 class HealthSummaryResponse(BaseModel):
     channels: List[ChannelHealthItem] = []
     total_queued: int = 0
-    failure_rate_30m: Optional[float] = None
+    # Ratio (0..1), NOT percent. See `ChannelHealthItem.failure_rate_24h`.
+    failure_rate_30m: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Ratio (0..1) of failed deliveries over total in the last 30 minutes; FE multiplies by 100 to display percent.",
+    )
     alerts_active: int = 0
