@@ -21,6 +21,7 @@ from ..core.event_groups import (
     NotificationEventGroup,
     NotificationChannel,
     EVENT_GROUP_LABELS,
+    DEFAULT_GROUP_CHANNELS,
 )
 from ..services import notification_preference_service
 
@@ -138,9 +139,16 @@ async def get_event_group_preferences(
         - List of available event groups with metadata
         - User's preference settings for each group/channel
     """
-    # Get event group metadata
+    # Get event group metadata. Only return groups present in
+    # `DEFAULT_GROUP_CHANNELS` — broadcast-only groups (e.g.
+    # `ORGANIZATION`) are excluded because they are not user-tunable
+    # and were previously rendered as fully-checked tunable rows by
+    # the settings UI (service used to fall back to `True` for missing
+    # defaults). See `app/core/event_groups.py`.
     groups = []
     for group in NotificationEventGroup:
+        if group not in DEFAULT_GROUP_CHANNELS:
+            continue
         labels = EVENT_GROUP_LABELS.get(group, {})
         groups.append(EventGroupInfo(
             id=group.value,
@@ -183,12 +191,17 @@ async def update_event_group_preference(
             "enabled": false
         }
     """
-    # Validate event group
-    valid_groups = [g.value for g in NotificationEventGroup]
-    if body.event_group.lower() not in valid_groups:
+    # Validate event group. Only groups in `DEFAULT_GROUP_CHANNELS` are
+    # user-tunable; broadcast-only groups (e.g. `ORGANIZATION`) reject
+    # PATCH so admin-side dispatching invariants stay intact.
+    tunable_groups = {g.value for g in DEFAULT_GROUP_CHANNELS.keys()}
+    if body.event_group.lower() not in tunable_groups:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid event_group. Must be one of: {valid_groups}"
+            detail=(
+                f"event_group '{body.event_group}' is not user-tunable. "
+                f"Tunable groups: {sorted(tunable_groups)}"
+            ),
         )
 
     # Validate channel
@@ -244,8 +257,13 @@ async def get_event_groups_metadata(
     This endpoint returns group names and descriptions for UI display
     without fetching user-specific preferences.
     """
+    # Same exclusion as `/event-groups`: only return user-tunable
+    # groups (`DEFAULT_GROUP_CHANNELS` keys). Broadcast-only groups
+    # like `organization` would otherwise render as fake-tunable rows.
     groups = []
     for group in NotificationEventGroup:
+        if group not in DEFAULT_GROUP_CHANNELS:
+            continue
         labels = EVENT_GROUP_LABELS.get(group, {})
         groups.append(EventGroupInfo(
             id=group.value,

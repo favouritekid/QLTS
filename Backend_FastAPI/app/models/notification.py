@@ -111,8 +111,12 @@ class NotificationRule(Base):
     recipient_config = Column(JSON, nullable=False,
                              comment="Resolver config: {resolver_type, params}")
 
-    # Optional activation conditions
-    condition = Column(JSON, nullable=True,
+    # Optional activation conditions.
+    # `none_as_null=True` makes SQLAlchemy persist Python `None` as SQL NULL
+    # instead of the JSON literal `'null'`, so `WHERE condition IS NULL`
+    # filters and indexes work correctly. Audit on 2026-04-27 found 48/49
+    # rows had the JSON literal — backfilled by migration to SQL NULL.
+    condition = Column(JSON(none_as_null=True), nullable=True,
                       comment="Optional activation conditions")
 
     # Enable/disable flag

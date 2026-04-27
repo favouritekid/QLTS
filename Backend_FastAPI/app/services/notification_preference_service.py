@@ -167,18 +167,31 @@ async def get_user_group_preferences(
 ) -> Dict[str, Dict[str, bool]]:
     """
     Get all group preferences for a user.
+
+    Only groups present in `DEFAULT_GROUP_CHANNELS` are user-tunable.
+    Domain broadcast-only groups (e.g. `ORGANIZATION`) are excluded
+    intentionally — fallback `defaults.get(channel, True)` would
+    otherwise default ORGANIZATION to all-channels-checked, which the
+    settings UI rendered as a tunable row even though dispatching is
+    not preference-gated. See `DEFAULT_GROUP_CHANNELS` in
+    `app/core/event_groups.py`.
     """
     repo = NotificationPreferenceRepository(db)
     preference = await repo.get_or_create(user_id)
 
     result = {}
     for group in NotificationEventGroup:
+        # Skip groups that have no defaults — these are broadcast-only
+        # and not user-tunable.
+        if group not in DEFAULT_GROUP_CHANNELS:
+            continue
+
         group_key = group.value.lower()
 
         # Start with defaults
-        defaults = DEFAULT_GROUP_CHANNELS.get(group, {})
+        defaults = DEFAULT_GROUP_CHANNELS[group]
         channel_prefs = {
-            channel.value: defaults.get(channel, True)
+            channel.value: defaults.get(channel, False)
             for channel in NotificationChannel
         }
 
