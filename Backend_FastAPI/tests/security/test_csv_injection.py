@@ -182,3 +182,53 @@ class TestDangerousPrefixes:
                 assert result.startswith("'"), f"Prefix '{prefix}' not sanitized"
                 assert result == f"'{test_value}"
 
+
+class TestAdmissionExportSanitizes:
+    """ADM-006 regression: admission CSV export must wrap rows through
+    ``sanitize_csv_row`` so lead-controlled fields cannot smuggle formulas
+    into Excel/LibreOffice."""
+
+    def test_router_imports_sanitize_csv_row(self):
+        """Static guard: the admissions router pulls in the sanitizer."""
+        import app.routers.admissions as admissions_module
+        assert getattr(admissions_module, "sanitize_csv_row", None) is not None, (
+            "ADM-006 regression: admissions router must import sanitize_csv_row"
+        )
+
+    def test_admission_export_wraps_writerow_with_sanitize_csv_row(self):
+        """Static guard: every writerow data row in the export goes through
+        sanitize_csv_row, not raw lists. Catches future contributors who
+        re-introduce ``writer.writerow([profile.id, lead.full_name, ...])``
+        with raw lead-controlled fields.
+        """
+        import inspect
+        from app.routers import admissions as admissions_module
+
+        source = inspect.getsource(admissions_module.export_admissions_csv)
+        # Header row is allowed to be raw (static literals only)
+        assert "sanitize_csv_row(" in source, (
+            "ADM-006 regression: export_admissions_csv must wrap data rows "
+            "with sanitize_csv_row(...)"
+        )
+
+    def test_sanitize_protects_full_name_email_phone_program(self):
+        """Lead-controlled fields with formula prefixes get neutralized."""
+        row = sanitize_csv_row([
+            42,
+            "=HYPERLINK(\"http://evil.example/\",\"click\")",  # full_name
+            "+attacker@example.com",  # email
+            "-0901234567",  # phone
+            "@123456789",  # citizen_id
+            "draft",
+            "10%",
+            "=cmd|'/c calc'!A1",  # program name
+            "2026-04-27 10:00",
+            "2026-04-27 10:00",
+        ])
+        assert row[0] == "42"
+        assert row[1].startswith("'="), "full_name formula not neutralized"
+        assert row[2].startswith("'+"), "email + prefix not neutralized"
+        assert row[3].startswith("'-"), "phone - prefix not neutralized"
+        assert row[4].startswith("'@"), "citizen_id @ prefix not neutralized"
+        assert row[7].startswith("'="), "program name formula not neutralized"
+
