@@ -78,11 +78,15 @@ async def update_current_user_profile(
     Cập nhật thông tin profile cho người dùng đang đăng nhập.
     (Casbin sẽ kiểm tra quyền PUT /api/profile)
     """
+    # Form-data convention (xem admin/users.py): empty string "" → clear
+    # (set NULL) cho nullable column; field không gửi → skip; có value → set.
     update_dict = {}
-    if full_name is not None and full_name.strip():
-        update_dict["full_name"] = full_name.strip()
-    if phone_number is not None and phone_number.strip():
-        update_dict["phone_number"] = phone_number.strip()
+    if full_name is not None:
+        stripped = full_name.strip()
+        update_dict["full_name"] = stripped if stripped else None
+    if phone_number is not None:
+        stripped = phone_number.strip()
+        update_dict["phone_number"] = stripped if stripped else None
 
     # --- SỬA LỖI LOGIC TẠI ĐÂY ---
     if email is not None and email.strip():

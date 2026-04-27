@@ -836,12 +836,20 @@ async def update_existing_user(
         current_user=current_admin
     )
 
-    # Xây dựng dict chỉ chứa các trường hợp lệ được cung cấp
+    # Xây dựng dict chỉ chứa các trường được cung cấp.
+    # Convention với Form-data:
+    #   - field không gửi (None) → skip (giữ giá trị cũ)
+    #   - field gửi rỗng "" → clear (set NULL) cho nullable column
+    #   - field gửi value → set sau khi strip()
+    # Áp dụng cho `full_name`/`phone_number` (nullable). `role`/`status`
+    # vẫn skip empty vì model nullable=False.
     update_dict = {}
-    if full_name is not None and full_name.strip():
-        update_dict["full_name"] = full_name.strip()
-    if phone_number is not None and phone_number.strip():
-        update_dict["phone_number"] = phone_number.strip()
+    if full_name is not None:
+        stripped = full_name.strip()
+        update_dict["full_name"] = stripped if stripped else None
+    if phone_number is not None:
+        stripped = phone_number.strip()
+        update_dict["phone_number"] = stripped if stripped else None
     if role is not None and role.strip():
         update_dict["role"] = role.strip()
     if status is not None and status.strip():
