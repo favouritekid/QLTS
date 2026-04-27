@@ -48,6 +48,31 @@ async def _noop_callback() -> None:
     pass
 
 
+def _check_lifecycle_guard(path: AdmissionPath, user: User) -> None:
+    """ADM-005: Lifecycle guard shared by ``update_path``,
+    ``upsert_criteria`` and ``upsert_documents``.
+
+    Per Q2 product decision (b — basic guard, durable audit deferred to
+    Wave 2):
+
+    - Archived paths cannot be modified at all.
+    - Manager can only modify paths in ``draft`` status. ``Admin
+      approves = activate``, so once a path is past draft only admin may
+      edit its criteria / documents / fields.
+    - Admin can edit any non-archived path.
+
+    Raises ``BusinessRuleViolation`` when the caller fails the guard so
+    routers can map to 400 / domain copy.
+    """
+    if path.status == "archived":
+        raise BusinessRuleViolation("Cannot update archived path")
+    if user.role != UserRole.ADMIN and path.status != "draft":
+        raise BusinessRuleViolation(
+            f"Manager can only update paths in 'draft' status. "
+            f"Current status: '{path.status}'. Contact Admin to modify."
+        )
+
+
 class AdmissionPathService:
     """
     Service for AdmissionPath business logic.
@@ -172,21 +197,16 @@ class AdmissionPathService:
         - Archived paths cannot be updated
         - Manager can ONLY update paths in 'draft' status
         - Admin can update any non-archived path
-        
+
         Raises:
             BusinessRuleViolation: If path is archived
             BusinessRuleViolation: If manager tries to edit non-draft path
         """
-        if path.status == "archived":
-            raise BusinessRuleViolation("Cannot update archived path")
-        
-        # Manager can only edit draft paths (Admin approves = activate)
-        if user.role == UserRole.MANAGER and path.status != "draft":
-            raise BusinessRuleViolation(
-                f"Manager can only update paths in 'draft' status. "
-                f"Current status: '{path.status}'. Contact Admin to modify."
-            )
-        
+        # ADM-005: shared lifecycle guard — also enforced on
+        # upsert_criteria / upsert_documents so manager cannot bypass
+        # the "manager edits draft only" rule by hitting a sub-route.
+        _check_lifecycle_guard(path, user)
+
         update_data = data.model_dump(exclude_unset=True)
 
         # Governance guard: minor_correction_allowed_fields is admin-only.
@@ -216,7 +236,14 @@ class AdmissionPathService:
     ) -> Tuple[AdmissionPath, PostCommitCallback]:
         """
         Create or update admission criteria for a path.
+
+        ADM-005: enforces the same lifecycle guard as ``update_path`` —
+        archived paths reject; non-admin can only mutate ``draft``. Without
+        this guard, manager could bypass the "draft-only" rule by hitting
+        ``PUT /paths/{id}/criteria`` directly.
         """
+        _check_lifecycle_guard(path, user)
+
         # 1. Update/Create Criteria
         if path.criteria:
             # Update existing
@@ -263,11 +290,18 @@ class AdmissionPathService:
     ) -> Tuple[List[ResolvedDocumentResponse], PostCommitCallback]:
         """
         Update document requirements for a path.
-        
+
         Logic:
         1. Find/Create method-specific DocumentGroup for this path's offering_type + method.
         2. Sync items in that group.
+
+        ADM-005: enforces the same lifecycle guard as ``update_path`` —
+        archived paths reject; non-admin can only mutate ``draft``. Without
+        this guard, manager could bypass the "draft-only" rule by hitting
+        ``PUT /paths/{id}/documents`` directly.
         """
+        _check_lifecycle_guard(path, user)
+
         if not path.academic_info or not path.academic_info.offering:
             # Force load if missing (though repo loads it)
              path = await self.repo.get_by_id_with_relations(path.id)
@@ -336,36 +370,61 @@ class AdmissionPathService:
     ) -> Tuple[bool, List[str]]:
         """
         Validate if path can be activated.
-        
-        Activation Checklist:
-        1. Has criteria (via OfferingAdmissionConfig)
-        2. Has document config
-        3. Has quota > 0
-        
+
+        ADM-004: criteria + documents are now checked inline using the same
+        rules as ``get_coverage_matrix`` so the route guard, coverage UI and
+        ``can_activate`` flag agree on a single readiness contract:
+
+        1. Status must be ``draft`` or ``inactive``.
+        2. ``academic_info.annual_admission_quota`` must be > 0.
+        3. ``path.criteria_id`` must be set.
+        4. A ``DocumentGroup`` must exist for the path's offering type +
+           admission method (method-specific or shared fallback).
+
         Returns:
             (can_activate, validation_errors)
         """
+        from app.repositories.document_group_repository import DocumentGroupRepository
+
         errors: List[str] = []
-        
+
         # Check 1: Status must be draft or inactive
         if path.status not in ["draft", "inactive"]:
             errors.append(f"Cannot activate path with status '{path.status}'")
-        
-        # Check 2: Must have academic_info with quota
+
+        # Check 2: academic_info + quota
         academic_info = path.academic_info
         if not academic_info:
-            errors.append("Path has no academic info")
-        elif not academic_info.annual_admission_quota or academic_info.annual_admission_quota <= 0:
-            errors.append("Quota must be greater than 0")
-        
-        # Check 3: Should have criteria (via admission_configs)
-        # This would require loading OfferingAdmissionConfig
-        # For now, we'll add a placeholder check
-        # In production, this would check for actual criteria
-        
-        # Check 4: Should have document config
-        # This would check if DocumentGroup exists for this offering type + method
-        
+            errors.append("Chưa thiết lập thông tin tuyển sinh (Academic Info)")
+        else:
+            quota = academic_info.annual_admission_quota or 0
+            if quota <= 0:
+                errors.append("Chưa thiết lập chỉ tiêu (Quota)")
+
+        # Check 3: Criteria must be configured
+        if path.criteria_id is None:
+            errors.append("Chưa cấu hình tiêu chí (Criteria)")
+
+        # Check 4: Documents must resolve (method-specific or shared)
+        offering_type_id = None
+        if academic_info and academic_info.offering:
+            offering_type_id = academic_info.offering.offering_type_id
+
+        has_documents = False
+        if offering_type_id:
+            doc_repo = DocumentGroupRepository(self.db)
+            method_group = await doc_repo.get_method_specific_group(
+                offering_type_id, path.admission_method_id
+            )
+            if method_group:
+                has_documents = True
+            else:
+                shared_groups = await doc_repo.get_shared_groups(offering_type_id)
+                has_documents = len(shared_groups) > 0
+
+        if not has_documents:
+            errors.append("Chưa cấu hình hồ sơ (Documents)")
+
         can_activate = len(errors) == 0
         return can_activate, errors
     
