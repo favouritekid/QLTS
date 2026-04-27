@@ -174,10 +174,29 @@ async def test_top_events_limit(client: AsyncClient, seeded):
 
 @pytest.mark.asyncio
 async def test_top_events_fail_rate(client: AsyncClient, seeded):
+    """`fail_rate` is a ratio (0..1), matching `get_failure_rate` and the
+    frontend `TopEventsTable`/`AlertBanner` consumers (which apply ×100
+    themselves). Pin both bounds AND the actual ratios from the seed
+    fixture so a regression to "percent" output (which would render as
+    "5000.0%") fails this test instead of slipping past `<= 100.0`.
+    """
     resp = await client.get(f"{URL}/stats/top-events", headers=seeded["headers"])
-    for ev in resp.json()["events"]:
+    events = {ev["event"]: ev for ev in resp.json()["events"]}
+    for ev in events.values():
         assert "fail_rate" in ev
-        assert 0.0 <= ev["fail_rate"] <= 100.0
+        assert 0.0 <= ev["fail_rate"] <= 1.0, (
+            f"fail_rate must be a ratio (0..1), got {ev['fail_rate']} for {ev['event']}"
+        )
+    # Seed: lead_assigned = 1 failed / 3 total ≈ 0.3333
+    if "lead_assigned" in events:
+        assert events["lead_assigned"]["total"] == 3
+        assert events["lead_assigned"]["failed"] == 1
+        assert abs(events["lead_assigned"]["fail_rate"] - (1 / 3)) < 0.01
+    # Seed: profile_submitted = 1 failed / 2 total = 0.5
+    if "profile_submitted" in events:
+        assert events["profile_submitted"]["total"] == 2
+        assert events["profile_submitted"]["failed"] == 1
+        assert abs(events["profile_submitted"]["fail_rate"] - 0.5) < 0.01
 
 
 # ============================================
