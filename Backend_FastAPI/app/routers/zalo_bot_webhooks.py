@@ -109,7 +109,18 @@ async def zalo_bot_webhook(
         return {"status": "ok", "mode": "non_object_payload"}
 
     result = data.get("result") or {}
-    event_name = result.get("event_name", "") if isinstance(result, dict) else ""
+    # Zalo Bot Platform actually ships ``event_name`` at the **top level**
+    # of the payload (per https://bot.zaloplatforms.com/docs). Plan v5 +
+    # initial code mistakenly read it from ``data["result"]["event_name"]``,
+    # which silently returned ``ignored_event`` for every real message
+    # (smoke 2026-04-27 captured `/lienkiet` POST → 200 with no handler
+    # activity). Read top-level first, fall back to legacy nested shape so
+    # any provider variant still routes correctly.
+    event_name = (
+        data.get("event_name")
+        or (result.get("event_name") if isinstance(result, dict) else "")
+        or ""
+    )
     if event_name != "message.text.received":
         # Other events (e.g. delivery callbacks) are ignored for now.
         return {"status": "ok", "mode": "ignored_event", "event": event_name}

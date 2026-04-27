@@ -19,6 +19,27 @@ SECRET = "test-webhook-secret-xyz"
 
 
 def _payload(text: str, chat_id: str = "chat_alpha_xxxxxxxx") -> dict:
+    """Real Zalo Bot Platform shape: ``event_name`` at TOP level, message
+    nested under ``result``. Captured from a live webhook hit on
+    2026-04-27 after initial smoke showed ignored_event for every command.
+    """
+    return {
+        "event_name": "message.text.received",
+        "result": {
+            "message": {
+                "chat": {"id": chat_id},
+                "text": text,
+                "from": {"display_name": "Officer A"},
+            },
+        },
+    }
+
+
+def _payload_legacy_nested(text: str, chat_id: str = "chat_alpha_xxxxxxxx") -> dict:
+    """Legacy shape used by plan v5 examples — ``event_name`` nested under
+    ``result``. The router now accepts this too via fallback so any future
+    provider variant doesn't regress.
+    """
     return {
         "result": {
             "event_name": "message.text.received",
@@ -119,10 +140,10 @@ class TestPayloadShape:
         self, client: AsyncClient, configured_secret, gateway_mock
     ):
         body = {
+            "event_name": "follow",
             "result": {
-                "event_name": "follow",
                 "message": {"chat": {"id": "x"}, "text": "ignored"},
-            }
+            },
         }
         resp = await client.post(
             "/api/webhooks/zalo-bot",
@@ -133,14 +154,49 @@ class TestPayloadShape:
         assert resp.json()["mode"] == "ignored_event"
         gateway_mock.send_message.assert_not_awaited()
 
+    async def test_top_level_event_name_is_recognized(
+        self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
+    ):
+        """Real Zalo payload puts ``event_name`` at top level. Pre-fix the
+        router only read it from ``result.event_name`` and silently
+        ignored every real message — repro of 2026-04-27 smoke regression.
+        """
+        verify, _ = link_service_mock
+        verify.return_value = (False, "invalid")
+        resp = await client.post(
+            "/api/webhooks/zalo-bot",
+            json=_payload("/lienkiet ABC123"),  # uses top-level shape
+            headers={"X-Bot-Api-Secret-Token": SECRET},
+        )
+        assert resp.status_code == 200
+        # Must NOT be ignored_event — handler must reach verify_and_link
+        assert resp.json().get("mode") != "ignored_event", (
+            "top-level event_name not recognised → real Zalo traffic dropped silently"
+        )
+
+    async def test_legacy_nested_event_name_still_works(
+        self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
+    ):
+        """Legacy shape (event_name nested under result) keeps working as
+        a fallback, so any provider variant doesn't regress."""
+        verify, _ = link_service_mock
+        verify.return_value = (False, "invalid")
+        resp = await client.post(
+            "/api/webhooks/zalo-bot",
+            json=_payload_legacy_nested("/lienkiet ABC123"),
+            headers={"X-Bot-Api-Secret-Token": SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json().get("mode") != "ignored_event"
+
     async def test_empty_chat_or_text_noop(
         self, client: AsyncClient, configured_secret, gateway_mock
     ):
         body = {
+            "event_name": "message.text.received",
             "result": {
-                "event_name": "message.text.received",
                 "message": {"chat": {"id": ""}, "text": "x"},
-            }
+            },
         }
         resp = await client.post(
             "/api/webhooks/zalo-bot",
