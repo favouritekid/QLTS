@@ -132,12 +132,17 @@ async def update_template(
     # Track which fields were updated
     updated_fields = []
 
-    # Update fields if provided
+    # Update fields if provided. `exclude_unset=True` already filters
+    # fields the client didn't touch, so we only need to guard non-nullable
+    # columns against an explicit `null` from a stale client. Nullable
+    # columns are clearable — admin can blank them by sending `null`.
     update_data = template_update.model_dump(exclude_unset=True)
+    _CLEARABLE_FIELDS = {"description", "link_template", "variables", "category", "allowed_events"}
     for field, value in update_data.items():
-        if value is not None:
-            setattr(template, field, value)
-            updated_fields.append(field)
+        if value is None and field not in _CLEARABLE_FIELDS:
+            continue
+        setattr(template, field, value)
+        updated_fields.append(field)
 
     # 1.9e: Find rules that reference this template (for cache invalidation)
     from sqlalchemy import select

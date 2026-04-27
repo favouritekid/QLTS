@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
+import { vi } from "date-fns/locale";
 import { Check, MoreVertical, Trash2 } from "lucide-react";
 import Link from "next/link";
 
@@ -118,6 +119,7 @@ function MobileNotificationCard({
           >
             {formatDistanceToNow(new Date(notification.created_at), {
               addSuffix: true,
+              locale: vi,
             })}
           </p>
         </div>
@@ -301,6 +303,7 @@ export function NotificationTable({
                 >
                   {formatDistanceToNow(new Date(notification.created_at), {
                     addSuffix: true,
+                    locale: vi,
                   })}
                 </TableCell>
                 <TableCell className="text-right">

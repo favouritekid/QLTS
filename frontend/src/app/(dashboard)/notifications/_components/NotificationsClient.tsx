@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Bell, Check, CheckCheck, Trash2, X, LayoutList, LayoutGrid, Search } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { vi } from "date-fns/locale";
 import Link from "next/link";
 import { toast } from "sonner";
 
@@ -482,6 +483,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                               <span>
                                 {formatDistanceToNow(new Date(notification.created_at), {
                                   addSuffix: true,
+                                  locale: vi,
                                 })}
                               </span>
                             </div>

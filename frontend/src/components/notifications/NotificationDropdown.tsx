@@ -4,6 +4,7 @@
 import React, { useState } from "react";
 import { Bell, Check, CheckCheck, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { vi } from "date-fns/locale";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -180,7 +181,7 @@ export function NotificationDropdown() {
                         <p className="text-muted-foreground text-xs">
                           {formatDistanceToNow(
                             new Date(notification.created_at),
-                            { addSuffix: true }
+                            { addSuffix: true, locale: vi }
                           )}
                         </p>
                         {/* ✅ Show "Tự động" badge for automatic assignments */}
