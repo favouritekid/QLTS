@@ -174,19 +174,17 @@ _LEAD_EVENTS: tuple = (
             _var("lead_name", "string", "Tên lead", False),
             _var("lead_phone", "string", "SĐT lead", False),
             _var("offering_name", "string", "Tên chương trình", False),
-            # v5: Derived flag auto-injected by the dispatcher when
-            # ``actor_id == officer_id``. Admin can add a condition
-            # ``is_self_action eq false`` in the rule wizard to
-            # suppress notifications when an officer self-assigns a
-            # lead (avoid self-spam).
-            _var(
-                "is_self_action",
-                "boolean",
-                "True nếu officer tự assign lead cho chính mình. Dùng để filter self-spam qua condition.",
-                False,
-            ),
+            # NOTE: ``is_self_action`` is intentionally NOT a ``variable``.
+            # It's a *derived* field auto-injected by the dispatcher when
+            # ``actor_id == officer_id`` — never produced by the
+            # ``EventPayload.for_lead_assigned()`` builder. Listing it as a
+            # variable would break the catalog↔payload parity test
+            # (``test_metadata_vars_exist_in_payload``). It is exposed
+            # below as a *condition field* so the wizard + validator
+            # accept it in rule conditions, which is the only surface
+            # admins interact with.
         ),
-        # ``is_self_action`` is also exposed as a condition field so the
+        # ``is_self_action`` is exposed as a condition field so the
         # admin wizard can offer it in the rule builder dropdown and the
         # rule-CRUD validator accepts ``{field: "is_self_action", ...}``
         # without rejecting it as unknown. Boolean operators only.
