@@ -106,26 +106,34 @@ async def zalo_bot_webhook(
         return Response(status_code=400, content="Invalid JSON")
 
     if not isinstance(data, dict):
+        log.warning("zalo_bot webhook non-object payload")
         return {"status": "ok", "mode": "non_object_payload"}
 
     result = data.get("result") or {}
-    # Zalo Bot Platform actually ships ``event_name`` at the **top level**
-    # of the payload (per https://bot.zaloplatforms.com/docs). Plan v5 +
-    # initial code mistakenly read it from ``data["result"]["event_name"]``,
-    # which silently returned ``ignored_event`` for every real message
-    # (smoke 2026-04-27 captured `/lienkiet` POST → 200 with no handler
-    # activity). Read top-level first, fall back to legacy nested shape so
-    # any provider variant still routes correctly.
+    # Zalo Bot Platform variants observed:
+    #   - top level: data["event_name"]
+    #   - nested:    data["result"]["event_name"]
+    # Smoke 2026-04-27 still hit ignored_event after PR #139 → real
+    # payload may use a 3rd shape. Log the structure (keys only, no
+    # values) when no event_name is found so we can iterate.
     event_name = (
         data.get("event_name")
         or (result.get("event_name") if isinstance(result, dict) else "")
         or ""
     )
     if event_name != "message.text.received":
-        # Other events (e.g. delivery callbacks) are ignored for now.
+        # Debug: surface the actual payload shape so future drift is
+        # visible. Keys only — values may contain link codes / chat
+        # IDs that are sensitive.
+        log.info(
+            "zalo_bot webhook ignored_event — debug shape",
+            top_keys=sorted(list(data.keys())),
+            result_keys=sorted(list(result.keys())) if isinstance(result, dict) else None,
+            event_name_seen=event_name or "<empty>",
+        )
         return {"status": "ok", "mode": "ignored_event", "event": event_name}
 
-    message = result.get("message") or {}
+    message = result.get("message") or data.get("message") or {}
     chat = message.get("chat") if isinstance(message, dict) else None
     chat_id = chat.get("id", "") if isinstance(chat, dict) else ""
     text_raw = (message.get("text") or "") if isinstance(message, dict) else ""
@@ -134,6 +142,14 @@ async def zalo_bot_webhook(
     display_name = sender.get("display_name", "") if isinstance(sender, dict) else ""
 
     if not chat_id or not text:
+        log.info(
+            "zalo_bot webhook noop — debug shape",
+            top_keys=sorted(list(data.keys())),
+            result_keys=sorted(list(result.keys())) if isinstance(result, dict) else None,
+            message_keys=sorted(list(message.keys())) if isinstance(message, dict) else None,
+            has_chat_id=bool(chat_id),
+            has_text=bool(text),
+        )
         return {"status": "ok", "mode": "noop"}
 
     # 3. Rate limit per chat_id.
@@ -158,14 +174,17 @@ async def zalo_bot_webhook(
 
     text_lower = text.lower()
 
-    # ---------------- /lienkiet <CODE> ----------------
-    if text_lower.startswith("/lienkiet"):
-        # Strip command, then the candidate code; format must be exact.
-        candidate = text[len("/lienkiet"):].strip().upper()
+    # ---------------- /lienket <CODE> ----------------
+    # "liên kết" without diacritics is "lien ket" (kết → ket, NOT kiet).
+    # Accept legacy "/lienkiet" too in case staff cached old instruction
+    # text — both route to the same handler.
+    if text_lower.startswith("/lienket") or text_lower.startswith("/lienkiet"):
+        prefix_len = len("/lienkiet") if text_lower.startswith("/lienkiet") else len("/lienket")
+        candidate = text[prefix_len:].strip().upper()
         if not _LINK_CODE_RE.match(candidate):
             await zalo_bot_gateway.send_message(
                 chat_id,
-                "Cú pháp sai. Gửi: /lienkiet <MA> (6 ký tự, chỉ chữ in hoa và số).",
+                "Cú pháp sai. Gửi: /lienket <MA> (6 ký tự, chỉ chữ in hoa và số).",
             )
             return {"status": "ok", "mode": "bad_format"}
 
@@ -191,8 +210,9 @@ async def zalo_bot_webhook(
         await zalo_bot_gateway.send_message(chat_id, reply)
         return {"status": "ok", "mode": "verify_and_link", "linked": ok}
 
-    # ---------------- /huylienkiet ----------------
-    if text_lower == "/huylienkiet":
+    # ---------------- /huylienket ----------------
+    # Same correction as /lienket above. Accept legacy "/huylienkiet" too.
+    if text_lower == "/huylienket" or text_lower == "/huylienkiet":
         try:
             ok, reply = await zalo_bot_link_service.unlink_by_chat_id(db, chat_id)
             if ok:
@@ -229,8 +249,8 @@ async def zalo_bot_webhook(
         chat_id,
         (
             "QLTS Bot:\n"
-            "/lienkiet <MA> — liên kết tài khoản\n"
-            "/huylienkiet — huỷ liên kết\n"
+            "/lienket <MA> — liên kết tài khoản\n"
+            "/huylienket — huỷ liên kết\n"
             "/trangthai — kiểm tra trạng thái"
         ),
     )

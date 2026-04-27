@@ -165,7 +165,7 @@ class TestPayloadShape:
         verify.return_value = (False, "invalid")
         resp = await client.post(
             "/api/webhooks/zalo-bot",
-            json=_payload("/lienkiet ABC123"),  # uses top-level shape
+            json=_payload("/lienket ABC123"),  # uses top-level shape
             headers={"X-Bot-Api-Secret-Token": SECRET},
         )
         assert resp.status_code == 200
@@ -183,7 +183,7 @@ class TestPayloadShape:
         verify.return_value = (False, "invalid")
         resp = await client.post(
             "/api/webhooks/zalo-bot",
-            json=_payload_legacy_nested("/lienkiet ABC123"),
+            json=_payload_legacy_nested("/lienket ABC123"),
             headers={"X-Bot-Api-Secret-Token": SECRET},
         )
         assert resp.status_code == 200
@@ -217,7 +217,7 @@ class TestLienKietCommand:
 
         resp = await client.post(
             "/api/webhooks/zalo-bot",
-            json=_payload("/lienkiet ABC123"),
+            json=_payload("/lienket ABC123"),
             headers={"X-Bot-Api-Secret-Token": SECRET},
         )
         assert resp.status_code == 200
@@ -235,7 +235,7 @@ class TestLienKietCommand:
         # Lowercase + 3 chars — does not match [A-Z0-9]{6}.
         resp = await client.post(
             "/api/webhooks/zalo-bot",
-            json=_payload("/lienkiet abc"),
+            json=_payload("/lienket abc"),
             headers={"X-Bot-Api-Secret-Token": SECRET},
         )
         assert resp.status_code == 200
@@ -251,7 +251,7 @@ class TestLienKietCommand:
 
         resp = await client.post(
             "/api/webhooks/zalo-bot",
-            json=_payload("/lienkiet ABC123"),
+            json=_payload("/lienket ABC123"),
             headers={"X-Bot-Api-Secret-Token": SECRET},
         )
         # 200 so Zalo doesn't retry and double-consume the code.
@@ -266,7 +266,45 @@ class TestLienKietCommand:
 
 @pytest.mark.asyncio
 class TestUnlinkCommand:
-    async def test_huylienkiet_calls_service(
+    async def test_huylienket_calls_service(
+        self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
+    ):
+        _, unlink = link_service_mock
+        unlink.return_value = (True, "Đã huỷ liên kết.")
+
+        resp = await client.post(
+            "/api/webhooks/zalo-bot",
+            json=_payload("/huylienket"),
+            headers={"X-Bot-Api-Secret-Token": SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["mode"] == "unlink"
+        unlink.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+class TestLegacyCommandSpelling:
+    """Backward-compat: accept the old (incorrect Vietnamese) spelling
+    ``/lienkiet`` and ``/huylienkiet`` so staff who copied previous
+    instruction text still link successfully. Canonical spelling is
+    ``/lienket`` (liên kết without diacritics)."""
+
+    async def test_legacy_lienkiet_still_routed(
+        self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
+    ):
+        verify, _ = link_service_mock
+        verify.return_value = (True, "Liên kết thành công!")
+
+        resp = await client.post(
+            "/api/webhooks/zalo-bot",
+            json=_payload("/lienkiet ABC123"),
+            headers={"X-Bot-Api-Secret-Token": SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["mode"] == "verify_and_link"
+        verify.assert_awaited_once()
+
+    async def test_legacy_huylienkiet_still_routed(
         self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
     ):
         _, unlink = link_service_mock
@@ -314,8 +352,8 @@ class TestUnknownCommand:
         assert resp.status_code == 200
         assert resp.json()["mode"] == "help"
         sent_text = gateway_mock.send_message.await_args.args[1]
-        assert "/lienkiet" in sent_text
-        assert "/huylienkiet" in sent_text
+        assert "/lienket" in sent_text
+        assert "/huylienket" in sent_text
         assert "/trangthai" in sent_text
 
 

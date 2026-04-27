@@ -124,7 +124,7 @@ describe("Zalo Bot section", () => {
     mockGenerate.mockResolvedValueOnce({
       code: "ABC123",
       expires_in_seconds: 600,
-      instructions: "Mở Zalo, tìm bot QLTS, gửi: /lienkiet ABC123",
+      instructions: "Mở Zalo, tìm bot QLTS, gửi: /lienket ABC123",
     });
 
     render(<NotificationSettingsClient />);

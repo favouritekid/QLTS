@@ -81,7 +81,7 @@ async def generate_link_code(
         "code": code,
         "expires_in_seconds": 600,  # v5/E8: 10-min window for staff onboarding
         "instructions": (
-            f"Mở Zalo, tìm bot QLTS, gửi: /lienkiet {code}"
+            f"Mở Zalo, tìm bot QLTS, gửi: /lienket {code}"
         ),
     }
 
