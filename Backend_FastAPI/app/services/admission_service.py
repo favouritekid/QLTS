@@ -5282,6 +5282,10 @@ async def override_profile(
             "Please refresh and try again."
         )
 
+    # ADM-014: capture pre-mutation state for the audit row.
+    _audit_old_status = profile.status
+    _audit_old_version = profile.version
+
     # STATE CHANGE
     profile.status = "overridden"
     profile.overridden_at = datetime.now(timezone.utc)
@@ -5319,9 +5323,33 @@ async def override_profile(
     # Populate transient computed fields so the mutation response matches GET.
     await _populate_response_fields(db, profile, admin)
 
-    # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11)
-    # TODO: Wire admin-override audit into audit_service.log_*.
-    # entity_audit_log table already exists; this path still only emits log.warning.
+    # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11) — ADM-014:
+    # admin override is a bypass action that absolutely needs durable audit
+    # in entity_audit_log, not just runtime log.warning. The fields below
+    # mirror what claim/unclaim/approve/reject already write.
+    from ..services import audit_service
+    await audit_service.log_changes(
+        db,
+        "AdmissionProfile",
+        profile.id,
+        "overridden",
+        changes={
+            "status": {"old": _audit_old_status, "new": "overridden"},
+            "version": {"old": _audit_old_version, "new": profile.version},
+            "override_reason": {"old": None, "new": data["reason"]},
+            "bypass_rules": {
+                "old": None,
+                "new": list(data.get("bypass_rules") or []),
+            },
+            "overridden_by_id": {"old": None, "new": admin.id},
+        },
+        actor_user_id=admin.id,
+        reason=data["reason"],
+        source="api",
+    )
+
+    # Keep the warning log too — useful for live alerting / SIEM, separate
+    # from the durable DB row.
     log.warning(
         "AUDIT: Admin override action",
         profile_id=profile.id,
