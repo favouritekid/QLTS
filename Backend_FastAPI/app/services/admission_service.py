@@ -69,6 +69,93 @@ from ..utils.masking import mask_citizen_id
 log = structlog.get_logger(__name__)
 
 
+# ADM-012: Safe domain exceptions whose ``str()`` is user-facing copy.
+# Anything outside this tuple becomes "Unexpected error" + correlation id
+# in bulk-action error maps so internal DB/stack details cannot leak to
+# the client. Keep this tuple in sync with imports above.
+_BULK_SAFE_DOMAIN_EXCEPTIONS = (
+    ResourceNotFoundError,
+    BadRequest,
+    BusinessRuleViolation,
+    PermissionDeniedError,
+    ConflictError,
+    ValidationError,
+)
+
+
+def _sniff_document_signature(stream) -> Optional[str]:
+    """ADM-019: detect a document upload's true type by magic bytes.
+
+    Returns ``"pdf"`` / ``"jpeg"`` / ``"png"`` when the first bytes of
+    ``stream`` match a known signature, ``None`` otherwise. The stream
+    cursor is restored to the start so the caller can still write the
+    file out.
+
+    Why magic bytes:
+    - ``UploadFile.content_type`` is taken straight from the multipart
+      header — fully attacker-controlled.
+    - The filename extension is just as untrusted.
+    - Without sniffing, a renamed ``.exe`` or HTML file with a forged
+      ``Content-Type: application/pdf`` would still pass validation.
+
+    We deliberately avoid pulling in ``python-magic`` / libmagic so the
+    check works in any container without an extra system dep.
+    """
+    try:
+        stream.seek(0)
+        head = stream.read(8)
+    finally:
+        try:
+            stream.seek(0)
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    if not head:
+        return None
+
+    if head.startswith(b"%PDF-"):
+        return "pdf"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    return None
+
+
+def _safe_bulk_error_message(
+    exc: Exception,
+    *,
+    bulk_label: str,
+    profile_id: int,
+    actor_id: Optional[int] = None,
+) -> str:
+    """Return a client-safe message for a bulk-action failure.
+
+    - Domain exceptions: pass through their message (already user-facing).
+    - Anything else: log full detail server-side with a correlation id and
+      return ``"Unexpected error (ref: <uuid>)"`` so internals do not leak.
+
+    The correlation id is logged alongside the original exception so ops
+    can pivot from a client report ("ref abc-123") to the full traceback.
+    """
+    import uuid as _uuid
+
+    if isinstance(exc, _BULK_SAFE_DOMAIN_EXCEPTIONS):
+        return str(exc)
+
+    correlation_id = _uuid.uuid4().hex[:12]
+    log.exception(
+        "bulk_action_unexpected_error",
+        bulk_label=bulk_label,
+        profile_id=profile_id,
+        actor_id=actor_id,
+        correlation_id=correlation_id,
+        error=str(exc),
+        error_type=exc.__class__.__name__,
+    )
+    return f"Unexpected error (ref: {correlation_id})"
+
+
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
@@ -3242,23 +3329,43 @@ async def upload_document(
     # File validation constants
     ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-    
+
     # Validate file type
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise BadRequest(
             f"Invalid file type '{file.content_type}'. "
             "Allowed: PDF, JPG, PNG"
         )
-    
+
     # Validate file size (read file to check size)
     file.file.seek(0, 2)  # Seek to end
     file_size = file.file.tell()
     file.file.seek(0)  # Reset to beginning
-    
+
     if file_size > MAX_FILE_SIZE:
         size_mb = file_size / (1024 * 1024)
         raise BadRequest(
             f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
+        )
+
+    # ADM-019: content_type and extension are client-controlled. Sniff
+    # the first bytes of the actual stream and reject mismatches so an
+    # attacker cannot upload a .exe with content_type=application/pdf.
+    sniffed_kind = _sniff_document_signature(file.file)
+    if sniffed_kind is None:
+        raise BadRequest(
+            "Tệp tải lên không phải PDF, JPG hoặc PNG hợp lệ "
+            "(magic bytes không khớp)."
+        )
+    expected_content_type = {
+        "pdf": "application/pdf",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+    }[sniffed_kind]
+    if file.content_type != expected_content_type:
+        raise BadRequest(
+            f"Content-Type '{file.content_type}' không khớp nội dung "
+            f"thực tế ({expected_content_type})."
         )
 
     # doc_record was already fetched above for the authz guard — no need to re-query.
@@ -3280,13 +3387,11 @@ async def upload_document(
         except OSError as e:
             log.warning("Failed to delete old file", path=old_file_path, error=str(e))
 
-    # SECURITY: Generate UUID-based filename (prevents path traversal & leaks)
-    original_filename = file.filename or "document"
-    file_extension = os.path.splitext(original_filename)[1].lower()
-    # Whitelist extensions
-    allowed_extensions = {".pdf", ".jpg", ".jpeg", ".png"}
-    if file_extension not in allowed_extensions:
-        file_extension = ".bin"  # Fallback for unknown types
+    # ADM-019: extension is taken from the sniffed content, not from
+    # the client-supplied filename, so we never fall back to ".bin" on
+    # an official document upload.
+    extension_for_kind = {"pdf": ".pdf", "jpeg": ".jpg", "png": ".png"}
+    file_extension = extension_for_kind[sniffed_kind]
 
     unique_filename = f"{doc_code}_{uuid.uuid4().hex[:12]}{file_extension}"
     file_path = f"{upload_dir}/{unique_filename}"
@@ -6734,9 +6839,13 @@ async def bulk_approve(
             failed_ids.append(profile_id)
             errors[profile_id] = "Profile not found"
         except Exception as e:
-            log.error("Bulk approve failed for profile", profile_id=profile_id, error=str(e))
             failed_ids.append(profile_id)
-            errors[profile_id] = str(e)
+            errors[profile_id] = _safe_bulk_error_message(
+                e,
+                bulk_label="admission_bulk_approve",
+                profile_id=profile_id,
+                actor_id=approver.id,
+            )
 
     await db.flush()
 
@@ -6950,9 +7059,13 @@ async def bulk_reject(
             failed_ids.append(profile_id)
             errors[profile_id] = "Profile not found"
         except Exception as e:
-            log.error("Bulk reject failed for profile", profile_id=profile_id, error=str(e))
             failed_ids.append(profile_id)
-            errors[profile_id] = str(e)
+            errors[profile_id] = _safe_bulk_error_message(
+                e,
+                bulk_label="admission_bulk_reject",
+                profile_id=profile_id,
+                actor_id=rejector.id,
+            )
 
     await db.flush()
 
@@ -7062,9 +7175,13 @@ async def bulk_assign(
             )
 
         except Exception as e:
-            log.error("Bulk assign failed for profile", profile_id=profile_id, error=str(e))
             failed_ids.append(profile_id)
-            errors[profile_id] = str(e)
+            errors[profile_id] = _safe_bulk_error_message(
+                e,
+                bulk_label="admission_bulk_assign",
+                profile_id=profile_id,
+                actor_id=assigner.id,
+            )
 
     await db.flush()
 
