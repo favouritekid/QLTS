@@ -1106,6 +1106,26 @@ class SystemEvents(str, Enum):
     Recipients: The user who logged in (for awareness)
     """
 
+    ZALO_BOT_LINK_DISPLACED = "zalo_bot_link_displaced"
+    """
+    Triggered when an existing active Zalo Bot link is taken over by another
+    user. Happens in ``zalo_bot_link_service.verify_and_link`` when the
+    incoming chat_id was previously bound to a different staff user — the
+    old binding is marked inactive (and ``zalo_bot_enabled`` flipped off)
+    so the new link can be enforced by the partial unique index. The
+    displaced user receives this event as a security awareness signal.
+
+    Payload Schema:
+        {
+            "user_id": int,               # Required: displaced user (recipient)
+            "displaced_by_user_id": int,  # Required: new linker (actor)
+            "chat_id_prefix": str,        # First 4 + last 2 chars of chat_id
+            "actor_id": int               # Same as displaced_by_user_id
+        }
+
+    Recipients: The displaced user (resolver = specific_users on user_id).
+    """
+
 
 # =============================================================================
 # EVENT DISPATCHER PATTERN

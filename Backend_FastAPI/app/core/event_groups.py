@@ -130,6 +130,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
 
     # Security events
     SystemEvents.SUSPICIOUS_LOGIN: NotificationEventGroup.SECURITY,
+    SystemEvents.ZALO_BOT_LINK_DISPLACED: NotificationEventGroup.SECURITY,
 
     # System operational events
     SystemEvents.HOLIDAY_CALENDAR_INCOMPLETE: NotificationEventGroup.SYSTEM,

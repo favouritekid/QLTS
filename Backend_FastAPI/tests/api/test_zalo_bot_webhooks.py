@@ -162,7 +162,7 @@ class TestPayloadShape:
         ignored every real message — repro of 2026-04-27 smoke regression.
         """
         verify, _ = link_service_mock
-        verify.return_value = (False, "invalid")
+        verify.return_value = (False, "invalid", None)
         resp = await client.post(
             "/api/webhooks/zalo-bot",
             json=_payload("/lienket ABC123"),  # uses top-level shape
@@ -180,7 +180,7 @@ class TestPayloadShape:
         """Legacy shape (event_name nested under result) keeps working as
         a fallback, so any provider variant doesn't regress."""
         verify, _ = link_service_mock
-        verify.return_value = (False, "invalid")
+        verify.return_value = (False, "invalid", None)
         resp = await client.post(
             "/api/webhooks/zalo-bot",
             json=_payload_legacy_nested("/lienket ABC123"),
@@ -213,7 +213,7 @@ class TestLienKietCommand:
         self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
     ):
         verify, _ = link_service_mock
-        verify.return_value = (True, "Liên kết thành công!")
+        verify.return_value = (True, "Liên kết thành công!", None)
 
         resp = await client.post(
             "/api/webhooks/zalo-bot",
@@ -270,7 +270,7 @@ class TestUnlinkCommand:
         self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
     ):
         _, unlink = link_service_mock
-        unlink.return_value = (True, "Đã huỷ liên kết.")
+        unlink.return_value = (True, "Đã huỷ liên kết.", None)
 
         resp = await client.post(
             "/api/webhooks/zalo-bot",
@@ -293,7 +293,7 @@ class TestLegacyCommandSpelling:
         self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
     ):
         verify, _ = link_service_mock
-        verify.return_value = (True, "Liên kết thành công!")
+        verify.return_value = (True, "Liên kết thành công!", None)
 
         resp = await client.post(
             "/api/webhooks/zalo-bot",
@@ -308,7 +308,7 @@ class TestLegacyCommandSpelling:
         self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock
     ):
         _, unlink = link_service_mock
-        unlink.return_value = (True, "Đã huỷ liên kết.")
+        unlink.return_value = (True, "Đã huỷ liên kết.", None)
 
         resp = await client.post(
             "/api/webhooks/zalo-bot",
@@ -374,7 +374,7 @@ class TestReplyDeliveryFailure:
         from app.gateways.zalo_bot import ZaloBotSendResult
 
         verify, _ = link_service_mock
-        verify.return_value = (True, "Liên kết thành công!")
+        verify.return_value = (True, "Liên kết thành công!", None)
         gateway_mock.send_message.return_value = ZaloBotSendResult(
             success=False, error_code=429, error_message="quota exceeded"
         )
@@ -399,7 +399,7 @@ class TestReplyDeliveryFailure:
         from app.gateways.zalo_bot import ZaloBotSendResult
 
         verify, _ = link_service_mock
-        verify.return_value = (True, "Liên kết thành công!")
+        verify.return_value = (True, "Liên kết thành công!", None)
         gateway_mock.send_message.return_value = ZaloBotSendResult(
             success=True, message_id="msg_xyz"
         )

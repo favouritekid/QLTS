@@ -233,14 +233,16 @@ async def zalo_bot_webhook(
             )
             return {"status": "ok", "mode": "bad_format"}
 
+        post_commit_cb = None
         try:
-            ok, reply = await zalo_bot_link_service.verify_and_link(
+            ok, reply, post_commit_cb = await zalo_bot_link_service.verify_and_link(
                 db, candidate, chat_id, display_name or None
             )
             if ok:
                 await db.commit()
             else:
                 await db.rollback()
+                post_commit_cb = None  # Don't fan out on failed verify.
         except Exception:
             await db.rollback()
             log.exception(
@@ -251,13 +253,26 @@ async def zalo_bot_webhook(
             return {"status": "ok", "mode": "service_error"}
 
         await _send_reply(chat_id, reply)
+        if post_commit_cb is not None:
+            # Displacement happened — fan out the security notification
+            # AFTER commit so the displaced user sees it (browser only by
+            # default per ZALO_BOT_LINK_DISPLACED catalog entry).
+            try:
+                await post_commit_cb()
+            except Exception:
+                # Never fail the webhook because of a notification fan-out
+                # issue — the link itself is already committed.
+                log.exception(
+                    "zalo_bot displacement post_commit failed",
+                    chat_id_prefix=_mask_chat_id(chat_id),
+                )
         return {"status": "ok", "mode": "verify_and_link", "linked": ok}
 
     # ---------------- /huylienket ----------------
     # Same correction as /lienket above. Accept legacy "/huylienkiet" too.
     if text_lower == "/huylienket" or text_lower == "/huylienkiet":
         try:
-            ok, reply = await zalo_bot_link_service.unlink_by_chat_id(db, chat_id)
+            ok, reply, _ = await zalo_bot_link_service.unlink_by_chat_id(db, chat_id)
             if ok:
                 await db.commit()
             else:
