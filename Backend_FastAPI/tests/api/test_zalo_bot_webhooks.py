@@ -368,6 +368,9 @@ class TestReplyDeliveryFailure:
     async def test_api_failure_logs_warning_but_keeps_200(
         self, client: AsyncClient, configured_secret, gateway_mock, link_service_mock, caplog
     ):
+        # Unique chat_id so the per-chat_id rate-limit counter (real
+        # Redis, shared across tests in this module) doesn't push us
+        # into the rate_limited branch before the verify path runs.
         from app.gateways.zalo_bot import ZaloBotSendResult
 
         verify, _ = link_service_mock
@@ -379,7 +382,7 @@ class TestReplyDeliveryFailure:
         with caplog.at_level("WARNING"):
             resp = await client.post(
                 "/api/webhooks/zalo-bot",
-                json=_payload("/lienket ABC123"),
+                json=_payload("/lienket ABC123", chat_id="chat_replyfail_uniq"),
                 headers={"X-Bot-Api-Secret-Token": SECRET},
             )
 
@@ -404,7 +407,7 @@ class TestReplyDeliveryFailure:
         with caplog.at_level("WARNING"):
             resp = await client.post(
                 "/api/webhooks/zalo-bot",
-                json=_payload("/lienket ABC123"),
+                json=_payload("/lienket ABC123", chat_id="chat_replyok_uniq"),
                 headers={"X-Bot-Api-Secret-Token": SECRET},
             )
 
