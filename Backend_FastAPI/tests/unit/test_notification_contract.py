@@ -447,6 +447,9 @@ class TestUserEventsHaveDispatchCallers:
         "user_deactivated", "user_profile_updated", "pipeline_config_updated",
         "officer_availability_changed", "suspicious_login",
         "holiday_calendar_incomplete",
+        # PR-Audit-1: dispatched from zalo_bot_link_service.verify_and_link
+        # post_commit closure when chat_id displacement happens.
+        "zalo_bot_link_displaced",
     })
 
     def test_user_events_have_dispatch_in_codebase(self):
