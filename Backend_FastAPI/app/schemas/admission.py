@@ -17,7 +17,7 @@ from datetime import date, datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional
 import html
 
-from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator, model_validator, ConfigDict
 
 
 # ==============================================================================
@@ -843,6 +843,27 @@ class BulkApproveItem(BaseModel):
     """Single item in a bulk approve request."""
     profile_id: int = Field(..., description="Admission profile ID")
     version: int = Field(..., ge=1, description="Current profile version for optimistic locking")
+    # ADM-026: per-item quota bypass. Admin-only at service layer.
+    # bypass_reason min length validated cross-field below.
+    bypass_quota: bool = Field(
+        False,
+        description="ADM-026: Override annual_admission_quota cap (admin only). Requires bypass_reason.",
+    )
+    bypass_reason: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="ADM-026: Required when bypass_quota=true. Min 20 chars. Audit log evidence.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_bypass_pair(self) -> "BulkApproveItem":
+        if self.bypass_quota:
+            reason = (self.bypass_reason or "").strip()
+            if len(reason) < 20:
+                raise ValueError(
+                    "bypass_reason is required and must be at least 20 characters when bypass_quota=true"
+                )
+        return self
 
 
 class BulkApproveRequest(BaseModel):
@@ -1061,6 +1082,26 @@ class ApproveRequest(BaseModel):
         ge=1,
         description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
     )
+    # ADM-026: quota bypass (admin only). Manager bypass → 403 at service layer.
+    bypass_quota: bool = Field(
+        False,
+        description="ADM-026: Override annual_admission_quota cap (admin only). Requires bypass_reason.",
+    )
+    bypass_reason: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="ADM-026: Required when bypass_quota=true. Min 20 chars. Audit log evidence.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_bypass_pair(self) -> "ApproveRequest":
+        if self.bypass_quota:
+            reason = (self.bypass_reason or "").strip()
+            if len(reason) < 20:
+                raise ValueError(
+                    "bypass_reason is required and must be at least 20 characters when bypass_quota=true"
+                )
+        return self
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -1250,6 +1291,26 @@ class FinalizeRequest(BaseModel):
         ge=1,
         description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
     )
+    # ADM-026: quota bypass at finalize (admin only).
+    bypass_quota: bool = Field(
+        False,
+        description="ADM-026: Override annual_admission_quota cap at finalize (admin only). Requires bypass_reason.",
+    )
+    bypass_reason: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="ADM-026: Required when bypass_quota=true. Min 20 chars. Audit log evidence.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_bypass_pair(self) -> "FinalizeRequest":
+        if self.bypass_quota:
+            reason = (self.bypass_reason or "").strip()
+            if len(reason) < 20:
+                raise ValueError(
+                    "bypass_reason is required and must be at least 20 characters when bypass_quota=true"
+                )
+        return self
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

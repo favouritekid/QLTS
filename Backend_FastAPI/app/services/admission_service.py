@@ -270,6 +270,257 @@ def _check_idor_access(
     raise ResourceNotFoundError(f"Admission profile {profile.id} not found")
 
 
+# =========================================================================
+# ADM-026: Quota enforcement helpers
+# =========================================================================
+
+# Statuses that occupy a quota slot. These are profiles already committed to
+# the cohort: approved or further along the funnel. ``withdrawn`` and
+# pre-approval states (draft/submitted/rejected/resubmitted/revision_requested)
+# are NOT counted because they have not yet committed a seat.
+#
+# Note: ``enrolled`` profiles with ``is_dropped=True`` ARE still counted —
+# they took a seat that cannot be reassigned for the same academic year.
+# This matches the legal/compliance reading that quota = seats consumed,
+# not seats currently active.
+QUOTA_OCCUPYING_STATUSES = (
+    "approved",
+    "overridden",
+    "confirmed",
+    "enrolled",
+)
+
+
+async def _resolve_quota_context(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    *,
+    lock: bool = True,
+) -> tuple[Optional[models.OfferingAcademicInfo], Optional[int]]:
+    """
+    Resolve the OfferingAcademicInfo + quota for ``profile``.
+
+    Strategy:
+    1. Prefer ``applied_rules.academic_info_id`` (snapshotted at create_profile).
+    2. Fall back to (lead.offering_id, profile.academic_year) for legacy
+       profiles that pre-date the snapshot.
+
+    If ``lock=True`` (default), the OfferingAcademicInfo row is acquired
+    with ``FOR UPDATE`` to serialize concurrent approve/finalize calls
+    against the same offering — without it, two parallel transactions can
+    each see ``count < quota`` and both insert, blowing the cap by 1+.
+
+    Returns:
+        (academic_info, quota). ``quota`` is ``None`` when the field is
+        unset (treat as unlimited / quota disabled). ``academic_info`` is
+        ``None`` when the profile cannot be linked to an offering academic
+        info row (legacy profile without offering_id, or seed/test data).
+    """
+    from sqlalchemy import select as _select
+
+    applied_rules = profile.applied_rules or {}
+    academic_info_id = applied_rules.get("academic_info_id")
+
+    stmt = _select(models.OfferingAcademicInfo)
+    if academic_info_id:
+        stmt = stmt.where(models.OfferingAcademicInfo.id == academic_info_id)
+    else:
+        # Fallback: legacy profile. Need lead.offering_id + academic_year.
+        if not profile.lead or not getattr(profile.lead, "offering_id", None):
+            return (None, None)
+        stmt = stmt.where(
+            models.OfferingAcademicInfo.offering_id == profile.lead.offering_id,
+            models.OfferingAcademicInfo.academic_year == profile.academic_year,
+        )
+
+    if lock:
+        stmt = stmt.with_for_update()
+
+    result = await db.execute(stmt)
+    academic_info = result.scalar_one_or_none()
+    if academic_info is None:
+        return (None, None)
+    return (academic_info, academic_info.annual_admission_quota)
+
+
+async def _count_quota_occupying_profiles(
+    db: AsyncSession,
+    *,
+    offering_id: int,
+    academic_year: int,
+    exclude_profile_id: Optional[int] = None,
+) -> int:
+    """
+    Count AdmissionProfile rows that currently occupy a quota seat for the
+    given (offering, academic_year). Excludes ``exclude_profile_id`` so a
+    transition INTO a quota-occupying status doesn't double-count itself
+    when the profile is mid-update.
+    """
+    from sqlalchemy import select as _select, func as _func
+
+    stmt = (
+        _select(_func.count(models.AdmissionProfile.id))
+        .join(models.Lead, models.AdmissionProfile.lead_id == models.Lead.id)
+        .where(
+            models.Lead.offering_id == offering_id,
+            models.AdmissionProfile.academic_year == academic_year,
+            models.AdmissionProfile.status.in_(QUOTA_OCCUPYING_STATUSES),
+        )
+    )
+    if exclude_profile_id is not None:
+        stmt = stmt.where(models.AdmissionProfile.id != exclude_profile_id)
+
+    result = await db.execute(stmt)
+    return int(result.scalar_one() or 0)
+
+
+async def _assert_quota_or_bypass(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    actor: models.User,
+    bypass_quota: bool,
+    bypass_reason: Optional[str],
+    *,
+    transition: str,
+    source: str = "api",
+) -> None:
+    """
+    ADM-026: Enforce ``annual_admission_quota`` for transitions INTO
+    quota-occupying statuses (approve / finalize). Emits a durable
+    ``entity_audit_log`` row whenever an admin bypasses the cap.
+
+    Behaviour:
+    - Profile not yet in a quota status + count + 1 ≤ quota → pass silently.
+    - Count + 1 > quota and ``bypass_quota=False`` → raise
+      ``BusinessRuleViolation`` (the standard hard-cap error path).
+    - ``bypass_quota=True`` and ``actor.role != ADMIN`` → raise
+      ``PermissionDeniedError``. Manager cannot bypass under Q12 Option B.
+    - ``bypass_quota=True`` without a ≥20-char reason → raise
+      ``ValidationError``. Schema-level validators catch this earlier for
+      Pydantic-bound payloads, but service-layer callers (tests, internal
+      flows) must still satisfy the contract.
+    - ``bypass_quota=True`` from admin with valid reason → pass and write
+      ``entity_audit_log`` with ``action="quota_bypassed"`` + full
+      changeset (quota, count_before/after, actor, reason).
+
+    The OfferingAcademicInfo row is locked (``FOR UPDATE``) before the
+    count so concurrent approve/finalize transactions serialize and the
+    cap holds under load.
+
+    Args:
+        db: Active session (caller's transaction frame).
+        profile: AdmissionProfile being transitioned. Must have ``lead``
+            eager-loaded so the offering-id fallback works.
+        actor: User performing the action.
+        bypass_quota: Whether the caller asked to override the cap.
+        bypass_reason: Audit-trail evidence. Required iff
+            ``bypass_quota=True`` (≥20 chars).
+        transition: Short label for audit/log (e.g. ``"approve"``,
+            ``"finalize"``, ``"bulk_approve"``).
+        source: Audit ``source`` field. Defaults to ``"api"``.
+
+    Raises:
+        BusinessRuleViolation: cap reached and no bypass.
+        PermissionDeniedError: bypass requested by non-admin.
+        ValidationError: bypass requested without valid reason.
+    """
+    academic_info, quota = await _resolve_quota_context(db, profile, lock=True)
+
+    # No academic_info found OR quota=None → quota disabled / legacy data.
+    # Treat as unlimited (no enforcement). Log at debug for observability.
+    if academic_info is None or quota is None or quota <= 0:
+        log.debug(
+            "Quota check skipped (unlimited / unconfigured)",
+            profile_id=profile.id,
+            transition=transition,
+            academic_info_id=getattr(academic_info, "id", None),
+            quota=quota,
+        )
+        return
+
+    # Count seats currently occupied by other profiles. Exclude self so a
+    # finalize on an already-approved profile doesn't double-count.
+    offering_id = profile.lead.offering_id if profile.lead else None
+    if offering_id is None:
+        # Cannot count without offering scope. Skip enforcement for safety.
+        log.warning(
+            "Quota check skipped: profile has no lead.offering_id",
+            profile_id=profile.id,
+            transition=transition,
+        )
+        return
+
+    count_before = await _count_quota_occupying_profiles(
+        db,
+        offering_id=offering_id,
+        academic_year=profile.academic_year,
+        exclude_profile_id=profile.id,
+    )
+    # If profile is ALREADY in a quota status (e.g. finalize on an approved
+    # profile), it was excluded from count_before, so count_after = count_before.
+    # If profile is transitioning INTO a quota status from outside (e.g.
+    # approve from submitted), count_after = count_before + 1.
+    is_already_occupying = profile.status in QUOTA_OCCUPYING_STATUSES
+    count_after = count_before if is_already_occupying else count_before + 1
+
+    over_cap = count_after > quota
+
+    if not over_cap:
+        return  # Under cap, allow.
+
+    # Cap reached. Either bypass or block.
+    if not bypass_quota:
+        raise BusinessRuleViolation(
+            f"Vượt chỉ tiêu tuyển sinh: chỉ tiêu năm {profile.academic_year} là "
+            f"{quota} hồ sơ, hiện đã đầy ({count_before}/{quota}). "
+            "Liên hệ admin nếu cần ghi đè (bypass_quota=true + bypass_reason ≥20 ký tự)."
+        )
+
+    # Bypass path. Admin-only.
+    if actor.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            "Chỉ Admin được phép ghi đè chỉ tiêu tuyển sinh (bypass_quota). "
+            f"Role hiện tại: {actor.role}."
+        )
+
+    reason = (bypass_reason or "").strip()
+    if len(reason) < 20:
+        raise ValidationError(
+            "bypass_reason là bắt buộc và phải có ít nhất 20 ký tự khi bypass_quota=true."
+        )
+
+    # Admin bypass authorized. Write durable audit log evidence.
+    from ..services import audit_service
+    await audit_service.log_audit(
+        db,
+        entity_type="AdmissionProfile",
+        entity_id=profile.id,
+        action="quota_bypassed",
+        actor_user_id=actor.id,
+        changes={
+            "quota": {"old": None, "new": quota},
+            "enrolled_count_before": {"old": None, "new": count_before},
+            "enrolled_count_after": {"old": None, "new": count_after},
+            "academic_info_id": {"old": None, "new": academic_info.id},
+            "academic_year": {"old": None, "new": profile.academic_year},
+            "offering_id": {"old": None, "new": offering_id},
+            "transition": {"old": None, "new": transition},
+        },
+        reason=reason,
+        source=source,
+    )
+    log.warning(
+        "ADM-026 quota cap bypassed by admin",
+        profile_id=profile.id,
+        transition=transition,
+        quota=quota,
+        count_before=count_before,
+        count_after=count_after,
+        actor_id=actor.id,
+        reason=reason[:80],
+    )
+
+
 async def check_enrollment_fee_eligibility(
     db: AsyncSession,
     profile_id: int,
@@ -4590,6 +4841,19 @@ async def approve_profile(
             "Vui lòng xác nhận thanh toán lệ phí trước khi duyệt hồ sơ."
         )
 
+    # ADM-026: quota gate. Locks the OfferingAcademicInfo row before
+    # counting committed seats so concurrent approve calls cannot blow the
+    # cap. Admin can override with bypass_quota + bypass_reason; manager
+    # gets 403; missing reason gets 400.
+    await _assert_quota_or_bypass(
+        db,
+        profile,
+        approver,
+        bypass_quota=bool(data.get("bypass_quota", False)),
+        bypass_reason=data.get("bypass_reason"),
+        transition="approve",
+    )
+
     # STATE CHANGE
     _old_status_for_audit = profile.status
     profile.status = "approved"
@@ -5843,6 +6107,21 @@ async def finalize_profile(
             "Please refresh and try again."
         )
 
+    # ADM-026: quota gate at finalize. Profile is already in a
+    # quota-occupying status (confirmed/overridden) at this point, so the
+    # transition into ``enrolled`` is net-zero on the count — but we still
+    # re-assert in case someone bypassed the approve gate or quota was
+    # reduced after approve. Locking the offering row also serializes
+    # concurrent finalize calls.
+    await _assert_quota_or_bypass(
+        db,
+        profile,
+        admin,
+        bypass_quota=bool(data.get("bypass_quota", False)),
+        bypass_reason=data.get("bypass_reason"),
+        transition="finalize",
+    )
+
     # Path C / Arch-3: delegate to shared `_perform_enrollment_core` (NOT
     # `enroll_student`) so finalize owns its own bundle without
     # double-dispatching the enroll bundle. Core handles the locked fetch +
@@ -7053,6 +7332,26 @@ async def bulk_approve(
             if requires_fee and fee_status == "pending":
                 failed_ids.append(profile_id)
                 errors[profile_id] = "Lệ phí xét tuyển chưa được thanh toán"
+                continue
+
+            # ADM-026: per-item quota gate. Per-item bypass fields let admin
+            # selectively override the cap for some profiles in the batch
+            # while letting others fail-fast. Errors map to per-item
+            # ``errors[profile_id]`` so the batch keeps moving (matches
+            # existing bulk error shape used for state/version/fee gates).
+            try:
+                await _assert_quota_or_bypass(
+                    db,
+                    profile,
+                    approver,
+                    bypass_quota=bool(item.get("bypass_quota", False)),
+                    bypass_reason=item.get("bypass_reason"),
+                    transition="bulk_approve",
+                    source="bulk_api",
+                )
+            except (BusinessRuleViolation, PermissionDeniedError, ValidationError) as quota_err:
+                failed_ids.append(profile_id)
+                errors[profile_id] = str(quota_err)
                 continue
 
             # STATE CHANGE
