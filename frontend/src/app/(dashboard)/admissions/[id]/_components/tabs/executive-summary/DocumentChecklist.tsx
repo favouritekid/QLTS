@@ -41,7 +41,7 @@ import { useState } from "react"
 import {
   getDocumentStatusConfig,
   getFormatLabel,
-  formatDateTime,
+  DOCUMENT_FORMAT_OPTIONS,
 } from "@/lib/utils/admission-helpers"
 import { useVerifyDocument, useRejectDocument } from "@/hooks/admissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
@@ -293,9 +293,12 @@ function DocumentRow({
 
         <TableCell className="text-center">
           {status === "verified" ? (
+            // "Đã kiểm tra" — officer-verified, fully complete. Distinct
+            // from "ghi nhận" states (uploaded / paper_submitted) which
+            // mean we received the row but haven't checked it yet.
             <Badge className="bg-success-600 hover:bg-success-700 gap-1">
               <CheckCircle2 className="w-3 h-3" />
-              Đã xác nhận
+              Đã kiểm tra
             </Badge>
           ) : (
             <Badge
@@ -318,9 +321,11 @@ function DocumentRow({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="original">Bản gốc</SelectItem>
-                <SelectItem value="certified_copy">Bản sao có công chứng</SelectItem>
-                <SelectItem value="photo">Bản photo/scan</SelectItem>
+                {DOCUMENT_FORMAT_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           ) : status === "verified" && doc.verified_format ? (

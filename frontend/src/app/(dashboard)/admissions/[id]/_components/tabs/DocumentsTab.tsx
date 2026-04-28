@@ -17,7 +17,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle
 } from "@/components/ui/dialog"
@@ -29,14 +28,21 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
-  FileText, Check, AlertCircle, Clock, XCircle, Upload, Loader2, Eye, ExternalLink,
-  Camera, FileCheck, FileSpreadsheet, Globe, Building2, Ban, RotateCcw
+  FileText, Check, AlertCircle, XCircle, Upload, Loader2, Eye,
+  Camera, FileCheck, FileSpreadsheet, Globe, Building2, Ban, RotateCcw,
+  AlertTriangle,
 } from "lucide-react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { useUploadAdmissionDocument, useMarkPaperSubmitted, useRejectDocument, useResetDocument } from "@/hooks/admissions/useAdmissions"
 import { useRef, useState } from "react"
 import { toast } from "sonner"
 import { isSafeFilePath } from "@/lib/utils"
+import {
+  DOCUMENT_FORMAT_OPTIONS,
+  getFormatLabel,
+  isDocumentVerified,
+  isDocumentRecorded,
+} from "@/lib/utils/admission-helpers"
 
 interface DocumentsTabProps {
   profile: AdmissionProfileResponse
@@ -47,6 +53,9 @@ interface DocumentsTabProps {
 // STATUS CONFIG
 // ============================================================================
 
+// Status labels distinguish "ghi nhận" (received) from "kiểm tra" (verified):
+// uploaded / paper_submitted are received but officer-review still pending,
+// while verified means officer has confirmed the submitted format.
 const STATUS_CONFIG: Record<string, {
   label: string
   color: string
@@ -58,17 +67,17 @@ const STATUS_CONFIG: Record<string, {
     icon: AlertCircle,
   },
   uploaded: {
-    label: "Đã tải",
+    label: "Đã ghi nhận (online)",
     color: "bg-info-100 text-info-700",
-    icon: Check,
+    icon: Upload,
   },
   paper_submitted: {
-    label: "Đã nộp",
-    color: "bg-success-100 text-success-700",
-    icon: Check,
+    label: "Đã nhận bản giấy",
+    color: "bg-info-100 text-info-700",
+    icon: FileText,
   },
   verified: {
-    label: "Đã xác minh",
+    label: "Đã kiểm tra",
     color: "bg-success-100 text-success-700",
     icon: Check,
   },
@@ -79,26 +88,12 @@ const STATUS_CONFIG: Record<string, {
   },
 }
 
-// ============================================================================
-// SUBMISSION FORMAT CONFIG
-// ============================================================================
-
-const FORMAT_CONFIG: Record<string, {
-  label: string
-  icon: typeof Camera
-}> = {
-  photo: {
-    label: "Ảnh chụp",
-    icon: Camera,
-  },
-  certified_copy: {
-    label: "Sao y",
-    icon: FileCheck,
-  },
-  original: {
-    label: "Bản gốc",
-    icon: FileSpreadsheet,
-  },
+// Icon mapping for submission format badges. Labels come from
+// admission-helpers (single source of truth) — do not duplicate text here.
+const FORMAT_ICONS: Record<string, typeof Camera> = {
+  photo: Camera,
+  certified_copy: FileCheck,
+  original: FileSpreadsheet,
 }
 
 function getStatusConfig(status: string) {
@@ -109,9 +104,12 @@ function getStatusConfig(status: string) {
   }
 }
 
-function getFormatConfig(format: string | null | undefined) {
+function getFormatBadge(format: string | null | undefined) {
   if (!format) return null
-  return FORMAT_CONFIG[format] ?? { label: format, icon: FileSpreadsheet }
+  return {
+    label: getFormatLabel(format),
+    icon: FORMAT_ICONS[format] ?? FileSpreadsheet,
+  }
 }
 
 // ============================================================================
@@ -276,14 +274,13 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
     window.open(url, "_blank", "noopener,noreferrer")
   }
   
-  // Stats
-  const completedCount = documents.filter(
-    (d) => d.status === "uploaded" || d.status === "verified" || d.status === "paper_submitted"
-  ).length
+  // Stats — distinguish "ghi nhận" (received in any form) from "kiểm tra"
+  // (officer-verified). Progress bar reflects fully-verified rows so
+  // received-but-unverified docs don't masquerade as complete.
+  const recordedCount = documents.filter((d) => isDocumentRecorded(d.status)).length
+  const verifiedCount = documents.filter((d) => isDocumentVerified(d.status)).length
   const mandatoryDocs = documents.filter((d) => d.is_mandatory)
-  const mandatoryCompletedCount = mandatoryDocs.filter(
-    (d) => d.status === "uploaded" || d.status === "verified" || d.status === "paper_submitted"
-  ).length
+  const mandatoryVerifiedCount = mandatoryDocs.filter((d) => isDocumentVerified(d.status)).length
 
   return (
     <>
@@ -296,29 +293,50 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                 Tài liệu hồ sơ
               </CardTitle>
               <CardDescription>
-                {completedCount} / {documents.length} tài liệu đã nộp
+                Đã ghi nhận {recordedCount}/{documents.length} • Đã kiểm tra {verifiedCount}/{documents.length}
                 {mandatoryDocs.length > 0 && (
                   <span className="ml-2">
-                    (Bắt buộc: {mandatoryCompletedCount}/{mandatoryDocs.length})
+                    (Bắt buộc đã kiểm tra: {mandatoryVerifiedCount}/{mandatoryDocs.length})
                   </span>
                 )}
               </CardDescription>
             </div>
-            {/* Progress indicator */}
+            {/* Progress bar reflects officer-verified rows only. The
+                ghi-nhận sliver shows up as the lighter background fill so
+                officers can still see incoming volume at a glance. */}
             <div className="flex items-center gap-2">
-              <div className="w-32 h-2 bg-muted rounded-full overflow-hidden">
+              <div
+                className="relative w-32 h-2 bg-muted rounded-full overflow-hidden"
+                role="progressbar"
+                aria-label="Tiến độ kiểm tra tài liệu"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={
+                  documents.length > 0
+                    ? Math.round((verifiedCount / documents.length) * 100)
+                    : 0
+                }
+              >
                 <div
-                  className="h-full bg-primary transition-[width] duration-300"
+                  className="absolute inset-y-0 left-0 bg-info-200 transition-[width] duration-300"
                   style={{
                     width: documents.length > 0
-                      ? `${(completedCount / documents.length) * 100}%`
+                      ? `${(recordedCount / documents.length) * 100}%`
+                      : "0%",
+                  }}
+                />
+                <div
+                  className="absolute inset-y-0 left-0 bg-success-600 transition-[width] duration-300"
+                  style={{
+                    width: documents.length > 0
+                      ? `${(verifiedCount / documents.length) * 100}%`
                       : "0%",
                   }}
                 />
               </div>
               <span className="text-sm text-muted-foreground font-medium">
                 {documents.length > 0
-                  ? Math.round((completedCount / documents.length) * 100)
+                  ? Math.round((verifiedCount / documents.length) * 100)
                   : 0}%
               </span>
             </div>
@@ -339,15 +357,24 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
             <div className="space-y-2">
               {documents.map((doc, index) => {
                 const statusConfig = getStatusConfig(doc.status)
-                const formatConfig = getFormatConfig(doc.submission_format)
+                const formatBadge = getFormatBadge(doc.submission_format)
                 const StatusIcon = statusConfig.icon
-                const FormatIcon = formatConfig?.icon || FileSpreadsheet
-                
+                const FormatIcon = formatBadge?.icon || FileSpreadsheet
+
                 const isUploading = uploadMutation.isPending && selectedDocCode === doc.code
                 const isPaperPending = paperMutation.isPending && paperMutation.variables?.docCode === doc.code
                 const hasFile = doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
                 const requiresUpload = doc.requires_upload !== false // Default true if undefined
                 const isPaperDoc = !requiresUpload
+                // Task-oriented hint surfaced inline for missing rows so the
+                // officer/applicant immediately knows the next physical step
+                // ("upload a scan" vs "bring paper to counter").
+                const isMissing = doc.status === "missing"
+                const taskHint = isMissing
+                  ? requiresUpload
+                    ? "Cần tải ảnh/scan"
+                    : "Nhận bản giấy tại quầy"
+                  : null
                 // PR #5: per-row permission flags from backend replace the
                 // coarse `can('edit')` gate — the matching button shows iff
                 // the route would authorise the action for this user.
@@ -384,15 +411,20 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             </span>
                           )}
                         </div>
+                        {taskHint && (
+                          <p className="text-xs text-warning-700 font-medium mt-1">
+                            {taskHint}
+                          </p>
+                        )}
                       </div>
                     </div>
-                    
-                    {/* Column 2: Loại nộp (submission_format) */}
-                    <div className="w-24 flex-shrink-0">
-                      {formatConfig && (
+
+                    {/* Column 2: Yêu cầu loại bản nộp (submission_format) */}
+                    <div className="w-32 flex-shrink-0">
+                      {formatBadge && (
                         <Badge variant="outline" className="text-xs gap-1">
                           <FormatIcon className="h-3 w-3" />
-                          {formatConfig.label}
+                          {formatBadge.label}
                         </Badge>
                       )}
                     </div>
@@ -423,7 +455,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                     </div>
                     
                     {/* Column 5: Thao tác */}
-                    <div className="w-32 flex-shrink-0 flex items-center justify-end gap-2">
+                    <div className="w-44 flex-shrink-0 flex items-center justify-end gap-2">
                       {/* View button for uploaded documents */}
                       {hasFile && (
                         <Button
@@ -436,43 +468,47 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           <Eye className="h-4 w-4" />
                         </Button>
                       )}
-                      
-                      {/* Upload button for online documents */}
+
+                      {/* Upload action — requires_upload=true rows. Label is
+                          "Tải file" to match the task-oriented hint above. */}
                       {canUpload && (
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => handleUploadClick(doc.code, doc.label, doc.submission_format ?? undefined)}
                           disabled={uploadMutation.isPending}
-                          aria-label="Tải lên"
+                          aria-label="Tải file"
                         >
                           {isUploading ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
                           ) : (
-                            <Upload className="h-4 w-4" />
+                            <Upload className="h-4 w-4 mr-1" />
                           )}
+                          Tải file
                         </Button>
                       )}
-                      
-                      {/* Paper submission checkbox (Officer only) */}
+
+                      {/* Paper-receipt action — requires_upload=false rows.
+                          Officer-only by backend permission flag. The spec
+                          replaced the old "Đã nộp" checkbox with an explicit
+                          button so the action is unambiguous. */}
                       {canMarkPaperSubmitted && (
-                        <div className="flex items-center gap-1">
-                          <Checkbox
-                            id={`paper-${doc.code}`}
-                            disabled={isPaperPending}
-                            onCheckedChange={(checked) => {
-                              if (checked) handlePaperSubmit(doc.code, doc.label, doc.submission_format ?? undefined)
-                            }}
-                          />
-                          <label
-                            htmlFor={`paper-${doc.code}`}
-                            className="text-xs text-muted-foreground cursor-pointer select-none"
-                          >
-                            Đã nộp
-                          </label>
-                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handlePaperSubmit(doc.code, doc.label, doc.submission_format ?? undefined)}
+                          disabled={isPaperPending}
+                          aria-label="Đánh dấu đã nhận giấy"
+                        >
+                          {isPaperPending ? (
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                          ) : (
+                            <Building2 className="h-4 w-4 mr-1" />
+                          )}
+                          Đánh dấu đã nhận giấy
+                        </Button>
                       )}
-                      
+
                       {/* Paper already submitted indicator */}
                       {isPaperDoc && doc.status === "paper_submitted" && (
                         <Check className="h-4 w-4 text-success-600" />
@@ -528,56 +564,70 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
         />
       </Card>
       
-      {/* Submission Format Selection Dialog */}
+      {/* Submission Format Selection Dialog
+          Officer / applicant declares the *actual* paper/file type they
+          just received. The dialog deliberately does NOT ask for an
+          extra evidence document — wording is task-oriented so the user
+          doesn't read this as a second upload step. */}
       <Dialog
         open={submissionFormatDialog?.isOpen || false}
         onOpenChange={(open) => !open && setSubmissionFormatDialog(null)}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Xác nhận loại bản nộp</DialogTitle>
+            <DialogTitle>Loại bản thực tế trong file/giấy này</DialogTitle>
             <DialogDescription>
-              Tài liệu: <strong>{submissionFormatDialog?.docLabel}</strong>
-              <br />
-              {submissionFormatDialog?.requiredFormat && (
-                <span className="text-sm text-amber-600 mt-1 inline-block">
-                  Yêu cầu: {FORMAT_CONFIG[submissionFormatDialog.requiredFormat]?.label || submissionFormatDialog.requiredFormat}
-                </span>
-              )}
+              Đây là loại bản của <strong>{submissionFormatDialog?.docLabel}</strong> bạn vừa{" "}
+              {submissionFormatDialog?.action === "paper" ? "nhận tại quầy" : "tải lên"}
+              {" "}— không phải tài liệu bổ sung. Hãy chọn đúng loại bản đang có trong tay.
             </DialogDescription>
           </DialogHeader>
 
+          {submissionFormatDialog?.requiredFormat && (
+            <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              <span className="text-muted-foreground">Yêu cầu hồ sơ: </span>
+              <span className="font-medium">
+                {getFormatLabel(submissionFormatDialog.requiredFormat)}
+              </span>
+            </div>
+          )}
+
           <RadioGroup value={selectedFormat} onValueChange={setSelectedFormat}>
-            <div className="flex items-center space-x-2 p-3 border rounded-lg hover:bg-muted/50 transition-colors">
-              <RadioGroupItem value="original" id="original" />
-              <Label htmlFor="original" className="flex-1 cursor-pointer">
-                <div className="font-medium">Bản chính</div>
-                <div className="text-xs text-muted-foreground">
-                  Giấy tờ gốc do cơ quan có thẩm quyền cấp
-                </div>
-              </Label>
-            </div>
-
-            <div className="flex items-center space-x-2 p-3 border rounded-lg hover:bg-muted/50 transition-colors">
-              <RadioGroupItem value="certified_copy" id="certified_copy" />
-              <Label htmlFor="certified_copy" className="flex-1 cursor-pointer">
-                <div className="font-medium">Bản sao có chứng thực</div>
-                <div className="text-xs text-muted-foreground">
-                  Bản photocopy được công chứng/chứng thực
-                </div>
-              </Label>
-            </div>
-
-            <div className="flex items-center space-x-2 p-3 border rounded-lg hover:bg-muted/50 transition-colors">
-              <RadioGroupItem value="photo" id="photo" />
-              <Label htmlFor="photo" className="flex-1 cursor-pointer">
-                <div className="font-medium">Bản photocopy</div>
-                <div className="text-xs text-muted-foreground">
-                  Bản sao không công chứng
-                </div>
-              </Label>
-            </div>
+            {DOCUMENT_FORMAT_OPTIONS.map((option) => (
+              <div
+                key={option.value}
+                className="flex items-center space-x-2 p-3 border rounded-lg hover:bg-muted/50 transition-colors"
+              >
+                <RadioGroupItem value={option.value} id={option.value} />
+                <Label htmlFor={option.value} className="flex-1 cursor-pointer">
+                  <div className="font-medium">{option.label}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {option.description}
+                  </div>
+                </Label>
+              </div>
+            ))}
           </RadioGroup>
+
+          {/* Soft warning — selected actual format does not match the
+              required format. Allowed (officer may still proceed) but
+              flagged so officer notices any mismatch before saving. */}
+          {submissionFormatDialog?.requiredFormat &&
+            selectedFormat &&
+            selectedFormat !== submissionFormatDialog.requiredFormat && (
+              <div
+                className="flex items-start gap-2 rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-sm text-warning-800"
+                role="alert"
+              >
+                <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                <span>
+                  Loại bản thực tế (<strong>{getFormatLabel(selectedFormat)}</strong>){" "}
+                  khác với yêu cầu hồ sơ (
+                  <strong>{getFormatLabel(submissionFormatDialog.requiredFormat)}</strong>
+                  ). Hãy kiểm tra lại trước khi xác nhận.
+                </span>
+              </div>
+            )}
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setSubmissionFormatDialog(null)}>

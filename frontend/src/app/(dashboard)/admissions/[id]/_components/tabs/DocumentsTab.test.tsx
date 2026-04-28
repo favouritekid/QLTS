@@ -1,15 +1,22 @@
 /**
- * DocumentsTab per-row permission gating (PR #5).
+ * DocumentsTab — per-row permission gating + ADM-031 task-orientation.
  *
- * The tab now renders each action button based on the explicit backend
- * flag (`doc.can_upload`, `doc.can_reject`, `doc.can_reset`,
- * `doc.can_mark_paper_submitted`) instead of the coarse
- * `can('edit')` role check. These tests exercise combinations directly
- * against the rendered DOM so any regression that falls back to a role
- * check or inverts a flag gets caught.
+ * Two concerns are exercised here:
+ *
+ * 1. Per-row permission flags from PR #5 (`can_upload`, `can_reject`,
+ *    `can_reset`, `can_mark_paper_submitted`). Each action button must
+ *    only render when the matching backend flag is true.
+ *
+ * 2. ADM-031 wireframe — missing rows surface a task-oriented hint
+ *    ("Cần tải ảnh/scan" vs "Nhận bản giấy tại quầy") and the action
+ *    buttons carry explicit labels ("Tải file" / "Đánh dấu đã nhận
+ *    giấy") instead of icon-only triggers. Format dialog wording was
+ *    rewritten to clarify that the user is declaring the actual paper
+ *    type, not uploading additional evidence.
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@/test/utils/test-utils";
+import userEvent from "@testing-library/user-event";
 
 import { DocumentsTab } from "./DocumentsTab";
 
@@ -32,6 +39,7 @@ type DocRow = {
   can_reject?: boolean;
   can_reset?: boolean;
   can_mark_paper_submitted?: boolean;
+  submission_format?: string | null;
   file_path?: string | null;
   uploaded_at?: string | null;
 };
@@ -67,7 +75,7 @@ describe("DocumentsTab — per-row permission flags", () => {
       },
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
-    expect(screen.getByRole("button", { name: /tải lên/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /tải file/i })).toBeInTheDocument();
   });
 
   it("hides Upload when can_upload=false even if status=missing", () => {
@@ -82,7 +90,7 @@ describe("DocumentsTab — per-row permission flags", () => {
       },
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
-    expect(screen.queryByRole("button", { name: /tải lên/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /tải file/i })).not.toBeInTheDocument();
   });
 
   it("shows Reject only when can_reject=true", () => {
@@ -129,7 +137,7 @@ describe("DocumentsTab — per-row permission flags", () => {
     expect(screen.getByRole("button", { name: /đặt lại/i })).toBeInTheDocument();
   });
 
-  it("shows paper-submit checkbox only when can_mark_paper_submitted=true", () => {
+  it("shows the paper-receipt button only when can_mark_paper_submitted=true", () => {
     const paperAllowed = buildProfile([
       {
         code: "HD_NH",
@@ -141,7 +149,9 @@ describe("DocumentsTab — per-row permission flags", () => {
       },
     ]);
     const { unmount } = render(<DocumentsTab profile={paperAllowed as never} isEditable />);
-    expect(screen.getByLabelText(/đã nộp/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /đánh dấu đã nhận giấy/i })
+    ).toBeInTheDocument();
     unmount();
 
     const paperBlocked = buildProfile([
@@ -155,7 +165,9 @@ describe("DocumentsTab — per-row permission flags", () => {
       },
     ]);
     render(<DocumentsTab profile={paperBlocked as never} isEditable />);
-    expect(screen.queryByLabelText(/đã nộp/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /đánh dấu đã nhận giấy/i })
+    ).not.toBeInTheDocument();
   });
 
   it("renders all buttons hidden when every flag is omitted (legacy row default)", () => {
@@ -170,9 +182,209 @@ describe("DocumentsTab — per-row permission flags", () => {
       },
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
-    expect(screen.queryByRole("button", { name: /tải lên/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /tải file/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /từ chối/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /đặt lại/i })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/đã nộp/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /đánh dấu đã nhận giấy/i })
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentsTab — ADM-031 task-orientation", () => {
+  it("missing + requires_upload row shows 'Cần tải ảnh/scan' hint and a Tải file button", () => {
+    const profile = buildProfile([
+      {
+        code: "CCCD",
+        label: "Căn cước công dân",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        can_upload: true,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(screen.getByText(/cần tải ảnh\/scan/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /tải file/i })).toBeInTheDocument();
+    // Paper hint must NOT appear for online docs.
+    expect(screen.queryByText(/nhận bản giấy tại quầy/i)).not.toBeInTheDocument();
+  });
+
+  it("missing + paper-only row shows 'Nhận bản giấy tại quầy' hint and a Đánh dấu đã nhận giấy button", () => {
+    const profile = buildProfile([
+      {
+        code: "HD_NH",
+        label: "Hợp đồng ngân hàng",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: false,
+        can_mark_paper_submitted: true,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(screen.getByText(/nhận bản giấy tại quầy/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /đánh dấu đã nhận giấy/i })
+    ).toBeInTheDocument();
+    // Online hint must NOT appear for paper-only docs.
+    expect(screen.queryByText(/cần tải ảnh\/scan/i)).not.toBeInTheDocument();
+  });
+
+  it("non-missing rows do not surface either task hint", () => {
+    const profile = buildProfile([
+      {
+        code: "CCCD",
+        label: "Căn cước",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+      {
+        code: "HD_NH",
+        label: "Hợp đồng",
+        status: "paper_submitted",
+        is_mandatory: false,
+        requires_upload: false,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(screen.queryByText(/cần tải ảnh\/scan/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nhận bản giấy tại quầy/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentsTab — ADM-031 progress and status labels", () => {
+  it("distinguishes 'Đã ghi nhận' from 'Đã kiểm tra' in the header summary", () => {
+    const profile = buildProfile([
+      {
+        code: "A",
+        label: "A",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+      {
+        code: "B",
+        label: "B",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+      {
+        code: "C",
+        label: "C",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    // 2 rows are recorded (uploaded + verified), 1 row is verified.
+    expect(screen.getByText(/đã ghi nhận 2\/3/i)).toBeInTheDocument();
+    expect(screen.getByText(/đã kiểm tra 1\/3/i)).toBeInTheDocument();
+    // Progress percentage is verified-share, not recorded-share.
+    const progressBar = screen.getByRole("progressbar", {
+      name: /tiến độ kiểm tra tài liệu/i,
+    });
+    expect(progressBar).toHaveAttribute("aria-valuenow", "33");
+  });
+
+  it("uploaded status renders as 'Đã ghi nhận', verified as 'Đã kiểm tra'", () => {
+    const profile = buildProfile([
+      {
+        code: "U",
+        label: "Uploaded row",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+      {
+        code: "V",
+        label: "Verified row",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+      {
+        code: "P",
+        label: "Paper row",
+        status: "paper_submitted",
+        is_mandatory: false,
+        requires_upload: false,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    // Header summary already mentions both phrases, so a row badge would
+    // collide with the summary node. Match all and assert presence of at
+    // least one badge per status — header renders these phrases too.
+    expect(screen.getAllByText(/đã ghi nhận \(online\)/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/đã kiểm tra/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/đã nhận bản giấy/i).length).toBeGreaterThan(0);
+  });
+});
+
+describe("DocumentsTab — ADM-031 format dialog", () => {
+  it("opens with task-oriented title, required-format note, and centralized labels", async () => {
+    const user = userEvent.setup();
+    const profile = buildProfile([
+      {
+        code: "HD_NH",
+        label: "Hợp đồng ngân hàng",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: false,
+        can_mark_paper_submitted: true,
+        submission_format: "certified_copy",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+
+    await user.click(
+      screen.getByRole("button", { name: /đánh dấu đã nhận giấy/i })
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    // Task-oriented title — declaring the actual format, not uploading
+    // additional evidence.
+    expect(
+      screen.getByRole("heading", { name: /loại bản thực tế trong file\/giấy này/i })
+    ).toBeInTheDocument();
+    // Required-format requirement is surfaced verbatim.
+    expect(dialog).toHaveTextContent(/yêu cầu hồ sơ:/i);
+    expect(dialog).toHaveTextContent(/bản sao chứng thực/i);
+    // Centralized labels (admission-helpers) — old strings ("Bản chính",
+    // "Bản photocopy", "Bản sao có chứng thực") must not appear.
+    expect(dialog).toHaveTextContent(/bản gốc/i);
+    expect(dialog).toHaveTextContent(/bản chụp\/scan không chứng thực/i);
+    expect(dialog).not.toHaveTextContent(/bản chính/i);
+    expect(dialog).not.toHaveTextContent(/^bản photocopy$/im);
+  });
+
+  it("shows a soft warning when the chosen actual format differs from the required format", async () => {
+    const user = userEvent.setup();
+    const profile = buildProfile([
+      {
+        code: "HD_NH",
+        label: "Hợp đồng ngân hàng",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: false,
+        can_mark_paper_submitted: true,
+        submission_format: "certified_copy",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+
+    await user.click(
+      screen.getByRole("button", { name: /đánh dấu đã nhận giấy/i })
+    );
+
+    // Default selectedFormat is the required format → warning hidden.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Switch to a different actual format → warning surfaces.
+    await user.click(screen.getByRole("radio", { name: /bản gốc/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/khác với yêu cầu hồ sơ/i);
   });
 });
