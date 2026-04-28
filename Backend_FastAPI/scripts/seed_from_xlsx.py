@@ -925,21 +925,81 @@ async def seed_16_duong_dan(db: AsyncSession, wb, dry_run: bool) -> int:
         if not method_id:
             continue
 
-        criteria_id = None
-        if criteria_code:
-            criteria_id = await lookup_id(db, "admission_criteria", "code", criteria_code)
-
+        # ADM-003: Insert path WITHOUT criteria_id first, then resolve
+        # the effective criteria_id (possibly cloning) and UPDATE.
+        # The xlsx data set deliberately has multiple paths referencing
+        # the same ``criteria_code`` (e.g. one criteria per
+        # method+year used by ~20 majors); after the
+        # ``uq_admission_path_criteria_id`` invariant this can no longer
+        # be a literal shared FK. We resolve sharing on the importer
+        # side by cloning the base criteria + its subject-group
+        # mappings under a deterministic code
+        # (``CRIT_orig_{old_id}_path_{path_id}``) — same scheme as the
+        # alembic adm003path001 migration.
         result = await db.execute(
             text('''INSERT INTO admission_path
-                 (academic_info_id, admission_method_id, criteria_id, status,
+                 (academic_info_id, admission_method_id, status,
                   display_name, display_order, visibility, application_fee, created_at, updated_at)
-                 VALUES (:aiid, :mid, :cid, :status, :dn, 0, :vis, :fee, NOW(), NOW())
+                 VALUES (:aiid, :mid, :status, :dn, 0, :vis, :fee, NOW(), NOW())
                  ON CONFLICT (academic_info_id, admission_method_id) DO NOTHING RETURNING id'''),
-            {"aiid": academic_info_id, "mid": method_id, "cid": criteria_id,
+            {"aiid": academic_info_id, "mid": method_id,
              "status": status, "dn": display_name, "vis": visibility, "fee": app_fee}
         )
-        if result.fetchone():
-            count += 1
+        path_row = result.fetchone()
+        if not path_row:
+            # Path already exists; leave its criteria_id alone (idempotent).
+            continue
+        path_id = path_row[0]
+
+        effective_criteria_id = None
+        if criteria_code:
+            base_criteria_id = await lookup_id(db, "admission_criteria", "code", criteria_code)
+            if base_criteria_id is not None:
+                in_use = (await db.execute(
+                    text("SELECT EXISTS(SELECT 1 FROM admission_path WHERE criteria_id = :c)"),
+                    {"c": base_criteria_id},
+                )).scalar()
+
+                if in_use:
+                    clone_code = f"CRIT_orig_{base_criteria_id}_path_{path_id}"
+                    existing = (await db.execute(
+                        text("SELECT id FROM admission_criteria WHERE code = :code"),
+                        {"code": clone_code},
+                    )).scalar()
+                    if existing is not None:
+                        effective_criteria_id = existing
+                    else:
+                        effective_criteria_id = (await db.execute(text('''
+                            INSERT INTO admission_criteria (
+                                code, method_id, name, min_gpa, min_score, conditions,
+                                is_active, required_subject_count, subject_selection_mode,
+                                scoring_method, max_possible_score, min_subject_score,
+                                policy_version, effective_from, effective_to
+                            )
+                            SELECT :new_code, method_id, name, min_gpa, min_score, conditions,
+                                   is_active, required_subject_count, subject_selection_mode,
+                                   scoring_method, max_possible_score, min_subject_score,
+                                   policy_version, effective_from, effective_to
+                            FROM admission_criteria WHERE id = :old_id
+                            RETURNING id
+                        '''), {"new_code": clone_code, "old_id": base_criteria_id})).scalar()
+
+                        await db.execute(text('''
+                            INSERT INTO criteria_subject_group (criteria_id, subject_group_id)
+                            SELECT :new_id, subject_group_id
+                            FROM criteria_subject_group WHERE criteria_id = :old_id
+                            ON CONFLICT (criteria_id, subject_group_id) DO NOTHING
+                        '''), {"new_id": effective_criteria_id, "old_id": base_criteria_id})
+                else:
+                    effective_criteria_id = base_criteria_id
+
+        if effective_criteria_id is not None:
+            await db.execute(
+                text("UPDATE admission_path SET criteria_id = :c WHERE id = :pid"),
+                {"c": effective_criteria_id, "pid": path_id},
+            )
+
+        count += 1
 
     # Auto-derive offering_admission_config (same logic as seed20260214001)
     if not dry_run:
