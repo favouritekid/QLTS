@@ -1208,6 +1208,7 @@ class OverrideRequest(BaseModel):
     - Admin only
     - Reason MANDATORY (audit requirement)
     - Full audit logging required
+    - REQUIRED version for optimistic locking (ADM-015)
     """
     reason: str = Field(
         ...,
@@ -1218,6 +1219,11 @@ class OverrideRequest(BaseModel):
     bypass_rules: List[str] = Field(
         default_factory=list,
         description="List of rules bypassed (e.g., ['min_gpa', 'missing_documents'])"
+    )
+    version: int = Field(
+        ...,
+        ge=1,
+        description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
     )
 
     @field_validator('reason')
@@ -1237,9 +1243,13 @@ class FinalizeRequest(BaseModel):
     - Transition: OVERRIDDEN/CONFIRMED → ENROLLED
     - Admin only
     - Creates Student record
+    - REQUIRED version for optimistic locking (ADM-015)
     """
-    # No fields required - triggers enrollment
-    pass
+    version: int = Field(
+        ...,
+        ge=1,
+        description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
+    )
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

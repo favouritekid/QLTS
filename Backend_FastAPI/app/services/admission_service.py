@@ -5468,8 +5468,13 @@ async def override_profile(
     if not data.get("reason"):
         raise BadRequest("Override reason is required (min 10 characters)")
 
-    # VERSION CHECK
-    if data.get("version") is not None and data["version"] != profile.version:
+    # ADM-015: schema makes ``version`` required (REQUIRED + ge=1), so we
+    # compare directly. The previous ``data.get("version") is not None``
+    # guard silently skipped the check whenever the field was absent —
+    # which was *always*, because OverrideRequest didn't expose it. If
+    # the schema/router ever drift again the KeyError below fails loud
+    # instead of giving a false sense of optimistic locking.
+    if data["version"] != profile.version:
         raise ConflictError(
             f"Profile was modified by another user. "
             f"Expected version {data['version']}, but current version is {profile.version}. "
@@ -5746,8 +5751,9 @@ async def finalize_profile(
         )
         raise BadRequest(str(e))
 
-    # VERSION CHECK
-    if data.get("version") is not None and data["version"] != profile.version:
+    # ADM-015: FinalizeRequest now requires ``version`` (ge=1). Direct
+    # compare; KeyError fails loud if the schema ever drops the field.
+    if data["version"] != profile.version:
         raise ConflictError(
             f"Profile was modified by another user. "
             f"Expected version {data['version']}, but current version is {profile.version}. "

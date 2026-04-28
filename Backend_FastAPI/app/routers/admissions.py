@@ -1742,7 +1742,8 @@ async def override_admission(
     **Request Body:**
     - reason: Override reason (REQUIRED, min 10 chars, max 1000)
     - bypass_rules: List of rules bypassed (optional, for documentation)
-    - version: Optional version for optimistic locking
+    - version: REQUIRED — current profile version for optimistic locking
+      (ADM-015). Stale version → 409 Conflict.
 
     **Returns:**
     - Updated AdmissionProfile with status='overridden'
@@ -1900,7 +1901,8 @@ async def finalize_enrollment(
     - Final state enforcement (no transitions from ENROLLED)
 
     **Request Body:**
-    - version: Optional version for optimistic locking
+    - version: REQUIRED — current profile version for optimistic locking
+      (ADM-015). Stale version → 409 Conflict.
 
     **Returns:**
     - Updated AdmissionProfile with status='enrolled'
