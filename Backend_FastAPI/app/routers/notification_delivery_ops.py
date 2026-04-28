@@ -27,7 +27,7 @@ router = APIRouter(
 async def list_deliveries(
     request: Request,
     event: Optional[str] = Query(None, description="Filter by event name"),
-    channel: Optional[str] = Query(None, description="Filter by channel", pattern="^(browser|email|zalo|sms)$"),
+    channel: Optional[str] = Query(None, description="Filter by channel", pattern="^(browser|email|zalo|zalo_bot|sms)$"),
     status: Optional[str] = Query(None, description="Filter by status", pattern="^(queued|sent|delivered|read|failed|skipped|dead_lettered)$"),
     user_id: Optional[int] = Query(None, description="Filter by user ID"),
     source_type: Optional[str] = Query(None, description="Filter by source type"),
