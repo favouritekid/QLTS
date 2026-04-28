@@ -40,8 +40,9 @@ import { isSafeFilePath } from "@/lib/utils"
 import {
   DOCUMENT_FORMAT_OPTIONS,
   getFormatLabel,
-  isDocumentVerified,
   isDocumentRecorded,
+  isDocumentRequirementSatisfied,
+  isDocumentPendingVerification,
 } from "@/lib/utils/admission-helpers"
 
 interface DocumentsTabProps {
@@ -274,13 +275,24 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
     window.open(url, "_blank", "noopener,noreferrer")
   }
   
-  // Stats — distinguish "ghi nhận" (received in any form) from "kiểm tra"
-  // (officer-verified). Progress bar reflects fully-verified rows so
-  // received-but-unverified docs don't masquerade as complete.
+  // Stats — split into three buckets so the surface matches the backend
+  // mandatory-doc gate (admission_service.py:566) without losing officer
+  // workflow visibility:
+  //   recordedCount   -> received in any form (uploaded | paper_submitted | verified)
+  //   satisfiedCount  -> backend would treat as completing the requirement
+  //                       (verified | paper_submitted). This is the
+  //                       "Hoàn tất yêu cầu" metric for the progress bar.
+  //   pendingCount    -> uploaded but not yet officer-verified ("Chờ kiểm tra")
+  // Without the satisfied/pending split, a paper-only mandatory row sitting
+  // at paper_submitted would render as incomplete in the UI even though
+  // the backend already accepts it as satisfied. ADM-031.6 follow-up.
   const recordedCount = documents.filter((d) => isDocumentRecorded(d.status)).length
-  const verifiedCount = documents.filter((d) => isDocumentVerified(d.status)).length
+  const satisfiedCount = documents.filter((d) => isDocumentRequirementSatisfied(d.status)).length
+  const pendingCount = documents.filter((d) => isDocumentPendingVerification(d.status)).length
   const mandatoryDocs = documents.filter((d) => d.is_mandatory)
-  const mandatoryVerifiedCount = mandatoryDocs.filter((d) => isDocumentVerified(d.status)).length
+  const mandatorySatisfiedCount = mandatoryDocs.filter((d) =>
+    isDocumentRequirementSatisfied(d.status),
+  ).length
 
   return (
     <>
@@ -293,27 +305,37 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                 Tài liệu hồ sơ
               </CardTitle>
               <CardDescription>
-                Đã ghi nhận {recordedCount}/{documents.length} • Đã kiểm tra {verifiedCount}/{documents.length}
+                Đã ghi nhận {recordedCount}/{documents.length}
+                {pendingCount > 0 && (
+                  <> • Chờ kiểm tra {pendingCount}</>
+                )}
+                {" • "}
+                Hoàn tất yêu cầu {satisfiedCount}/{documents.length}
                 {mandatoryDocs.length > 0 && (
                   <span className="ml-2">
-                    (Bắt buộc đã kiểm tra: {mandatoryVerifiedCount}/{mandatoryDocs.length})
+                    (Bắt buộc đã hoàn tất: {mandatorySatisfiedCount}/{mandatoryDocs.length})
                   </span>
                 )}
               </CardDescription>
             </div>
-            {/* Progress bar reflects officer-verified rows only. The
-                ghi-nhận sliver shows up as the lighter background fill so
-                officers can still see incoming volume at a glance. */}
+            {/* Progress bar reflects backend mandatory-completion semantics:
+                the success fill = `verified | paper_submitted` (rows the
+                backend already accepts as satisfying the requirement), the
+                lighter background fill = total received including the
+                pending-verify queue. Aligning with the backend gate
+                prevents paper-only rows that have been correctly logged as
+                paper_submitted from looking incomplete. ADM-031.6
+                follow-up. */}
             <div className="flex items-center gap-2">
               <div
                 className="relative w-32 h-2 bg-muted rounded-full overflow-hidden"
                 role="progressbar"
-                aria-label="Tiến độ kiểm tra tài liệu"
+                aria-label="Tiến độ hoàn tất tài liệu"
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={
                   documents.length > 0
-                    ? Math.round((verifiedCount / documents.length) * 100)
+                    ? Math.round((satisfiedCount / documents.length) * 100)
                     : 0
                 }
               >
@@ -329,14 +351,14 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                   className="absolute inset-y-0 left-0 bg-success-600 transition-[width] duration-300"
                   style={{
                     width: documents.length > 0
-                      ? `${(verifiedCount / documents.length) * 100}%`
+                      ? `${(satisfiedCount / documents.length) * 100}%`
                       : "0%",
                   }}
                 />
               </div>
               <span className="text-sm text-muted-foreground font-medium">
                 {documents.length > 0
-                  ? Math.round((verifiedCount / documents.length) * 100)
+                  ? Math.round((satisfiedCount / documents.length) * 100)
                   : 0}%
               </span>
             </div>
@@ -386,21 +408,21 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                 return (
                   <div
                     key={doc.code || index}
-                    className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/30 transition-colors"
+                    className="flex flex-col gap-3 p-3 border rounded-lg hover:bg-muted/30 transition-colors md:flex-row md:items-center md:gap-4"
                   >
                     {/* Column 1: Tên giấy tờ */}
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className="p-2 bg-muted rounded">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <div className="p-2 bg-muted rounded shrink-0">
                         <FileText className="h-4 w-4 text-muted-foreground" />
                       </div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="font-medium flex items-center gap-1 truncate">
                           {doc.label}
                           {doc.is_mandatory && (
                             <span className="text-error-500 text-xs">*</span>
                           )}
                         </p>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
                           <span>Mã: {doc.code}</span>
                           {doc.uploaded_at && (
                             <span>• {new Date(doc.uploaded_at).toLocaleDateString("vi-VN")}</span>
@@ -419,18 +441,21 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                       </div>
                     </div>
 
-                    {/* Column 2: Yêu cầu loại bản nộp (submission_format) */}
-                    <div className="w-32 flex-shrink-0">
+                    {/* Badge group — format + hình thức + status. Wraps on
+                        narrow widths so long Vietnamese copy ("Bản chụp/scan
+                        không chứng thực") doesn't overflow the row.
+                        ADM-031.5 follow-up. */}
+                    <div className="flex flex-wrap items-center gap-2 md:max-w-[20rem] md:justify-end">
                       {formatBadge && (
-                        <Badge variant="outline" className="text-xs gap-1">
-                          <FormatIcon className="h-3 w-3" />
-                          {formatBadge.label}
+                        <Badge
+                          variant="outline"
+                          className="text-xs gap-1 max-w-full"
+                          title={formatBadge.label}
+                        >
+                          <FormatIcon className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{formatBadge.label}</span>
                         </Badge>
                       )}
-                    </div>
-                    
-                    {/* Column 3: Hình thức (Online vs Nộp giấy) */}
-                    <div className="w-24 flex-shrink-0">
                       <Badge variant="secondary" className="text-xs gap-1">
                         {requiresUpload ? (
                           <>
@@ -444,18 +469,17 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           </>
                         )}
                       </Badge>
-                    </div>
-                    
-                    {/* Column 4: Trạng thái */}
-                    <div className="w-28 flex-shrink-0">
-                      <Badge className={statusConfig.color}>
-                        <StatusIcon className="h-3 w-3 mr-1" />
-                        {statusConfig.label}
+                      <Badge className={`${statusConfig.color} max-w-full`} title={statusConfig.label}>
+                        <StatusIcon className="h-3 w-3 mr-1 shrink-0" />
+                        <span className="truncate">{statusConfig.label}</span>
                       </Badge>
                     </div>
-                    
-                    {/* Column 5: Thao tác */}
-                    <div className="w-44 flex-shrink-0 flex items-center justify-end gap-2">
+
+                    {/* Actions — wrap on narrow widths so explicit Vietnamese
+                        button labels ("Tải file" / "Đánh dấu đã nhận giấy")
+                        never overflow the action column.
+                        ADM-031.5 follow-up. */}
+                    <div className="flex flex-wrap items-center gap-2 md:justify-end md:shrink-0">
                       {/* View button for uploaded documents */}
                       {hasFile && (
                         <Button

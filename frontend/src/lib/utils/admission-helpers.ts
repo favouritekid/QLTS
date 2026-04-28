@@ -167,10 +167,11 @@ export function getDocumentStatusConfig(status: string): DocumentStatusConfig {
 }
 
 /**
- * True when the row has been fully checked by an officer. Use this — not
- * `status !== "missing"` — when computing "đã kiểm tra" progress so that
- * uploaded / paper_submitted (received but not yet verified) don't get
- * counted as complete.
+ * True when the row has been fully checked by an officer. Use ONLY when
+ * you specifically need the "officer-verified" subset — for the
+ * mandatory-completion gauge, prefer ``isDocumentRequirementSatisfied``
+ * so that paper_submitted (which the backend already accepts as
+ * satisfying the requirement) is not surfaced as incomplete.
  */
 export function isDocumentVerified(status: string): boolean {
   return status === "verified"
@@ -183,6 +184,32 @@ export function isDocumentVerified(status: string): boolean {
  */
 export function isDocumentRecorded(status: string): boolean {
   return status === "uploaded" || status === "paper_submitted" || status === "verified"
+}
+
+/**
+ * ADM-031.6 follow-up: True when the row satisfies the backend's
+ * mandatory-document gate. Mirrors the strict-mode check at
+ * ``Backend_FastAPI/app/services/admission_service.py:566`` which
+ * accepts BOTH ``verified`` and ``paper_submitted`` as completing the
+ * requirement. ``uploaded`` (file received but officer hasn't verified
+ * yet) is intentionally excluded — that row is still pending check.
+ *
+ * Use this for the "Hoàn tất yêu cầu" / mandatory-progress metric so
+ * paper-only rows don't masquerade as incomplete just because they were
+ * never digitised.
+ */
+export function isDocumentRequirementSatisfied(status: string): boolean {
+  return status === "verified" || status === "paper_submitted"
+}
+
+/**
+ * ADM-031.6 follow-up: True when the row was uploaded online but still
+ * waits for officer verification. This is the "Chờ kiểm tra" bucket;
+ * surfacing it lets officers see the verification queue separately from
+ * fully completed rows.
+ */
+export function isDocumentPendingVerification(status: string): boolean {
+  return status === "uploaded"
 }
 
 // ==============================================================================

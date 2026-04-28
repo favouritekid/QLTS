@@ -254,9 +254,11 @@ describe("DocumentsTab — ADM-031 task-orientation", () => {
 });
 
 describe("DocumentsTab — ADM-031 progress and status labels", () => {
-  it("distinguishes 'Đã ghi nhận' from 'Đã kiểm tra' in the header summary", () => {
+  it("splits header into ghi nhận / chờ kiểm tra / hoàn tất yêu cầu", () => {
     const profile = buildProfile([
       {
+        // Online row: officer has not verified yet → counts as recorded
+        // and pending, but NOT as satisfying the requirement.
         code: "A",
         label: "A",
         status: "uploaded",
@@ -264,11 +266,21 @@ describe("DocumentsTab — ADM-031 progress and status labels", () => {
         requires_upload: true,
       },
       {
+        // Online row already verified → recorded + satisfied.
         code: "B",
         label: "B",
         status: "verified",
         is_mandatory: true,
         requires_upload: true,
+      },
+      {
+        // Paper-only row marked received → recorded + satisfied
+        // (backend `paper_submitted` already completes the requirement).
+        code: "P",
+        label: "P",
+        status: "paper_submitted",
+        is_mandatory: true,
+        requires_upload: false,
       },
       {
         code: "C",
@@ -279,14 +291,18 @@ describe("DocumentsTab — ADM-031 progress and status labels", () => {
       },
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
-    // 2 rows are recorded (uploaded + verified), 1 row is verified.
-    expect(screen.getByText(/đã ghi nhận 2\/3/i)).toBeInTheDocument();
-    expect(screen.getByText(/đã kiểm tra 1\/3/i)).toBeInTheDocument();
-    // Progress percentage is verified-share, not recorded-share.
+    // Recorded = uploaded + verified + paper_submitted = 3 of 4
+    expect(screen.getByText(/đã ghi nhận 3\/4/i)).toBeInTheDocument();
+    // Pending verification = uploaded only = 1
+    expect(screen.getByText(/chờ kiểm tra 1/i)).toBeInTheDocument();
+    // Satisfied = verified + paper_submitted = 2 of 4 (backend gate)
+    expect(screen.getByText(/hoàn tất yêu cầu 2\/4/i)).toBeInTheDocument();
+    // Progress reflects backend mandatory-completion semantics. 2 of 4
+    // mandatory rows satisfy the requirement → 50%.
     const progressBar = screen.getByRole("progressbar", {
-      name: /tiến độ kiểm tra tài liệu/i,
+      name: /tiến độ hoàn tất tài liệu/i,
     });
-    expect(progressBar).toHaveAttribute("aria-valuenow", "33");
+    expect(progressBar).toHaveAttribute("aria-valuenow", "50");
   });
 
   it("uploaded status renders as 'Đã ghi nhận', verified as 'Đã kiểm tra'", () => {
