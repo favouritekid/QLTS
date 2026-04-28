@@ -544,12 +544,20 @@ test.describe("Admission Profile Lifecycle", () => {
 
     // --- Step 10: Admin overrides ---
     await test.step("Admin overrides profile", async () => {
+      // ADM-015: override now requires the current profile version
+      // (optimistic locking). Fetch it just before the call.
+      const profileBefore = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId1}`, {
+          headers: adminHeaders,
+        })
+      ).json();
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId1}/override`,
         {
           headers: adminHeaders,
           data: {
             reason: "E2E happy path test - override to bypass confirmation",
+            version: profileBefore.version,
           },
         }
       );
@@ -570,10 +578,19 @@ test.describe("Admission Profile Lifecycle", () => {
         const body = await enrollResp.json();
         console.log(`Enrolled! student_code=${body.student_code}`);
       } else {
-        // Fallback to finalize
+        // Fallback to finalize — ADM-015 requires current version
+        const profileBefore = await (
+          await page.request.get(
+            `${API_URL}/api/admissions/${profileId1}`,
+            { headers: adminHeaders }
+          )
+        ).json();
         const finalizeResp = await page.request.post(
           `${API_URL}/api/admissions/${profileId1}/finalize`,
-          { headers: adminHeaders, data: {} }
+          {
+            headers: adminHeaders,
+            data: { version: profileBefore.version },
+          }
         );
         expect(finalizeResp.ok()).toBeTruthy();
         const body = await finalizeResp.json();
@@ -832,9 +849,19 @@ test.describe("Admission Profile Lifecycle", () => {
         const body = await enrollResp.json();
         console.log(`Enrolled! student_code=${body.student_code}`);
       } else {
+        // ADM-015: finalize requires current version
+        const profileBefore = await (
+          await page.request.get(
+            `${API_URL}/api/admissions/${profileId3}`,
+            { headers: adminHeaders }
+          )
+        ).json();
         const finalizeResp = await page.request.post(
           `${API_URL}/api/admissions/${profileId3}/finalize`,
-          { headers: adminHeaders, data: {} }
+          {
+            headers: adminHeaders,
+            data: { version: profileBefore.version },
+          }
         );
         expect(finalizeResp.ok()).toBeTruthy();
         console.log(`Finalized: ${(await finalizeResp.json()).status}`);
@@ -1364,11 +1391,20 @@ test.describe("Admission Profile Lifecycle", () => {
 
     // --- Step 3: Admin overrides ---
     await test.step("Admin overrides profile", async () => {
+      // ADM-015: fetch current version before override
+      const profileBefore = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId7A}`, {
+          headers: adminHeaders,
+        })
+      ).json();
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId7A}/override`,
         {
           headers: adminHeaders,
-          data: { reason: "Override for drop test 7A — bypass confirmation" },
+          data: {
+            reason: "Override for drop test 7A — bypass confirmation",
+            version: profileBefore.version,
+          },
         }
       );
       expect(resp.ok()).toBeTruthy();
@@ -1385,9 +1421,19 @@ test.describe("Admission Profile Lifecycle", () => {
       if (enrollResp.ok() || enrollResp.status() === 201) {
         console.log(`Enrolled 7A: student_code=${(await enrollResp.json()).student_code}`);
       } else {
+        // ADM-015: finalize requires current version
+        const profileBefore = await (
+          await page.request.get(
+            `${API_URL}/api/admissions/${profileId7A}`,
+            { headers: adminHeaders }
+          )
+        ).json();
         const finalizeResp = await page.request.post(
           `${API_URL}/api/admissions/${profileId7A}/finalize`,
-          { headers: adminHeaders, data: {} }
+          {
+            headers: adminHeaders,
+            data: { version: profileBefore.version },
+          }
         );
         expect(finalizeResp.ok()).toBeTruthy();
         console.log(`Finalized 7A: ${(await finalizeResp.json()).status}`);
@@ -1501,9 +1547,19 @@ test.describe("Admission Profile Lifecycle", () => {
       if (enrollResp.ok() || enrollResp.status() === 201) {
         console.log(`Enrolled 7B: student_code=${(await enrollResp.json()).student_code}`);
       } else {
+        // ADM-015: finalize requires current version
+        const profileBefore = await (
+          await page.request.get(
+            `${API_URL}/api/admissions/${profileId7B}`,
+            { headers: adminHeaders }
+          )
+        ).json();
         const finalizeResp = await page.request.post(
           `${API_URL}/api/admissions/${profileId7B}/finalize`,
-          { headers: adminHeaders, data: {} }
+          {
+            headers: adminHeaders,
+            data: { version: profileBefore.version },
+          }
         );
         expect(finalizeResp.ok()).toBeTruthy();
         console.log(`Finalized 7B: ${(await finalizeResp.json()).status}`);
