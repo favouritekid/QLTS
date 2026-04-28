@@ -405,12 +405,24 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                 const canReset = doc.can_reset ?? false
                 const canMarkPaperSubmitted = doc.can_mark_paper_submitted ?? false
                 
+                // ADM-031 round 2: mode badge replaces the old "Online" /
+                // "Nộp giấy" pair so the wording matches the actual workflow
+                // ("Cần file" = needs upload, "Ghi nhận giấy" = paper-only
+                // checklist). Tooltip explains the difference for officers
+                // unfamiliar with the term.
+                const modeLabel = requiresUpload ? "Cần file" : "Ghi nhận giấy"
+                const modeTitle = requiresUpload
+                  ? "Cần tải ảnh/scan/PDF của giấy tờ lên hệ thống"
+                  : "Chỉ ghi nhận đã nhận bản giấy, không cần upload file"
+                const ModeIcon = requiresUpload ? Globe : Building2
+
                 return (
                   <div
                     key={doc.code || index}
                     className="flex flex-col gap-3 p-3 border rounded-lg hover:bg-muted/30 transition-colors md:flex-row md:items-center md:gap-4"
                   >
-                    {/* Column 1: Tên giấy tờ */}
+                    {/* Title block — name + mandatory star + meta + task hint.
+                        Same on mobile and desktop. */}
                     <div className="flex items-start gap-3 flex-1 min-w-0">
                       <div className="p-2 bg-muted rounded shrink-0">
                         <FileText className="h-4 w-4 text-muted-foreground" />
@@ -441,45 +453,58 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                       </div>
                     </div>
 
-                    {/* Badge group — format + hình thức + status. Wraps on
-                        narrow widths so long Vietnamese copy ("Bản chụp/scan
-                        không chứng thực") doesn't overflow the row.
-                        ADM-031.5 follow-up. */}
-                    <div className="flex flex-wrap items-center gap-2 md:max-w-[20rem] md:justify-end">
+                    {/* Metadata block — labelled key/value rows on mobile per
+                        ADM-031 round 2 wireframe; collapses to horizontal
+                        badge cluster on desktop. The labels are
+                        ``md:hidden`` so they vanish on desktop without
+                        wrapping the badges in extra DOM. */}
+                    <div className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm md:flex md:flex-wrap md:items-center md:gap-2 md:max-w-[20rem] md:justify-end">
                       {formatBadge && (
-                        <Badge
-                          variant="outline"
-                          className="text-xs gap-1 max-w-full"
-                          title={formatBadge.label}
-                        >
-                          <FormatIcon className="h-3 w-3 shrink-0" />
-                          <span className="truncate">{formatBadge.label}</span>
-                        </Badge>
+                        <>
+                          <span className="text-xs text-muted-foreground self-center md:hidden">
+                            Yêu cầu bản nộp
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className="text-xs gap-1 max-w-full justify-start md:justify-center"
+                            title={formatBadge.label}
+                          >
+                            <FormatIcon className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{formatBadge.label}</span>
+                          </Badge>
+                        </>
                       )}
-                      <Badge variant="secondary" className="text-xs gap-1">
-                        {requiresUpload ? (
-                          <>
-                            <Globe className="h-3 w-3" />
-                            Online
-                          </>
-                        ) : (
-                          <>
-                            <Building2 className="h-3 w-3" />
-                            Nộp giấy
-                          </>
-                        )}
+                      <span className="text-xs text-muted-foreground self-center md:hidden">
+                        Cách ghi nhận
+                      </span>
+                      <Badge
+                        variant="secondary"
+                        className="text-xs gap-1 justify-start md:justify-center w-fit"
+                        title={modeTitle}
+                      >
+                        <ModeIcon className="h-3 w-3" />
+                        {modeLabel}
                       </Badge>
-                      <Badge className={`${statusConfig.color} max-w-full`} title={statusConfig.label}>
+                      <span className="text-xs text-muted-foreground self-center md:hidden">
+                        Trạng thái
+                      </span>
+                      <Badge
+                        className={`${statusConfig.color} max-w-full justify-start md:justify-center`}
+                        title={statusConfig.label}
+                      >
                         <StatusIcon className="h-3 w-3 mr-1 shrink-0" />
                         <span className="truncate">{statusConfig.label}</span>
                       </Badge>
                     </div>
 
-                    {/* Actions — wrap on narrow widths so explicit Vietnamese
-                        button labels ("Tải file" / "Đánh dấu đã nhận giấy")
-                        never overflow the action column.
-                        ADM-031.5 follow-up. */}
-                    <div className="flex flex-wrap items-center gap-2 md:justify-end md:shrink-0">
+                    {/* Actions — labelled on mobile, compact horizontal cluster
+                        on desktop. Inner div keeps the buttons grouped so
+                        flex-wrap operates within the action area only. */}
+                    <div className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 md:flex md:flex-wrap md:items-center md:gap-2 md:justify-end md:shrink-0">
+                      <span className="text-xs text-muted-foreground self-center md:hidden">
+                        Thao tác
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
                       {/* View button for uploaded documents */}
                       {hasFile && (
                         <Button
@@ -570,6 +595,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           )}
                         </Button>
                       )}
+                      </div>
                     </div>
                   </div>
                 )
@@ -590,20 +616,23 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
       
       {/* Submission Format Selection Dialog
           Officer / applicant declares the *actual* paper/file type they
-          just received. The dialog deliberately does NOT ask for an
-          extra evidence document — wording is task-oriented so the user
-          doesn't read this as a second upload step. */}
+          just received. ADM-031 round 2 splits the wording per action so
+          the upload flow ("File này là bản gì?") and the paper-receipt
+          flow ("Bản giấy vừa nhận là bản gì?") are unambiguous. The dialog
+          deliberately does NOT ask for an extra evidence document. */}
       <Dialog
         open={submissionFormatDialog?.isOpen || false}
         onOpenChange={(open) => !open && setSubmissionFormatDialog(null)}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Loại bản thực tế trong file/giấy này</DialogTitle>
+            <DialogTitle>
+              {submissionFormatDialog?.action === "paper"
+                ? "Xác nhận bản giấy vừa nhận"
+                : "Tải file tài liệu"}
+            </DialogTitle>
             <DialogDescription>
-              Đây là loại bản của <strong>{submissionFormatDialog?.docLabel}</strong> bạn vừa{" "}
-              {submissionFormatDialog?.action === "paper" ? "nhận tại quầy" : "tải lên"}
-              {" "}— không phải tài liệu bổ sung. Hãy chọn đúng loại bản đang có trong tay.
+              Tài liệu: <strong>{submissionFormatDialog?.docLabel}</strong>
             </DialogDescription>
           </DialogHeader>
 
@@ -615,6 +644,12 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
               </span>
             </div>
           )}
+
+          <p className="text-sm font-medium">
+            {submissionFormatDialog?.action === "paper"
+              ? "Bản giấy vừa nhận là bản gì?"
+              : "File này là bản gì?"}
+          </p>
 
           <RadioGroup value={selectedFormat} onValueChange={setSelectedFormat}>
             {DOCUMENT_FORMAT_OPTIONS.map((option) => (
@@ -635,7 +670,9 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
 
           {/* Soft warning — selected actual format does not match the
               required format. Allowed (officer may still proceed) but
-              flagged so officer notices any mismatch before saving. */}
+              flagged so officer notices any mismatch before saving.
+              Wording is action-aware: upload flow says "trước khi tải
+              file"; paper flow says "trước khi ghi nhận". */}
           {submissionFormatDialog?.requiredFormat &&
             selectedFormat &&
             selectedFormat !== submissionFormatDialog.requiredFormat && (
@@ -645,10 +682,9 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
               >
                 <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
                 <span>
-                  Loại bản thực tế (<strong>{getFormatLabel(selectedFormat)}</strong>){" "}
-                  khác với yêu cầu hồ sơ (
-                  <strong>{getFormatLabel(submissionFormatDialog.requiredFormat)}</strong>
-                  ). Hãy kiểm tra lại trước khi xác nhận.
+                  {submissionFormatDialog.action === "paper"
+                    ? "Bản giấy thực tế khác yêu cầu hồ sơ. Hãy kiểm tra lại trước khi ghi nhận."
+                    : "Loại bản trong file khác yêu cầu hồ sơ. Hãy kiểm tra lại trước khi tải file."}
                 </span>
               </div>
             )}
@@ -661,7 +697,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
               onClick={handleSubmissionFormatConfirm}
               disabled={!selectedFormat}
             >
-              Xác nhận
+              {submissionFormatDialog?.action === "paper" ? "Ghi nhận giấy" : "Tải file"}
             </Button>
           </DialogFooter>
         </DialogContent>

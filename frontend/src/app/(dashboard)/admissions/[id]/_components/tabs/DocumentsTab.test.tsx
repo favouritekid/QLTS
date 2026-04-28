@@ -16,6 +16,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@/test/utils/test-utils";
+import { within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { DocumentsTab } from "./DocumentsTab";
@@ -192,7 +193,7 @@ describe("DocumentsTab — per-row permission flags", () => {
 });
 
 describe("DocumentsTab — ADM-031 task-orientation", () => {
-  it("missing + requires_upload row shows 'Cần tải ảnh/scan' hint and a Tải file button", () => {
+  it("missing + requires_upload row shows 'Cần tải ảnh/scan' hint, 'Cần file' mode, and a Tải file button", () => {
     const profile = buildProfile([
       {
         code: "CCCD",
@@ -205,12 +206,16 @@ describe("DocumentsTab — ADM-031 task-orientation", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     expect(screen.getByText(/cần tải ảnh\/scan/i)).toBeInTheDocument();
+    // ADM-031 round 2: "Online" was replaced with "Cần file" so the mode
+    // badge actually describes the workflow.
+    expect(screen.getByText(/^Cần file$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Online$/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /tải file/i })).toBeInTheDocument();
     // Paper hint must NOT appear for online docs.
     expect(screen.queryByText(/nhận bản giấy tại quầy/i)).not.toBeInTheDocument();
   });
 
-  it("missing + paper-only row shows 'Nhận bản giấy tại quầy' hint and a Đánh dấu đã nhận giấy button", () => {
+  it("missing + paper-only row shows 'Nhận bản giấy tại quầy' hint, 'Ghi nhận giấy' mode, and a Đánh dấu đã nhận giấy button", () => {
     const profile = buildProfile([
       {
         code: "HD_NH",
@@ -223,6 +228,10 @@ describe("DocumentsTab — ADM-031 task-orientation", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     expect(screen.getByText(/nhận bản giấy tại quầy/i)).toBeInTheDocument();
+    // ADM-031 round 2: "Nộp giấy" was replaced with "Ghi nhận giấy" to
+    // match the paper-only checklist semantic.
+    expect(screen.getByText(/^Ghi nhận giấy$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Nộp giấy$/i)).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /đánh dấu đã nhận giấy/i })
     ).toBeInTheDocument();
@@ -250,6 +259,38 @@ describe("DocumentsTab — ADM-031 task-orientation", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     expect(screen.queryByText(/cần tải ảnh\/scan/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/nhận bản giấy tại quầy/i)).not.toBeInTheDocument();
+  });
+
+  it("does not leak deprecated mode copy ('Online' / 'Nộp giấy' / 'Bản photocopy' / 'Bản photo/scan' / 'Ảnh chụp') in officer UI", () => {
+    const profile = buildProfile([
+      {
+        code: "CCCD",
+        label: "Căn cước",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "photo",
+      },
+      {
+        code: "HD",
+        label: "Hợp đồng",
+        status: "paper_submitted",
+        is_mandatory: false,
+        requires_upload: false,
+        submission_format: "certified_copy",
+      },
+    ]);
+    const { container } = render(
+      <DocumentsTab profile={profile as never} isEditable />
+    );
+    // Old mode labels.
+    expect(container.textContent).not.toMatch(/\bOnline\b/);
+    expect(container.textContent).not.toMatch(/\bNộp giấy\b/);
+    // Old format labels (legacy duplicates) — the centralized source uses
+    // "Bản chụp/scan không chứng thực" for `photo`, never these.
+    expect(container.textContent).not.toMatch(/Bản photocopy/);
+    expect(container.textContent).not.toMatch(/Bản photo\/scan/);
+    expect(container.textContent).not.toMatch(/Ảnh chụp hoặc scan/);
   });
 });
 
@@ -339,8 +380,8 @@ describe("DocumentsTab — ADM-031 progress and status labels", () => {
   });
 });
 
-describe("DocumentsTab — ADM-031 format dialog", () => {
-  it("opens with task-oriented title, required-format note, and centralized labels", async () => {
+describe("DocumentsTab — ADM-031 paper-receipt dialog", () => {
+  it("opens with paper-specific title, prompt, primary button, and centralized labels", async () => {
     const user = userEvent.setup();
     const profile = buildProfile([
       {
@@ -360,11 +401,11 @@ describe("DocumentsTab — ADM-031 format dialog", () => {
     );
 
     const dialog = await screen.findByRole("dialog");
-    // Task-oriented title — declaring the actual format, not uploading
-    // additional evidence.
+    // ADM-031 round 2: paper-specific dialog title (no file/upload word).
     expect(
-      screen.getByRole("heading", { name: /loại bản thực tế trong file\/giấy này/i })
+      screen.getByRole("heading", { name: /xác nhận bản giấy vừa nhận/i })
     ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/bản giấy vừa nhận là bản gì\?/i);
     // Required-format requirement is surfaced verbatim.
     expect(dialog).toHaveTextContent(/yêu cầu hồ sơ:/i);
     expect(dialog).toHaveTextContent(/bản sao chứng thực/i);
@@ -374,9 +415,12 @@ describe("DocumentsTab — ADM-031 format dialog", () => {
     expect(dialog).toHaveTextContent(/bản chụp\/scan không chứng thực/i);
     expect(dialog).not.toHaveTextContent(/bản chính/i);
     expect(dialog).not.toHaveTextContent(/^bản photocopy$/im);
+    // Paper-flow primary button is "Ghi nhận giấy", not the upload one.
+    expect(screen.getByRole("button", { name: /^ghi nhận giấy$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^tải file$/i })).not.toBeInTheDocument();
   });
 
-  it("shows a soft warning when the chosen actual format differs from the required format", async () => {
+  it("shows paper-specific soft warning when the chosen actual format differs from the required format", async () => {
     const user = userEvent.setup();
     const profile = buildProfile([
       {
@@ -398,9 +442,96 @@ describe("DocumentsTab — ADM-031 format dialog", () => {
     // Default selectedFormat is the required format → warning hidden.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    // Switch to a different actual format → warning surfaces.
+    // Switch to a different actual format → paper-specific warning surfaces.
     await user.click(screen.getByRole("radio", { name: /bản gốc/i }));
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/khác với yêu cầu hồ sơ/i);
+    expect(alert).toHaveTextContent(/bản giấy thực tế khác yêu cầu hồ sơ/i);
+    expect(alert).toHaveTextContent(/trước khi ghi nhận/i);
+    // Upload-flow copy must NOT leak into paper dialog.
+    expect(alert).not.toHaveTextContent(/trước khi tải file/i);
+  });
+});
+
+describe("DocumentsTab — ADM-031 upload dialog", () => {
+  it("opens with upload-specific title, prompt, primary button after a file is selected", async () => {
+    const user = userEvent.setup();
+    const profile = buildProfile([
+      {
+        code: "CCCD",
+        label: "Căn cước công dân",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        can_upload: true,
+        submission_format: "photo",
+      },
+    ]);
+    const { container } = render(
+      <DocumentsTab profile={profile as never} isEditable />
+    );
+
+    // Two-step upload flow: clicking the row's "Tải file" button arms the
+    // hidden file input + state; the submission-format dialog only opens
+    // AFTER the user picks a file. Mirror both steps in the test.
+    await user.click(screen.getByRole("button", { name: /^tải file$/i }));
+    const fileInput = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement;
+    expect(fileInput).toBeTruthy();
+    const file = new File(["dummy"], "ccd.pdf", { type: "application/pdf" });
+    await user.upload(fileInput, file);
+
+    const dialog = await screen.findByRole("dialog");
+    // Upload-specific title and prompt.
+    expect(
+      screen.getByRole("heading", { name: /^tải file tài liệu$/i })
+    ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/file này là bản gì\?/i);
+    expect(dialog).toHaveTextContent(/yêu cầu hồ sơ:/i);
+    // Upload-flow primary button (in the dialog footer) is "Tải file".
+    // The row also has a "Tải file" button, so scope to the dialog.
+    expect(
+      within(dialog).getByRole("button", { name: /^tải file$/i })
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: /^ghi nhận giấy$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows upload-specific soft warning when the chosen actual format differs from the required format", async () => {
+    const user = userEvent.setup();
+    const profile = buildProfile([
+      {
+        code: "CCCD",
+        label: "Căn cước công dân",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        can_upload: true,
+        submission_format: "certified_copy",
+      },
+    ]);
+    const { container } = render(
+      <DocumentsTab profile={profile as never} isEditable />
+    );
+
+    await user.click(screen.getByRole("button", { name: /^tải file$/i }));
+    const fileInput = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement;
+    const file = new File(["dummy"], "ccd.pdf", { type: "application/pdf" });
+    await user.upload(fileInput, file);
+
+    // Default selectedFormat = required format → warning hidden.
+    await screen.findByRole("dialog");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Switch actual format → upload-specific warning surfaces.
+    await user.click(screen.getByRole("radio", { name: /bản gốc/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/loại bản trong file khác yêu cầu hồ sơ/i);
+    expect(alert).toHaveTextContent(/trước khi tải file/i);
+    // Paper-flow copy must NOT leak into upload dialog.
+    expect(alert).not.toHaveTextContent(/trước khi ghi nhận/i);
   });
 });
