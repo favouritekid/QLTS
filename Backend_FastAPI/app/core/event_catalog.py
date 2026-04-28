@@ -1276,7 +1276,17 @@ _SYSTEM_EVENTS: tuple = (
         # nếu muốn cảnh báo mạnh hơn.
         default_channels=("browser",),
         priority=10,
-        dedup_key_template="security:${user_id}:zalo_bot_link_displaced:${displaced_by_user_id}",
+        # Dedup key includes chat_id_prefix (and not just the user pair)
+        # because a single (displaced_user, new_user) pair can legitimately
+        # produce multiple events: A links chat_X → B displaces A → A
+        # re-links chat_Y → B displaces A again. Without chat_id_prefix
+        # the second notification would be suppressed by the 5-minute
+        # cooldown (NOTIFICATION_COOLDOWN_SECONDS) — leaving A unaware
+        # of the second hijack.
+        dedup_key_template=(
+            "security:${user_id}:zalo_bot_link_displaced:"
+            "${displaced_by_user_id}:${chat_id_prefix}"
+        ),
         link_strategy="/settings/notifications",
         # Sensitive: contains targeted recipient + potential security event
         privacy="sensitive",

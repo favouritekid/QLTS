@@ -299,6 +299,43 @@ async def get_link_status(db: AsyncSession, user_id: int) -> Optional[dict]:
     }
 
 
+async def _get_or_create_pref_safe(db: AsyncSession, user_id: int):
+    """Concurrency-safe wrapper around ``NotificationPreferenceRepository.get_or_create``.
+
+    The base ``get_or_create`` is read-then-insert with no upsert, so two
+    concurrent requests for the same user that both observe "no row"
+    will both INSERT and the second hits the unique-on-user_id constraint
+    with ``IntegrityError``. Realistic trigger paths for zalo bot:
+    user opens 2 browser tabs and clicks "Tạo mã" twice, or sends
+    ``/lienket`` from two chat_ids in quick succession.
+
+    We wrap the call in a SAVEPOINT so a constraint violation rolls back
+    only the failed INSERT (not the link write that called us). On
+    rollback we re-fetch — the winning concurrent INSERT must have
+    committed by then. If re-fetch still returns None, the failure was
+    not a race and the original ``IntegrityError`` is re-raised so the
+    router can rollback + return 5xx. Pre-existing repo behavior is
+    unchanged for non-racing callers.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.repositories.notification_preference_repository import (
+        NotificationPreferenceRepository,
+    )
+
+    repo = NotificationPreferenceRepository(db)
+    try:
+        async with db.begin_nested():
+            return await repo.get_or_create(user_id)
+    except IntegrityError:
+        # Race: another transaction inserted the row between our SELECT
+        # and INSERT. Re-fetch — the winning row is now visible.
+        existing = await repo.get_by_user_id(user_id)
+        if existing is None:
+            raise
+        return existing
+
+
 async def _sync_preference(
     db: AsyncSession,
     user_id: int,
@@ -316,13 +353,9 @@ async def _sync_preference(
     Audit row is written only when the value actually changes; toggling
     the column to its current value is a no-op for both DB and audit.
     """
-    from app.repositories.notification_preference_repository import (
-        NotificationPreferenceRepository,
-    )
     from app.services import audit_service
 
-    repo = NotificationPreferenceRepository(db)
-    pref = await repo.get_or_create(user_id)
+    pref = await _get_or_create_pref_safe(db, user_id)
     old_value = bool(pref.zalo_bot_enabled)
     if old_value == enabled:
         return  # No-op — nothing to flip, nothing to audit.

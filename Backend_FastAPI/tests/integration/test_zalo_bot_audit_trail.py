@@ -398,6 +398,99 @@ class TestBackfillMigrationIdempotency:
         assert len(second) == 1, "second run must be a no-op"
 
 
+class TestDedupKeyAllowsRepeatDisplacement:
+    """V-2 fix: ZALO_BOT_LINK_DISPLACED dedup key MUST include
+    chat_id_prefix so two genuine displacements involving the same
+    (displaced_user, new_user) pair but different chat_ids both reach
+    the recipient instead of the second being suppressed by the
+    5-minute cooldown.
+    """
+
+    def test_dedup_key_changes_with_chat_id_prefix(self):
+        from app.core.event_catalog import render_dedup_key
+        from app.core.events import SystemEvents
+
+        payload_first = {
+            "user_id": 1,
+            "displaced_by_user_id": 2,
+            "chat_id_prefix": "abcd***ef",
+            "actor_id": 2,
+        }
+        payload_second = dict(payload_first, chat_id_prefix="ghij***kl")
+
+        key_first = render_dedup_key(
+            SystemEvents.ZALO_BOT_LINK_DISPLACED, payload_first
+        )
+        key_second = render_dedup_key(
+            SystemEvents.ZALO_BOT_LINK_DISPLACED, payload_second
+        )
+
+        assert key_first != key_second, (
+            "different chat_id_prefix MUST produce different dedup keys; "
+            "otherwise repeat-displacement notifications get cooldown-suppressed"
+        )
+        # Both should still be deterministic + contain the user pair.
+        assert "1" in key_first and "2" in key_first
+        assert "abcd" in key_first
+        assert "ghij" in key_second
+
+
+class TestSyncPreferenceConcurrencySafe:
+    """V-1 fix: ``_sync_preference`` must survive a concurrent INSERT
+    race on ``notification_preference.user_id`` (read-then-insert
+    pattern in the base repo). The savepoint + re-fetch in
+    ``_get_or_create_pref_safe`` is the contract under test.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pref_already_present_on_concurrent_insert_is_handled(
+        self, db: AsyncSession, officer_user_in_db: dict, monkeypatch
+    ):
+        """Simulate the race: first SELECT returns None (as if a parallel
+        request hadn't committed yet), but the INSERT then collides with
+        the parallel insert that just landed. Service must catch
+        ``IntegrityError`` from the savepoint, re-fetch, and proceed.
+        """
+        from app.models.notification_preference import NotificationPreference
+        from app.repositories.notification_preference_repository import (
+            NotificationPreferenceRepository,
+        )
+
+        user_id = officer_user_in_db["id"]
+
+        # Pre-create the pref row to simulate the "winning" parallel insert.
+        winner = NotificationPreference(user_id=user_id, browser_enabled=True)
+        db.add(winner)
+        await db.commit()
+
+        # Force the in-service get_by_user_id to return None ONCE (the
+        # racing read), then the savepoint INSERT will fail with IntegrityError.
+        original_get = NotificationPreferenceRepository.get_by_user_id
+        call_state = {"count": 0}
+
+        async def fake_get(self, uid):
+            call_state["count"] += 1
+            if call_state["count"] == 1:
+                return None  # race: caller doesn't see the winner yet
+            return await original_get(self, uid)
+
+        monkeypatch.setattr(
+            NotificationPreferenceRepository, "get_by_user_id", fake_get
+        )
+
+        # Should NOT raise — savepoint catches the IntegrityError, re-fetch
+        # returns the winner row, and the audit + flip proceed normally.
+        await zalo_bot_link_service._sync_preference(
+            db, user_id, enabled=True, actor_user_id=user_id
+        )
+        await db.commit()
+
+        # Final state: winner row updated, exactly 1 audit row written.
+        pref_audits = await _audit_rows(db, "NotificationPreference")
+        assert len(pref_audits) == 1
+        assert pref_audits[0].new_value is True
+
+
 class TestPreferenceSyncIdempotency:
     @pytest.mark.asyncio
     async def test_no_audit_row_when_value_unchanged(
