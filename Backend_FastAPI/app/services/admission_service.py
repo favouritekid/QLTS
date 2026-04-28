@@ -3277,27 +3277,45 @@ async def upload_document(
     file: Any,  # UploadFile
     current_user: models.User,
     actual_submission_format: Optional[str] = None,
-) -> models.AdmissionProfile:
+) -> tuple[models.AdmissionProfile, Callable]:
     """
     Upload a document for an admission profile.
 
     Workflow:
-    1. Verify access (IDOR)
-    2. Verify profile status (draft/rejected)
-    3. Verify doc_code exists in ProfileDocument
-    4. Save file to disk (uploads/admissions/{id}/{doc_code}_{filename})
-    5. Update ProfileDocument status='uploaded', file_path, and actual_submission_format
-    6. Re-compute validation_summary with updated documents
+    1. Verify access (IDOR).
+    2. Verify profile status (draft/rejected/revision_requested).
+    3. Verify doc_code exists in ProfileDocument.
+    4. Stage file to ``uploads/admissions/{id}/.staging.{uuid}.{ext}``
+       (NOT yet at the final path the DB will reference).
+    5. Update ProfileDocument with the FINAL ``file_path`` it will live
+       at after promotion + ``status='uploaded'`` + format.
+    6. Re-compute validation_summary, audit-log the upload.
 
-    IMPORTANT: This function does NOT commit the transaction.
-    Router must call db.commit().
+    ADM-007: filesystem mutations must not become permanent before the
+    DB commit. The service writes to a staging path and the caller
+    receives a ``finalize(committed: bool)`` callback that does the
+    real promotion (or cleanup) AFTER the router's ``db.commit()``
+    settles. See the return shape below.
+
+    IMPORTANT: This function does NOT commit the transaction. Router
+    must call ``await db.commit()`` and then ``await finalize(True)``;
+    on commit failure the router must call ``await finalize(False)``
+    instead. The caller-side pattern lives in
+    ``app/routers/admissions.py::upload_document``.
 
     Args:
         actual_submission_format: Type of document submitted (original | certified_copy | photo)
             User must declare what type of physical document they scanned/uploaded.
 
     Returns:
-        AdmissionProfile with updated validation_summary
+        Tuple of:
+          - ``AdmissionProfile`` with updated validation_summary.
+          - ``finalize(committed: bool)`` async callback. When
+            ``committed=True``: rename staging → final, then delete
+            the previous file (if any). When ``committed=False``:
+            delete the staging file. Idempotent best-effort: each
+            branch checks ``os.path.exists`` before acting and never
+            raises on the cleanup branch.
 
     Security:
     - Path Traversal: filename sanitization (inherent in modern frameworks but good practice)
@@ -3370,7 +3388,7 @@ async def upload_document(
 
     # doc_record was already fetched above for the authz guard — no need to re-query.
 
-    # Prepare file path with security measures
+    # Prepare file paths with security measures
     import os
     import shutil
     import uuid
@@ -3378,14 +3396,10 @@ async def upload_document(
     upload_dir = f"uploads/admissions/{profile_id}"
     os.makedirs(upload_dir, exist_ok=True)
 
-    # SECURITY: Delete old file if exists (prevent orphan files)
+    # ADM-007: capture the previous file path so the post-commit
+    # callback can delete it. We do NOT delete it here — that would
+    # make the FS change permanent before the DB commit settles.
     old_file_path = doc_record.file_path
-    if old_file_path and os.path.exists(old_file_path):
-        try:
-            os.remove(old_file_path)
-            log.info("Old document file deleted", old_path=old_file_path)
-        except OSError as e:
-            log.warning("Failed to delete old file", path=old_file_path, error=str(e))
 
     # ADM-019: extension is taken from the sniffed content, not from
     # the client-supplied filename, so we never fall back to ".bin" on
@@ -3393,62 +3407,202 @@ async def upload_document(
     extension_for_kind = {"pdf": ".pdf", "jpeg": ".jpg", "png": ".png"}
     file_extension = extension_for_kind[sniffed_kind]
 
-    unique_filename = f"{doc_code}_{uuid.uuid4().hex[:12]}{file_extension}"
-    file_path = f"{upload_dir}/{unique_filename}"
+    unique_id = uuid.uuid4().hex[:12]
+    unique_filename = f"{doc_code}_{unique_id}{file_extension}"
+    final_path = f"{upload_dir}/{unique_filename}"
+    # ADM-007: stage to a sibling path in the same directory so the
+    # post-commit promotion is a single ``os.rename`` (atomic on the
+    # same filesystem). Hidden by leading ``.staging.`` prefix so it
+    # does not show up in casual ``ls`` of the uploads dir.
+    staging_path = f"{upload_dir}/.staging.{unique_id}{file_extension}"
 
-    # Save file
+    # Stage the file to the staging path. If this fails, clean up the
+    # partially-written staging file before raising — we never let
+    # filesystem state diverge from "no upload happened".
     try:
-        with open(file_path, "wb") as buffer:
+        with open(staging_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
-        log.error("File upload failed", error=str(e), profile_id=profile_id)
+        log.error(
+            "File staging failed",
+            error=str(e),
+            profile_id=profile_id,
+            staging_path=staging_path,
+        )
+        if os.path.exists(staging_path):
+            try:
+                os.remove(staging_path)
+            except OSError:  # pragma: no cover — best-effort cleanup
+                pass
         raise BadRequest("Failed to save file")
 
-    # Update ProfileDocument record (replaces JSONB flag_modified workaround)
-    uploaded_at_dt = datetime.now(timezone.utc)
-    await admission_repo.update_document_status(
-        profile_id=profile_id,
-        document_type_code=doc_code,
-        status="uploaded",
-        file_path=file_path,
-        uploaded_at=uploaded_at_dt.isoformat(),
-        actual_submission_format=actual_submission_format
-    )
+    # ADM-007: from this point on, the staging file is on disk.
+    # Anything that raises BEFORE we return ``finalize`` to the router
+    # would leak the staging file (the router never sees the callback
+    # to clean it up). Wrap the entire post-staging block — DB
+    # update, flush, refresh, frontend-field compute, audit log —
+    # so any exception triggers a best-effort cleanup before
+    # re-raising the original error.
+    try:
+        # Update ProfileDocument record to point at the FINAL path.
+        # The staging file lives at ``staging_path`` until
+        # ``finalize(True)`` renames it; readers that hit the DB
+        # before commit + finalize will see ``final_path`` but the
+        # file will not exist there yet. That is acceptable because
+        # the only caller that observes this window is the router
+        # itself (between ``db.flush`` and ``db.commit``), and routers
+        # do not serve reads to clients in that window.
+        uploaded_at_dt = datetime.now(timezone.utc)
+        await admission_repo.update_document_status(
+            profile_id=profile_id,
+            document_type_code=doc_code,
+            status="uploaded",
+            file_path=final_path,
+            uploaded_at=uploaded_at_dt.isoformat(),
+            actual_submission_format=actual_submission_format
+        )
 
-    profile.updated_at = uploaded_at_dt
+        profile.updated_at = uploaded_at_dt
 
-    await db.flush()
+        await db.flush()
 
-    # ✅ Re-compute validation_summary with updated documents
-    from app.repositories import AdmissionRepository
-    admission_repo_refresh = AdmissionRepository(db)
-    documents = await admission_repo_refresh.get_all_documents(profile_id)
-    _compute_frontend_fields(profile, current_user, documents)
+        # ✅ Re-compute validation_summary with updated documents
+        from app.repositories import AdmissionRepository
+        admission_repo_refresh = AdmissionRepository(db)
+        documents = await admission_repo_refresh.get_all_documents(profile_id)
+        _compute_frontend_fields(profile, current_user, documents)
 
-    # ✅ AUDIT LOG: Track document upload
-    from .document_audit_service import log_document_upload
-    await log_document_upload(
-        db=db,
-        profile_document_id=doc_record.id,
-        actor_user_id=current_user.id,
-        old_status=doc_record.status if doc_record.status != "uploaded" else "missing",
-        new_file_path=file_path,
-        original_filename=file.filename or "unknown",
-        file_size_bytes=file_size,
-        content_type=file.content_type,
-        old_file_path=old_file_path,
-        declared_format=actual_submission_format,
-    )
+        # ✅ AUDIT LOG: Track document upload
+        from .document_audit_service import log_document_upload
+        await log_document_upload(
+            db=db,
+            profile_document_id=doc_record.id,
+            actor_user_id=current_user.id,
+            old_status=doc_record.status if doc_record.status != "uploaded" else "missing",
+            new_file_path=final_path,
+            original_filename=file.filename or "unknown",
+            file_size_bytes=file_size,
+            content_type=file.content_type,
+            old_file_path=old_file_path,
+            declared_format=actual_submission_format,
+        )
+    except Exception as exc:
+        # Service blew up between stage-write and return-finalize.
+        # The router is never going to see ``finalize`` so we own the
+        # cleanup ourselves. Best-effort — never mask the original
+        # exception.
+        log.error(
+            "ADM-007 upload service failed after staging write; "
+            "cleaning staging file before re-raising",
+            error=str(exc),
+            profile_id=profile_id,
+            staging_path=staging_path,
+        )
+        if os.path.exists(staging_path):
+            try:
+                os.remove(staging_path)
+            except OSError as cleanup_error:
+                log.warning(
+                    "Failed to clean staging file after service error",
+                    staging_path=staging_path,
+                    cleanup_error=str(cleanup_error),
+                )
+        raise
 
     log.info(
-        "Document uploaded with audit log",
+        "Document staged with audit log (awaiting commit)",
         profile_id=profile_id,
         doc_code=doc_code,
-        file_path=file_path,
-        user_id=current_user.id
+        staging_path=staging_path,
+        final_path=final_path,
+        user_id=current_user.id,
     )
 
-    return profile
+    async def finalize(committed: bool) -> None:
+        """ADM-007 file-ops finalize callback.
+
+        - ``committed=True``: rename staging → final, then delete the
+          previous file (if any). If the rename fails (disk full,
+          permission, race), we raise so the router can surface a 500
+          and the operator can investigate. The old file is kept in
+          place on rename failure so the user can re-upload without
+          first losing their existing copy.
+        - ``committed=False``: delete the staging file. Best-effort:
+          warns on failure, never raises (the router is unwinding).
+
+        Idempotent: each branch checks ``os.path.exists`` before
+        acting so a double-call (rare, but possible if the router
+        retries) does not raise.
+        """
+        if not committed:
+            if os.path.exists(staging_path):
+                try:
+                    os.remove(staging_path)
+                    log.info(
+                        "Staging file cleaned up after rollback",
+                        staging_path=staging_path,
+                    )
+                except OSError as e:
+                    log.warning(
+                        "Failed to clean staging file after rollback",
+                        staging_path=staging_path,
+                        error=str(e),
+                    )
+            return
+
+        # committed=True: promote staging → final. Use ``os.replace``
+        # rather than ``os.rename`` so the semantics are atomic across
+        # both POSIX and Windows even when the destination already
+        # exists (rare, but possible if the same uuid collides on a
+        # retry).
+        try:
+            if os.path.exists(staging_path):
+                os.replace(staging_path, final_path)
+                log.info(
+                    "Document file promoted from staging post-commit",
+                    final_path=final_path,
+                )
+            elif not os.path.exists(final_path):
+                # Neither staging nor final exists — something has gone
+                # very wrong (concurrent finalize, or the staging file
+                # was removed out-of-band). Surface as an error rather
+                # than silently leaving the DB pointing at a missing
+                # file.
+                raise OSError(
+                    f"ADM-007 finalize: neither staging nor final "
+                    f"file exists for profile={profile_id} "
+                    f"doc={doc_code}"
+                )
+            # else: final already exists (idempotent re-call) — nothing
+            # to do. Continue to old-file cleanup below.
+        except OSError as e:
+            log.error(
+                "ADM-007 finalize promote failed; old file kept intact",
+                staging_path=staging_path,
+                final_path=final_path,
+                old_file_path=old_file_path,
+                error=str(e),
+            )
+            raise
+
+        # Old-file delete is best-effort: the new file is already in
+        # place + DB committed, so a leftover old file is at worst
+        # storage waste, not a correctness issue.
+        if old_file_path and old_file_path != final_path and os.path.exists(old_file_path):
+            try:
+                os.remove(old_file_path)
+                log.info(
+                    "Old document file deleted post-commit",
+                    old_path=old_file_path,
+                )
+            except OSError as e:
+                log.warning(
+                    "Failed to delete old file post-commit",
+                    old_path=old_file_path,
+                    error=str(e),
+                )
+
+    return profile, finalize
 
 
 async def confirm_document_format(
@@ -3729,12 +3883,19 @@ async def reset_document(
     profile_id: int,
     doc_code: str,
     current_user: models.User,
-) -> models.AdmissionProfile:
+) -> tuple[models.AdmissionProfile, Callable]:
     """
     Reset a document to 'missing' status (undo submission).
 
     Use case: User accidentally clicked "Đã nộp" or uploaded wrong file.
     Allows simple undo without complex audit trail.
+
+    ADM-007: filesystem deletion is deferred to a post-commit
+    callback. The old file stays on disk until the router's
+    ``db.commit()`` settles; if commit fails the file remains on disk
+    and the rolled-back DB still references it, which keeps DB and FS
+    consistent. The caller-side pattern lives in
+    ``app/routers/admissions.py::reset_document_endpoint``.
 
     Permissions:
     - Officer: Can reset documents for profiles in draft/rejected status
@@ -3747,7 +3908,13 @@ async def reset_document(
         current_user: Current authenticated user
 
     Returns:
-        AdmissionProfile with updated validation_summary
+        Tuple of:
+          - ``AdmissionProfile`` with updated validation_summary.
+          - ``finalize(committed: bool)`` async callback. When
+            ``committed=True``: delete the previous file (if any).
+            When ``committed=False``: no-op — the service never
+            mutated the filesystem, so there is nothing to undo.
+            Idempotent best-effort.
 
     Raises:
         ResourceNotFoundError: Document not found
@@ -3797,15 +3964,10 @@ async def reset_document(
         reason="User requested reset",
     )
 
-    # Delete physical file if exists
-    if old_file_path:
-        import os
-        if os.path.exists(old_file_path):
-            try:
-                os.remove(old_file_path)
-                log.info("Document file deleted during reset", file_path=old_file_path)
-            except OSError as e:
-                log.warning("Failed to delete document file", error=str(e), file_path=old_file_path)
+    # ADM-007: defer the file delete to the post-commit callback. If
+    # commit fails the file stays on disk and the rolled-back DB still
+    # references it — DB ↔ FS remain consistent. The deletion only
+    # becomes visible to the world after ``db.commit()`` settles.
 
     await db.flush()
 
@@ -3814,13 +3976,45 @@ async def reset_document(
     _compute_frontend_fields(profile, current_user, documents)
 
     log.info(
-        "Document reset to missing",
+        "Document reset staged (awaiting commit)",
         profile_id=profile_id,
         doc_code=doc_code,
         user_id=current_user.id,
+        old_file_path=old_file_path,
     )
 
-    return profile
+    async def finalize(committed: bool) -> None:
+        """ADM-007 reset finalize callback.
+
+        - ``committed=True``: delete the old file if it exists. Best
+          effort — log a warning on failure (storage waste, not a
+          correctness issue).
+        - ``committed=False``: no-op. The service never wrote to the
+          filesystem, so there is nothing to undo.
+
+        Idempotent: ``os.path.exists`` check before unlink.
+        """
+        if not committed:
+            return
+
+        if old_file_path:
+            import os
+
+            if os.path.exists(old_file_path):
+                try:
+                    os.remove(old_file_path)
+                    log.info(
+                        "Document file deleted post-commit during reset",
+                        file_path=old_file_path,
+                    )
+                except OSError as e:
+                    log.warning(
+                        "Failed to delete document file post-commit",
+                        error=str(e),
+                        file_path=old_file_path,
+                    )
+
+    return profile, finalize
 
 
 async def _perform_enrollment_core(
