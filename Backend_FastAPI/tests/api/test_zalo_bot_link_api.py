@@ -143,7 +143,7 @@ class TestUnlinkEndpoint:
     ):
         with patch(
             "app.services.zalo_bot_link_service.unlink",
-            new=AsyncMock(return_value=(True, "Đã huỷ liên kết.")),
+            new=AsyncMock(return_value=(True, "Đã huỷ liên kết.", None)),
         ) as svc:
             resp = await client.post(
                 "/api/zalo-bot/unlink", headers=officer_token_headers
@@ -159,7 +159,7 @@ class TestUnlinkEndpoint:
     ):
         with patch(
             "app.services.zalo_bot_link_service.unlink",
-            new=AsyncMock(return_value=(False, "Tài khoản chưa được liên kết.")),
+            new=AsyncMock(return_value=(False, "Tài khoản chưa được liên kết.", None)),
         ):
             resp = await client.post(
                 "/api/zalo-bot/unlink", headers=officer_token_headers

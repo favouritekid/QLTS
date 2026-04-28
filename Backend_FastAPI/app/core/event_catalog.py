@@ -1254,6 +1254,43 @@ _SYSTEM_EVENTS: tuple = (
         # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
         privacy="sensitive",
     ),
+    EventDefinition(
+        event=SystemEvents.ZALO_BOT_LINK_DISPLACED,
+        category="security",
+        display_name="Liên kết Zalo Bot bị thay thế",
+        description=(
+            "Khi chat_id Zalo Bot của bạn được liên kết bởi một tài khoản "
+            "QLTS khác — bạn sẽ ngừng nhận thông báo qua Zalo cho đến khi "
+            "thiết lập lại liên kết."
+        ),
+        variables=(
+            _var("user_id", "integer", "ID user bị displace (recipient)"),
+            _var("displaced_by_user_id", "integer", "ID user mới chiếm liên kết"),
+            _var("chat_id_prefix", "string", "Prefix chat_id (đã mask)", False),
+            _var("actor_id", "integer", "ID user mới (actor)"),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("specific_users",),
+        # Browser-only by default per design decision (minimal blast).
+        # Admin có thể thêm channel email qua /admin/notification-rules
+        # nếu muốn cảnh báo mạnh hơn.
+        default_channels=("browser",),
+        priority=10,
+        # Dedup key includes chat_id_prefix (and not just the user pair)
+        # because a single (displaced_user, new_user) pair can legitimately
+        # produce multiple events: A links chat_X → B displaces A → A
+        # re-links chat_Y → B displaces A again. Without chat_id_prefix
+        # the second notification would be suppressed by the 5-minute
+        # cooldown (NOTIFICATION_COOLDOWN_SECONDS) — leaving A unaware
+        # of the second hijack.
+        dedup_key_template=(
+            "security:${user_id}:zalo_bot_link_displaced:"
+            "${displaced_by_user_id}:${chat_id_prefix}"
+        ),
+        link_strategy="/settings/notifications",
+        # Sensitive: contains targeted recipient + potential security event
+        privacy="sensitive",
+    ),
 )
 
 # -------------------------------------------------------------------

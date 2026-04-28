@@ -118,7 +118,7 @@ async def unlink_zalo_bot(
     """
     from app.services import zalo_bot_link_service
 
-    ok, message = await zalo_bot_link_service.unlink(db, current_user.id)
+    ok, message, _ = await zalo_bot_link_service.unlink(db, current_user.id)
     if ok:
         await db.commit()
     else:

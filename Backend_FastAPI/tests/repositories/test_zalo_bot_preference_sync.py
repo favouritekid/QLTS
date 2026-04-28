@@ -35,7 +35,7 @@ class TestPreferenceSyncOnLink:
             "app.database.safe_redis_getdel",
             new=AsyncMock(return_value=str(user_id)),
         ):
-            ok, _ = await zalo_bot_link_service.verify_and_link(
+            ok, _, _ = await zalo_bot_link_service.verify_and_link(
                 db, "ABC123", "chat_alpha", "Officer A"
             )
         assert ok is True
@@ -64,7 +64,7 @@ class TestPreferenceSyncOnLink:
             )
         await db.commit()
 
-        ok, _ = await zalo_bot_link_service.unlink(db, user_id)
+        ok, _, _ = await zalo_bot_link_service.unlink(db, user_id)
         assert ok is True
         await db.commit()
 

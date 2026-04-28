@@ -103,12 +103,18 @@ class TestVerifyAndLink:
         repo_mock.get_active_by_chat_id = AsyncMock(return_value=None)
         repo_mock.create_or_reactivate = AsyncMock()
 
+        # Patch audit_service so unit tests don't need a real DB. The
+        # full audit semantics are covered in
+        # tests/integration/test_zalo_bot_audit_trail.py against a real
+        # session — this test only verifies the GETDEL contract.
         with patch("app.database.safe_redis_getdel", new=getdel_mock), \
              patch.object(svc, "StaffZaloBotLinkRepository", return_value=repo_mock), \
-             patch.object(svc, "_sync_preference", new=AsyncMock()):
+             patch.object(svc, "_sync_preference", new=AsyncMock()), \
+             patch("app.services.audit_service.log_created", new=AsyncMock()), \
+             patch("app.services.audit_service.log_audit", new=AsyncMock()):
             db_mock = AsyncMock()
-            ok1, _ = await svc.verify_and_link(db_mock, "ABC123", "chat_xyz")
-            ok2, msg2 = await svc.verify_and_link(db_mock, "ABC123", "chat_xyz")
+            ok1, _, _ = await svc.verify_and_link(db_mock, "ABC123", "chat_xyz")
+            ok2, msg2, _ = await svc.verify_and_link(db_mock, "ABC123", "chat_xyz")
 
         assert ok1 is True, "first consume must succeed when GETDEL returns the user_id"
         assert ok2 is False, "second consume on the same code must fail"
@@ -122,7 +128,7 @@ class TestVerifyAndLink:
 
         with patch("app.database.safe_redis_getdel", new=getdel_mock), \
              patch.object(svc, "StaffZaloBotLinkRepository", return_value=repo_mock):
-            ok, _ = await svc.verify_and_link(AsyncMock(), "BADCOD", "chat_x")
+            ok, _, _ = await svc.verify_and_link(AsyncMock(), "BADCOD", "chat_x")
 
         assert ok is False
         repo_mock.create_or_reactivate.assert_not_awaited()
@@ -136,7 +142,9 @@ class TestVerifyAndLink:
 
         with patch("app.database.safe_redis_getdel", new=getdel_mock), \
              patch.object(svc, "StaffZaloBotLinkRepository", return_value=repo_mock), \
-             patch.object(svc, "_sync_preference", new=AsyncMock()):
+             patch.object(svc, "_sync_preference", new=AsyncMock()), \
+             patch("app.services.audit_service.log_created", new=AsyncMock()), \
+             patch("app.services.audit_service.log_audit", new=AsyncMock()):
             await svc.verify_and_link(AsyncMock(), "abc123", "chat_x")
 
         looked_up_key = getdel_mock.await_args.args[0]

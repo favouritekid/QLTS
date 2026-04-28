@@ -421,6 +421,16 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         "notification_type": "warning",
         "recipient_config": {"resolver_type": "specific_users", "params": {}},
     },
+    SystemEvents.ZALO_BOT_LINK_DISPLACED: {
+        "title_template": "Liên kết Zalo Bot bị thay thế",
+        "message_template": (
+            "Liên kết Zalo Bot của bạn vừa bị thay thế bởi một tài khoản "
+            "khác (chat_id ${chat_id_prefix}). Bạn sẽ ngừng nhận thông báo "
+            "qua Zalo cho đến khi thiết lập lại liên kết."
+        ),
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
     SystemEvents.SYSTEM_ALERT: {
         "title_template": "[${severity}] System Alert",
         "message_template": "${message}",
