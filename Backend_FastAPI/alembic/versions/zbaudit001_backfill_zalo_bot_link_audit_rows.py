@@ -26,12 +26,17 @@ Prod state audit (verified 2026-04-28 via DB query):
 
 Idempotency
 -----------
-``INSERT ... SELECT ... WHERE NOT EXISTS`` over the same
-(entity_type, entity_id, source='backfill') triple, so re-running the
-migration (or running on a DB where some rows were already backfilled)
-inserts nothing for already-handled rows. Safe to re-apply.
+``INSERT ... SELECT ... WHERE NOT EXISTS`` keyed on
+(entity_type, entity_id, action='created') — ANY source. The stricter
+key matters for the downgrade-then-reupgrade scenario: if the live
+service has already written a real ``action='created'`` row for the
+link (source='zalo_bot_webhook' or 'api') BEFORE this migration is
+re-applied, a predicate scoped to ``source='backfill'`` would still
+fire and double the audit row. Keying on action='created' regardless
+of source means the live row blocks the backfill — which is what
+operators actually want (the live row carries truth).
 
-Downgrade deletes only the rows tagged ``source='backfill'`` for entity
+Downgrade deletes only rows tagged ``source='backfill'`` for entity
 type ``StaffZaloBotLink``. Audit rows written by the live service
 (``source='zalo_bot_webhook'`` or ``source='api'``) are NOT touched —
 those represent real operator actions and must persist across
@@ -78,10 +83,15 @@ _BACKFILL_SQL = """
     FROM staff_zalo_bot_link l
     WHERE l.is_active = true
       AND NOT EXISTS (
+          -- Block on ANY existing 'created' row, regardless of source.
+          -- A live row written by zalo_bot_link_service (source =
+          -- 'zalo_bot_webhook' / 'api') after a previous downgrade
+          -- represents truth and must not be duplicated by a synthetic
+          -- backfill on re-upgrade.
           SELECT 1 FROM entity_audit_log a
           WHERE a.entity_type = 'StaffZaloBotLink'
             AND a.entity_id = l.id
-            AND a.source = 'backfill'
+            AND a.action = 'created'
       );
 """
 

@@ -266,6 +266,138 @@ class TestUnlinkAudit:
         assert deleted[0].source == "zalo_bot_webhook"
 
 
+class TestBackfillMigrationIdempotency:
+    """The backfill migration runs ``INSERT ... WHERE NOT EXISTS`` on
+    ``(entity_type, entity_id, action='created')``. Verify that:
+
+    - Re-running the SQL on a DB where the live service has already
+      written a 'created' row (different source) does NOT duplicate.
+    - Re-running after a previous backfill (source='backfill') is also
+      a no-op.
+
+    Reproduces the exact SQL from
+    ``alembic/versions/zbaudit001_backfill_zalo_bot_link_audit_rows.py``
+    so a future tweak to the migration predicate will fail this test
+    if the idempotency contract regresses.
+    """
+
+    BACKFILL_SQL = """
+        INSERT INTO entity_audit_log (
+            entity_type, entity_id, action,
+            actor_user_id, field_name,
+            old_value, new_value, changes,
+            reason, source, ip_address, user_agent,
+            created_at
+        )
+        SELECT
+            'StaffZaloBotLink',
+            l.id,
+            'created',
+            l.user_id,
+            NULL,
+            NULL,
+            json_build_object(
+                'user_id', l.user_id,
+                'is_active', l.is_active,
+                'linked_at', l.linked_at,
+                'note', 'backfilled — actual link predates audit instrumentation'
+            )::jsonb,
+            NULL,
+            'backfilled 2026-04-28; original linked_at preserved in new_value',
+            'backfill',
+            NULL,
+            NULL,
+            l.linked_at
+        FROM staff_zalo_bot_link l
+        WHERE l.is_active = true
+          AND NOT EXISTS (
+              SELECT 1 FROM entity_audit_log a
+              WHERE a.entity_type = 'StaffZaloBotLink'
+                AND a.entity_id = l.id
+                AND a.action = 'created'
+          );
+    """
+
+    @pytest.mark.asyncio
+    async def test_live_created_row_blocks_backfill_after_downgrade_reupgrade(
+        self, db: AsyncSession, officer_user_in_db: dict
+    ):
+        """Reproduces the failure mode flagged in /review:
+        downgrade → live link op writes 'created' (source='zalo_bot_webhook')
+        → upgrade re-runs migration. The stricter predicate must NOT
+        insert a synthetic backfill row alongside the live one.
+        """
+        from sqlalchemy import text
+
+        user_id = officer_user_in_db["id"]
+        # Step 1: live link op writes the 'created' audit row with the
+        # service's own source label.
+        with patch(
+            "app.database.safe_redis_getdel",
+            new=AsyncMock(return_value=str(user_id)),
+        ):
+            await zalo_bot_link_service.verify_and_link(
+                db, "ABC123", "chat_idem_live", None
+            )
+            await db.commit()
+
+        link = (
+            await db.execute(
+                select(StaffZaloBotLink).where(
+                    StaffZaloBotLink.user_id == user_id
+                )
+            )
+        ).scalar_one()
+
+        before = await _audit_rows(db, "StaffZaloBotLink", link.id)
+        assert len(before) == 1
+        assert before[0].source == "zalo_bot_webhook"
+
+        # Step 2: simulate post-downgrade re-upgrade by running the
+        # migration SQL directly. The stricter predicate must skip.
+        await db.execute(text(self.BACKFILL_SQL))
+        await db.commit()
+
+        after = await _audit_rows(db, "StaffZaloBotLink", link.id)
+        assert len(after) == 1, (
+            "backfill must NOT duplicate when a live 'created' row "
+            "already exists for this entity (any source)"
+        )
+        assert after[0].source == "zalo_bot_webhook"
+
+    @pytest.mark.asyncio
+    async def test_running_backfill_twice_is_noop(
+        self, db: AsyncSession, officer_user_in_db: dict
+    ):
+        """Re-running the migration on a DB already backfilled produces
+        no extra rows."""
+        from sqlalchemy import text
+
+        user_id = officer_user_in_db["id"]
+        # Insert a link directly (bypass service so no audit row exists).
+        link = StaffZaloBotLink(
+            user_id=user_id,
+            chat_id="chat_idem_twice",
+            display_name=None,
+            is_active=True,
+        )
+        db.add(link)
+        await db.commit()
+
+        # First run: should insert 1 backfill row.
+        await db.execute(text(self.BACKFILL_SQL))
+        await db.commit()
+        first = await _audit_rows(db, "StaffZaloBotLink", link.id)
+        assert len(first) == 1
+        assert first[0].source == "backfill"
+
+        # Second run: predicate blocks, no-op.
+        await db.execute(text(self.BACKFILL_SQL))
+        await db.commit()
+        second = await _audit_rows(db, "StaffZaloBotLink", link.id)
+        assert len(second) == 1, "second run must be a no-op"
+
+
 class TestPreferenceSyncIdempotency:
     @pytest.mark.asyncio
     async def test_no_audit_row_when_value_unchanged(
