@@ -1086,28 +1086,106 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         token: str,
     ) -> Optional[models.AdmissionConfirmationToken]:
         """
-        Get confirmation token with pessimistic lock on both token and profile.
-        Used exclusively by verify_and_confirm to prevent race conditions.
+        ADM-013: profile-first 3-step pessimistic lock for the magic-link
+        confirm flow. Earlier shape used a single ``selectinload(profile)
+        + with_for_update()`` query, which only locks the token row —
+        the relationship load runs as a separate SELECT without a lock,
+        so confirm could race override/finalize on the profile row.
+
+        The new shape locks profile first, then token, then re-validates
+        the FK so that confirm, override, and finalize all share the
+        same lock order (profile → token-related work). With identical
+        ordering across the three flows Postgres serialises them
+        cleanly without deadlocks.
+
+        Steps:
+          1. Resolve ``profile_id`` from the token value (no lock; fast
+             bail-out when the token is missing or already purged).
+          2. ``SELECT AdmissionProfile FOR UPDATE`` for that
+             ``profile_id`` (eager-load lead so the service can read
+             ``profile.lead`` without firing a lazy load on the locked
+             instance).
+          3. ``SELECT AdmissionConfirmationToken FOR UPDATE`` by token
+             value.
+          4. Re-validate that ``token.profile_id`` still matches the
+             locked profile. If override invalidated the token while we
+             were waiting on the profile lock — or, in the unlikely
+             event of a token recreated for a different profile — bail.
+
+        Caller-side idempotency (``confirmed_at``, ``locked_at``,
+        ``expires_at``) is preserved untouched: this method only
+        changes when/where locks are acquired, never the validation
+        rules in ``verify_and_confirm``.
 
         Args:
-            token: Token string from URL
+            token: Token string from URL.
 
         Returns:
-            AdmissionConfirmationToken with profile + lead locked, or None
+            ``AdmissionConfirmationToken`` row-locked, with the
+            ``profile`` relationship pre-bound to the *same* locked
+            profile instance (no extra round-trip), or ``None`` if any
+            of the four steps fails.
         """
         from sqlalchemy.orm import selectinload
+        from sqlalchemy.orm.attributes import set_committed_value
 
-        stmt = (
-            select(models.AdmissionConfirmationToken)
-            .where(models.AdmissionConfirmationToken.token == token)
-            .options(
-                selectinload(models.AdmissionConfirmationToken.profile)
-                .selectinload(models.AdmissionProfile.lead)
-            )
+        # Step 1 — Resolve profile_id without locking. If the token
+        # has been deleted (e.g. an override invalidated it before this
+        # request landed), surface as not-found cheaply.
+        pid_stmt = select(models.AdmissionConfirmationToken.profile_id).where(
+            models.AdmissionConfirmationToken.token == token
+        )
+        profile_id = (await self.db.execute(pid_stmt)).scalar_one_or_none()
+        if profile_id is None:
+            return None
+
+        # Step 2 — Lock the profile row first. Eager-load lead so the
+        # service body can read ``profile.lead`` without triggering an
+        # async lazy load on the locked instance.
+        profile_stmt = (
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.id == profile_id)
+            .options(selectinload(models.AdmissionProfile.lead))
             .with_for_update()
         )
-        result = await self.db.execute(stmt)
-        return result.scalar_one_or_none()
+        locked_profile = (
+            await self.db.execute(profile_stmt)
+        ).scalar_one_or_none()
+        if locked_profile is None:
+            # Profile was deleted between resolve and lock (extremely
+            # unlikely under the cascade FK, but defensive).
+            return None
+
+        # Step 3 — Lock the token row. Lock acquired AFTER the profile
+        # lock so all three flows (confirm, override, finalize) share
+        # the same profile→token ordering.
+        token_stmt = (
+            select(models.AdmissionConfirmationToken)
+            .where(models.AdmissionConfirmationToken.token == token)
+            .with_for_update()
+        )
+        token_obj = (await self.db.execute(token_stmt)).scalar_one_or_none()
+        if token_obj is None:
+            # Override/finalize ran during our profile-lock wait and
+            # invalidated the token. Treat as not-found.
+            return None
+
+        # Step 4 — Re-validate FK after acquiring both locks. The
+        # only realistic way this fails is if an override deleted the
+        # token and a brand-new token was issued for a *different*
+        # profile under the same value (impossible with 256-bit
+        # randomness, but bail safely if it ever happens).
+        if token_obj.profile_id != locked_profile.id:
+            return None
+
+        # Bind the locked profile onto the token's ``profile``
+        # relationship without dirtying the session and without an
+        # extra SELECT. Identity map already holds ``locked_profile``
+        # for this PK, so this is the same instance the service will
+        # mutate; the token's lazy-loaded relationship is short-
+        # circuited to point at it.
+        set_committed_value(token_obj, "profile", locked_profile)
+        return token_obj
 
     async def increment_token_attempts(
         self,

@@ -4017,6 +4017,71 @@ async def reset_document(
     return profile, finalize
 
 
+async def _lock_admission_profile_for_write(
+    db: AsyncSession, profile_id: int,
+) -> models.AdmissionProfile:
+    """
+    ADM-013: Acquire the profile-row write lock AND return a freshly
+    loaded ORM instance.
+
+    All three state-changing flows that race on a single
+    AdmissionProfile — magic-link confirm, admin override, admin
+    finalize — must acquire the profile lock FIRST so Postgres can
+    serialise them via row locking instead of falling back on the
+    optimistic version check alone.
+
+    Earlier shape returned ``None`` and only acquired the row lock.
+    That left a hole: a non-router caller that loaded ``profile``
+    *before* waiting on the lock would block on the SELECT, then
+    continue reading ``profile.status`` / ``profile.version`` from
+    the **stale** in-memory ORM instance. The lock would be honoured
+    on disk but the service body would still mutate against pre-lock
+    column values. ``populate_existing=True`` closes that hole by
+    refreshing the column values on the instance already in this
+    session's identity map; the returned object IS the same Python
+    instance the caller passed in (when they share a session) but
+    with fresh column data.
+
+    Eager loads mirror the router dependency chains
+    (``get_admission_for_manager`` / ``get_admission_for_user``) so
+    downstream code (``_populate_response_fields``, lead/officer
+    sync) can still read ``profile.lead.assigned_officer`` and
+    ``profile.assigned_reviewer`` without firing async lazy loads.
+
+    Args:
+        db: AsyncSession holding the transaction.
+        profile_id: Profile ID to lock.
+
+    Returns:
+        The locked + freshly populated ``AdmissionProfile``.
+
+    Raises:
+        ResourceNotFoundError: Profile no longer exists. Defensive —
+            the router dep usually catches this earlier.
+    """
+    from sqlalchemy import select as _select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        _select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    result = await db.execute(stmt)
+    locked = result.scalar_one_or_none()
+    if locked is None:
+        raise ResourceNotFoundError(
+            f"Admission profile {profile_id} not found"
+        )
+    return locked
+
+
 async def _perform_enrollment_core(
     db: AsyncSession,
     profile_id: int,
@@ -5452,6 +5517,14 @@ async def override_profile(
     """
     from .admission_state_machine import validate_transition
 
+    # ADM-013: explicit profile-first FOR UPDATE lock before reading
+    # ``profile.status`` / ``profile.version`` and before deleting
+    # confirmation tokens. The helper returns a freshly populated ORM
+    # instance via ``populate_existing=True`` so we read post-lock
+    # column values even if the caller passed a stale instance loaded
+    # before the lock was waited on (non-router callers; tests).
+    profile = await _lock_admission_profile_for_write(db, profile.id)
+
     # STATE VALIDATION
     try:
         validate_transition(profile.status, "overridden")
@@ -5738,6 +5811,16 @@ async def finalize_profile(
         ConflictError: Version mismatch or enrollment conflict
     """
     from .admission_state_machine import validate_transition
+
+    # ADM-013: explicit profile-first FOR UPDATE lock before reading
+    # ``profile.status`` / ``profile.version``. Helper rebinds to a
+    # freshly populated ORM instance (``populate_existing=True``) so
+    # version + state validation never read pre-lock stale columns
+    # from a non-router caller. The downstream
+    # ``_perform_enrollment_core`` re-locks defensively as well, so a
+    # version mismatch or state-machine error here is an early bail
+    # under the same row lock contract used by override + confirm.
+    profile = await _lock_admission_profile_for_write(db, profile.id)
 
     # STATE VALIDATION
     try:
@@ -6705,7 +6788,12 @@ async def verify_and_confirm(
     from app.repositories import AdmissionRepository
 
     repo = AdmissionRepository(db)
-    # Pessimistic lock on token + profile to prevent concurrent confirms
+    # ADM-013: ``get_token_for_confirm`` performs a profile-first
+    # 3-step lock (resolve profile_id → SELECT profile FOR UPDATE →
+    # SELECT token FOR UPDATE → re-validate FK) so confirm shares the
+    # same lock order as override/finalize. The token row + the
+    # ``token_obj.profile`` instance are both locked when we proceed
+    # below; mutations land under the same row lock.
     token_obj = await repo.get_token_for_confirm(token_value)
 
     if not token_obj:
