@@ -797,7 +797,7 @@ async def upload_document(
     - actual_submission_format: Type of document (original | certified_copy | photo)
     """
     try:
-        profile = await admission_service.upload_document(
+        profile, finalize = await admission_service.upload_document(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
@@ -805,7 +805,14 @@ async def upload_document(
             current_user=current_user,
             actual_submission_format=actual_submission_format,
         )
-        await db.commit()
+        # ADM-007: file is staged on disk; promote/cleanup happens
+        # via ``finalize`` only after the commit branch is decided.
+        try:
+            await db.commit()
+        except Exception:
+            await finalize(False)
+            raise
+        await finalize(True)
         await db.refresh(profile)
         return profile
 
@@ -1000,13 +1007,21 @@ async def reset_document_endpoint(
     - Full AdmissionProfileResponse with updated validation_summary
     """
     try:
-        profile = await admission_service.reset_document(
+        profile, finalize = await admission_service.reset_document(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
             current_user=current_user,
         )
-        await db.commit()
+        # ADM-007: defer the file delete to ``finalize(True)`` so a
+        # commit failure leaves the file (and the rolled-back DB
+        # reference to it) in place.
+        try:
+            await db.commit()
+        except Exception:
+            await finalize(False)
+            raise
+        await finalize(True)
         await db.refresh(profile)
         return profile
 
