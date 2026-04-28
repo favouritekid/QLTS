@@ -261,7 +261,7 @@ describe("DocumentsTab — ADM-031 task-orientation", () => {
     expect(screen.queryByText(/nhận bản giấy tại quầy/i)).not.toBeInTheDocument();
   });
 
-  it("does not leak deprecated mode copy ('Online' / 'Nộp giấy' / 'Bản photocopy' / 'Bản photo/scan' / 'Ảnh chụp') in officer UI", () => {
+  it("does not leak deprecated mode/status copy ('Online' / 'Nộp giấy' / '(online)' / 'Bản photocopy' / 'Bản photo/scan' / 'Ảnh chụp') in officer UI", () => {
     const profile = buildProfile([
       {
         code: "CCCD",
@@ -283,9 +283,12 @@ describe("DocumentsTab — ADM-031 task-orientation", () => {
     const { container } = render(
       <DocumentsTab profile={profile as never} isEditable />
     );
-    // Old mode labels.
-    expect(container.textContent).not.toMatch(/\bOnline\b/);
+    // Old mode labels and the deprecated "(online)" parenthetical that
+    // used to appear in the uploaded status — the workflow doesn't have
+    // an "online" concept, only "needs file" vs "paper-only".
+    expect(container.textContent).not.toMatch(/\bOnline\b/i);
     expect(container.textContent).not.toMatch(/\bNộp giấy\b/);
+    expect(container.textContent).not.toMatch(/\(online\)/i);
     // Old format labels (legacy duplicates) — the centralized source uses
     // "Bản chụp/scan không chứng thực" for `photo`, never these.
     expect(container.textContent).not.toMatch(/Bản photocopy/);
@@ -374,7 +377,10 @@ describe("DocumentsTab — ADM-031 progress and status labels", () => {
     // Header summary already mentions both phrases, so a row badge would
     // collide with the summary node. Match all and assert presence of at
     // least one badge per status — header renders these phrases too.
-    expect(screen.getAllByText(/đã ghi nhận \(online\)/i).length).toBeGreaterThan(0);
+    // ADM-031 round 3: "Đã ghi nhận file" replaces the old
+    // "Đã ghi nhận (online)" so the document status copy never says
+    // "online" (the workflow distinction is needs-file vs paper-only).
+    expect(screen.getAllByText(/đã ghi nhận file/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/đã kiểm tra/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/đã nhận bản giấy/i).length).toBeGreaterThan(0);
   });

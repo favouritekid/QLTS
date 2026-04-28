@@ -143,7 +143,7 @@ export function getDocumentStatusConfig(status: string): DocumentStatusConfig {
       // (verified). Officer still has to verify the upload before this row
       // counts as fully complete.
       variant: "secondary",
-      label: "Đã ghi nhận (online)",
+      label: "Đã ghi nhận file",
       iconName: "Upload",
     },
     verified: {

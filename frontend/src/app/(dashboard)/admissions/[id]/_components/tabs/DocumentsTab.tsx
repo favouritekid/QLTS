@@ -68,7 +68,7 @@ const STATUS_CONFIG: Record<string, {
     icon: AlertCircle,
   },
   uploaded: {
-    label: "Đã ghi nhận (online)",
+    label: "Đã ghi nhận file",
     color: "bg-info-100 text-info-700",
     icon: Upload,
   },
