@@ -676,10 +676,18 @@ class TestStateTransitionWorkflows:
         assert correct_confirm_response.status_code == 200, f"Confirm failed: {correct_confirm_response.text}"
         assert correct_confirm_response.json()["status"] == "confirmed"
 
-        # 7. Admin finalizes
+        # 7. Admin finalizes — ADM-015 requires current ``version``.
+        # ``ConfirmTokenResponse`` (the magic-link confirm response
+        # shape) does not carry ``version``, so we fetch the latest
+        # profile state via GET before issuing the finalize.
+        profile_after_confirm = await client.get(
+            f"/api/admissions/{profile.id}",
+            headers=admin_headers,
+        )
+        assert profile_after_confirm.status_code == 200, profile_after_confirm.text
         finalize_response = await client.post(
             f"/api/admissions/{profile.id}/finalize",
-            json={},
+            json={"version": profile_after_confirm.json()["version"]},
             headers=admin_headers,
         )
         assert finalize_response.status_code == 200, f"Finalize failed: {finalize_response.text}"
@@ -762,10 +770,10 @@ class TestStateTransitionWorkflows:
         assert override_response.status_code == 200, f"Override failed: {override_response.text}"
         assert override_response.json()["status"] == "overridden"
 
-        # 2. Admin finalizes
+        # 2. Admin finalizes — ADM-015 requires current ``version``
         finalize_response = await client.post(
             f"/api/admissions/{profile.id}/finalize",
-            json={},
+            json={"version": override_response.json()["version"]},
             headers=admin_headers,
         )
         assert finalize_response.status_code == 200, f"Finalize failed: {finalize_response.text}"

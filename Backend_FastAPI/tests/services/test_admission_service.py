@@ -1424,7 +1424,9 @@ class TestOverrideResponseFields:
         admin_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
-        profile_id, _, _ = await _create_profile_with_state(
+        # ADM-015: override now requires the current version. The
+        # helper hands it back so we don't need a separate GET.
+        profile_id, version, _ = await _create_profile_with_state(
             client, officer_user_in_db, seed_lead_dependencies,
             target_status="approved",
         )
@@ -1432,7 +1434,11 @@ class TestOverrideResponseFields:
 
         response = await client.post(
             f"/api/admissions/{profile_id}/override",
-            json={"reason": "Special case for scholarship recipient", "bypass_rules": []},
+            json={
+                "reason": "Special case for scholarship recipient",
+                "bypass_rules": [],
+                "version": version,
+            },
             headers=admin_headers,
         )
         assert response.status_code in (200, 201), f"Override failed: {response.text}"
@@ -1455,7 +1461,8 @@ class TestFinalizeResponseFields:
         admin_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
-        profile_id, _, _ = await _create_profile_with_state(
+        # ADM-015: finalize now requires the current version.
+        profile_id, version, _ = await _create_profile_with_state(
             client, officer_user_in_db, seed_lead_dependencies,
             target_status="confirmed",
         )
@@ -1463,7 +1470,7 @@ class TestFinalizeResponseFields:
 
         response = await client.post(
             f"/api/admissions/{profile_id}/finalize",
-            json={},
+            json={"version": version},
             headers=admin_headers,
         )
         assert response.status_code in (200, 201), f"Finalize failed: {response.text}"
