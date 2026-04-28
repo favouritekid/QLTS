@@ -117,7 +117,7 @@ async def verify_and_link(
 
     user_id_str = await safe_redis_getdel(_code_key(code.upper()))
     if not user_id_str:
-        return False, "Ma lien ket khong hop le hoac da het han."
+        return False, "Mã liên kết không hợp lệ hoặc đã hết hạn."
 
     user_id = int(user_id_str)
     repo = StaffZaloBotLinkRepository(db)
@@ -138,7 +138,7 @@ async def verify_and_link(
         user_id=user_id,
         chat_id_prefix=chat_id[:8] + "***" if chat_id else "",
     )
-    return True, "Lien ket thanh cong! Ban se nhan thong bao tu QLTS qua Zalo."
+    return True, "Liên kết thành công! Bạn sẽ nhận thông báo từ QLTS qua Zalo."
 
 
 async def unlink(db: AsyncSession, user_id: int) -> Tuple[bool, str]:
@@ -146,16 +146,16 @@ async def unlink(db: AsyncSession, user_id: int) -> Tuple[bool, str]:
     repo = StaffZaloBotLinkRepository(db)
     found = await repo.deactivate_by_user_id(user_id)
     if not found:
-        return False, "Tai khoan chua duoc lien ket."
+        return False, "Tài khoản chưa được liên kết."
     await _sync_preference(db, user_id, enabled=False)
-    return True, "Da huy lien ket."
+    return True, "Đã huỷ liên kết."
 
 
 async def unlink_by_chat_id(db: AsyncSession, chat_id: str) -> Tuple[bool, str]:
     repo = StaffZaloBotLinkRepository(db)
     link = await repo.get_active_by_chat_id(chat_id)
     if not link:
-        return False, "Tai khoan chua duoc lien ket."
+        return False, "Tài khoản chưa được liên kết."
     return await unlink(db, link.user_id)
 
 

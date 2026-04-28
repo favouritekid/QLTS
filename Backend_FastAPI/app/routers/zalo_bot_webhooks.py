@@ -31,6 +31,7 @@ from app.database import (
     get_db,
     safe_redis_expire,
     safe_redis_incr,
+    safe_redis_set,
 )
 
 log = structlog.get_logger(__name__)
@@ -42,6 +43,13 @@ _WEBHOOK_RL_PREFIX = "zalo_bot:webhook_rl:"
 _WEBHOOK_RL_LIMIT = 10  # commands
 _WEBHOOK_RL_WINDOW = 60  # seconds
 
+# Once-per-window flag so we send the "rate limited" reply only on the
+# first hit that crosses the threshold. Without this, every subsequent
+# rate-limited request still triggers a send_message (~1 reply per
+# attacker request) — which on the Basic plan (3000 msg/month) burns the
+# daily quota in minutes when a single chat is blasted with traffic.
+_WEBHOOK_RL_NOTIFIED_PREFIX = "zalo_bot:webhook_rl_notified:"
+
 # 6-char uppercase alnum, exact length so attackers can't pad with spaces
 _LINK_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 
@@ -51,6 +59,29 @@ def _mask_chat_id(chat_id: str) -> str:
     if not chat_id:
         return ""
     return chat_id[:8] + "***" if len(chat_id) > 8 else chat_id[:4] + "***"
+
+
+async def _send_reply(chat_id: str, text: str) -> None:
+    """Send a reply to the chat and log if Zalo API rejects it.
+
+    The webhook always returns 200 to Zalo so the upstream doesn't retry
+    and double-consume the link code (``GETDEL`` is destructive). That
+    means a silent ``send_message`` failure leaves the user with no
+    confirmation and no on-host trail — the gateway only logs httpx
+    exceptions, not API-level errors (``ok=false`` with ``error_code`` /
+    ``description``). Surface those here so operators can spot quota
+    (429), unauthorized (401), or chat-blocked failures from the log.
+    """
+    from app.gateways.zalo_bot import zalo_bot_gateway
+
+    result = await zalo_bot_gateway.send_message(chat_id, text)
+    if not result.success:
+        log.warning(
+            "zalo_bot reply send failed",
+            chat_id_prefix=_mask_chat_id(chat_id),
+            error_code=result.error_code,
+            error_message=result.error_message,
+        )
 
 
 async def _rate_limit_chat(chat_id: str) -> bool:
@@ -77,7 +108,6 @@ async def zalo_bot_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    from app.gateways.zalo_bot import zalo_bot_gateway
     from app.repositories.staff_zalo_bot_link_repository import (
         StaffZaloBotLinkRepository,
     )
@@ -154,12 +184,27 @@ async def zalo_bot_webhook(
 
     # 3. Rate limit per chat_id.
     if await _rate_limit_chat(chat_id):
-        await zalo_bot_gateway.send_message(
-            chat_id, "Quá nhiều lệnh. Vui lòng thử lại sau 1 phút."
+        # Only reply once per window. ``SET NX EX`` returns truthy on
+        # first set inside the window, falsy on subsequent attempts —
+        # so the reply (and its send_message quota cost) fires exactly
+        # once per minute per chat regardless of attack volume. If
+        # Redis is unavailable, ``safe_redis_set`` returns None / False
+        # and we silently drop the reply, which is the right
+        # availability tradeoff (still log the rate_limited hit).
+        notified = await safe_redis_set(
+            f"{_WEBHOOK_RL_NOTIFIED_PREFIX}{chat_id}",
+            "1",
+            ex=_WEBHOOK_RL_WINDOW,
+            nx=True,
         )
+        if notified:
+            await _send_reply(
+                chat_id, "Quá nhiều lệnh. Vui lòng thử lại sau 1 phút."
+            )
         log.warning(
             "zalo_bot webhook rate_limited",
             chat_id_prefix=_mask_chat_id(chat_id),
+            replied=bool(notified),
         )
         return {"status": "rate_limited"}
 
@@ -182,7 +227,7 @@ async def zalo_bot_webhook(
         prefix_len = len("/lienkiet") if text_lower.startswith("/lienkiet") else len("/lienket")
         candidate = text[prefix_len:].strip().upper()
         if not _LINK_CODE_RE.match(candidate):
-            await zalo_bot_gateway.send_message(
+            await _send_reply(
                 chat_id,
                 "Cú pháp sai. Gửi: /lienket <MA> (6 ký tự, chỉ chữ in hoa và số).",
             )
@@ -202,12 +247,10 @@ async def zalo_bot_webhook(
                 "zalo_bot verify_and_link failed",
                 chat_id_prefix=_mask_chat_id(chat_id),
             )
-            await zalo_bot_gateway.send_message(
-                chat_id, "Lỗi hệ thống. Vui lòng thử lại sau."
-            )
+            await _send_reply(chat_id, "Lỗi hệ thống. Vui lòng thử lại sau.")
             return {"status": "ok", "mode": "service_error"}
 
-        await zalo_bot_gateway.send_message(chat_id, reply)
+        await _send_reply(chat_id, reply)
         return {"status": "ok", "mode": "verify_and_link", "linked": ok}
 
     # ---------------- /huylienket ----------------
@@ -225,12 +268,10 @@ async def zalo_bot_webhook(
                 "zalo_bot unlink_by_chat_id failed",
                 chat_id_prefix=_mask_chat_id(chat_id),
             )
-            await zalo_bot_gateway.send_message(
-                chat_id, "Lỗi hệ thống. Vui lòng thử lại sau."
-            )
+            await _send_reply(chat_id, "Lỗi hệ thống. Vui lòng thử lại sau.")
             return {"status": "ok", "mode": "service_error"}
 
-        await zalo_bot_gateway.send_message(chat_id, reply)
+        await _send_reply(chat_id, reply)
         return {"status": "ok", "mode": "unlink", "found": ok}
 
     # ---------------- /trangthai ----------------
@@ -241,11 +282,11 @@ async def zalo_bot_webhook(
         # someone else if the chat_id has bounced) to the chat — only a
         # binary linked / not-linked answer.
         reply = "Đã liên kết." if link else "Chưa liên kết."
-        await zalo_bot_gateway.send_message(chat_id, reply)
+        await _send_reply(chat_id, reply)
         return {"status": "ok", "mode": "status", "linked": bool(link)}
 
     # ---------------- help / unknown ----------------
-    await zalo_bot_gateway.send_message(
+    await _send_reply(
         chat_id,
         (
             "QLTS Bot:\n"

@@ -112,7 +112,7 @@ class TestVerifyAndLink:
 
         assert ok1 is True, "first consume must succeed when GETDEL returns the user_id"
         assert ok2 is False, "second consume on the same code must fail"
-        assert "khong hop le" in msg2.lower() or "het han" in msg2.lower()
+        assert "không hợp lệ" in msg2.lower() or "hết hạn" in msg2.lower()
         assert getdel_mock.await_count == 2
 
     async def test_invalid_code_returns_failure_no_db_writes(self):
