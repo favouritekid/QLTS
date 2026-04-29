@@ -217,6 +217,12 @@ export const documentItemSchema = z.object({
    * ID of officer who verified the document.
    */
   verified_by: z.number().int().nullable().optional(),
+  /**
+   * Display name of the verifier — backend resolves full_name → email →
+   * null via a batched User lookup (ADM-031 round 10). When null, the FE
+   * falls back to "User #<verified_by>".
+   */
+  verified_by_name: z.string().nullable().optional(),
   // ---------------------------------------------------------------------
   // PR #5 — explicit per-document permission flags.
   // Backend computes these per (role × doc status × profile status × unit

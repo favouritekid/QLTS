@@ -192,6 +192,18 @@ const VI_DATE_FORMATTER = new Intl.DateTimeFormat("vi-VN", {
   year: "numeric",
 })
 
+// ADM-031 round 10 — full datetime (dd/mm/yyyy hh:mm) used by the verifier
+// tooltip on the Trạng thái cell so officers can see the exact verification
+// timestamp without hovering long enough for a relative-time tooltip.
+const VI_DATETIME_FORMATTER = new Intl.DateTimeFormat("vi-VN", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+})
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -285,6 +297,32 @@ function computeRowState(doc: DocumentItem) {
     ? getShortFormatLabel(doc.submission_format)
     : null
 
+  // ADM-031 round 10 — verifier identity for the "Đã duyệt" badge.
+  // verifiedDisplayName: full name from backend → fallback "User #<id>" →
+  // null when neither id nor timestamp is present (older legacy rows).
+  // verifiedAtShort feeds the secondary line under the badge; verifierTooltip
+  // is the long-form tooltip ("Duyệt bởi <Tên> lúc dd/mm/yyyy hh:mm").
+  const verifiedAtIso = doc.verified_at ?? null
+  const verifiedAtShort = verifiedAtIso
+    ? VI_DATE_FORMATTER.format(new Date(verifiedAtIso))
+    : null
+  const verifiedAtLong = verifiedAtIso
+    ? VI_DATETIME_FORMATTER.format(new Date(verifiedAtIso))
+    : null
+  const verifiedDisplayName =
+    doc.verified_by_name?.trim() ||
+    (doc.verified_by != null ? `User #${doc.verified_by}` : null)
+  let verifierTooltip: string | null = null
+  if (doc.status === "verified") {
+    if (verifiedDisplayName && verifiedAtLong) {
+      verifierTooltip = `Duyệt bởi ${verifiedDisplayName} lúc ${verifiedAtLong}`
+    } else if (verifiedDisplayName) {
+      verifierTooltip = `Duyệt bởi ${verifiedDisplayName}`
+    } else if (verifiedAtLong) {
+      verifierTooltip = `Đã duyệt lúc ${verifiedAtLong}`
+    }
+  }
+
   const hasFile =
     !!doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
   const canUpload = doc.can_upload ?? false
@@ -316,6 +354,10 @@ function computeRowState(doc: DocumentItem) {
     canVerify,
     hasAnyAction,
     recordedAtFormatted,
+    // ADM-031 round 10
+    verifiedDisplayName,
+    verifiedAtShort,
+    verifierTooltip,
   }
 }
 
@@ -813,7 +855,11 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
   // ============================================================================
 
   return (
-    <>
+    // ADM-031 round 10 — wrap the whole tab in a single TooltipProvider so
+    // the Trạng thái-cell verifier tooltip and the action-icon tooltips
+    // (DocumentRowActions has its own provider for legacy reasons; nested
+    // is harmless) both have a context.
+    <TooltipProvider delayDuration={150}>
       {/* KPI strip — 4 tiles so officer reads the global state at a glance.
           Counts use tabular-nums so the digits stay aligned across columns. */}
       <div
@@ -1037,13 +1083,50 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             )}
                           </td>
                           <td className="py-3 pr-3 align-top">
-                            <Badge className={`${state.statusConfig.color} gap-1`}>
-                              <StatusIcon
-                                className="h-3 w-3 shrink-0"
-                                aria-hidden="true"
-                              />
-                              {state.statusConfig.label}
-                            </Badge>
+                            {state.verifierTooltip ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge
+                                    className={`${state.statusConfig.color} gap-1 cursor-help`}
+                                  >
+                                    <StatusIcon
+                                      className="h-3 w-3 shrink-0"
+                                      aria-hidden="true"
+                                    />
+                                    {state.statusConfig.label}
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {state.verifierTooltip}
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              <Badge
+                                className={`${state.statusConfig.color} gap-1`}
+                              >
+                                <StatusIcon
+                                  className="h-3 w-3 shrink-0"
+                                  aria-hidden="true"
+                                />
+                                {state.statusConfig.label}
+                              </Badge>
+                            )}
+                            {doc.status === "verified" &&
+                              (state.verifiedDisplayName ||
+                                state.verifiedAtShort) && (
+                                <div className="mt-1 text-xs text-muted-foreground break-words">
+                                  {state.verifiedDisplayName}
+                                  {state.verifiedDisplayName &&
+                                  state.verifiedAtShort
+                                    ? " · "
+                                    : ""}
+                                  {state.verifiedAtShort && (
+                                    <span className="tabular-nums">
+                                      {state.verifiedAtShort}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                           </td>
                           <td className="py-3 pl-3 align-top">
                             <DocumentRowActions
@@ -1099,15 +1182,52 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             </div>
                           )}
                         </div>
-                        <Badge
-                          className={`${state.statusConfig.color} gap-1 shrink-0`}
-                        >
-                          <StatusIcon
-                            className="h-3 w-3 shrink-0"
-                            aria-hidden="true"
-                          />
-                          {state.statusConfig.label}
-                        </Badge>
+                        <div className="flex flex-col items-end gap-0.5 shrink-0">
+                          {state.verifierTooltip ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  className={`${state.statusConfig.color} gap-1 cursor-help`}
+                                >
+                                  <StatusIcon
+                                    className="h-3 w-3 shrink-0"
+                                    aria-hidden="true"
+                                  />
+                                  {state.statusConfig.label}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {state.verifierTooltip}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Badge
+                              className={`${state.statusConfig.color} gap-1`}
+                            >
+                              <StatusIcon
+                                className="h-3 w-3 shrink-0"
+                                aria-hidden="true"
+                              />
+                              {state.statusConfig.label}
+                            </Badge>
+                          )}
+                          {doc.status === "verified" &&
+                            (state.verifiedDisplayName ||
+                              state.verifiedAtShort) && (
+                              <div className="text-xs text-muted-foreground text-right max-w-[10rem] break-words">
+                                {state.verifiedDisplayName}
+                                {state.verifiedDisplayName &&
+                                state.verifiedAtShort
+                                  ? " · "
+                                  : ""}
+                                {state.verifiedAtShort && (
+                                  <span className="tabular-nums">
+                                    {state.verifiedAtShort}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                        </div>
                       </div>
 
                       <dl className="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-1.5 mt-3 text-sm">
@@ -1385,6 +1505,6 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </TooltipProvider>
   )
 }

@@ -49,6 +49,10 @@ type DocRow = {
   verified_format?: string | null;
   file_path?: string | null;
   uploaded_at?: string | null;
+  paper_submitted_at?: string | null;
+  verified_at?: string | null;
+  verified_by?: number | null;
+  verified_by_name?: string | null;
 };
 
 function buildProfile(docs: DocRow[]) {
@@ -890,5 +894,98 @@ describe("DocumentsTab — ADM-031 upload dialog", () => {
     ).toBeInTheDocument();
     expect(dialog).toHaveTextContent(/file này là bản gì\?/i);
     expect(within(dialog).getByRole("button", { name: /^tải file$/i })).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// ADM-031 ROUND 10 — VERIFIER IDENTITY (who verified + when)
+// =============================================================================
+
+describe("DocumentsTab — ADM-031 round 10 verifier identity", () => {
+  it("renders verifier name + short date below the 'Đã duyệt' badge", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ THPT",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "certified_copy",
+        verified_format: "certified_copy",
+        verified_at: "2026-04-29T08:30:00+00:00",
+        verified_by: 7,
+        verified_by_name: "Nguyễn Văn A",
+      },
+    ]);
+    const { container } = render(
+      <DocumentsTab profile={profile as never} isEditable />,
+    );
+    // Name appears at least once (desktop + mobile) alongside the dd/mm/yyyy date.
+    expect(container.textContent).toMatch(/Nguyễn Văn A/);
+    expect(container.textContent).toMatch(/29\/04\/2026/);
+  });
+
+  it("falls back to 'User #<id>' when verified_by_name is null but id is present", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ THPT",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+        verified_at: "2026-04-29T08:30:00+00:00",
+        verified_by: 42,
+        verified_by_name: null,
+      },
+    ]);
+    const { container } = render(
+      <DocumentsTab profile={profile as never} isEditable />,
+    );
+    expect(container.textContent).toMatch(/User #42/);
+  });
+
+  it("shows only the date when neither verified_by_name nor verified_by is set", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ THPT",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+        verified_at: "2026-04-29T08:30:00+00:00",
+        verified_by: null,
+        verified_by_name: null,
+      },
+    ]);
+    const { container } = render(
+      <DocumentsTab profile={profile as never} isEditable />,
+    );
+    expect(container.textContent).toMatch(/29\/04\/2026/);
+    expect(container.textContent).not.toMatch(/User #/);
+  });
+
+  it("does NOT render a verifier line for non-verified statuses (e.g. uploaded)", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ THPT",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+        // Stale verifier columns from a prior cycle should be ignored as
+        // long as status !== verified — only the latest workflow state
+        // drives the secondary line.
+        verified_at: "2026-04-20T08:30:00+00:00",
+        verified_by: 7,
+        verified_by_name: "Nguyễn Văn A",
+      },
+    ]);
+    const { container } = render(
+      <DocumentsTab profile={profile as never} isEditable />,
+    );
+    // The "Đã ghi nhận" cell renders the date next to format with a leading
+    // bullet ("Chứng thực · 20/04/2026") — but that's not the verifier line
+    // and the name should NOT appear anywhere when status is not verified.
+    expect(container.textContent).not.toMatch(/Nguyễn Văn A/);
   });
 });

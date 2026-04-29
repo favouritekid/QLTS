@@ -254,6 +254,23 @@ class DocumentItemSchema(BaseModel):
         None,
         description="Format actually declared by the officer at upload/paper-receipt time"
     )
+    # ADM-031 round 10: surface the verifier identity + timestamp so the FE
+    # row can render "Đã duyệt — <Tên> · <ngày>" under the status badge and
+    # show full datetime on hover. verified_at + verified_by come straight
+    # from ProfileDocument; verified_by_name is resolved server-side via a
+    # batched User lookup to keep the listing N+1-free.
+    verified_at: Optional[datetime] = Field(
+        None,
+        description="Timestamp when officer marked status=verified",
+    )
+    verified_by: Optional[int] = Field(
+        None,
+        description="User id of the officer who verified the document",
+    )
+    verified_by_name: Optional[str] = Field(
+        None,
+        description="Display name (full_name or email) of the verifier; null if user no longer exists",
+    )
 
     # =========================================================================
     # Checklist-only display fields populated by _compute_frontend_fields.
