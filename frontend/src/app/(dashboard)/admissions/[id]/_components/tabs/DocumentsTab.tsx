@@ -105,11 +105,14 @@ interface DocumentsTabProps {
 // CONSTANTS
 // ============================================================================
 
-// ADM-031 round 6 — Trạng thái cell carries workflow state only:
-// "Cần làm" -> officer/applicant must act, "Chờ duyệt" -> waiting for
-// manager review, "Đã duyệt" -> verified, "Từ chối" -> rejected. The
-// "Đã ghi nhận" cell separately reports what was physically received
-// ("Chưa" / "File" / "Giấy") so the two cells don't echo each other.
+// ADM-031 round 9 — Trạng thái cell carries workflow state only.
+// Backend strict mode (admission_service.py:566) treats `paper_submitted`
+// as already satisfying the mandatory-doc gate alongside `verified`, so
+// the badge for that state is "Đã nhận giấy" (officer received the
+// paper, no extra verify step needed) — NOT "Chờ duyệt", which would
+// imply the row is still pending the manager. "Đã ghi nhận" cell
+// separately reports physical reception ("Chưa" / "File scan" /
+// "Bản giấy") so the two cells don't echo each other.
 const STATUS_CONFIG: Record<
   string,
   { label: string; color: string; icon: typeof AlertCircle }
@@ -125,8 +128,12 @@ const STATUS_CONFIG: Record<
     icon: Upload,
   },
   paper_submitted: {
-    label: "Chờ duyệt",
-    color: "bg-info-100 text-info-700",
+    // Round 9: backend already treats paper_submitted as "đủ yêu cầu",
+    // so the badge reads "Đã nhận giấy" (success-tinted) instead of
+    // "Chờ duyệt" — keeping the row consistent with the
+    // "Hoàn tất yêu cầu" KPI count.
+    label: "Đã nhận giấy",
+    color: "bg-success-50 text-success-700",
     icon: FileText,
   },
   verified: {
@@ -826,10 +833,14 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
           }
         />
         <KpiTile
-          label="Chờ kiểm tra"
+          // Round 9: rename to "File chờ duyệt" so the tile matches the
+          // helper (`isDocumentPendingVerification`) which only counts
+          // `uploaded`. paper_submitted rows are NOT pending — backend
+          // already accepts them as satisfied.
+          label="File chờ duyệt"
           value={pendingCount}
           accent={pendingCount > 0 ? "warning" : "default"}
-          hint={pendingCount > 0 ? "File chưa duyệt" : "Không có"}
+          hint={pendingCount > 0 ? "Cần manager duyệt format" : "Không có"}
         />
         <KpiTile
           label="Hoàn tất yêu cầu"

@@ -245,8 +245,8 @@ describe("DocumentsTab — ADM-031 round 5 KPI strip", () => {
     // Đã ghi nhận = 3/4 (uploaded + verified + paper_submitted)
     expect(within(kpi).getByText(/^đã ghi nhận$/i)).toBeInTheDocument();
     expect(within(kpi).getByText("3/4")).toBeInTheDocument();
-    // Chờ kiểm tra = 1 (uploaded only)
-    expect(within(kpi).getByText(/^chờ kiểm tra$/i)).toBeInTheDocument();
+    // File chờ duyệt = 1 (uploaded only) — round 9 rename.
+    expect(within(kpi).getByText(/^file chờ duyệt$/i)).toBeInTheDocument();
     expect(within(kpi).getByText("1")).toBeInTheDocument();
     // Hoàn tất yêu cầu = 2/4 (verified + paper_submitted)
     expect(within(kpi).getByText(/^hoàn tất yêu cầu$/i)).toBeInTheDocument();
@@ -566,7 +566,7 @@ describe("DocumentsTab — ADM-031 round 6 status workflow labels", () => {
     expect(within(table).queryByText(/Đã ghi nhận file/)).not.toBeInTheDocument();
   });
 
-  it("paper_submitted row shows 'Chờ duyệt' status + 'Bản giấy' reception", () => {
+  it("paper_submitted row shows 'Đã nhận giấy' status (round 9 — backend counts as satisfied) + 'Bản giấy' reception", () => {
     const profile = buildProfile([
       {
         code: "P",
@@ -578,8 +578,12 @@ describe("DocumentsTab — ADM-031 round 6 status workflow labels", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
-    expect(within(table).getByText(/^Chờ duyệt$/)).toBeInTheDocument();
+    // Round 9: paper_submitted is "Đã nhận giấy" (success-tinted) so the
+    // row matches the KPI semantics — backend already treats it as
+    // satisfying the mandatory-doc gate, so it is NOT "Chờ duyệt".
+    expect(within(table).getByText(/^Đã nhận giấy$/)).toBeInTheDocument();
     expect(within(table).getByText(/^Bản giấy$/)).toBeInTheDocument();
+    // Long-form legacy copy must not leak.
     expect(within(table).queryByText(/Đã nhận bản giấy/)).not.toBeInTheDocument();
   });
 
