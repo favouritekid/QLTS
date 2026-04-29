@@ -51,6 +51,12 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   AlertCircle,
   AlertTriangle,
   Ban,
@@ -138,15 +144,16 @@ const STATUS_CONFIG: Record<
 // Reception bucket — compact "what-was-received" label that mirrors the
 // backend mandatory-completion gate. Showing this in the "Đã ghi nhận"
 // table cell avoids having to read the full status badge for the common
-// case ("File đã upload" / "Bản giấy đã nhận" / "Chưa nhận gì").
+// case. Round 8: longer phrasing ("File scan" / "Bản giấy") so the
+// reception verb is unambiguous on its own line.
 const RECEPTION_LABEL: Record<string, string> = {
   missing: "Chưa",
   rejected: "Chưa",
-  resubmitted: "File",
-  revision_requested: "File",
-  uploaded: "File",
-  verified: "File",
-  paper_submitted: "Giấy",
+  resubmitted: "File scan",
+  revision_requested: "File scan",
+  uploaded: "File scan",
+  verified: "File scan",
+  paper_submitted: "Bản giấy",
 }
 
 // Work-queue priority. Officers act on rows in this order: things they
@@ -366,6 +373,46 @@ interface ActionsCellProps {
   alignEnd?: boolean
 }
 
+/**
+ * Icon-only button with a Radix Tooltip popup on hover/focus. Uses
+ * `aria-label` for the accessible name; the tooltip content is meant
+ * to convey extra description ("Đặt lại về Chưa nộp" verbose form vs
+ * the short "Đặt lại" name) without duplicating the SR announcement.
+ */
+function IconActionButton({
+  ariaLabel,
+  tooltip,
+  onClick,
+  disabled,
+  children,
+  className,
+}: {
+  ariaLabel: string
+  tooltip: string
+  onClick: () => void
+  disabled?: boolean
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="sm"
+          variant="ghost"
+          className={`h-8 w-8 p-0 ${className ?? ""}`}
+          onClick={onClick}
+          disabled={disabled}
+          aria-label={ariaLabel}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{tooltip}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 function DocumentRowActions(props: ActionsCellProps) {
   const {
     doc,
@@ -396,118 +443,141 @@ function DocumentRowActions(props: ActionsCellProps) {
     return <span className="text-xs text-muted-foreground">—</span>
   }
 
+  // ADM-031 round 8: 3 visual groups separated by thin dividers so the
+  // officer scans intent quickly:
+  //   - common: View
+  //   - officer (intake): Upload, Mark paper-submitted
+  //   - manager (review): Verify, Reject, Reset
+  // Each button is icon-only with Radix Tooltip on hover + aria-label
+  // for screen readers; no `title` attribute so SR doesn't double-read.
+  const hasCommon = state.hasFile
+  const hasOfficerGroup = state.canUpload || state.canMarkPaperSubmitted
+  const hasManagerGroup = state.canVerify || state.canReject || state.canReset
+
   return (
-    <div
-      className={`flex flex-wrap items-center gap-1.5 ${alignEnd ? "justify-end" : ""}`}
-    >
-      {/* WIG: drop duplicate `title` when aria-label conveys the same text;
-          keep aria-label only on icon-only buttons so screen readers don't
-          announce the same string twice. */}
-      {state.hasFile && (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => doc.file_path && onView(doc.file_path)}
-          aria-label="Xem tài liệu"
-        >
-          <Eye className="h-4 w-4" />
-        </Button>
-      )}
+    <TooltipProvider delayDuration={150}>
+      <div
+        className={`flex flex-wrap items-center gap-0.5 ${alignEnd ? "justify-end" : ""}`}
+      >
+        {/* Common */}
+        {state.hasFile && (
+          <IconActionButton
+            ariaLabel="Xem tài liệu"
+            tooltip="Xem file đã tải lên"
+            onClick={() => doc.file_path && onView(doc.file_path)}
+          >
+            <Eye className="h-4 w-4" />
+          </IconActionButton>
+        )}
 
-      {state.canUpload && (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            onUpload(doc.code, doc.label, doc.submission_format ?? undefined)
-          }
-          disabled={isUploading}
-        >
-          {isUploading ? (
-            <Loader2 className="h-4 w-4 mr-1 animate-spin motion-reduce:animate-none" />
-          ) : (
-            <Upload className="h-4 w-4 mr-1" />
+        {hasCommon && (hasOfficerGroup || hasManagerGroup) && (
+          <span
+            aria-hidden="true"
+            className="mx-1 inline-block h-4 w-px bg-border"
+          />
+        )}
+
+        {/* Officer / intake group */}
+        {state.canUpload && (
+          <IconActionButton
+            ariaLabel="Tải file"
+            tooltip="Tải file ảnh/scan/PDF lên hệ thống"
+            disabled={isUploading}
+            onClick={() =>
+              onUpload(doc.code, doc.label, doc.submission_format ?? undefined)
+            }
+          >
+            {isUploading ? (
+              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+          </IconActionButton>
+        )}
+
+        {state.canMarkPaperSubmitted && (
+          <IconActionButton
+            ariaLabel="Đánh dấu đã nhận giấy"
+            tooltip="Đánh dấu đã nhận bản giấy tại quầy"
+            disabled={isPaperPending}
+            onClick={() =>
+              onPaperSubmit(
+                doc.code,
+                doc.label,
+                doc.submission_format ?? undefined,
+              )
+            }
+          >
+            {isPaperPending ? (
+              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+            ) : (
+              <Building2 className="h-4 w-4" />
+            )}
+          </IconActionButton>
+        )}
+
+        {state.isPaperOnly &&
+          doc.status === "paper_submitted" &&
+          !state.canReject &&
+          !state.canReset &&
+          !state.canVerify && (
+            <span className="inline-flex items-center text-success-600 text-xs">
+              <Check className="h-4 w-4" aria-hidden="true" />
+            </span>
           )}
-          Tải file
-        </Button>
-      )}
 
-      {state.canMarkPaperSubmitted && (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            onPaperSubmit(doc.code, doc.label, doc.submission_format ?? undefined)
-          }
-          disabled={isPaperPending}
-          aria-label="Đánh dấu đã nhận giấy"
-        >
-          {isPaperPending ? (
-            <Loader2 className="h-4 w-4 mr-1 animate-spin motion-reduce:animate-none" />
-          ) : (
-            <Building2 className="h-4 w-4 mr-1" />
-          )}
-          Đã nhận giấy
-        </Button>
-      )}
+        {hasOfficerGroup && hasManagerGroup && (
+          <span
+            aria-hidden="true"
+            className="mx-1 inline-block h-4 w-px bg-border"
+          />
+        )}
 
-      {state.isPaperOnly && doc.status === "paper_submitted" && !state.canReject && !state.canReset && !state.canVerify && (
-        <span className="inline-flex items-center text-success-600 text-xs">
-          <Check className="h-4 w-4" aria-hidden="true" />
-        </span>
-      )}
+        {/* Manager / review group */}
+        {state.canVerify && (
+          <IconActionButton
+            ariaLabel="Duyệt tài liệu"
+            tooltip="Duyệt — xác nhận tài liệu hợp lệ"
+            className="text-success-700 hover:text-success-800 hover:bg-success-50"
+            disabled={isVerifyPending && isCurrentVerifyTarget}
+            onClick={() => onVerifyClick(doc.code, verifyFormat)}
+          >
+            {isVerifyPending && isCurrentVerifyTarget ? (
+              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
+          </IconActionButton>
+        )}
 
-      {/* Verify — manager/admin one-click approve. Lives in the
-          DocumentsTab so officers/managers can clear the verify queue
-          without bouncing into the executive checklist. */}
-      {state.canVerify && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="text-success-700 hover:text-success-800 hover:bg-success-50 border-success-300"
-          onClick={() => onVerifyClick(doc.code, verifyFormat)}
-          disabled={isVerifyPending && isCurrentVerifyTarget}
-          aria-label="Duyệt tài liệu"
-        >
-          {isVerifyPending && isCurrentVerifyTarget ? (
-            <Loader2 className="h-4 w-4 mr-1 animate-spin motion-reduce:animate-none" />
-          ) : (
-            <Check className="h-4 w-4 mr-1" />
-          )}
-          Duyệt
-        </Button>
-      )}
+        {state.canReject && (
+          <IconActionButton
+            ariaLabel="Từ chối tài liệu"
+            tooltip="Từ chối — yêu cầu nộp lại"
+            className="text-error-600 hover:text-error-700 hover:bg-error-50"
+            onClick={() => onRejectClick(doc.code, doc.label)}
+          >
+            <Ban className="h-4 w-4" />
+          </IconActionButton>
+        )}
 
-      {state.canReject && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="text-error-600 hover:text-error-700 hover:bg-error-50 border-error-300"
-          onClick={() => onRejectClick(doc.code, doc.label)}
-          aria-label="Từ chối tài liệu"
-        >
-          <Ban className="h-4 w-4 mr-1" />
-          Từ chối
-        </Button>
-      )}
-
-      {state.canReset && (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="text-warning-600 hover:text-warning-700 hover:bg-warning-50"
-          onClick={() => onResetClick(doc.code, doc.label)}
-          disabled={isResetPending && isCurrentResetTarget}
-          aria-label="Đặt lại tài liệu về Chưa nộp"
-        >
-          {isResetPending && isCurrentResetTarget ? (
-            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
-          ) : (
-            <RotateCcw className="h-4 w-4" />
-          )}
-        </Button>
-      )}
-    </div>
+        {state.canReset && (
+          <IconActionButton
+            ariaLabel="Đặt lại tài liệu về Chưa nộp"
+            tooltip="Đặt lại — đưa về trạng thái Chưa nộp"
+            className="text-warning-600 hover:text-warning-700 hover:bg-warning-50"
+            disabled={isResetPending && isCurrentResetTarget}
+            onClick={() => onResetClick(doc.code, doc.label)}
+          >
+            {isResetPending && isCurrentResetTarget ? (
+              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+            ) : (
+              <RotateCcw className="h-4 w-4" />
+            )}
+          </IconActionButton>
+        )}
+      </div>
+    </TooltipProvider>
   )
 }
 
@@ -840,23 +910,22 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           key={doc.code || i}
                           className="hover:bg-muted/30 motion-reduce:transition-none"
                         >
+                          {/* ----- Tên giấy tờ ----- round 8:
+                              line 1 = name
+                              line 2 = Bắt buộc / Tùy chọn
+                              Mã (doc.code) moves to a hover title on the
+                              name so officers don't see the technical
+                              token in the main UI but can still inspect
+                              it for support / debug. */}
                           <td className="py-3 pr-3 align-top min-w-0">
-                            <div className="font-medium text-pretty break-words">
-                              {doc.label}
-                              {doc.is_mandatory && (
-                                <span
-                                  className="text-error-500 ml-0.5"
-                                  aria-label="Bắt buộc"
-                                >
-                                  *
-                                </span>
-                              )}
-                            </div>
                             <div
-                              className="text-xs text-muted-foreground"
-                              translate="no"
+                              className="font-medium text-pretty break-words"
+                              title={`Mã: ${doc.code}`}
                             >
-                              Mã: {doc.code}
+                              {doc.label}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
                             </div>
                             {doc.status === "rejected" && doc.rejection_reason && (
                               <div className="text-xs text-error-700 mt-1 break-words">
@@ -864,21 +933,22 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                               </div>
                             )}
                           </td>
+
+                          {/* ----- Yêu cầu ----- round 8: 2 lines
+                              line 1 = format (Gốc / Chứng thực / Chụp/scan)
+                              line 2 = how-to (Tải file / Nhận giấy)
+                              Stacked alignment lets officers compare
+                              vertically with the matching 2 lines in the
+                              "Đã ghi nhận" cell. */}
                           <td className="py-3 pr-3 align-top">
-                            {/* ADM-031 round 7: 3-line "Yêu cầu" cell — bắt buộc /
-                                loại bản / cách xử lý — replaces the separate
-                                "Cách ghi nhận" column. */}
-                            <div className="text-sm">
-                              {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
-                            </div>
-                            {state.requiredFormatShort && state.formatBadge && (
+                            {state.requiredFormatShort && state.formatBadge ? (
                               <div
-                                className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5"
+                                className="text-sm inline-flex items-center gap-1"
                                 title={state.formatBadge.label}
                               >
                                 {FormatIcon && (
                                   <FormatIcon
-                                    className="h-3 w-3 shrink-0"
+                                    className="h-3 w-3 shrink-0 text-muted-foreground"
                                     aria-hidden="true"
                                   />
                                 )}
@@ -886,9 +956,13 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                   {state.requiredFormatShort}
                                 </span>
                               </div>
+                            ) : (
+                              <div className="text-sm text-muted-foreground">
+                                —
+                              </div>
                             )}
                             <div
-                              className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5"
+                              className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-1"
                               title={state.howToReceiveTitle}
                               aria-label={state.howToReceiveTitle}
                             >
@@ -899,23 +973,22 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                               <span>{state.howToReceiveLabel}</span>
                             </div>
                           </td>
+
+                          {/* ----- Đã ghi nhận ----- round 8: 2 lines
+                              line 1 = actual format short + recorded date
+                                       (e.g. "Chứng thực · 29/04/2026")
+                                       — empty for missing/rejected.
+                              line 2 = reception bucket
+                                       ("File scan" / "Bản giấy" / "Chưa")
+                              Alignment matches the 2 lines in "Yêu cầu"
+                              so a row reads as a 2x2 mini grid. */}
                           <td className="py-3 pr-3 align-top">
-                            <Badge
-                              variant={
-                                state.receptionLabel === "Chưa"
-                                  ? "outline"
-                                  : "secondary"
-                              }
-                              className="text-xs"
-                            >
-                              {state.receptionLabel}
-                            </Badge>
-                            {state.recordedFormatLabel && (
+                            {state.recordedFormatLabel ? (
                               <div
-                                className={`text-xs mt-1 inline-flex items-center gap-1 break-words ${
+                                className={`text-sm inline-flex items-center gap-1 break-words ${
                                   state.recordedDiffersFromRequired
                                     ? "text-warning-700"
-                                    : "text-muted-foreground"
+                                    : ""
                                 }`}
                                 title={
                                   state.recordedDiffersFromRequired
@@ -934,13 +1007,20 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                     ? getShortFormatLabel(state.recordedFormatCode)
                                     : state.recordedFormatLabel}
                                 </span>
+                                {state.recordedAtFormatted && (
+                                  <span className="text-muted-foreground tabular-nums">
+                                    · {state.recordedAtFormatted}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-sm text-muted-foreground">
+                                —
                               </div>
                             )}
-                            {state.recordedAtFormatted && (
-                              <div className="text-xs text-muted-foreground tabular-nums mt-1">
-                                {state.recordedAtFormatted}
-                              </div>
-                            )}
+                            <div className="text-xs text-muted-foreground mt-1">
+                              {state.receptionLabel}
+                            </div>
                           </td>
                           <td className="py-3 pr-3 align-top">
                             <Badge className={`${state.statusConfig.color} gap-1`}>
@@ -989,26 +1069,15 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                       className="rounded-lg border p-3 motion-reduce:transition-none"
                     >
                       <div className="flex items-start gap-2">
-                        <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                          #{i + 1}
-                        </span>
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium text-pretty break-words">
-                            {doc.label}
-                            {doc.is_mandatory && (
-                              <span
-                                className="text-error-500 ml-0.5"
-                                aria-label="Bắt buộc"
-                              >
-                                *
-                              </span>
-                            )}
-                          </div>
                           <div
-                            className="text-xs text-muted-foreground"
-                            translate="no"
+                            className="font-medium text-pretty break-words"
+                            title={`Mã: ${doc.code}`}
                           >
-                            Mã: {doc.code}
+                            {doc.label}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
                           </div>
                           {doc.status === "rejected" && doc.rejection_reason && (
                             <div className="text-xs text-error-700 mt-1 break-words">
@@ -1027,25 +1096,23 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                         </Badge>
                       </div>
 
-                      <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1.5 mt-3 text-sm">
-                        <dt className="text-xs text-muted-foreground self-center">
+                      <dl className="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-1.5 mt-3 text-sm">
+                        <dt className="text-xs text-muted-foreground self-start mt-1">
                           Yêu cầu
                         </dt>
                         <dd className="break-words">
-                          <div>
-                            {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
-                            {state.formatBadge && (
-                              <span
-                                className="text-xs text-muted-foreground"
-                                title={state.formatBadge.label}
-                              >
-                                {" · "}
-                                {state.formatBadge.label}
+                          {state.requiredFormatShort && state.formatBadge ? (
+                            <div
+                              className="inline-flex items-center gap-1"
+                              title={state.formatBadge.label}
+                            >
+                              <span aria-label={state.formatBadge.label}>
+                                {state.requiredFormatShort}
                               </span>
-                            )}
-                          </div>
-                          {/* Cách xử lý line — replaces the dropped
-                              "Cách ghi nhận" row from round 7. */}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
                           <div
                             className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5"
                             title={state.howToReceiveTitle}
@@ -1059,19 +1126,16 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           </div>
                         </dd>
 
-                        <dt className="text-xs text-muted-foreground self-center">
+                        <dt className="text-xs text-muted-foreground self-start mt-1">
                           Đã ghi nhận
                         </dt>
                         <dd className="break-words">
-                          <span className="font-medium">
-                            {state.receptionLabel}
-                          </span>
-                          {state.recordedFormatLabel && (
-                            <span
-                              className={`text-xs ml-2 ${
+                          {state.recordedFormatLabel ? (
+                            <div
+                              className={`inline-flex items-center gap-1 ${
                                 state.recordedDiffersFromRequired
                                   ? "text-warning-700"
-                                  : "text-muted-foreground"
+                                  : ""
                               }`}
                               title={
                                 state.recordedDiffersFromRequired
@@ -1079,15 +1143,29 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                   : `Đã ghi nhận: ${state.recordedFormatLabel}`
                               }
                             >
-                              {state.recordedDiffersFromRequired ? "⚠ " : ""}
-                              {state.recordedFormatLabel}
-                            </span>
-                          )}
-                          {state.recordedAtFormatted && (
-                            <div className="text-xs text-muted-foreground tabular-nums mt-0.5">
-                              {state.recordedAtFormatted}
+                              {state.recordedDiffersFromRequired && (
+                                <AlertTriangle
+                                  className="h-3 w-3 shrink-0"
+                                  aria-label="Khác yêu cầu hồ sơ"
+                                />
+                              )}
+                              <span>
+                                {state.recordedFormatCode
+                                  ? getShortFormatLabel(state.recordedFormatCode)
+                                  : state.recordedFormatLabel}
+                              </span>
+                              {state.recordedAtFormatted && (
+                                <span className="text-muted-foreground tabular-nums">
+                                  · {state.recordedAtFormatted}
+                                </span>
+                              )}
                             </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
                           )}
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {state.receptionLabel}
+                          </div>
                         </dd>
                       </dl>
 

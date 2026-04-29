@@ -351,10 +351,10 @@ describe("DocumentsTab — ADM-031 round 5 reception & how-to columns", () => {
     const table = screen.getByRole("table");
     const cells = within(table).getAllByRole("cell");
     const receptionCell = cells[2];
-    expect(receptionCell?.textContent).toMatch(/^Chưa/);
+    expect(receptionCell?.textContent).toMatch(/Chưa/);
   });
 
-  it("requires_upload=false row shows 'Nhận giấy' how-to + 'Đã nhận giấy' visible button", () => {
+  it("requires_upload=false row shows 'Nhận giấy' how-to + icon button with 'Đánh dấu đã nhận giấy' aria-label", () => {
     const profile = buildProfile([
       {
         code: "PHIEU",
@@ -374,15 +374,12 @@ describe("DocumentsTab — ADM-031 round 5 reception & how-to columns", () => {
     expect(
       within(table).queryByText(/Nhận giấy tại quầy/i),
     ).not.toBeInTheDocument();
-    // Button: visible "Đã nhận giấy", aria-label "Đánh dấu đã nhận giấy".
+    // Round 8: action buttons are icon-only with Radix Tooltip — aria-label
+    // is the accessible name, no visible label text.
     const paperButton = within(table).getByRole("button", {
       name: /đánh dấu đã nhận giấy/i,
     });
-    expect(paperButton).toBeInTheDocument();
     expect(paperButton).toHaveAccessibleName(/đánh dấu đã nhận giấy/i);
-    expect(paperButton.textContent).toMatch(/^Đã nhận giấy$/);
-    // No upload-flow copy on a paper-only row.
-    expect(within(table).queryByText(/^Tải file$/)).not.toBeInTheDocument();
   });
 });
 
@@ -390,8 +387,8 @@ describe("DocumentsTab — ADM-031 round 5 reception & how-to columns", () => {
 // ADM-031 ROUND 7 — "YÊU CẦU" CELL ABSORBS "CÁCH GHI NHẬN"
 // =============================================================================
 
-describe("DocumentsTab — ADM-031 round 7 'Yêu cầu' merge", () => {
-  it("requires_upload=true row shows 'Bắt buộc · Chứng thực' + 'Tải file' inside the Yêu cầu cell", () => {
+describe("DocumentsTab — ADM-031 round 8 cells layout", () => {
+  it("Tên cell shows 'Bắt buộc' on line 2 (mandatory marker moved out of name and Yêu cầu cell)", () => {
     const profile = buildProfile([
       {
         code: "HOC_BA",
@@ -404,15 +401,22 @@ describe("DocumentsTab — ADM-031 round 7 'Yêu cầu' merge", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
-    // Cells in round 7 order: Tên | Yêu cầu | Đã ghi nhận | Trạng thái | Thao tác
+    // Cells: Tên | Yêu cầu | Đã ghi nhận | Trạng thái | Thao tác
     const cells = within(table).getAllByRole("cell");
+    const tenCell = cells[0];
     const yeuCauCell = cells[1];
-    expect(yeuCauCell.textContent).toMatch(/Bắt buộc/);
+    expect(tenCell.textContent).toMatch(/Học bạ/);
+    expect(tenCell.textContent).toMatch(/Bắt buộc/);
+    // "Mã: ..." no longer visible in Tên cell (moved to title attribute).
+    expect(tenCell.textContent).not.toMatch(/Mã:/);
+    // Yêu cầu cell only carries format + how-to (Bắt buộc/Tùy chọn moved
+    // to Tên cell in round 8).
+    expect(yeuCauCell.textContent).not.toMatch(/Bắt buộc/);
     expect(yeuCauCell.textContent).toMatch(/Chứng thực/);
     expect(yeuCauCell.textContent).toMatch(/Tải file/);
   });
 
-  it("requires_upload=false row shows 'Bắt buộc · Gốc' + 'Nhận giấy' inside the Yêu cầu cell", () => {
+  it("requires_upload=false row puts 'Gốc' + 'Nhận giấy' in Yêu cầu cell", () => {
     const profile = buildProfile([
       {
         code: "PHIEU",
@@ -427,7 +431,6 @@ describe("DocumentsTab — ADM-031 round 7 'Yêu cầu' merge", () => {
     const table = screen.getByRole("table");
     const cells = within(table).getAllByRole("cell");
     const yeuCauCell = cells[1];
-    expect(yeuCauCell.textContent).toMatch(/Bắt buộc/);
     expect(yeuCauCell.textContent).toMatch(/Gốc/);
     expect(yeuCauCell.textContent).toMatch(/Nhận giấy/);
   });
@@ -495,9 +498,10 @@ describe("DocumentsTab — ADM-031 round 7 paper_submitted_at", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
     const cells = within(table).getAllByRole("cell");
-    // Reception cell at index 2.
+    // Reception cell at index 2 — contains: actual format short ("Gốc")
+    // + date + reception bucket ("Bản giấy").
     const receptionCell = cells[2];
-    expect(receptionCell.textContent).toMatch(/Giấy/);
+    expect(receptionCell.textContent).toMatch(/Bản giấy/);
     expect(receptionCell.textContent).toMatch(/28\/04\/2026/);
   });
 
@@ -517,7 +521,7 @@ describe("DocumentsTab — ADM-031 round 7 paper_submitted_at", () => {
     const table = screen.getByRole("table");
     const cells = within(table).getAllByRole("cell");
     const receptionCell = cells[2];
-    expect(receptionCell.textContent).toMatch(/File/);
+    expect(receptionCell.textContent).toMatch(/File scan/);
     expect(receptionCell.textContent).toMatch(/15\/03\/2026/);
   });
 });
@@ -545,7 +549,7 @@ describe("DocumentsTab — ADM-031 round 6 status workflow labels", () => {
     expect(within(table).queryByText(/^Chưa nộp$/)).not.toBeInTheDocument();
   });
 
-  it("uploaded row shows 'Chờ duyệt' status + 'File' reception", () => {
+  it("uploaded row shows 'Chờ duyệt' status + 'File scan' reception", () => {
     const profile = buildProfile([
       {
         code: "U",
@@ -558,11 +562,11 @@ describe("DocumentsTab — ADM-031 round 6 status workflow labels", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
     expect(within(table).getByText(/^Chờ duyệt$/)).toBeInTheDocument();
-    expect(within(table).getByText(/^File$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^File scan$/)).toBeInTheDocument();
     expect(within(table).queryByText(/Đã ghi nhận file/)).not.toBeInTheDocument();
   });
 
-  it("paper_submitted row shows 'Chờ duyệt' status + 'Giấy' reception", () => {
+  it("paper_submitted row shows 'Chờ duyệt' status + 'Bản giấy' reception", () => {
     const profile = buildProfile([
       {
         code: "P",
@@ -575,11 +579,11 @@ describe("DocumentsTab — ADM-031 round 6 status workflow labels", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
     expect(within(table).getByText(/^Chờ duyệt$/)).toBeInTheDocument();
-    expect(within(table).getByText(/^Giấy$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^Bản giấy$/)).toBeInTheDocument();
     expect(within(table).queryByText(/Đã nhận bản giấy/)).not.toBeInTheDocument();
   });
 
-  it("verified row shows 'Đã duyệt' status + 'File' reception", () => {
+  it("verified row shows 'Đã duyệt' status + 'File scan' reception", () => {
     const profile = buildProfile([
       {
         code: "V",
@@ -592,7 +596,7 @@ describe("DocumentsTab — ADM-031 round 6 status workflow labels", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
     expect(within(table).getByText(/^Đã duyệt$/)).toBeInTheDocument();
-    expect(within(table).getByText(/^File$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^File scan$/)).toBeInTheDocument();
     expect(within(table).queryByText(/^Đã kiểm tra$/)).not.toBeInTheDocument();
   });
 
@@ -720,9 +724,15 @@ describe("DocumentsTab — ADM-031 round 5 deprecated copy guard", () => {
     expect(container.textContent).not.toMatch(/Bản photocopy/);
     expect(container.textContent).not.toMatch(/Bản photo\/scan/);
     expect(container.textContent).not.toMatch(/Ảnh chụp hoặc scan/);
-    // Required new copy.
+    // Forbidden by user spec for round 8.
+    expect(container.textContent).not.toMatch(/chứng cứ|evidence/i);
+    // Required new copy — short labels in body, full label in title attr.
     expect(container.textContent).toMatch(/Tải file/);
-    expect(container.textContent).toMatch(/Bản chụp\/scan không chứng thực/);
+    // Full label still reachable via title attribute on the format span.
+    const fullLabelEls = container.querySelectorAll(
+      '[title*="Bản chụp/scan không chứng thực"]',
+    );
+    expect(fullLabelEls.length).toBeGreaterThan(0);
   });
 });
 
@@ -731,7 +741,7 @@ describe("DocumentsTab — ADM-031 round 5 deprecated copy guard", () => {
 // =============================================================================
 
 describe("DocumentsTab — ADM-031 recorded format display", () => {
-  it("shows actual_submission_format on uploaded rows", () => {
+  it("shows actual_submission_format on uploaded rows (short label visible, full label in title)", () => {
     const profile = buildProfile([
       {
         code: "anh_3x4",
@@ -744,12 +754,17 @@ describe("DocumentsTab — ADM-031 recorded format display", () => {
       },
     ]);
     const { container } = render(<DocumentsTab profile={profile as never} isEditable />);
-    // Required + recorded both visible.
-    expect(container.textContent).toMatch(/Bản sao chứng thực/);
-    expect(container.textContent).toMatch(/Bản chụp\/scan không chứng thực/);
+    // Both required ("Chứng thực") and recorded ("Chụp/scan") short
+    // labels are visible.
+    expect(container.textContent).toMatch(/Chứng thực/);
+    expect(container.textContent).toMatch(/Chụp\/scan/);
+    // Full label reachable via title attr (e.g., aria-label on format span).
+    expect(
+      container.querySelector('[aria-label="Bản sao chứng thực"]'),
+    ).toBeInTheDocument();
   });
 
-  it("shows verified_format on verified rows", () => {
+  it("shows verified_format on verified rows (reception bucket = 'File scan')", () => {
     const profile = buildProfile([
       {
         code: "hoc_ba_thpt",
@@ -763,9 +778,9 @@ describe("DocumentsTab — ADM-031 recorded format display", () => {
       },
     ]);
     const { container } = render(<DocumentsTab profile={profile as never} isEditable />);
-    // Reception bucket reads "File" + the format detail.
-    expect(container.textContent).toMatch(/File/);
-    expect(container.textContent).toMatch(/Bản sao chứng thực/);
+    // Reception bucket reads "File scan" + the format short label.
+    expect(container.textContent).toMatch(/File scan/);
+    expect(container.textContent).toMatch(/Chứng thực/);
   });
 });
 
