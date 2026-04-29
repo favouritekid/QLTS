@@ -554,7 +554,40 @@ class AdmissionConfirmationToken(Base):
         nullable=True,
         comment="Locked after max failed attempts"
     )
-    
+
+    # ADM-023 (2026-04-29): hybrid cooldown ladder.
+    # ``locked_at`` is the HARD lock (≥30 fails — admin must reset).
+    # ``lock_until`` is the SLIDING cooldown end set on every failed
+    # attempt — request retry rejected with retry_at while NOW() <
+    # lock_until. Cooldown duration scales with attempt_count per the
+    # ladder in ``admission_confirmation_cooldown.cooldown_minutes_for``.
+    lock_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Sliding cooldown end. NULL when no cooldown active.",
+    )
+    lock_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="How many times this token has been hard-locked (≥1 = require admin reset).",
+    )
+
+    # ADM-028 (2026-04-29): reminder beat dedupe markers. Beat task
+    # scans for tokens approaching expiry and emits ``ADMISSION_
+    # CONFIRMATION_REMINDER_*`` notifications; these timestamps stop
+    # double-sends if the beat tick overruns or the task retries.
+    reminder_24h_sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Set when the 24h-before-expiry reminder has been dispatched.",
+    )
+    reminder_6h_sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Set when the 6h-before-expiry reminder has been dispatched.",
+    )
+
     # Creation timestamp
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

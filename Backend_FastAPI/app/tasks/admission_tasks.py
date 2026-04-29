@@ -250,3 +250,313 @@ def check_admission_surveys_due_task(self):
         },
     )
     return result
+
+
+# =============================================================================
+# ADM-028 (2026-04-29): magic-link confirmation reminder beat
+# =============================================================================
+#
+# Two reminder windows: ~24h and ~6h before token expiry. Per-token
+# dedupe via ``reminder_24h_sent_at`` / ``reminder_6h_sent_at`` columns.
+# Beat fires every 30 min so the worst-case lag between "applicant
+# crosses the 24h boundary" and "applicant gets the reminder" is 30
+# minutes — acceptable for a 7-day token.
+#
+# Eligibility filter (both windows):
+#   * confirmed_at IS NULL  → token still pending
+#   * locked_at IS NULL     → not hard-locked (no reminder for locked)
+#   * expires_at > now()    → not expired (no reminder for stale)
+# Plus per-window:
+#   * expires_at - now() <= window_seconds
+#   * reminder_<window>_sent_at IS NULL
+#
+# Failure isolation: per-token ``begin_nested`` savepoint so a single
+# missing email/phone does not poison the batch.
+
+
+@celery_app.task(
+    name="check_admission_confirmation_reminders_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=180,
+)
+def check_admission_confirmation_reminders_task(self):
+    """Scan unconfirmed magic-link tokens approaching expiry; fire
+    24h / 6h reminder events with idempotent dedupe markers.
+    """
+    task_name = "check_admission_confirmation_reminders_task"
+    task_log = logging.getLogger(task_name)
+
+    task_log.info(
+        "magic_link_reminder heartbeat: start",
+        extra={"event": "magic_link_reminder_heartbeat", "phase": "start"},
+    )
+
+    async def _run() -> dict:
+        from ..config import settings
+        from ..core.events import SystemEvents
+        from ..models import (
+            AdmissionConfirmationToken,
+            NotificationAction,
+            NotificationRule,
+        )
+        from ..models.lead import Lead
+        from ..models.admission import AdmissionProfile as _ProfileModel
+        from ..services import notification_dispatcher
+        from ..services.notification_dispatcher import _rooms_for_admission
+
+        result = {
+            "checked": 0,
+            "sent_24h": 0,
+            "sent_6h": 0,
+            "failed": 0,
+            "skipped_no_email_phone": 0,
+            "skipped_unconfigured": 0,
+        }
+
+        post_commit_callbacks = []
+        now = datetime.now(timezone.utc)
+        window_24h = now + timedelta(hours=24)
+        window_6h = now + timedelta(hours=6)
+
+        async def _delivery_configured(
+            session, event_value: str
+        ) -> bool:
+            """ADM-028 review (P2): a rule is only useful for these
+            applicant-only reminders if it has at least one enabled
+            action with ``config.external_resolver = 'lead_contact'``.
+            Without that, ``dispatch()`` resolves to zero internal
+            recipients and zero external deliveries — but the task
+            previously stamped ``reminder_*_sent_at`` anyway, locking
+            the token out of future retries even after ops finally
+            wired the rule.
+
+            Pre-flight check at task start so the gate is one query
+            per scan, not per token.
+            """
+            rule = (
+                await session.execute(
+                    select(NotificationRule).where(
+                        NotificationRule.event == event_value,
+                        NotificationRule.enabled.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if rule is None:
+                return False
+            actions = (
+                await session.execute(
+                    select(NotificationAction).where(
+                        NotificationAction.rule_id == rule.id
+                    )
+                )
+            ).scalars().all()
+            for action in actions:
+                config = action.config or {}
+                if config.get("external_resolver") == "lead_contact":
+                    return True
+            return False
+
+        async with task_db_session() as session:
+            # P2 review: gate the whole scan on rule configuration.
+            # Without ``lead_contact`` action, the dispatch is a no-op
+            # and stamping reminder_*_sent_at would silently consume
+            # the only retry window the token has.
+            cfg_24h = await _delivery_configured(
+                session, SystemEvents.ADMISSION_CONFIRMATION_REMINDER_24H.value
+            )
+            cfg_6h = await _delivery_configured(
+                session, SystemEvents.ADMISSION_CONFIRMATION_REMINDER_6H.value
+            )
+            if not cfg_24h and not cfg_6h:
+                task_log.warning(
+                    "magic_link_reminder: no rule with lead_contact "
+                    "external resolver configured — skipping scan",
+                    extra={
+                        "event": "magic_link_reminder_heartbeat",
+                        "phase": "skipped_unconfigured",
+                    },
+                )
+                # Don't even fetch tokens; nothing to do.
+                return result
+            # One scan covers both windows — partial index
+            # ``ix_admission_confirmation_token_reminder_scan`` keeps it
+            # cheap. Per-token branch picks 6h vs 24h vs both.
+            base_conditions = [
+                AdmissionConfirmationToken.confirmed_at.is_(None),
+                AdmissionConfirmationToken.locked_at.is_(None),
+                AdmissionConfirmationToken.expires_at > now,
+                AdmissionConfirmationToken.expires_at <= window_24h,
+            ]
+            query = (
+                select(AdmissionConfirmationToken)
+                .options(
+                    selectinload(AdmissionConfirmationToken.profile)
+                    .selectinload(_ProfileModel.lead)
+                )
+                .where(and_(*base_conditions))
+                .order_by(AdmissionConfirmationToken.expires_at.asc())
+                .limit(500)
+            )
+            tokens = (await session.execute(query)).scalars().all()
+            result["checked"] = len(tokens)
+
+            for token in tokens:
+                try:
+                    async with session.begin_nested():
+                        profile = token.profile
+                        if profile is None or profile.lead is None:
+                            result["skipped_no_email_phone"] += 1
+                            continue
+                        lead = profile.lead
+                        if not (lead.email or getattr(lead, "phone", None)):
+                            # Without contact channels there's no way to
+                            # deliver the reminder. Mark BOTH windows
+                            # consumed so the token drops out of future
+                            # scans — operator has the dashboard if they
+                            # want to chase manually.
+                            token.reminder_24h_sent_at = now
+                            token.reminder_6h_sent_at = now
+                            result["skipped_no_email_phone"] += 1
+                            continue
+
+                        # Decide which window(s) to fire. Both can fire
+                        # in one tick when the token was issued <6h
+                        # before expiry — just dispatch them as two
+                        # discrete events, each with its own dedupe.
+                        in_6h_window = token.expires_at <= window_6h
+                        confirm_url = (
+                            f"{settings.FRONTEND_URL.rstrip('/')}"
+                            f"/confirm/{token.token}"
+                        )
+                        rooms = _rooms_for_admission(profile)
+
+                        if (
+                            not in_6h_window
+                            and token.reminder_24h_sent_at is None
+                        ):
+                            if not cfg_24h:
+                                # P2 review: rule has no lead_contact
+                                # action — dispatch is a no-op. Don't
+                                # mark sent_at so the next scan can
+                                # retry once ops wires the rule.
+                                result["skipped_unconfigured"] += 1
+                            else:
+                                hours_remaining = max(
+                                    0,
+                                    int(
+                                        (token.expires_at - now).total_seconds()
+                                        // 3600
+                                    ),
+                                )
+                                _, cb = await notification_dispatcher.dispatch(
+                                    db=session,
+                                    event=SystemEvents.ADMISSION_CONFIRMATION_REMINDER_24H,
+                                    payload={
+                                        "application_id": profile.id,
+                                        "lead_id": lead.id,
+                                        "lead_name": lead.full_name or "Học viên",
+                                        "expires_at_iso": token.expires_at.isoformat(),
+                                        "hours_remaining": hours_remaining,
+                                        "confirm_url": confirm_url,
+                                    },
+                                    rooms=rooms,
+                                )
+                                if cb:
+                                    post_commit_callbacks.append(cb)
+                                token.reminder_24h_sent_at = now
+                                result["sent_24h"] += 1
+
+                        if (
+                            in_6h_window
+                            and token.reminder_6h_sent_at is None
+                        ):
+                            if not cfg_6h:
+                                result["skipped_unconfigured"] += 1
+                            else:
+                                hours_remaining = max(
+                                    0,
+                                    int(
+                                        (token.expires_at - now).total_seconds()
+                                        // 3600
+                                    ),
+                                )
+                                _, cb = await notification_dispatcher.dispatch(
+                                    db=session,
+                                    event=SystemEvents.ADMISSION_CONFIRMATION_REMINDER_6H,
+                                    payload={
+                                        "application_id": profile.id,
+                                        "lead_id": lead.id,
+                                        "lead_name": lead.full_name or "Học viên",
+                                        "expires_at_iso": token.expires_at.isoformat(),
+                                        "hours_remaining": hours_remaining,
+                                        "confirm_url": confirm_url,
+                                    },
+                                    rooms=rooms,
+                                )
+                                if cb:
+                                    post_commit_callbacks.append(cb)
+                                token.reminder_6h_sent_at = now
+                                # If the 24h reminder hadn't fired yet (e.g.
+                                # token issued <6h before expiry) we mark it
+                                # consumed too — sending both within minutes
+                                # of each other would just be noise. Only
+                                # do this when 24h ALSO has a configured
+                                # delivery; otherwise the marker would
+                                # short-circuit a future retry once ops
+                                # wires the 24h rule.
+                                if (
+                                    token.reminder_24h_sent_at is None
+                                    and cfg_24h
+                                ):
+                                    token.reminder_24h_sent_at = now
+                                result["sent_6h"] += 1
+
+                except Exception:
+                    task_log.exception(
+                        "magic_link_reminder per-token failure",
+                        extra={"token_id": getattr(token, "id", None)},
+                    )
+                    result["failed"] += 1
+
+            await session.commit()
+            for cb in post_commit_callbacks:
+                try:
+                    await cb()
+                except Exception:
+                    task_log.exception("post_commit callback failed")
+
+        return result
+
+    result = run_async_task(
+        async_func=_run,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=[
+            "checked",
+            "sent_24h",
+            "sent_6h",
+            "failed",
+            "skipped_no_email_phone",
+            "skipped_unconfigured",
+        ],
+    )
+
+    if result["sent_24h"] + result["sent_6h"] > 0:
+        outcome = "dispatched"
+    elif result["checked"] == 0:
+        outcome = "idle"
+    else:
+        outcome = "no_send"
+    task_log.info(
+        "magic_link_reminder heartbeat: end (%s)",
+        outcome,
+        extra={
+            "event": "magic_link_reminder_heartbeat",
+            "phase": "end",
+            "outcome": outcome,
+            **result,
+        },
+    )
+    return result

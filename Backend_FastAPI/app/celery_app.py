@@ -113,6 +113,17 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- ADM-028 (2026-04-29): magic-link expiry reminders ---
+    # 30 min cadence: worst-case lag between an applicant crossing
+    # the 24h-before-expiry boundary and getting the reminder is 30
+    # minutes. Acceptable for a 7-day token; tighter cadence wastes
+    # beat cycles for a low-volume table.
+    "check-admission-confirmation-reminders": {
+        "task": "check_admission_confirmation_reminders_task",
+        "schedule": 30 * 60,  # Every 30 minutes
+        "options": {"queue": "default"},
+    },
+
     # --- Nightly Maintenance Tasks ---
     "recalculate-lead-caches-nightly": {
         "task": "recalculate_lead_caches_task",
