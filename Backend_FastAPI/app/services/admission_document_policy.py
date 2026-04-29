@@ -18,26 +18,45 @@ lifts the matrix into a small class both call sites consume.
 
 Why a class instead of a free function?
 ---------------------------------------
-The matrix needs five derived booleans (``is_admin``, ``is_owner``,
-``manager_in_scope``, ``reviewer_scope``, ``profile_editable``) that
-depend only on ``(profile, user)`` and never change between the five
-``authorize()`` calls a single response makes. Computing them once on
-construction avoids re-deriving on each ``authorize()`` invocation
-and keeps the per-call signature small (``action``, ``doc_status``,
-``requires_upload``).
+The matrix needs derived booleans (``is_admin``, ``is_owner``,
+``manager_in_scope``, ``reviewer_scope``, ``applicant_can_modify_docs``,
+``reviewer_can_modify_docs``) that depend only on ``(profile, user)``
+and never change between the five ``authorize()`` calls a single
+response makes. Computing them once on construction avoids re-deriving
+on each ``authorize()`` invocation and keeps the per-call signature
+small (``action``, ``doc_status``, ``requires_upload``).
+
+Profile-state contract (BR1, 2026-04-29)
+----------------------------------------
+- ``APPLICANT_DOC_MUTATION_STATES`` = the set in which an applicant or
+  the owning officer may upload a file or mark a paper receipt
+  (``draft / submitted / rejected / resubmitted / revision_requested``).
+  Includes ``submitted`` / ``resubmitted`` because real applicants do
+  add missing evidence after the initial submit before a manager rules
+  on it.
+- ``REVIEWER_DOC_MUTATION_BLOCKED_STATES`` = the set in which even a
+  reviewer (manager-in-scope or admin) is barred from verify / reject /
+  reset because the profile has crossed into student-record territory
+  (currently just ``enrolled``). After enrolment a Student +
+  StudentDocument exist and changing AdmissionProfile docs would drift
+  from the historical record.
 
 Allowed actions
 ---------------
 ``"upload"``: applicant/officer/manager-in-scope/admin uploads a file
-for an editable profile, document is missing or previously rejected.
+for a profile in ``APPLICANT_DOC_MUTATION_STATES``, document is
+missing or previously rejected.
 ``"paper_submitted"``: same actor, paper-only doc (``requires_upload
-== False``), document still missing.
+== False``), document still missing, profile in
+``APPLICANT_DOC_MUTATION_STATES``.
 ``"verify"``: reviewer (admin/manager-in-scope), status is
-``uploaded`` or ``paper_submitted``.
+``uploaded`` or ``paper_submitted``, profile NOT in
+``REVIEWER_DOC_MUTATION_BLOCKED_STATES``.
 ``"reject"``: reviewer, status is anything past ``missing`` except
-the rejected/missing terminal states (= ``uploaded`` / ``paper_submitted`` /
-``verified``).
-``"reset"``: reviewer, anything except ``missing``.
+the rejected/missing terminal states (= ``uploaded`` /
+``paper_submitted`` / ``verified``), profile NOT blocked.
+``"reset"``: reviewer, anything except ``missing``, profile NOT
+blocked.
 """
 from __future__ import annotations
 
@@ -57,6 +76,32 @@ DocumentAction = Literal[
 ]
 
 
+# BR1 (2026-04-29): profile-state set in which an applicant/officer may
+# add or replace evidence. Real-world workflow: applicant submits, a
+# missing certificate arrives in the post a day later, officer uploads
+# it before the manager begins review. Excluding ``submitted`` /
+# ``resubmitted`` from this set (the previous "profile_editable" did)
+# made the FE hide the upload button and the BE service guard reject
+# the call — a real bug for that workflow.
+APPLICANT_DOC_MUTATION_STATES: frozenset[str] = frozenset(
+    {
+        "draft",
+        "submitted",
+        "rejected",
+        "resubmitted",
+        "revision_requested",
+    }
+)
+
+# BR1 (2026-04-29): profile states in which even a reviewer (admin /
+# manager-in-scope) is barred from verify / reject / reset. After
+# ``enrolled`` the system has materialised a Student + StudentDocument;
+# mutating AdmissionProfile docs from this point would silently drift
+# from the historical student record. Withdrawn is also terminal but
+# pre-Student so we leave reviewer access open for evidence cleanup.
+REVIEWER_DOC_MUTATION_BLOCKED_STATES: frozenset[str] = frozenset({"enrolled"})
+
+
 # Cached derived flags — computed once per (profile, user) pair so the
 # five authorize() calls a single response makes don't re-derive them.
 @dataclass(frozen=True)
@@ -65,7 +110,8 @@ class _UserProfileContext:
     is_owner: bool
     manager_in_scope: bool
     reviewer_scope: bool
-    profile_editable: bool
+    applicant_can_modify_docs: bool
+    reviewer_can_modify_docs: bool
 
 
 def _build_context(
@@ -95,17 +141,17 @@ def _build_context(
         and lead.unit_id == user.unit_id
     )
     reviewer_scope = is_admin or manager_in_scope
-    profile_editable = profile.status in (
-        "draft",
-        "rejected",
-        "revision_requested",
+    applicant_can_modify_docs = profile.status in APPLICANT_DOC_MUTATION_STATES
+    reviewer_can_modify_docs = (
+        profile.status not in REVIEWER_DOC_MUTATION_BLOCKED_STATES
     )
     return _UserProfileContext(
         is_admin=is_admin,
         is_owner=is_owner,
         manager_in_scope=manager_in_scope,
         reviewer_scope=reviewer_scope,
-        profile_editable=profile_editable,
+        applicant_can_modify_docs=applicant_can_modify_docs,
+        reviewer_can_modify_docs=reviewer_can_modify_docs,
     )
 
 
@@ -167,30 +213,35 @@ class DocumentActionPolicy:
         if action == "upload":
             return (
                 requires_upload
-                and ctx.profile_editable
+                and ctx.applicant_can_modify_docs
                 and (ctx.is_owner or ctx.is_admin or ctx.manager_in_scope)
                 and doc_status in ("missing", "rejected")
             )
         if action == "paper_submitted":
             return (
                 (not requires_upload)
-                and ctx.profile_editable
+                and ctx.applicant_can_modify_docs
                 and (ctx.is_owner or ctx.is_admin or ctx.manager_in_scope)
                 and doc_status == "missing"
             )
         if action == "verify":
-            return ctx.reviewer_scope and doc_status in (
-                "uploaded",
-                "paper_submitted",
+            return (
+                ctx.reviewer_scope
+                and ctx.reviewer_can_modify_docs
+                and doc_status in ("uploaded", "paper_submitted")
             )
         if action == "reject":
-            return ctx.reviewer_scope and doc_status in (
-                "uploaded",
-                "paper_submitted",
-                "verified",
+            return (
+                ctx.reviewer_scope
+                and ctx.reviewer_can_modify_docs
+                and doc_status in ("uploaded", "paper_submitted", "verified")
             )
         if action == "reset":
-            return ctx.reviewer_scope and doc_status != "missing"
+            return (
+                ctx.reviewer_scope
+                and ctx.reviewer_can_modify_docs
+                and doc_status != "missing"
+            )
 
         # Unknown action — treat as deny so a typo in calling code
         # never grants access. Service guard surfaces the bug as a

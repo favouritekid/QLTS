@@ -714,21 +714,37 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
     ? uploadConfig.allowed_extensions.map((ext) => `.${ext}`).join(",")
     : ""
 
+  // BR2 (2026-04-29): split rows into the active checklist (snapshot
+  // mandatory) and extras (ProfileDocument rows whose code is no
+  // longer in the current applied_rules.mandatory_docs — backend now
+  // surfaces them with is_extra=true instead of silently dropping).
+  // KPI counts and the work-queue sort run on activeDocs only —
+  // extras are evidence-only and would muddy the "what's left to do"
+  // signal if mixed in.
+  const activeDocs = useMemo(
+    () => documents.filter((d) => !d.is_extra),
+    [documents],
+  )
+  const extraDocs = useMemo(
+    () => documents.filter((d) => d.is_extra),
+    [documents],
+  )
+
   // Sort docs by work-queue priority — only resort when documents change.
-  const sortedDocs = useMemo(() => sortByWorkQueue(documents), [documents])
+  const sortedDocs = useMemo(() => sortByWorkQueue(activeDocs), [activeDocs])
 
   // KPI counts. Keep on the unsorted array — totals don't depend on order.
-  const total = documents.length
-  const recordedCount = documents.filter((d) =>
+  const total = activeDocs.length
+  const recordedCount = activeDocs.filter((d) =>
     isDocumentRecorded(d.status ?? ""),
   ).length
-  const satisfiedCount = documents.filter((d) =>
+  const satisfiedCount = activeDocs.filter((d) =>
     isDocumentRequirementSatisfied(d.status ?? ""),
   ).length
-  const pendingCount = documents.filter((d) =>
+  const pendingCount = activeDocs.filter((d) =>
     isDocumentPendingVerification(d.status ?? ""),
   ).length
-  const mandatoryDocs = documents.filter((d) => d.is_mandatory)
+  const mandatoryDocs = activeDocs.filter((d) => d.is_mandatory)
   const mandatorySatisfiedCount = mandatoryDocs.filter((d) =>
     isDocumentRequirementSatisfied(d.status ?? ""),
   ).length
@@ -1405,6 +1421,74 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
           aria-describedby="documents-upload-rules"
         />
       </Card>
+
+      {/*
+        BR2 (2026-04-29): extras section.
+        ProfileDocument rows that exist in the DB but are no longer in
+        the path's mandatory_docs snapshot — usually because the path
+        was edited after the profile was created. Backend marks them
+        is_extra=true; we surface them so officers see prior evidence
+        wasn't silently dropped, but render read-only (action buttons
+        suppressed via backend can_* = false). A future explicit
+        "Đồng bộ yêu cầu tài liệu" action will own cleanup.
+      */}
+      {extraDocs.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle className="text-base">
+              Tài liệu ngoài yêu cầu hiện tại
+            </CardTitle>
+            <CardDescription>
+              Đây là các tài liệu thí sinh đã nộp ở phương thức tuyển sinh
+              trước đó. Hiện không còn nằm trong yêu cầu hồ sơ. Giữ lại để
+              lưu vết hồ sơ; không thể chỉnh trực tiếp ở đây.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2">
+              {extraDocs.map((doc, i) => {
+                const state = computeRowState(doc)
+                const StatusIcon = state.statusConfig.icon
+                return (
+                  <li
+                    key={doc.code || `extra-${i}`}
+                    className="rounded-md border bg-muted/30 p-3 flex items-start gap-3"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div
+                        className="font-medium break-words"
+                        title={`Mã: ${doc.code}`}
+                      >
+                        {doc.label}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {state.recordedFormatLabel
+                          ? `${state.recordedFormatLabel}`
+                          : "—"}
+                        {state.recordedAtFormatted && (
+                          <span className="tabular-nums">
+                            {" · "}
+                            {state.recordedAtFormatted}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <Badge
+                      className={`${state.statusConfig.color} gap-1 shrink-0`}
+                    >
+                      <StatusIcon
+                        className="h-3 w-3 shrink-0"
+                        aria-hidden="true"
+                      />
+                      {state.statusConfig.label}
+                    </Badge>
+                  </li>
+                )
+              })}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Submission Format Selection Dialog */}
       <Dialog

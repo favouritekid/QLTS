@@ -259,3 +259,144 @@ async def test_admin_has_reviewer_actions_after_upload(
     # Admin is not the lead's assigned officer → can_upload should flip off
     # once status is no longer missing/rejected.
     assert uploaded_row["can_upload"] is False
+
+
+@pytest.mark.asyncio
+async def test_extras_are_locked_at_service_layer_not_just_in_response(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    doc_perm_config: dict,
+):
+    """BR2 (2026-04-29): documents whose code is no longer in the
+    profile's ``applied_rules.mandatory_docs`` snapshot are
+    evidence-only — every direct API mutation must be rejected, not
+    just hidden in the UI.
+
+    Set up: create a profile (which seeds ``mandatory_docs`` from the
+    path), upload its mandatory doc, then mutate the snapshot in DB so
+    that doc becomes "extra". Re-fetch and confirm the response marks
+    it ``is_extra=True`` with all ``can_*`` false. Then call every
+    document-mutation endpoint directly and assert each one is
+    rejected — proves the service guard, not just the response shape,
+    enforces the read-only contract.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+    from sqlalchemy import select
+    from tests.fixtures.constants import TestUsers
+
+    prof = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, doc_perm_config
+    )
+    pid = prof["id"]
+
+    # Officer uploads so the doc has artifact state to "freeze" as evidence.
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    checklist = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()[
+        "documents_checklist"
+    ]
+    target = next(d for d in checklist if d.get("requires_upload"))
+    upload = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{target['code']}/upload",
+        headers=oh,
+        files={
+            "file": (f"{target['code']}.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")
+        },
+        data={"actual_submission_format": "photo"},
+    )
+    assert upload.status_code in (200, 201), upload.text
+
+    # Mutate the snapshot so target becomes "extra". This simulates the
+    # AdmissionPath being edited after profile creation; the service
+    # under test must observe applied_rules.mandatory_docs as the
+    # source of truth and reject mutations on the now-stale doc.
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            row = await s.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == pid
+                )
+            )
+            db_profile = row.scalar_one()
+            new_rules = dict(db_profile.applied_rules or {})
+            new_rules["mandatory_docs"] = []
+            db_profile.applied_rules = new_rules
+            flag_modified(db_profile, "applied_rules")
+
+    admin_headers = await _login(
+        client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"]
+    )
+
+    # Response shape: row marked is_extra + all can_* false.
+    refreshed = (
+        await client.get(f"{ADMISSIONS}/{pid}", headers=admin_headers)
+    ).json()
+    extra = next(
+        d for d in refreshed["documents_checklist"] if d["code"] == target["code"]
+    )
+    assert extra["is_extra"] is True, extra
+    for flag in (
+        "can_upload",
+        "can_verify",
+        "can_reject",
+        "can_reset",
+        "can_mark_paper_submitted",
+    ):
+        assert extra[flag] is False, f"extras must clamp {flag}=False, got {extra}"
+
+    # Service guard: every direct mutation endpoint must reject.
+    # Includes both reviewer-side (verify/reject/reset) and
+    # applicant-side (upload/paper-submitted) — the read-only contract
+    # is symmetric.
+    code = target["code"]
+    rejection_routes = [
+        (
+            f"{ADMISSIONS}/{pid}/documents/{code}/verify-format",
+            "PATCH",
+            {"format": "photo"},
+            None,
+        ),
+        (
+            f"{ADMISSIONS}/{pid}/documents/{code}/reject",
+            "POST",
+            {"reason": "extras lock contract test"},
+            None,
+        ),
+        (
+            f"{ADMISSIONS}/{pid}/documents/{code}/reset",
+            "POST",
+            {},
+            None,
+        ),
+        (
+            f"{ADMISSIONS}/{pid}/documents/{code}/paper-submitted",
+            "POST",
+            # Include actual_submission_format so the request passes the
+            # Pydantic schema validation gate and reaches the service
+            # guard — without it the endpoint would 422 on the body
+            # shape, which doesn't prove the BR2 lock.
+            {"actual_submission_format": "photo"},
+            None,
+        ),
+    ]
+    for route, method, body, _ in rejection_routes:
+        resp = await client.request(method, route, headers=admin_headers, json=body)
+        assert resp.status_code in (403, 404), (
+            f"{method} {route} on extra doc: expected 403/404, "
+            f"got {resp.status_code}: {resp.text[:200]}"
+        )
+
+    # Upload endpoint takes multipart, not JSON — exercise it separately
+    # so the service guard is hit before the file-handling path.
+    upload_again = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{code}/upload",
+        headers=admin_headers,
+        files={"file": (f"{code}.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+        data={"actual_submission_format": "photo"},
+    )
+    assert upload_again.status_code in (403, 404), (
+        f"POST upload on extra doc: expected 403/404, "
+        f"got {upload_again.status_code}: {upload_again.text[:200]}"
+    )

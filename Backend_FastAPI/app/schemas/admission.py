@@ -287,6 +287,18 @@ class DocumentItemSchema(BaseModel):
         default=None,
         description="Whether this document is mandatory for the admission path",
     )
+    is_extra: Optional[bool] = Field(
+        default=False,
+        description=(
+            "BR2 (2026-04-29): True when this row is a ProfileDocument that "
+            "exists in the DB but is NOT in the current "
+            "applied_rules.mandatory_docs snapshot — typically because the "
+            "AdmissionPath was edited after the profile was created. Extras "
+            "are read-only (all can_* flags false); the FE renders them in "
+            "a separate 'Tài liệu ngoài yêu cầu hiện tại' section so "
+            "officers see prior evidence isn't silently dropped."
+        ),
+    )
     requires_upload: Optional[bool] = Field(
         default=None,
         description="True if an online upload is required; False for paper-only docs",
