@@ -269,7 +269,13 @@ class DocumentItemSchema(BaseModel):
     )
     verified_by_name: Optional[str] = Field(
         None,
-        description="Display name (full_name or email) of the verifier; null if user no longer exists",
+        description=(
+            "Display name of the verifier — backend resolves "
+            "full_name → username via a batched User lookup. Null when the "
+            "verifier no longer exists or has neither field set; FE then "
+            "falls back to 'User #<verified_by>'. Email is never exposed "
+            "here (staff-to-staff privacy)."
+        ),
     )
 
     # =========================================================================
