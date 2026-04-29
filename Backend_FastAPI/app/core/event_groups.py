@@ -92,6 +92,10 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.APPLICATION_FEE_PAID: NotificationEventGroup.APPLICATION,
     SystemEvents.APPLICATION_SURVEY_DUE: NotificationEventGroup.APPLICATION,
     SystemEvents.APPLICATION_MINOR_CORRECTED: NotificationEventGroup.APPLICATION,
+    # ADM-023 / ADM-028 (2026-04-29): magic-link hardening events
+    SystemEvents.ADMISSION_CONFIRMATION_REMINDER_24H: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_CONFIRMATION_REMINDER_6H: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_CONFIRMATION_HARD_LOCKED: NotificationEventGroup.APPLICATION,
 
     # Finance events
     SystemEvents.DORM_FEE_CREATED: NotificationEventGroup.FINANCE,

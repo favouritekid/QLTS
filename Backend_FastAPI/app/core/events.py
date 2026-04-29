@@ -1126,6 +1126,68 @@ class SystemEvents(str, Enum):
     Recipients: The displaced user (resolver = specific_users on user_id).
     """
 
+    # =============================================================================
+    # ADM-023 / ADM-028 — Magic-link hardening (2026-04-29)
+    # =============================================================================
+
+    ADMISSION_CONFIRMATION_REMINDER_24H = "admission_confirmation_reminder_24h"
+    """
+    Triggered by the magic-link reminder beat task ~24h before the token
+    ``expires_at`` for an unconfirmed approved profile. One-shot per
+    token: ``reminder_24h_sent_at`` is stamped in the same transaction
+    as the dispatch so re-runs don't double-fire even if beat overlaps
+    or the worker retries.
+
+    Payload Schema:
+        {
+            "application_id": int,    # Required: AdmissionProfile ID
+            "lead_id": int,           # Required: Lead ID for contact resolver
+            "lead_name": str,         # Display name
+            "expires_at_iso": str,    # ISO datetime — token expiry
+            "hours_remaining": int,   # ~24, computed at fire time
+            "confirm_url": str,       # Direct magic-link URL
+        }
+
+    Recipients: Applicant (email + Zalo). No internal fanout.
+    """
+
+    ADMISSION_CONFIRMATION_REMINDER_6H = "admission_confirmation_reminder_6h"
+    """
+    Final reminder ~6h before token expiry. Same beat task, same dedupe
+    pattern as the 24h reminder via ``reminder_6h_sent_at``. Firing the
+    6h reminder does NOT depend on the 24h reminder having fired —
+    legitimate token may have crossed both windows already at task
+    start (e.g. issued <6h before expiry on a manual resend).
+
+    Payload Schema: same as ``ADMISSION_CONFIRMATION_REMINDER_24H`` but
+    ``hours_remaining`` ≈ 6.
+
+    Recipients: Applicant (email + Zalo). No internal fanout.
+    """
+
+    ADMISSION_CONFIRMATION_HARD_LOCKED = "admission_confirmation_hard_locked"
+    """
+    Triggered when an applicant's magic-link token crosses the
+    ≥30-failed-attempts hard-lock threshold (``locked_at`` set,
+    ``lock_count`` incremented). Internal-only — the applicant already
+    saw a "link locked" message at the API; this event is the operator
+    awareness signal so support can proactively reach out and unlock
+    if appropriate.
+
+    Payload Schema:
+        {
+            "application_id": int,        # Required: AdmissionProfile ID
+            "token_id": int,              # Required: AdmissionConfirmationToken ID
+            "attempt_count": int,         # Total failed attempts
+            "lock_count": int,            # How many times this token has been hard-locked
+            "locked_at_iso": str,         # When the hard lock fired
+            "lead_id": int,               # Lead ID for context
+            "lead_name": str,             # Display name
+        }
+
+    Recipients: Assigned officer + unit managers + admins.
+    """
+
 
 # =============================================================================
 # EVENT DISPATCHER PATTERN

@@ -431,6 +431,46 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         "notification_type": "warning",
         "recipient_config": {"resolver_type": "specific_users", "params": {}},
     },
+    # ADM-028 (2026-04-29) — magic-link expiry reminders.
+    # Same shape as APPLICATION_SURVEY_DUE: applicant-only delivery
+    # via lead_contact resolver on the action config. The seeded rule
+    # below resolves to ZERO internal recipients on its own; outbound
+    # email/Zalo only fires after ops adds an action with
+    # ``external_resolver="lead_contact"`` (and template_id for ZNS)
+    # via the admin /notification-rules UI. Until that's wired the
+    # beat task marks reminder_*_sent_at without any actual delivery
+    # — accepted operational gap; no reminder spam in the meantime.
+    SystemEvents.ADMISSION_CONFIRMATION_REMINDER_24H: {
+        "title_template": "Còn ~${hours_remaining}h để xác nhận nhập học",
+        "message_template": (
+            "${lead_name}, liên kết xác nhận nhập học của bạn sẽ hết hạn "
+            "vào ${expires_at_iso}. Vui lòng truy cập ${confirm_url} để "
+            "hoàn tất xác nhận."
+        ),
+        "notification_type": "info",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    SystemEvents.ADMISSION_CONFIRMATION_REMINDER_6H: {
+        "title_template": "Còn ~${hours_remaining}h — xác nhận nhập học gấp",
+        "message_template": (
+            "${lead_name}, liên kết xác nhận nhập học sẽ hết hạn trong "
+            "vài giờ tới (${expires_at_iso}). Vui lòng xác nhận tại "
+            "${confirm_url} để giữ chỗ."
+        ),
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    # ADM-023 (2026-04-29) — hard-lock awareness for operators
+    SystemEvents.ADMISSION_CONFIRMATION_HARD_LOCKED: {
+        "title_template": "🔒 Liên kết xác nhận của ${lead_name} bị khóa",
+        "message_template": (
+            "Liên kết xác nhận của hồ sơ #${application_id} (${lead_name}) "
+            "đã bị khóa do nhập sai CCCD ${attempt_count} lần "
+            "(lock #${lock_count}). Vui lòng kiểm tra và mở khóa nếu cần."
+        ),
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "lead_owner", "params": {}},
+    },
     SystemEvents.SYSTEM_ALERT: {
         "title_template": "[${severity}] System Alert",
         "message_template": "${message}",

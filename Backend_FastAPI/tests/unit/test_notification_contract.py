@@ -450,6 +450,15 @@ class TestUserEventsHaveDispatchCallers:
         # PR-Audit-1: dispatched from zalo_bot_link_service.verify_and_link
         # post_commit closure when chat_id displacement happens.
         "zalo_bot_link_displaced",
+        # ADM-023+028 (2026-04-29): magic-link hardening events.
+        # 24h/6h reminders fire from app/tasks/admission_tasks.py
+        # ``check_admission_confirmation_reminders_task``. hard_locked
+        # fires from app/services/admission_service.py
+        # ``verify_and_confirm`` when attempt_count crosses
+        # HARD_LOCK_THRESHOLD (=30).
+        "admission_confirmation_reminder_24h",
+        "admission_confirmation_reminder_6h",
+        "admission_confirmation_hard_locked",
     })
 
     def test_user_events_have_dispatch_in_codebase(self):

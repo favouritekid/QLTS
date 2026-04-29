@@ -7284,13 +7284,65 @@ async def generate_confirmation_token(
             f"Cannot generate confirmation token for profile with status '{profile.status}'. "
             "Only approved profiles can receive confirmation links."
         )
-    
+
+    # ADM-023 / Q9-C2 (2026-04-29): per-profile resend cap. The same
+    # entry point handles initial issuance (auto-fired by approve)
+    # AND operator-driven resends; cap=3 means each profile gets one
+    # automatic + two manual resends per 24h before requiring support.
+    # Fail-closed when Redis is down (None) so a brittle cache is not
+    # an excuse to lift the spam cap — see resend_limit module
+    # docstring for the rationale.
+    from .admission_confirmation_resend_limit import (
+        consume_resend_quota,
+        RESEND_CAP_PER_24H,
+    )
+    count = await consume_resend_quota(profile.id)
+    if count is None:
+        raise BadRequest(
+            "Tạm thời không thể gửi lại liên kết xác nhận do hệ thống đang "
+            "bận. Vui lòng thử lại sau ít phút."
+        )
+    if count > RESEND_CAP_PER_24H:
+        # Audit: persistent record so ops can correlate user reports
+        # with the cap. Run on a separate session so the row survives
+        # the BadRequest rollback.
+        from ..database import AsyncSessionLocal
+        from ..services import audit_service
+
+        try:
+            async with AsyncSessionLocal() as audit_db:
+                await audit_service.log_audit(
+                    audit_db,
+                    entity_type="AdmissionProfile",
+                    entity_id=profile.id,
+                    action="confirmation_resend_rate_limited",
+                    actor_user_id=None,
+                    changes={
+                        "attempt_count_in_window": {"old": None, "new": count},
+                        "cap": {"old": None, "new": RESEND_CAP_PER_24H},
+                    },
+                    reason="Per-profile 24h resend cap reached",
+                    source="magic_link",
+                )
+                await audit_db.commit()
+        except Exception as audit_err:  # noqa: BLE001 — best-effort audit
+            log.error(
+                "Resend rate-limit audit write FAILED",
+                profile_id=profile.id,
+                error=str(audit_err),
+            )
+
+        raise BadRequest(
+            f"Đã gửi lại liên kết {RESEND_CAP_PER_24H} lần trong 24 giờ qua. "
+            "Vui lòng liên hệ phòng tuyển sinh nếu cần hỗ trợ thêm."
+        )
+
     # Generate secure token
     token_value = secrets.token_urlsafe(32)  # 256-bit entropy
     expires_at = datetime.now(timezone.utc) + timedelta(
         days=settings.ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS
     )
-    
+
     # Create token via repository
     repo = AdmissionRepository(db)
     token_obj = await repo.create_confirmation_token(
@@ -7466,35 +7518,159 @@ async def verify_and_confirm(
     if token_obj.expires_at < now:
         raise BadRequest("This confirmation link has expired. Please request a new link.")
 
+    # ADM-023 (2026-04-29): hybrid cooldown gate. Sliding ``lock_until``
+    # is set on every failed attempt by the cooldown ladder; serving a
+    # retry while it's still in the future would defeat the brute-force
+    # defence. Distinct from ``locked_at`` (hard lock) above —
+    # ``lock_until`` clears itself by passage of time, ``locked_at``
+    # only by an admin.
+    if token_obj.lock_until is not None and token_obj.lock_until > now:
+        retry_in_seconds = int((token_obj.lock_until - now).total_seconds())
+        raise BadRequest(
+            f"Quá nhiều lần nhập sai. Vui lòng thử lại sau {retry_in_seconds} giây."
+        )
+
     # Get profile and verify CCCD
     profile = token_obj.profile
     if not profile or not profile.citizen_id:
         raise BadRequest("Profile data is incomplete. Please contact support.")
-    
+
     # Verify last 4 digits
     expected_digits = profile.citizen_id[-settings.ADMISSION_CONFIRM_CCCD_DIGITS:]
-    
+
     if last_digits != expected_digits:
-        # Increment attempts
-        await repo.increment_token_attempts(token_obj, settings.ADMISSION_CONFIRM_MAX_ATTEMPTS)
-        
-        attempts_remaining = max(0, settings.ADMISSION_CONFIRM_MAX_ATTEMPTS - token_obj.attempt_count)
-        
-        if token_obj.locked_at is not None:
+        # ADM-023 (2026-04-29): hybrid cooldown ladder + hard-lock at 30.
+        # Step 1 — bump the attempt counter. We pass HARD_LOCK_THRESHOLD
+        # (30) instead of the legacy ``ADMISSION_CONFIRM_MAX_ATTEMPTS``
+        # (5) so the repo helper's "lock when count >= max" branch
+        # fires at the SAME threshold the ladder uses for hard lock.
+        # Without this, the legacy 5-attempt lock would short-circuit
+        # the ladder before the 30/120/1440-minute cooldowns ever
+        # kicked in. The legacy setting is kept for the FE
+        # "attempts_remaining" display only.
+        from .admission_confirmation_cooldown import (
+            HARD_LOCK_THRESHOLD,
+            cooldown_minutes_for,
+            is_hard_lock,
+        )
+        await repo.increment_token_attempts(token_obj, HARD_LOCK_THRESHOLD)
+        from datetime import timedelta as _timedelta
+
+        if is_hard_lock(token_obj.attempt_count):
+            # Hard lock. ``locked_at`` may have been set already by the
+            # repo helper at the legacy MAX_ATTEMPTS threshold; either
+            # way we mirror it here so audit + ``lock_count`` always
+            # advance on the actual hard-lock crossing.
+            if token_obj.locked_at is None:
+                token_obj.locked_at = now
+            token_obj.lock_count = (token_obj.lock_count or 0) + 1
+            token_obj.lock_until = None  # superseded by hard lock
+
+            # Audit so compliance can reconstruct who attempted to brute
+            # force which profile, when. ``actor_user_id=None`` because
+            # the magic-link path is public/applicant-driven.
+            from ..services import audit_service
+            await audit_service.log_audit(
+                db,
+                entity_type="AdmissionConfirmationToken",
+                entity_id=token_obj.id,
+                action="confirmation_hard_locked",
+                actor_user_id=None,
+                changes={
+                    "attempt_count": {
+                        "old": None,
+                        "new": token_obj.attempt_count,
+                    },
+                    "lock_count": {
+                        "old": None,
+                        "new": token_obj.lock_count,
+                    },
+                    "profile_id": {"old": None, "new": profile.id},
+                },
+                reason="≥30 failed CCCD attempts",
+                source="magic_link",
+            )
+
+            # Operator awareness: dispatch hard-lock event so
+            # officer/manager can proactively reach out and unlock.
+            # The router commits the BadRequest-side mutations (audit
+            # + locked_at + lock_count) at the ``except BadRequest``
+            # branch, so the dispatch's post-commit callback also runs
+            # AFTER that commit. We attach the callback to the
+            # exception and the router awaits it before raising the
+            # HTTP error — without this hand-off browser realtime +
+            # email enqueue would never happen.
+            from .notification_dispatcher import dispatch as _dispatch
+            from .notification_dispatcher import _rooms_for_admission
+            hard_lock_cb = None
+            try:
+                _, hard_lock_cb = await _dispatch(
+                    db=db,
+                    event=SystemEvents.ADMISSION_CONFIRMATION_HARD_LOCKED,
+                    payload={
+                        "application_id": profile.id,
+                        "token_id": token_obj.id,
+                        "attempt_count": token_obj.attempt_count,
+                        "lock_count": token_obj.lock_count,
+                        "locked_at_iso": token_obj.locked_at.isoformat()
+                        if token_obj.locked_at
+                        else now.isoformat(),
+                        "lead_id": profile.lead_id,
+                        "lead_name": (
+                            profile.lead.full_name
+                            if profile.lead
+                            else "Học viên"
+                        ),
+                    },
+                    rooms=_rooms_for_admission(profile),
+                )
+            except Exception as dispatch_err:  # noqa: BLE001 — best-effort
+                # Dispatch failure must NOT block the hard-lock
+                # response — the audit row is already written
+                # in-txn so compliance is captured. Notification is
+                # operator-courtesy, not safety-critical.
+                log.error(
+                    "Magic-link hard-lock dispatch failed",
+                    token_id=token_obj.id,
+                    profile_id=profile.id,
+                    error=str(dispatch_err),
+                )
+
             log.warning(
-                "Confirmation token locked after max attempts",
+                "Magic-link hard lock triggered",
                 token_id=token_obj.id,
                 profile_id=profile.id,
+                attempt_count=token_obj.attempt_count,
+                lock_count=token_obj.lock_count,
             )
-            raise BadRequest(
-                "Too many failed attempts. This confirmation link has been locked. "
-                "Please contact support for assistance."
+            exc = BadRequest(
+                "Liên kết xác nhận đã bị khóa do quá nhiều lần nhập sai. "
+                "Vui lòng liên hệ phòng tuyển sinh để được mở khóa."
             )
-        
+            # Hand the post-commit callback back to the router. The
+            # router commits the BadRequest-side mutations (the
+            # ``except BadRequest`` branch in admissions.py
+            # ``confirm_admission_via_magic_link`` already does
+            # ``await db.commit()`` then raises) and we want the
+            # notification fanout to run AFTER that commit, not
+            # before — otherwise the notification can reference
+            # state that hasn't been persisted yet.
+            if hard_lock_cb is not None:
+                exc.post_commit_callback = hard_lock_cb  # type: ignore[attr-defined]
+            raise exc
+
+        cooldown_min = cooldown_minutes_for(token_obj.attempt_count) or 0
+        token_obj.lock_until = now + _timedelta(minutes=cooldown_min)
+        attempts_remaining = max(
+            0, settings.ADMISSION_CONFIRM_MAX_ATTEMPTS - token_obj.attempt_count
+        )
+
         log.warning(
             "CCCD verification failed",
             token_id=token_obj.id,
             profile_id=profile.id,
+            attempt_count=token_obj.attempt_count,
+            cooldown_minutes=cooldown_min,
             attempts_remaining=attempts_remaining,
         )
         raise BadRequest(

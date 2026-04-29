@@ -640,6 +640,95 @@ _ADMISSION_EVENTS: tuple = (
         # Sensitive: contains lead/applicant/user/fee PII or targeted recipient
         privacy="sensitive",
     ),
+    # ADM-028 (2026-04-29): magic-link expiry reminders. Beat task fires
+    # at ~24h and ~6h before the token expires for unconfirmed approved
+    # profiles. Per-token dedupe via reminder_24h_sent_at /
+    # reminder_6h_sent_at columns on AdmissionConfirmationToken.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_CONFIRMATION_REMINDER_24H,
+        category="application",
+        display_name="Nhắc xác nhận nhập học (còn ~24 giờ)",
+        description=(
+            "Beat task gửi nhắc applicant ~24h trước khi liên kết xác nhận hết hạn. "
+            "One-shot per token, dedupe qua reminder_24h_sent_at."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead (cho lead_contact resolver)"),
+            _var("lead_name", "string", "Họ tên applicant"),
+            _var("expires_at_iso", "string", "ISO datetime — token expiry"),
+            _var("hours_remaining", "integer", "Số giờ còn lại trước expiry"),
+            _var("confirm_url", "string", "URL magic-link trực tiếp"),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("specific_users",),
+        default_channels=("email", "zalo"),
+        priority=30,
+        # Dedupe must include ``expires_at_iso`` so a refreshed token
+        # (different expiry window) gets a fresh reminder. Keying on
+        # ``application_id`` alone would let a previously-fired
+        # reminder block delivery for a re-issued link in the same
+        # 24h scan, even after the beat task cleared
+        # ``reminder_24h_sent_at`` on the new row.
+        dedup_key_template="confirm_reminder_24h:${application_id}:${expires_at_iso}",
+        link_strategy=None,
+        privacy="sensitive",
+    ),
+    EventDefinition(
+        event=SystemEvents.ADMISSION_CONFIRMATION_REMINDER_6H,
+        category="application",
+        display_name="Nhắc xác nhận nhập học (còn ~6 giờ)",
+        description=(
+            "Beat task gửi nhắc applicant ~6h trước khi liên kết xác nhận hết hạn. "
+            "One-shot per token, dedupe qua reminder_6h_sent_at. Có thể fire "
+            "không cần 24h reminder đã fire trước đó (token issued <6h trước expiry)."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("lead_name", "string", "Họ tên applicant"),
+            _var("expires_at_iso", "string", "ISO datetime — token expiry"),
+            _var("hours_remaining", "integer", "Số giờ còn lại"),
+            _var("confirm_url", "string", "URL magic-link"),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("specific_users",),
+        default_channels=("email", "zalo"),
+        priority=20,
+        # Same per-issuance-window keying as the 24h variant —
+        # see comment there.
+        dedup_key_template="confirm_reminder_6h:${application_id}:${expires_at_iso}",
+        link_strategy=None,
+        privacy="sensitive",
+    ),
+    # ADM-023 (2026-04-29): hard-lock awareness. Internal-only fanout
+    # so support can proactively reach out when an applicant has been
+    # hard-locked (≥30 failed CCCD attempts, lock_count incremented).
+    EventDefinition(
+        event=SystemEvents.ADMISSION_CONFIRMATION_HARD_LOCKED,
+        category="application",
+        display_name="Liên kết xác nhận bị khóa (≥30 lần sai CCCD)",
+        description=(
+            "Service raise khi applicant nhập sai CCCD ≥30 lần. Operator "
+            "(officer/manager/admin) nhận notification để chủ động hỗ trợ."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("token_id", "integer", "ID confirmation token"),
+            _var("attempt_count", "integer", "Tổng số lần nhập sai"),
+            _var("lock_count", "integer", "Số lần token bị hard-lock"),
+            _var("locked_at_iso", "string", "Thời điểm hard lock"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("lead_name", "string", "Họ tên applicant"),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=10,
+        dedup_key_template="confirm_hard_locked:${token_id}:${lock_count}",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+    ),
 )
 
 # -------------------------------------------------------------------

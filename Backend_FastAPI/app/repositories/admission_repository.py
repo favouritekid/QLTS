@@ -1038,22 +1038,52 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         expires_at,
     ) -> models.AdmissionConfirmationToken:
         """
-        Create a new confirmation token for a profile.
-        
-        Invalidates any existing token for the same profile first.
-        
+        Issue (or refresh) the magic-link confirmation token for a profile.
+
+        ADM-023 (2026-04-29): when an existing token row is present we
+        REUSE it — only ``token``, ``expires_at`` and ``confirmed_at``
+        are updated. The brute-force counters (``attempt_count``,
+        ``lock_until``, ``locked_at``, ``lock_count``) are PRESERVED so
+        an abuser can't simply request a fresh link to escape the
+        ladder. The previous behaviour (``DELETE + INSERT``) reset
+        every counter and was the loophole flagged by the resend test.
+
+        Operator-driven cooldown reset is a separate admin path (not
+        in scope for this PR); when it ships, that path will explicitly
+        zero ``lock_until`` / ``lock_count`` with an audit row.
+
         Args:
             profile_id: AdmissionProfile ID
             token: URL-safe random token string
             expires_at: Token expiration timestamp
-            
+
         Returns:
-            Created AdmissionConfirmationToken
+            The single token row (refreshed or newly created).
         """
-        # Delete any existing token for this profile
-        await self.invalidate_existing_tokens(profile_id)
-        
-        # Create new token
+        from sqlalchemy import select as _select
+
+        existing = (
+            await self.db.execute(
+                _select(models.AdmissionConfirmationToken).where(
+                    models.AdmissionConfirmationToken.profile_id == profile_id
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None:
+            # Refresh value + expiry, clear consumed marker so the new
+            # link is usable. Counters intentionally untouched.
+            existing.token = token
+            existing.expires_at = expires_at
+            existing.confirmed_at = None
+            # New email window starts → previous reminder dedupes are
+            # stale (different expires_at). Reset reminder markers so
+            # the beat task re-fires for the new window.
+            existing.reminder_24h_sent_at = None
+            existing.reminder_6h_sent_at = None
+            await self.db.flush()
+            return existing
+
         token_obj = models.AdmissionConfirmationToken(
             profile_id=profile_id,
             token=token,

@@ -2072,6 +2072,18 @@ async def confirm_admission_by_token(
     except BadRequest as e:
         # IMPORTANT: Commit to persist attempt_count/locked_at changes
         await db.commit()
+        # ADM-023 (2026-04-29): hard-lock branch attaches a notification
+        # callback to the exception so operator alerts run AFTER the
+        # locked_at + audit row commit (browser realtime + email
+        # enqueue must observe the persisted state). Best-effort: a
+        # callback failure must not turn a 400 into a 500.
+        post_commit = getattr(e, "post_commit_callback", None)
+        if post_commit is not None:
+            try:
+                await post_commit()
+            except Exception:
+                # Logged inside the callback path; don't escalate.
+                pass
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
