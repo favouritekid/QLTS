@@ -416,6 +416,31 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                   : "Chỉ ghi nhận đã nhận bản giấy, không cần upload file"
                 const ModeIcon = requiresUpload ? Globe : Building2
 
+                // ADM-031 round 4: surface the actually-recorded format so
+                // officers can verify what they (or a teammate) declared at
+                // upload/paper-receipt time. Priority mirrors the executive
+                // summary view: verified > actual > none. The required
+                // format stays in the "Yêu cầu bản nộp" badge regardless,
+                // so a mismatch between required and actual is visually
+                // diff-able at a glance.
+                const recordedFormatCode =
+                  doc.status === "verified" && doc.verified_format
+                    ? doc.verified_format
+                    : doc.actual_submission_format ?? null
+                const recordedFormatLabel = recordedFormatCode
+                  ? getFormatLabel(recordedFormatCode)
+                  : null
+                const recordedLabelHeader =
+                  doc.status === "verified" ? "Đã kiểm tra (loại bản)" : "Đã ghi nhận (loại bản)"
+                const recordedFormatColor =
+                  doc.status === "verified"
+                    ? "border-success-300 bg-success-50 text-success-800"
+                    : "border-info-300 bg-info-50 text-info-800"
+                const recordedDiffersFromRequired =
+                  recordedFormatCode &&
+                  doc.submission_format &&
+                  recordedFormatCode !== doc.submission_format
+
                 return (
                   <div
                     key={doc.code || index}
@@ -458,7 +483,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                         badge cluster on desktop. The labels are
                         ``md:hidden`` so they vanish on desktop without
                         wrapping the badges in extra DOM. */}
-                    <div className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm md:flex md:flex-wrap md:items-center md:gap-2 md:max-w-[20rem] md:justify-end">
+                    <div className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm md:flex md:flex-wrap md:items-center md:gap-2 md:max-w-[22rem] md:justify-end">
                       {formatBadge && (
                         <>
                           <span className="text-xs text-muted-foreground self-center md:hidden">
@@ -467,10 +492,41 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           <Badge
                             variant="outline"
                             className="text-xs gap-1 max-w-full justify-start md:justify-center"
-                            title={formatBadge.label}
+                            title={`Yêu cầu hồ sơ: ${formatBadge.label}`}
                           >
                             <FormatIcon className="h-3 w-3 shrink-0" />
                             <span className="truncate">{formatBadge.label}</span>
+                          </Badge>
+                        </>
+                      )}
+                      {/* ADM-031 round 4: show the actual / verified format so
+                          officers don't have to re-open the document to recall
+                          what they declared. Border colour signals the source
+                          (verified vs officer-declared) without an extra
+                          legend; mismatch with the required format is also
+                          flagged via title tooltip. */}
+                      {recordedFormatLabel && (
+                        <>
+                          <span className="text-xs text-muted-foreground self-center md:hidden">
+                            {recordedLabelHeader}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className={`text-xs gap-1 max-w-full justify-start md:justify-center ${recordedFormatColor}`}
+                            title={
+                              recordedDiffersFromRequired
+                                ? `${recordedLabelHeader}: ${recordedFormatLabel} — KHÁC yêu cầu hồ sơ (${formatBadge?.label ?? doc.submission_format})`
+                                : `${recordedLabelHeader}: ${recordedFormatLabel}`
+                            }
+                          >
+                            <FormatIcon className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{recordedFormatLabel}</span>
+                            {recordedDiffersFromRequired && (
+                              <AlertTriangle
+                                className="h-3 w-3 shrink-0 text-warning-700"
+                                aria-label="Khác yêu cầu hồ sơ"
+                              />
+                            )}
                           </Badge>
                         </>
                       )}

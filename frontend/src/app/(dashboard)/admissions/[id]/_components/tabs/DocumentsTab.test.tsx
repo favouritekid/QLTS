@@ -41,6 +41,8 @@ type DocRow = {
   can_reset?: boolean;
   can_mark_paper_submitted?: boolean;
   submission_format?: string | null;
+  actual_submission_format?: string | null;
+  verified_format?: string | null;
   file_path?: string | null;
   uploaded_at?: string | null;
 };
@@ -539,5 +541,83 @@ describe("DocumentsTab — ADM-031 upload dialog", () => {
     expect(alert).toHaveTextContent(/trước khi tải file/i);
     // Paper-flow copy must NOT leak into upload dialog.
     expect(alert).not.toHaveTextContent(/trước khi ghi nhận/i);
+  });
+});
+
+describe("DocumentsTab — ADM-031 round 4 actual / verified format display", () => {
+  it("shows actual_submission_format on uploaded rows (officer-declared, info colour)", () => {
+    const profile = buildProfile([
+      {
+        code: "anh_3x4",
+        label: "Ảnh 3x4",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+        // Path requires certified_copy but officer uploaded a plain photo.
+        submission_format: "certified_copy",
+        actual_submission_format: "photo",
+      },
+    ]);
+    const { container } = render(<DocumentsTab profile={profile as never} isEditable />);
+    // Both required AND actual format must be visible — officer needs the
+    // diff at a glance to decide whether to redo the upload.
+    expect(container.textContent).toMatch(/bản sao chứng thực/i);
+    expect(container.textContent).toMatch(/bản chụp\/scan không chứng thực/i);
+    // Recorded label is mobile-only (md:hidden); rendered into DOM either way.
+    expect(container.textContent).toMatch(/đã ghi nhận \(loại bản\)/i);
+  });
+
+  it("shows verified_format on verified rows (manager-confirmed, success colour)", () => {
+    const profile = buildProfile([
+      {
+        code: "hoc_ba_thpt",
+        label: "Học bạ THPT",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "certified_copy",
+        actual_submission_format: "certified_copy",
+        verified_format: "certified_copy",
+      },
+    ]);
+    const { container } = render(<DocumentsTab profile={profile as never} isEditable />);
+    // The "Đã kiểm tra (loại bản)" label replaces the "ghi nhận" variant
+    // once a manager confirms the format.
+    expect(container.textContent).toMatch(/đã kiểm tra \(loại bản\)/i);
+    expect(container.textContent).not.toMatch(/đã ghi nhận \(loại bản\)/i);
+  });
+
+  it("shows actual_submission_format on paper_submitted rows", () => {
+    const profile = buildProfile([
+      {
+        code: "giay_khai_sinh",
+        label: "Giấy khai sinh",
+        status: "paper_submitted",
+        is_mandatory: true,
+        requires_upload: false,
+        submission_format: "original",
+        actual_submission_format: "certified_copy",
+      },
+    ]);
+    const { container } = render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(container.textContent).toMatch(/bản gốc/i);
+    expect(container.textContent).toMatch(/bản sao chứng thực/i);
+    expect(container.textContent).toMatch(/đã ghi nhận \(loại bản\)/i);
+  });
+
+  it("does not render the recorded-format badge when actual is missing (status=missing)", () => {
+    const profile = buildProfile([
+      {
+        code: "cccd",
+        label: "CCCD",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "photo",
+      },
+    ]);
+    const { container } = render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(container.textContent).not.toMatch(/đã ghi nhận \(loại bản\)/i);
+    expect(container.textContent).not.toMatch(/đã kiểm tra \(loại bản\)/i);
   });
 });

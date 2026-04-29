@@ -1222,6 +1222,14 @@ def _compute_frontend_fields(
                     # Defaults to True for verified status, False otherwise
                     "submission_format_confirmed": doc.status == "verified",
                     "label_from_db": doc.document_type.name,
+                    # ADM-031 round 4: surface the officer-declared format and
+                    # the manager-verified format so the FE can show "Đã ghi
+                    # nhận (loại bản): X" / "Đã kiểm tra (loại bản): Y" next
+                    # to the path-required submission_format. Without this,
+                    # the row badges only echo the requirement and an
+                    # actual/required mismatch stays invisible to officers.
+                    "actual_submission_format": doc.actual_submission_format,
+                    "verified_format": doc.verified_format,
                 }
     
     # PR #5 — per-document action permissions delegate to the
@@ -1276,6 +1284,11 @@ def _compute_frontend_fields(
             "is_mandatory": True,
             "requires_upload": _requires_upload,
             "submission_format": config.get("submission_format"),
+            # ADM-031 round 4: pass through the officer-declared and
+            # manager-verified format codes so the FE row can render the
+            # actual/verified state next to the required format.
+            "actual_submission_format": uploaded_doc.get("actual_submission_format"),
+            "verified_format": uploaded_doc.get("verified_format"),
             "status": _doc_status,
             "file_path": uploaded_doc.get("file_path"),
             "uploaded_at": uploaded_doc.get("uploaded_at"),

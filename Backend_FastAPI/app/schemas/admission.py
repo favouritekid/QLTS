@@ -242,6 +242,13 @@ class DocumentItemSchema(BaseModel):
         None,
         description="Format verified by officer (original/certified_copy/photo)"
     )
+    # ADM-031 round 4: officer-declared actual format. Captured at upload /
+    # paper-receipt time; surfaced in the FE row badge so officers can see
+    # what was actually recorded vs the path-required submission_format.
+    actual_submission_format: Optional[Literal["original", "certified_copy", "photo"]] = Field(
+        None,
+        description="Format actually declared by the officer at upload/paper-receipt time"
+    )
 
     # =========================================================================
     # Checklist-only display fields populated by _compute_frontend_fields.
