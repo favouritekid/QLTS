@@ -1230,6 +1230,14 @@ def _compute_frontend_fields(
                     # actual/required mismatch stays invisible to officers.
                     "actual_submission_format": doc.actual_submission_format,
                     "verified_format": doc.verified_format,
+                    # ADM-031 round 7: paper-receipt timestamp so the FE can
+                    # render the "Đã ghi nhận" cell date for paper-only docs
+                    # the same way it does for uploaded ones (uploaded_at).
+                    "paper_submitted_at": (
+                        doc.paper_submitted_at.isoformat()
+                        if doc.paper_submitted_at
+                        else None
+                    ),
                 }
     
     # PR #5 — per-document action permissions delegate to the
@@ -1292,6 +1300,8 @@ def _compute_frontend_fields(
             "status": _doc_status,
             "file_path": uploaded_doc.get("file_path"),
             "uploaded_at": uploaded_doc.get("uploaded_at"),
+            # ADM-031 round 7: paper-receipt timestamp
+            "paper_submitted_at": uploaded_doc.get("paper_submitted_at"),
             "rejection_reason": uploaded_doc.get("rejection_reason"),
             "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False),
             **_perms,

@@ -31,6 +31,7 @@ vi.mock("@/hooks/admissions/useAdmissions", () => ({
   useMarkPaperSubmitted: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useRejectDocument: () => ({ mutate: vi.fn(), isPending: false }),
   useResetDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useVerifyDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
 }));
 
 type DocRow = {
@@ -258,7 +259,7 @@ describe("DocumentsTab — ADM-031 round 5 KPI strip", () => {
 // =============================================================================
 
 describe("DocumentsTab — ADM-031 round 5 desktop table", () => {
-  it("renders a semantic table with the 7-column header", () => {
+  it("renders a semantic table with the round-7 6-column header (Cách ghi nhận merged into Yêu cầu)", () => {
     const profile = buildProfile([
       {
         code: "CCCD",
@@ -273,11 +274,9 @@ describe("DocumentsTab — ADM-031 round 5 desktop table", () => {
     const headers = within(table).getAllByRole("columnheader");
     const headerLabels = headers.map((h) => h.textContent?.trim());
     expect(headerLabels).toEqual([
-      "#",
       "Tên giấy tờ",
       "Yêu cầu",
       "Đã ghi nhận",
-      "Cách ghi nhận",
       "Trạng thái",
       "Thao tác",
     ]);
@@ -318,7 +317,8 @@ describe("DocumentsTab — ADM-031 round 5 desktop table", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
     const rows = within(table).getAllByRole("row").slice(1); // skip header
-    const labels = rows.map((r) => within(r).getAllByRole("cell")[1]?.textContent);
+    // Title cell is now index 0 (the "#" column was removed in round 7).
+    const labels = rows.map((r) => within(r).getAllByRole("cell")[0]?.textContent);
     // Priority: missing(mandatory) → missing(optional) → uploaded → verified
     expect(labels[0]).toContain("Missing mandatory");
     expect(labels[1]).toContain("Missing optional");
@@ -346,9 +346,11 @@ describe("DocumentsTab — ADM-031 round 5 reception & how-to columns", () => {
     const { container } = render(<DocumentsTab profile={profile as never} isEditable />);
     expect(container.textContent).toMatch(/Tải file/);
     // The row exposes the "Chưa" reception bucket for missing.
+    // Round 7 dropped the "#" column → cells are
+    // Tên | Yêu cầu | Đã ghi nhận | Trạng thái | Thao tác (index 2 = reception).
     const table = screen.getByRole("table");
     const cells = within(table).getAllByRole("cell");
-    const receptionCell = cells[3]; // # | Tên | Yêu cầu | Đã ghi nhận | ...
+    const receptionCell = cells[2];
     expect(receptionCell?.textContent).toMatch(/^Chưa/);
   });
 
@@ -381,6 +383,142 @@ describe("DocumentsTab — ADM-031 round 5 reception & how-to columns", () => {
     expect(paperButton.textContent).toMatch(/^Đã nhận giấy$/);
     // No upload-flow copy on a paper-only row.
     expect(within(table).queryByText(/^Tải file$/)).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// ADM-031 ROUND 7 — "YÊU CẦU" CELL ABSORBS "CÁCH GHI NHẬN"
+// =============================================================================
+
+describe("DocumentsTab — ADM-031 round 7 'Yêu cầu' merge", () => {
+  it("requires_upload=true row shows 'Bắt buộc · Chứng thực' + 'Tải file' inside the Yêu cầu cell", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "certified_copy",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    // Cells in round 7 order: Tên | Yêu cầu | Đã ghi nhận | Trạng thái | Thao tác
+    const cells = within(table).getAllByRole("cell");
+    const yeuCauCell = cells[1];
+    expect(yeuCauCell.textContent).toMatch(/Bắt buộc/);
+    expect(yeuCauCell.textContent).toMatch(/Chứng thực/);
+    expect(yeuCauCell.textContent).toMatch(/Tải file/);
+  });
+
+  it("requires_upload=false row shows 'Bắt buộc · Gốc' + 'Nhận giấy' inside the Yêu cầu cell", () => {
+    const profile = buildProfile([
+      {
+        code: "PHIEU",
+        label: "Phiếu cam kết",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: false,
+        submission_format: "original",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    const cells = within(table).getAllByRole("cell");
+    const yeuCauCell = cells[1];
+    expect(yeuCauCell.textContent).toMatch(/Bắt buộc/);
+    expect(yeuCauCell.textContent).toMatch(/Gốc/);
+    expect(yeuCauCell.textContent).toMatch(/Nhận giấy/);
+  });
+});
+
+// =============================================================================
+// ADM-031 ROUND 7 — VERIFY BUTTON
+// =============================================================================
+
+describe("DocumentsTab — ADM-031 round 7 verify button", () => {
+  it("renders 'Duyệt' button when can_verify=true", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+        actual_submission_format: "certified_copy",
+        can_verify: true,
+      } as never,
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(
+      within(table).getByRole("button", { name: /duyệt tài liệu/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides 'Duyệt' when can_verify=false", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+        can_verify: false,
+      } as never,
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(
+      screen.queryByRole("button", { name: /duyệt tài liệu/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// ADM-031 ROUND 7 — paper_submitted_at DATE IN RECEPTION CELL
+// =============================================================================
+
+describe("DocumentsTab — ADM-031 round 7 paper_submitted_at", () => {
+  it("paper_submitted row renders the paper_submitted_at date in the reception cell", () => {
+    const profile = buildProfile([
+      {
+        code: "PHIEU",
+        label: "Phiếu cam kết",
+        status: "paper_submitted",
+        is_mandatory: true,
+        requires_upload: false,
+        actual_submission_format: "original",
+        paper_submitted_at: "2026-04-28T10:30:00+00:00",
+      } as never,
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    const cells = within(table).getAllByRole("cell");
+    // Reception cell at index 2.
+    const receptionCell = cells[2];
+    expect(receptionCell.textContent).toMatch(/Giấy/);
+    expect(receptionCell.textContent).toMatch(/28\/04\/2026/);
+  });
+
+  it("uploaded row renders the uploaded_at date in the reception cell, not paper_submitted_at", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+        actual_submission_format: "certified_copy",
+        uploaded_at: "2026-03-15T08:00:00+00:00",
+      } as never,
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    const cells = within(table).getAllByRole("cell");
+    const receptionCell = cells[2];
+    expect(receptionCell.textContent).toMatch(/File/);
+    expect(receptionCell.textContent).toMatch(/15\/03\/2026/);
   });
 });
 

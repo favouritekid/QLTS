@@ -195,6 +195,13 @@ export const documentItemSchema = z.object({
     .string()
     .nullable()
     .optional(),
+  /**
+   * Paper-receipt timestamp — when officer marked the paper document as
+   * received. Surfaced in the FE so the "Đã ghi nhận" cell can show the
+   * receipt date for paper-only docs the same way it shows uploaded_at
+   * for online docs (ADM-031 round 7).
+   */
+  paper_submitted_at: z.string().nullable().optional(),
   rejection_reason: z.string().nullable().optional(),
   actual_submission_format: z.string().nullable().optional(),
   /**

@@ -237,6 +237,11 @@ class DocumentItemSchema(BaseModel):
         None,
         description="Upload timestamp (UTC)"
     )
+    # ADM-031 round 7: paper-receipt timestamp
+    paper_submitted_at: Optional[datetime] = Field(
+        None,
+        description="Timestamp when officer marked the paper document as received"
+    )
     # ✅ FIX Finding 2.3: Document Internal Verification
     verified_format: Optional[Literal["original", "certified_copy", "photo"]] = Field(
         None,

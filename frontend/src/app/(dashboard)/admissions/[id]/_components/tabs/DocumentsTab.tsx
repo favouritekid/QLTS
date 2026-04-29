@@ -76,6 +76,7 @@ import {
   useMarkPaperSubmitted,
   useRejectDocument,
   useResetDocument,
+  useVerifyDocument,
 } from "@/hooks/admissions/useAdmissions"
 import { useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -254,11 +255,14 @@ function computeRowState(doc: DocumentItem) {
 
   // Date-of-record — appears under the reception bucket in the
   // "Đã ghi nhận" cell so the title cell can stay focused on doc
-  // identity (label + code + reject reason).
+  // identity (label + code + reject reason). For paper-submitted
+  // rows, prefer the dedicated paper_submitted_at timestamp from
+  // ADM-031 round 7 backend addition; fall back to uploaded_at for
+  // online docs.
   const recordedAtIso =
-    doc.uploaded_at ??
-    (doc as DocumentItem & { paper_submitted_at?: string | null }).paper_submitted_at ??
-    null
+    doc.status === "paper_submitted"
+      ? (doc.paper_submitted_at ?? null)
+      : (doc.uploaded_at ?? null)
   const recordedAtFormatted = recordedAtIso
     ? VI_DATE_FORMATTER.format(new Date(recordedAtIso))
     : null
@@ -273,8 +277,9 @@ function computeRowState(doc: DocumentItem) {
   const canMarkPaperSubmitted = doc.can_mark_paper_submitted ?? false
   const canReject = doc.can_reject ?? false
   const canReset = doc.can_reset ?? false
+  const canVerify = doc.can_verify ?? false
   const hasAnyAction =
-    hasFile || canUpload || canMarkPaperSubmitted || canReject || canReset
+    hasFile || canUpload || canMarkPaperSubmitted || canReject || canReset || canVerify
 
   return {
     statusConfig,
@@ -294,6 +299,7 @@ function computeRowState(doc: DocumentItem) {
     canMarkPaperSubmitted,
     canReject,
     canReset,
+    canVerify,
     hasAnyAction,
     recordedAtFormatted,
   }
@@ -341,6 +347,8 @@ interface ActionsCellProps {
   isPaperPending: boolean
   isResetPending: boolean
   isCurrentResetTarget: boolean
+  isVerifyPending: boolean
+  isCurrentVerifyTarget: boolean
   onView: (filePath: string) => void
   onUpload: (
     code: string,
@@ -354,6 +362,7 @@ interface ActionsCellProps {
   ) => void
   onRejectClick: (code: string, label: string) => void
   onResetClick: (code: string, label: string) => void
+  onVerifyClick: (code: string, format: string) => void
   alignEnd?: boolean
 }
 
@@ -365,13 +374,23 @@ function DocumentRowActions(props: ActionsCellProps) {
     isPaperPending,
     isResetPending,
     isCurrentResetTarget,
+    isVerifyPending,
+    isCurrentVerifyTarget,
     onView,
     onUpload,
     onPaperSubmit,
     onRejectClick,
     onResetClick,
+    onVerifyClick,
     alignEnd,
   } = props
+
+  // Verify uses the actual / required format as the format claim. The
+  // verify dialog (executive checklist) is the deeper review surface;
+  // here the button is a one-click confirm for officers/managers who
+  // already match required to actual.
+  const verifyFormat =
+    doc.actual_submission_format ?? doc.submission_format ?? "photo"
 
   if (!state.hasAnyAction && !(state.isPaperOnly && doc.status === "paper_submitted")) {
     return <span className="text-xs text-muted-foreground">—</span>
@@ -432,21 +451,43 @@ function DocumentRowActions(props: ActionsCellProps) {
         </Button>
       )}
 
-      {state.isPaperOnly && doc.status === "paper_submitted" && !state.canReject && !state.canReset && (
+      {state.isPaperOnly && doc.status === "paper_submitted" && !state.canReject && !state.canReset && !state.canVerify && (
         <span className="inline-flex items-center text-success-600 text-xs">
           <Check className="h-4 w-4" aria-hidden="true" />
         </span>
       )}
 
+      {/* Verify — manager/admin one-click approve. Lives in the
+          DocumentsTab so officers/managers can clear the verify queue
+          without bouncing into the executive checklist. */}
+      {state.canVerify && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="text-success-700 hover:text-success-800 hover:bg-success-50 border-success-300"
+          onClick={() => onVerifyClick(doc.code, verifyFormat)}
+          disabled={isVerifyPending && isCurrentVerifyTarget}
+          aria-label="Duyệt tài liệu"
+        >
+          {isVerifyPending && isCurrentVerifyTarget ? (
+            <Loader2 className="h-4 w-4 mr-1 animate-spin motion-reduce:animate-none" />
+          ) : (
+            <Check className="h-4 w-4 mr-1" />
+          )}
+          Duyệt
+        </Button>
+      )}
+
       {state.canReject && (
         <Button
           size="sm"
-          variant="ghost"
-          className="text-error-600 hover:text-error-700 hover:bg-error-50"
+          variant="outline"
+          className="text-error-600 hover:text-error-700 hover:bg-error-50 border-error-300"
           onClick={() => onRejectClick(doc.code, doc.label)}
           aria-label="Từ chối tài liệu"
         >
-          <Ban className="h-4 w-4" />
+          <Ban className="h-4 w-4 mr-1" />
+          Từ chối
         </Button>
       )}
 
@@ -482,6 +523,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
   const paperMutation = useMarkPaperSubmitted(profile.id)
   const rejectMutation = useRejectDocument(profile.id)
   const resetMutation = useResetDocument(profile.id)
+  const verifyMutation = useVerifyDocument(profile.id)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedDocCode, setSelectedDocCode] = useState<string | null>(null)
@@ -674,6 +716,10 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
     setPendingResetDoc(null)
   }
 
+  const handleVerifyClick = (code: string, format: string) => {
+    verifyMutation.mutate({ docCode: code, format })
+  }
+
   // -- Per-row mutation helpers ---------------------------------------------
 
   const isUploadingForCode = (code: string) =>
@@ -682,6 +728,8 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
     paperMutation.isPending && paperMutation.variables?.docCode === code
   const isResetPendingForCode = (code: string) =>
     resetMutation.isPending && resetMutation.variables === code
+  const isVerifyPendingForCode = (code: string) =>
+    verifyMutation.isPending && verifyMutation.variables?.docCode === code
 
   // ============================================================================
   // RENDER
@@ -761,12 +809,6 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b text-xs uppercase tracking-wide text-muted-foreground">
-                      <th
-                        scope="col"
-                        className="py-2 pr-3 text-left font-medium tabular-nums w-10"
-                      >
-                        #
-                      </th>
                       <th scope="col" className="py-2 pr-3 text-left font-medium">
                         Tên giấy tờ
                       </th>
@@ -775,9 +817,6 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                       </th>
                       <th scope="col" className="py-2 pr-3 text-left font-medium">
                         Đã ghi nhận
-                      </th>
-                      <th scope="col" className="py-2 pr-3 text-left font-medium">
-                        Cách ghi nhận
                       </th>
                       <th scope="col" className="py-2 pr-3 text-left font-medium">
                         Trạng thái
@@ -801,9 +840,6 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           key={doc.code || i}
                           className="hover:bg-muted/30 motion-reduce:transition-none"
                         >
-                          <td className="py-3 pr-3 align-top text-muted-foreground tabular-nums">
-                            {i + 1}
-                          </td>
                           <td className="py-3 pr-3 align-top min-w-0">
                             <div className="font-medium text-pretty break-words">
                               {doc.label}
@@ -829,6 +865,9 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             )}
                           </td>
                           <td className="py-3 pr-3 align-top">
+                            {/* ADM-031 round 7: 3-line "Yêu cầu" cell — bắt buộc /
+                                loại bản / cách xử lý — replaces the separate
+                                "Cách ghi nhận" column. */}
                             <div className="text-sm">
                               {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
                             </div>
@@ -848,6 +887,17 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                 </span>
                               </div>
                             )}
+                            <div
+                              className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5"
+                              title={state.howToReceiveTitle}
+                              aria-label={state.howToReceiveTitle}
+                            >
+                              <HowIcon
+                                className="h-3 w-3 shrink-0"
+                                aria-hidden="true"
+                              />
+                              <span>{state.howToReceiveLabel}</span>
+                            </div>
                           </td>
                           <td className="py-3 pr-3 align-top">
                             <Badge
@@ -893,22 +943,6 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             )}
                           </td>
                           <td className="py-3 pr-3 align-top">
-                            {/* ADM-031 round 6 — light pill, NOT a button. The
-                                action lives in the "Thao tác" column; this cell
-                                only describes the workflow path. */}
-                            <span
-                              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground bg-muted/60"
-                              title={state.howToReceiveTitle}
-                              aria-label={state.howToReceiveTitle}
-                            >
-                              <HowIcon
-                                className="h-3 w-3 shrink-0"
-                                aria-hidden="true"
-                              />
-                              {state.howToReceiveLabel}
-                            </span>
-                          </td>
-                          <td className="py-3 pr-3 align-top">
                             <Badge className={`${state.statusConfig.color} gap-1`}>
                               <StatusIcon
                                 className="h-3 w-3 shrink-0"
@@ -925,11 +959,14 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                               isPaperPending={isPaperPendingForCode(doc.code)}
                               isResetPending={resetMutation.isPending}
                               isCurrentResetTarget={isResetPendingForCode(doc.code)}
+                              isVerifyPending={verifyMutation.isPending}
+                              isCurrentVerifyTarget={isVerifyPendingForCode(doc.code)}
                               onView={handleViewDocument}
                               onUpload={handleUploadClick}
                               onPaperSubmit={handlePaperSubmit}
                               onRejectClick={handleRejectClick}
                               onResetClick={handleResetClick}
+                              onVerifyClick={handleVerifyClick}
                               alignEnd
                             />
                           </td>
@@ -995,16 +1032,31 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           Yêu cầu
                         </dt>
                         <dd className="break-words">
-                          {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
-                          {state.formatBadge && (
-                            <span
-                              className="text-xs text-muted-foreground"
-                              title={state.formatBadge.label}
-                            >
-                              {" · "}
-                              {state.formatBadge.label}
-                            </span>
-                          )}
+                          <div>
+                            {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
+                            {state.formatBadge && (
+                              <span
+                                className="text-xs text-muted-foreground"
+                                title={state.formatBadge.label}
+                              >
+                                {" · "}
+                                {state.formatBadge.label}
+                              </span>
+                            )}
+                          </div>
+                          {/* Cách xử lý line — replaces the dropped
+                              "Cách ghi nhận" row from round 7. */}
+                          <div
+                            className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5"
+                            title={state.howToReceiveTitle}
+                            aria-label={state.howToReceiveTitle}
+                          >
+                            <HowIcon
+                              className="h-3 w-3 shrink-0"
+                              aria-hidden="true"
+                            />
+                            <span>{state.howToReceiveLabel}</span>
+                          </div>
                         </dd>
 
                         <dt className="text-xs text-muted-foreground self-center">
@@ -1037,25 +1089,6 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             </div>
                           )}
                         </dd>
-
-                        <dt className="text-xs text-muted-foreground self-center">
-                          Cách ghi nhận
-                        </dt>
-                        <dd>
-                          {/* Light pill, NOT a button — actual action lives in
-                              the action group below. */}
-                          <span
-                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground bg-muted/60"
-                            title={state.howToReceiveTitle}
-                            aria-label={state.howToReceiveTitle}
-                          >
-                            <HowIcon
-                              className="h-3 w-3 shrink-0"
-                              aria-hidden="true"
-                            />
-                            {state.howToReceiveLabel}
-                          </span>
-                        </dd>
                       </dl>
 
                       {state.hasAnyAction && (
@@ -1067,11 +1100,14 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             isPaperPending={isPaperPendingForCode(doc.code)}
                             isResetPending={resetMutation.isPending}
                             isCurrentResetTarget={isResetPendingForCode(doc.code)}
+                            isVerifyPending={verifyMutation.isPending}
+                            isCurrentVerifyTarget={isVerifyPendingForCode(doc.code)}
                             onView={handleViewDocument}
                             onUpload={handleUploadClick}
                             onPaperSubmit={handlePaperSubmit}
                             onRejectClick={handleRejectClick}
                             onResetClick={handleResetClick}
+                            onVerifyClick={handleVerifyClick}
                           />
                         </div>
                       )}
