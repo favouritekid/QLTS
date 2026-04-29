@@ -83,6 +83,7 @@ import { isSafeFilePath } from "@/lib/utils"
 import {
   DOCUMENT_FORMAT_OPTIONS,
   getFormatLabel,
+  getShortFormatLabel,
   isDocumentRecorded,
   isDocumentRequirementSatisfied,
   isDocumentPendingVerification,
@@ -97,35 +98,37 @@ interface DocumentsTabProps {
 // CONSTANTS
 // ============================================================================
 
-// Status labels distinguish "ghi nhận" (received) from "kiểm tra" (verified):
-// uploaded / paper_submitted are received but officer-review still pending,
-// while verified means officer has confirmed the submitted format.
+// ADM-031 round 6 — Trạng thái cell carries workflow state only:
+// "Cần làm" -> officer/applicant must act, "Chờ duyệt" -> waiting for
+// manager review, "Đã duyệt" -> verified, "Từ chối" -> rejected. The
+// "Đã ghi nhận" cell separately reports what was physically received
+// ("Chưa" / "File" / "Giấy") so the two cells don't echo each other.
 const STATUS_CONFIG: Record<
   string,
   { label: string; color: string; icon: typeof AlertCircle }
 > = {
   missing: {
-    label: "Chưa nộp",
+    label: "Cần làm",
     color: "bg-muted text-muted-foreground",
     icon: AlertCircle,
   },
   uploaded: {
-    label: "Đã ghi nhận file",
+    label: "Chờ duyệt",
     color: "bg-info-100 text-info-700",
     icon: Upload,
   },
   paper_submitted: {
-    label: "Đã nhận bản giấy",
+    label: "Chờ duyệt",
     color: "bg-info-100 text-info-700",
     icon: FileText,
   },
   verified: {
-    label: "Đã kiểm tra",
+    label: "Đã duyệt",
     color: "bg-success-100 text-success-700",
     icon: Check,
   },
   rejected: {
-    label: "Không hợp lệ",
+    label: "Từ chối",
     color: "bg-error-100 text-error-700",
     icon: XCircle,
   },
@@ -240,11 +243,29 @@ function computeRowState(doc: DocumentItem) {
     recordedFormatCode !== doc.submission_format
 
   const receptionLabel = getReceptionLabel(doc.status ?? "missing")
-  const howToReceiveLabel = requiresUpload ? "Tải file" : "Nhận giấy tại quầy"
+  // ADM-031 round 6 — table uses the shorter verb "Tải file" / "Nhận giấy"
+  // so the column doesn't drift outside its 5-rem width with the legacy
+  // "Nhận giấy tại quầy". Tooltip + aria-label keep the full meaning.
+  const howToReceiveLabel = requiresUpload ? "Tải file" : "Nhận giấy"
   const howToReceiveTitle = requiresUpload
     ? "Cần tải ảnh/scan/PDF của giấy tờ lên hệ thống"
-    : "Chỉ ghi nhận đã nhận bản giấy, không cần upload file"
+    : "Ghi nhận đã nhận bản giấy trực tiếp, không cần upload file"
   const HowToReceiveIcon = requiresUpload ? Globe : Building2
+
+  // Date-of-record — appears under the reception bucket in the
+  // "Đã ghi nhận" cell so the title cell can stay focused on doc
+  // identity (label + code + reject reason).
+  const recordedAtIso =
+    doc.uploaded_at ??
+    (doc as DocumentItem & { paper_submitted_at?: string | null }).paper_submitted_at ??
+    null
+  const recordedAtFormatted = recordedAtIso
+    ? VI_DATE_FORMATTER.format(new Date(recordedAtIso))
+    : null
+
+  const requiredFormatShort = doc.submission_format
+    ? getShortFormatLabel(doc.submission_format)
+    : null
 
   const hasFile =
     !!doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
@@ -255,15 +276,12 @@ function computeRowState(doc: DocumentItem) {
   const hasAnyAction =
     hasFile || canUpload || canMarkPaperSubmitted || canReject || canReset
 
-  const formattedUploadedAt = doc.uploaded_at
-    ? VI_DATE_FORMATTER.format(new Date(doc.uploaded_at))
-    : null
-
   return {
     statusConfig,
     requiresUpload,
     isPaperOnly,
     formatBadge,
+    requiredFormatShort,
     recordedFormatCode,
     recordedFormatLabel,
     recordedDiffersFromRequired,
@@ -277,7 +295,7 @@ function computeRowState(doc: DocumentItem) {
     canReject,
     canReset,
     hasAnyAction,
-    formattedUploadedAt,
+    recordedAtFormatted,
   }
 }
 
@@ -403,13 +421,14 @@ function DocumentRowActions(props: ActionsCellProps) {
             onPaperSubmit(doc.code, doc.label, doc.submission_format ?? undefined)
           }
           disabled={isPaperPending}
+          aria-label="Đánh dấu đã nhận giấy"
         >
           {isPaperPending ? (
             <Loader2 className="h-4 w-4 mr-1 animate-spin motion-reduce:animate-none" />
           ) : (
             <Building2 className="h-4 w-4 mr-1" />
           )}
-          Đánh dấu đã nhận giấy
+          Đã nhận giấy
         </Button>
       )}
 
@@ -715,8 +734,8 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                 Tài liệu hồ sơ
               </CardTitle>
               <CardDescription>
-                Sắp xếp theo việc cần làm: chưa nộp / không hợp lệ trước, kế đến
-                là chờ kiểm tra, cuối cùng là đã hoàn tất.
+                Sắp xếp theo việc cần làm: cần làm / từ chối trước, kế đến là
+                chờ duyệt, cuối cùng là đã duyệt.
               </CardDescription>
             </div>
             <p
@@ -797,16 +816,11 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              <span translate="no">Mã: {doc.code}</span>
-                              {state.formattedUploadedAt && (
-                                <>
-                                  {" • "}
-                                  <span className="tabular-nums">
-                                    {state.formattedUploadedAt}
-                                  </span>
-                                </>
-                              )}
+                            <div
+                              className="text-xs text-muted-foreground"
+                              translate="no"
+                            >
+                              Mã: {doc.code}
                             </div>
                             {doc.status === "rejected" && doc.rejection_reason && (
                               <div className="text-xs text-error-700 mt-1 break-words">
@@ -818,14 +832,19 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             <div className="text-sm">
                               {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
                             </div>
-                            {state.formatBadge && FormatIcon && (
-                              <div className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5">
-                                <FormatIcon
-                                  className="h-3 w-3 shrink-0"
-                                  aria-hidden="true"
-                                />
-                                <span className="break-words">
-                                  {state.formatBadge.label}
+                            {state.requiredFormatShort && state.formatBadge && (
+                              <div
+                                className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5"
+                                title={state.formatBadge.label}
+                              >
+                                {FormatIcon && (
+                                  <FormatIcon
+                                    className="h-3 w-3 shrink-0"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                                <span aria-label={state.formatBadge.label}>
+                                  {state.requiredFormatShort}
                                 </span>
                               </div>
                             )}
@@ -850,8 +869,8 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                 }`}
                                 title={
                                   state.recordedDiffersFromRequired
-                                    ? `Khác yêu cầu hồ sơ (${state.formatBadge?.label ?? doc.submission_format})`
-                                    : undefined
+                                    ? `Đã ghi nhận: ${state.recordedFormatLabel} — KHÁC yêu cầu hồ sơ (${state.formatBadge?.label ?? doc.submission_format})`
+                                    : `Đã ghi nhận: ${state.recordedFormatLabel}`
                                 }
                               >
                                 {state.recordedDiffersFromRequired && (
@@ -860,22 +879,34 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                     aria-label="Khác yêu cầu hồ sơ"
                                   />
                                 )}
-                                <span>{state.recordedFormatLabel}</span>
+                                <span>
+                                  {state.recordedFormatCode
+                                    ? getShortFormatLabel(state.recordedFormatCode)
+                                    : state.recordedFormatLabel}
+                                </span>
+                              </div>
+                            )}
+                            {state.recordedAtFormatted && (
+                              <div className="text-xs text-muted-foreground tabular-nums mt-1">
+                                {state.recordedAtFormatted}
                               </div>
                             )}
                           </td>
                           <td className="py-3 pr-3 align-top">
-                            <Badge
-                              variant="outline"
-                              className="text-xs gap-1"
+                            {/* ADM-031 round 6 — light pill, NOT a button. The
+                                action lives in the "Thao tác" column; this cell
+                                only describes the workflow path. */}
+                            <span
+                              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground bg-muted/60"
                               title={state.howToReceiveTitle}
+                              aria-label={state.howToReceiveTitle}
                             >
                               <HowIcon
                                 className="h-3 w-3 shrink-0"
                                 aria-hidden="true"
                               />
                               {state.howToReceiveLabel}
-                            </Badge>
+                            </span>
                           </td>
                           <td className="py-3 pr-3 align-top">
                             <Badge className={`${state.statusConfig.color} gap-1`}>
@@ -942,11 +973,6 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           >
                             Mã: {doc.code}
                           </div>
-                          {state.formattedUploadedAt && (
-                            <div className="text-xs text-muted-foreground tabular-nums">
-                              Cập nhật: {state.formattedUploadedAt}
-                            </div>
-                          )}
                           {doc.status === "rejected" && doc.rejection_reason && (
                             <div className="text-xs text-error-700 mt-1 break-words">
                               Lý do: {doc.rejection_reason}
@@ -971,7 +997,10 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                         <dd className="break-words">
                           {doc.is_mandatory ? "Bắt buộc" : "Tùy chọn"}
                           {state.formatBadge && (
-                            <span className="text-xs text-muted-foreground">
+                            <span
+                              className="text-xs text-muted-foreground"
+                              title={state.formatBadge.label}
+                            >
                               {" · "}
                               {state.formatBadge.label}
                             </span>
@@ -992,10 +1021,20 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                                   ? "text-warning-700"
                                   : "text-muted-foreground"
                               }`}
+                              title={
+                                state.recordedDiffersFromRequired
+                                  ? `Đã ghi nhận: ${state.recordedFormatLabel} — KHÁC yêu cầu hồ sơ`
+                                  : `Đã ghi nhận: ${state.recordedFormatLabel}`
+                              }
                             >
                               {state.recordedDiffersFromRequired ? "⚠ " : ""}
                               {state.recordedFormatLabel}
                             </span>
+                          )}
+                          {state.recordedAtFormatted && (
+                            <div className="text-xs text-muted-foreground tabular-nums mt-0.5">
+                              {state.recordedAtFormatted}
+                            </div>
                           )}
                         </dd>
 
@@ -1003,17 +1042,19 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           Cách ghi nhận
                         </dt>
                         <dd>
-                          <Badge
-                            variant="outline"
-                            className="text-xs gap-1"
+                          {/* Light pill, NOT a button — actual action lives in
+                              the action group below. */}
+                          <span
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground bg-muted/60"
                             title={state.howToReceiveTitle}
+                            aria-label={state.howToReceiveTitle}
                           >
                             <HowIcon
                               className="h-3 w-3 shrink-0"
                               aria-hidden="true"
                             />
                             {state.howToReceiveLabel}
-                          </Badge>
+                          </span>
                         </dd>
                       </dl>
 

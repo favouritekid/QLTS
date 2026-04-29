@@ -103,6 +103,26 @@ export function getFormatDescription(format: string | null | undefined): string 
 }
 
 /**
+ * Compact format labels for dense surfaces like the documents table.
+ * Pair with `getFormatLabel` (full label) in the tooltip so the short
+ * form never strips meaning.
+ */
+const SHORT_FORMAT_LABELS: Record<DocumentFormatCode, string> = {
+  original: "Gốc",
+  certified_copy: "Chứng thực",
+  photo: "Chụp/scan",
+}
+
+/**
+ * Compact label for table cells / chips. Falls back to the raw code
+ * when unknown so callers don't render an empty cell.
+ */
+export function getShortFormatLabel(format: string | null | undefined): string {
+  if (!format) return "-"
+  return SHORT_FORMAT_LABELS[format as DocumentFormatCode] ?? format
+}
+
+/**
  * Ordered list of document format options for radio/select pickers.
  */
 export const DOCUMENT_FORMAT_OPTIONS: ReadonlyArray<{

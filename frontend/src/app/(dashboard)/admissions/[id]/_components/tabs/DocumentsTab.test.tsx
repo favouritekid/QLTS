@@ -352,7 +352,7 @@ describe("DocumentsTab — ADM-031 round 5 reception & how-to columns", () => {
     expect(receptionCell?.textContent).toMatch(/^Chưa/);
   });
 
-  it("requires_upload=false row shows 'Nhận giấy tại quầy' how-to + 'Đánh dấu đã nhận giấy' button", () => {
+  it("requires_upload=false row shows 'Nhận giấy' how-to + 'Đã nhận giấy' visible button", () => {
     const profile = buildProfile([
       {
         code: "PHIEU",
@@ -365,12 +365,176 @@ describe("DocumentsTab — ADM-031 round 5 reception & how-to columns", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
-    expect(within(table).getByText(/Nhận giấy tại quầy/)).toBeInTheDocument();
+    // Short verb in the table cell — the long "Nhận giấy tại quầy" was
+    // dropped in round 6 to match the screenshot. Tooltip still keeps
+    // the long copy.
+    expect(within(table).getByText(/^Nhận giấy$/)).toBeInTheDocument();
     expect(
-      within(table).getByRole("button", { name: /đánh dấu đã nhận giấy/i }),
-    ).toBeInTheDocument();
+      within(table).queryByText(/Nhận giấy tại quầy/i),
+    ).not.toBeInTheDocument();
+    // Button: visible "Đã nhận giấy", aria-label "Đánh dấu đã nhận giấy".
+    const paperButton = within(table).getByRole("button", {
+      name: /đánh dấu đã nhận giấy/i,
+    });
+    expect(paperButton).toBeInTheDocument();
+    expect(paperButton).toHaveAccessibleName(/đánh dấu đã nhận giấy/i);
+    expect(paperButton.textContent).toMatch(/^Đã nhận giấy$/);
     // No upload-flow copy on a paper-only row.
     expect(within(table).queryByText(/^Tải file$/)).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// ADM-031 ROUND 6 — STATUS WORKFLOW LABELS
+// =============================================================================
+
+describe("DocumentsTab — ADM-031 round 6 status workflow labels", () => {
+  it("missing row shows 'Cần làm' status + 'Chưa' reception", () => {
+    const profile = buildProfile([
+      {
+        code: "C",
+        label: "Bằng",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByText(/^Cần làm$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^Chưa$/)).toBeInTheDocument();
+    // Old workflow copy must not leak.
+    expect(within(table).queryByText(/^Chưa nộp$/)).not.toBeInTheDocument();
+  });
+
+  it("uploaded row shows 'Chờ duyệt' status + 'File' reception", () => {
+    const profile = buildProfile([
+      {
+        code: "U",
+        label: "Học bạ",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByText(/^Chờ duyệt$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^File$/)).toBeInTheDocument();
+    expect(within(table).queryByText(/Đã ghi nhận file/)).not.toBeInTheDocument();
+  });
+
+  it("paper_submitted row shows 'Chờ duyệt' status + 'Giấy' reception", () => {
+    const profile = buildProfile([
+      {
+        code: "P",
+        label: "Phiếu",
+        status: "paper_submitted",
+        is_mandatory: true,
+        requires_upload: false,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByText(/^Chờ duyệt$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^Giấy$/)).toBeInTheDocument();
+    expect(within(table).queryByText(/Đã nhận bản giấy/)).not.toBeInTheDocument();
+  });
+
+  it("verified row shows 'Đã duyệt' status + 'File' reception", () => {
+    const profile = buildProfile([
+      {
+        code: "V",
+        label: "Học bạ",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByText(/^Đã duyệt$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^File$/)).toBeInTheDocument();
+    expect(within(table).queryByText(/^Đã kiểm tra$/)).not.toBeInTheDocument();
+  });
+
+  it("rejected row shows 'Từ chối' status + 'Chưa' reception", () => {
+    const profile = buildProfile([
+      {
+        code: "R",
+        label: "Bằng",
+        status: "rejected",
+        is_mandatory: true,
+        requires_upload: true,
+        rejection_reason: "Mờ",
+      } as never,
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByText(/^Từ chối$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^Chưa$/)).toBeInTheDocument();
+    expect(within(table).queryByText(/^Không hợp lệ$/)).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// ADM-031 ROUND 6 — SHORT FORMAT LABELS IN TABLE
+// =============================================================================
+
+describe("DocumentsTab — ADM-031 round 6 short format labels", () => {
+  it("table renders short format labels (Gốc / Chứng thực / Chụp/scan)", () => {
+    const profile = buildProfile([
+      {
+        code: "A",
+        label: "Bằng",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "original",
+      },
+      {
+        code: "B",
+        label: "Học bạ",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "certified_copy",
+      },
+      {
+        code: "C",
+        label: "Ảnh",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "photo",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByText(/^Gốc$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^Chứng thực$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^Chụp\/scan$/)).toBeInTheDocument();
+  });
+
+  it("full format label still appears in tooltip / aria-label", () => {
+    const profile = buildProfile([
+      {
+        code: "C",
+        label: "Ảnh",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+        submission_format: "photo",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    // The cell wrapping the short label carries the full string in
+    // aria-label / title so screen readers still get the long form.
+    const fullLabel = within(table).getByLabelText(
+      /Bản chụp\/scan không chứng thực/i,
+    );
+    expect(fullLabel).toBeInTheDocument();
   });
 });
 
