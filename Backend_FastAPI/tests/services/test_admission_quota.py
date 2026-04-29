@@ -774,6 +774,210 @@ class TestQuotaConcurrentRace:
 
 
 # =========================================================================
+# ADM-026 review (Round 2): bulk autoflush-counted overflow
+# =========================================================================
+
+
+class TestQuotaBulkAutoflush:
+    """
+    Bulk approve must observe IN-BATCH inserts when checking the cap.
+    ``_assert_quota_or_bypass`` re-runs ``_count_quota_occupying_profiles``
+    for every item; that count must see the prior items' status updates
+    that were flushed earlier in the same batch (audit_service.log_audit
+    + sync_lead_from_admission both call ``db.flush()`` per item, even
+    though the sessionmaker has ``autoflush=False``).
+
+    Failure mode if this regresses: cap=2, 0 currently approved, batch
+    of 3 → all 3 approved (cap blown by 1). This test pins the contract
+    by asserting per-item outcomes AND by introspecting the per-item
+    error message to prove the count progression actually saw the
+    in-batch inserts.
+    """
+
+    async def test_bulk_overflow_detected_via_in_batch_autoflush(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        seeds = await _seed_offering_with_quota(
+            quota=2,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="autoflush",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER,
+            unit_id=seeds["unit_id"],
+            suffix="autoflush_mgr",
+        )
+        # Start clean: NO existing approved profiles. Items 1+2 must
+        # succeed (count goes 0→1→2 within the batch); item 3 must fail
+        # with the count_before reflecting items 1+2.
+        pids = []
+        for i in range(3):
+            pids.append(
+                await _seed_lead_and_profile(
+                    seeds=seeds,
+                    citizen_id=f"20000000040{i}",
+                    status="submitted",
+                )
+            )
+
+        async with AsyncSessionLocal() as session:
+            result, _cb = await admission_service.bulk_approve(
+                db=session,
+                items=[{"profile_id": pid, "version": 1} for pid in pids],
+                approver=manager,
+                notes="Autoflush contract test",
+            )
+            await session.commit()
+
+        # Items 1+2 succeed, item 3 fails because in-batch count saw
+        # items 1+2 already approved.
+        assert result["success_count"] == 2, (
+            f"Autoflush regression: expected 2 successes, got "
+            f"{result['success_count']}. Bulk likely missing per-item flush "
+            f"between items — item 3 saw count=0 instead of count=2."
+        )
+        assert result["failed_count"] == 1
+        assert pids[2] in result["failed_ids"]
+
+        # Stronger assertion: error message for item 3 mentions "2/2" so
+        # we can prove the count_before observed the in-batch inserts.
+        err_msg = result["errors"][pids[2]]
+        assert "2/2" in err_msg or "đã đầy" in err_msg.lower(), (
+            f"Item 3 error didn't reference cap-full state: {err_msg!r}"
+        )
+
+        # DB invariant: exactly 2 of the 3 profiles ended in 'approved'.
+        async with AsyncSessionLocal() as session:
+            approved = (
+                await session.execute(
+                    select(models.AdmissionProfile.id).where(
+                        models.AdmissionProfile.id.in_(pids),
+                        models.AdmissionProfile.status == "approved",
+                    )
+                )
+            ).scalars().all()
+            assert len(approved) == 2
+
+
+# =========================================================================
+# ADM-026 review (Round 2): quota=0 means "offering closed", not unlimited
+# =========================================================================
+
+
+class TestQuotaZeroBlocks:
+    """
+    Schema currently allows annual_admission_quota = 0 (ge=0). Conflating
+    that with quota = NULL (unlimited) would let staff admit unbounded
+    students into a deliberately closed cohort. ADM-026 round-2 fix:
+    quota=0 blocks ALL approves; only NULL means unlimited. Admin bypass
+    with valid reason still works as a documented escape hatch.
+    """
+
+    async def test_quota_zero_blocks_approve_without_bypass(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        seeds = await _seed_offering_with_quota(
+            quota=0,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="zero_block",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER,
+            unit_id=seeds["unit_id"],
+            suffix="zero_block_mgr",
+        )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000600", status="submitted"
+        )
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                with pytest.raises(BusinessRuleViolation):
+                    await admission_service._assert_quota_or_bypass(
+                        session,
+                        profile,
+                        manager,
+                        bypass_quota=False,
+                        bypass_reason=None,
+                        transition="approve",
+                    )
+
+    async def test_quota_zero_admin_bypass_still_works(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        """Admin bypass with valid reason is the documented escape."""
+        seeds = await _seed_offering_with_quota(
+            quota=0,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="zero_bypass",
+        )
+        admin = await _make_user(
+            role=UserRole.ADMIN,
+            unit_id=seeds["unit_id"],
+            suffix="zero_bypass_admin",
+        )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000610", status="submitted"
+        )
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                # Should NOT raise — admin override on quota=0 cohort.
+                await admission_service._assert_quota_or_bypass(
+                    session,
+                    profile,
+                    admin,
+                    bypass_quota=True,
+                    bypass_reason=(
+                        "Cohort closed (quota=0) but admit per Hiệu Trưởng "
+                        "directive 2026-04-29."
+                    ),
+                    transition="approve",
+                )
+
+    async def test_quota_null_remains_unlimited(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        """quota=None still means unlimited (no enforcement)."""
+        seeds = await _seed_offering_with_quota(
+            quota=None,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="null_unlimited",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER,
+            unit_id=seeds["unit_id"],
+            suffix="null_mgr",
+        )
+        # Even with several already approved, quota=None lets next pass.
+        for i in range(3):
+            await _seed_lead_and_profile(
+                seeds=seeds,
+                citizen_id=f"20000000062{i}",
+                status="approved",
+            )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000625", status="submitted"
+        )
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                # No raise — quota=None means unlimited.
+                await admission_service._assert_quota_or_bypass(
+                    session,
+                    profile,
+                    manager,
+                    bypass_quota=False,
+                    bypass_reason=None,
+                    transition="approve",
+                )
+
+
+# =========================================================================
 # ADM-026 review (Major #3): denied bypass attempts produce audit rows
 # =========================================================================
 

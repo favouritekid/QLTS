@@ -422,11 +422,23 @@ async def _assert_quota_or_bypass(
     """
     academic_info, quota = await _resolve_quota_context(db, profile, lock=True)
 
-    # No academic_info found OR quota=None → quota disabled / legacy data.
-    # Treat as unlimited (no enforcement). Log at debug for observability.
-    if academic_info is None or quota is None or quota <= 0:
+    # ADM-026 review (Round 2): three distinct quota states must be
+    # disambiguated. Conflating them was the original bug.
+    #   academic_info missing → unconfigured / legacy → SKIP (no enforcement)
+    #   quota IS NULL         → "unlimited"          → SKIP (no enforcement)
+    #   quota <= 0            → "offering closed"    → BLOCK ALL approves
+    #
+    # Schema currently allows annual_admission_quota = 0 (ge=0). Treating 0
+    # as unlimited would let admin/manager admit unbounded students into a
+    # deliberately closed cohort. Instead, 0 (or negative for safety) is a
+    # hard block — the only escape is admin bypass with the standard reason
+    # contract. This is the safe interpretation; if product wants a
+    # different model later (e.g. force schema to ge=1, or rename "0" to
+    # "frozen with admin override"), update both schema and this gate
+    # together.
+    if academic_info is None or quota is None:
         log.debug(
-            "Quota check skipped (unlimited / unconfigured)",
+            "Quota check skipped (unconfigured / unlimited)",
             profile_id=profile.id,
             transition=transition,
             academic_info_id=getattr(academic_info, "id", None),
