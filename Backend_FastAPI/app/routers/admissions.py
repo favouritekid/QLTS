@@ -367,6 +367,11 @@ async def bulk_approve_admissions(
     db: AsyncSession = Depends(database.get_db),
 ):
     """Bulk approve multiple admission profiles."""
+    # ADM-026 review (Major #1): per-item admin-only bypass enforcement
+    # at request entry. Service-side check is defense-in-depth.
+    for _item in body.items:
+        deps.require_admin_for_quota_bypass(current_user, _item.bypass_quota)
+
     try:
         result, callback = await admission_service.bulk_approve(
             db=db,
@@ -1437,6 +1442,11 @@ async def approve_admission(
     if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
          raise PermissionDeniedError("Only Managers or Admins can approve profiles")
 
+    # ADM-026 review (Major #1): admin-only quota bypass enforced at request
+    # entry. Service-side check in `_assert_quota_or_bypass` remains as
+    # defense-in-depth.
+    deps.require_admin_for_quota_bypass(current_user, data.bypass_quota)
+
     try:
         # 1. DELEGATE to Service (Service handles Locking + IDOR + bundle)
         result, callback = await admission_service.approve_profile(
@@ -1911,6 +1921,10 @@ async def finalize_enrollment(
     - 400: Invalid state transition or version mismatch
     - 404: Profile not found (or IDOR protection)
     """
+    # ADM-026 review (Major #1): admin-only quota bypass enforced at
+    # request entry; service-side check is defense-in-depth.
+    deps.require_admin_for_quota_bypass(current_user, data.bypass_quota)
+
     try:
         # 1. DELEGATE to Service (service handles bundle + commission)
         result, callback = await admission_service.finalize_profile(

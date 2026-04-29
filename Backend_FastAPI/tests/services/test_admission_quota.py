@@ -684,3 +684,341 @@ class TestQuotaIntegrationBulkApprove:
             ).scalars().all()
             assert len(audit_count) == 1
             assert audit_count[0].entity_id == pid_bypass
+
+
+# =========================================================================
+# ADM-026 review (Major #2): concurrent-approve race
+# =========================================================================
+
+
+class TestQuotaConcurrentRace:
+    """
+    ADM-026 lock contract: ``with_for_update()`` on OfferingAcademicInfo
+    must serialize concurrent approves so the cap holds even when two
+    transactions race against the same offering at boundary.
+    """
+
+    async def test_concurrent_approves_at_cap_only_one_succeeds(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        """
+        Cap=1, currently 0 approved. Two SEPARATE sessions each try to
+        approve their own profile in parallel via ``asyncio.gather``.
+        Without the FOR UPDATE row lock both would see ``count<quota`` and
+        succeed → cap blown by 1. With the lock, they serialize and the
+        second sees ``count=1`` and raises.
+        """
+        import asyncio
+
+        seeds = await _seed_offering_with_quota(
+            quota=1,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="race",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER, unit_id=seeds["unit_id"], suffix="race_mgr"
+        )
+        pid_a = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000200", status="submitted"
+        )
+        pid_b = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000201", status="submitted"
+        )
+
+        # Each task runs in its OWN session/transaction — must not share
+        # AsyncSession across asyncio.gather (memory: async-session-gather).
+        async def _try_approve(pid: int) -> str:
+            try:
+                async with AsyncSessionLocal() as session:
+                    async with session.begin():
+                        profile = await _profile_with_lead(session, pid)
+                        await admission_service._assert_quota_or_bypass(
+                            session,
+                            profile,
+                            manager,
+                            bypass_quota=False,
+                            bypass_reason=None,
+                            transition="approve",
+                        )
+                        # Mimic the approve mutation by occupying a seat
+                        # within the same locked txn — the helper above
+                        # already locked OfferingAcademicInfo, so this
+                        # row update commits the seat consumption.
+                        profile.status = "approved"
+                        await session.flush()
+                return "ok"
+            except BusinessRuleViolation:
+                return "blocked"
+
+        result_a, result_b = await asyncio.gather(
+            _try_approve(pid_a), _try_approve(pid_b)
+        )
+        outcomes = sorted([result_a, result_b])
+        # Exactly one succeeds, exactly one is blocked.
+        assert outcomes == ["blocked", "ok"], (
+            f"Concurrency contract broken: outcomes={outcomes}"
+        )
+
+        # DB invariant: at most ONE of the two profiles ended in 'approved'.
+        async with AsyncSessionLocal() as session:
+            approved = (
+                await session.execute(
+                    select(models.AdmissionProfile.id).where(
+                        models.AdmissionProfile.id.in_([pid_a, pid_b]),
+                        models.AdmissionProfile.status == "approved",
+                    )
+                )
+            ).scalars().all()
+            assert len(approved) == 1
+
+
+# =========================================================================
+# ADM-026 review (Major #3): denied bypass attempts produce audit rows
+# =========================================================================
+
+
+class TestQuotaDeniedAudit:
+    """
+    Compliance contract: any attempt to override the cap — even a denied
+    one — must leave an entity_audit_log row. The denial path raises and
+    the caller's transaction rolls back, so the audit row is written via
+    a fresh session inside ``_audit_quota_bypass_denied``.
+    """
+
+    async def test_manager_denial_writes_audit_row(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        seeds = await _seed_offering_with_quota(
+            quota=1,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="denied_role",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER, unit_id=seeds["unit_id"], suffix="denied_mgr"
+        )
+        await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000300", status="approved"
+        )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000301", status="submitted"
+        )
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                with pytest.raises(PermissionDeniedError):
+                    await admission_service._assert_quota_or_bypass(
+                        session,
+                        profile,
+                        manager,
+                        bypass_quota=True,
+                        bypass_reason=(
+                            "Trưởng phòng cần ghi đè cho kỳ này lý do hợp lệ"
+                        ),
+                        transition="approve",
+                    )
+
+        async with AsyncSessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(models.EntityAuditLog).where(
+                        models.EntityAuditLog.action == "quota_bypass_denied_role",
+                        models.EntityAuditLog.entity_id == pid,
+                    )
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].actor_user_id == manager.id
+
+    async def test_admin_short_reason_writes_audit_row(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        seeds = await _seed_offering_with_quota(
+            quota=1,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="denied_reason",
+        )
+        admin = await _make_user(
+            role=UserRole.ADMIN, unit_id=seeds["unit_id"], suffix="denied_admin"
+        )
+        await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000310", status="approved"
+        )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000311", status="submitted"
+        )
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                with pytest.raises(ValidationError):
+                    await admission_service._assert_quota_or_bypass(
+                        session,
+                        profile,
+                        admin,
+                        bypass_quota=True,
+                        bypass_reason="ngắn",  # <20 chars
+                        transition="approve",
+                    )
+
+        async with AsyncSessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(models.EntityAuditLog).where(
+                        models.EntityAuditLog.action == "quota_bypass_denied_reason",
+                        models.EntityAuditLog.entity_id == pid,
+                    )
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].actor_user_id == admin.id
+
+
+# =========================================================================
+# Test-gap follow-ups: Pydantic 422, boundary 1/1+1, legacy fallback
+# =========================================================================
+
+
+class TestQuotaPydanticValidation:
+    """Schema-layer validation (Pydantic 422) for the bypass pair.
+
+    These are pure-sync schema checks. The module-level ``pytestmark =
+    pytest.mark.asyncio`` paints them with the asyncio marker, which
+    pytest-asyncio warns about for non-async functions. The warning is
+    cosmetic — tests still execute correctly because pytest-asyncio only
+    cares when the test body needs awaiting.
+    """
+
+    def test_bypass_quota_true_short_reason_raises_at_schema_level(self):
+        """ValueError at schema parse — FastAPI maps to 422 Unprocessable."""
+        from app.schemas.admission import ApproveRequest
+
+        with pytest.raises(ValueError) as exc_info:
+            ApproveRequest(
+                version=1,
+                bypass_quota=True,
+                bypass_reason="quá ngắn",
+            )
+        assert "20" in str(exc_info.value)
+
+    def test_bypass_quota_false_no_reason_ok(self):
+        """Bypass off → reason optional → schema accepts."""
+        from app.schemas.admission import ApproveRequest
+
+        req = ApproveRequest(version=1)
+        assert req.bypass_quota is False
+        assert req.bypass_reason is None
+
+    def test_bypass_quota_true_valid_reason_ok(self):
+        from app.schemas.admission import ApproveRequest
+
+        req = ApproveRequest(
+            version=1,
+            bypass_quota=True,
+            bypass_reason="Đặc cách tuyển sinh ngày 2026-04-29 do Hiệu Trưởng",
+        )
+        assert req.bypass_quota is True
+
+
+class TestQuotaBoundary:
+    """Edge boundary: occupied count exactly equals quota."""
+
+    async def test_one_of_one_blocks_next_attempt(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        """Cap=1, count=1 → next approve raises (sharper than 2/2 case)."""
+        seeds = await _seed_offering_with_quota(
+            quota=1,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="boundary11",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER, unit_id=seeds["unit_id"], suffix="boundary11_mgr"
+        )
+        await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000400", status="approved"
+        )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000401", status="submitted"
+        )
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                with pytest.raises(BusinessRuleViolation):
+                    await admission_service._assert_quota_or_bypass(
+                        session,
+                        profile,
+                        manager,
+                        bypass_quota=False,
+                        bypass_reason=None,
+                        transition="approve",
+                    )
+
+
+class TestQuotaLegacyFallback:
+    """Legacy profile path: applied_rules.academic_info_id missing."""
+
+    async def test_legacy_profile_falls_back_to_offering_academic_year(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        """
+        Profile snapshotted before academic_info_id was added still gets
+        enforced by the (lead.offering_id, profile.academic_year) lookup.
+        """
+        seeds = await _seed_offering_with_quota(
+            quota=1,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="legacy",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER, unit_id=seeds["unit_id"], suffix="legacy_mgr"
+        )
+        await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000500", status="approved"
+        )
+        # Legacy profile: applied_rules has no academic_info_id field.
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                lead = models.Lead(
+                    full_name="Legacy applicant",
+                    phone="0900000501",
+                    email="legacy501@test.com",
+                    source="website",
+                    unit_id=seeds["unit_id"],
+                    offering_id=seeds["offering_id"],
+                )
+                session.add(lead)
+                await session.flush()
+                legacy = models.AdmissionProfile(
+                    lead_id=lead.id,
+                    status="submitted",
+                    citizen_id="200000000501",
+                    academic_year=seeds["academic_year"],
+                    version=1,
+                    applied_rules={
+                        "min_gpa": 0,
+                        "mandatory_docs": [],
+                        # No academic_info_id — legacy snapshot.
+                    },
+                )
+                session.add(legacy)
+                await session.flush()
+                pid = legacy.id
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                with pytest.raises(BusinessRuleViolation):
+                    await admission_service._assert_quota_or_bypass(
+                        session,
+                        profile,
+                        manager,
+                        bypass_quota=False,
+                        bypass_reason=None,
+                        transition="approve",
+                    )

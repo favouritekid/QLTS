@@ -489,6 +489,43 @@ async def require_admin_or_manager(
     return current_user
 
 
+def require_admin_for_quota_bypass(
+    user: "models.User",
+    bypass_quota: bool,
+) -> None:
+    """
+    ADM-026: enforce admin-only access to ``bypass_quota=True``.
+
+    Called explicitly from approve / finalize / bulk-approve routers AFTER
+    the body is parsed but BEFORE the service is invoked. Mirrors the
+    "Smart Dependency, Dumb Router" rule (CLAUDE.md): bypass admin gate is
+    a request-entry concern, not a service concern. The service still
+    enforces the same rule in ``_assert_quota_or_bypass`` as
+    defense-in-depth, but blocking at the router boundary keeps invalid
+    requests out of the locked-row + audit-log path entirely (no wasted
+    DB roundtrip, no risk of partial state on bug-induced bypass).
+
+    Why a function and not a `Depends(...)`:
+        - The (bypass_quota, bypass_reason) pair lives on the body and
+          differs per schema (ApproveRequest / BulkApproveItem /
+          FinalizeRequest). A single FastAPI dependency would require
+          parametric body typing; calling this helper from each router
+          is straightforward and keeps the body contract explicit.
+        - For bulk routes, callers iterate request items and invoke
+          this helper per item before the service entry.
+
+    Raises:
+        PermissionDeniedError → mapped to 403 by exception handler.
+    """
+    if bypass_quota and user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            detail=(
+                "Chỉ Admin được phép ghi đè chỉ tiêu tuyển sinh "
+                "(bypass_quota). Role hiện tại: " + str(user.role) + "."
+            )
+        )
+
+
 async def require_finance_staff(
     current_user: models.User = Depends(get_current_active_user),
 ) -> models.User:

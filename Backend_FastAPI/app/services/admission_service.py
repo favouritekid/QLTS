@@ -316,12 +316,10 @@ async def _resolve_quota_context(
         ``None`` when the profile cannot be linked to an offering academic
         info row (legacy profile without offering_id, or seed/test data).
     """
-    from sqlalchemy import select as _select
-
     applied_rules = profile.applied_rules or {}
     academic_info_id = applied_rules.get("academic_info_id")
 
-    stmt = _select(models.OfferingAcademicInfo)
+    stmt = select(models.OfferingAcademicInfo)
     if academic_info_id:
         stmt = stmt.where(models.OfferingAcademicInfo.id == academic_info_id)
     else:
@@ -356,10 +354,8 @@ async def _count_quota_occupying_profiles(
     transition INTO a quota-occupying status doesn't double-count itself
     when the profile is mid-update.
     """
-    from sqlalchemy import select as _select, func as _func
-
     stmt = (
-        _select(_func.count(models.AdmissionProfile.id))
+        select(func.count(models.AdmissionProfile.id))
         .join(models.Lead, models.AdmissionProfile.lead_id == models.Lead.id)
         .where(
             models.Lead.offering_id == offering_id,
@@ -477,7 +473,32 @@ async def _assert_quota_or_bypass(
         )
 
     # Bypass path. Admin-only.
+    #
+    # ADM-026 review (Major #3): denied bypass attempts also generate an
+    # audit row so compliance can reconstruct WHO tried to overflow the
+    # cap, not just who succeeded. Because denial raises, the caller's
+    # transaction rolls back — we use a fresh AsyncSessionLocal()
+    # (separate connection, separate transaction) for the audit write so
+    # the row persists regardless of the outer rollback. Action codes:
+    #   * quota_bypass_denied_role    — non-admin tried bypass
+    #   * quota_bypass_denied_reason  — admin tried bypass without ≥20-char reason
+    #   * quota_bypassed              — admin success path (existing)
     if actor.role != UserRole.ADMIN:
+        await _audit_quota_bypass_denied(
+            entity_id=profile.id,
+            actor=actor,
+            denial_action="quota_bypass_denied_role",
+            denial_detail=f"role={actor.role}",
+            quota=quota,
+            count_before=count_before,
+            count_after=count_after,
+            academic_info_id=academic_info.id,
+            academic_year=profile.academic_year,
+            offering_id=offering_id,
+            transition=transition,
+            source=source,
+            attempted_reason=bypass_reason,
+        )
         raise PermissionDeniedError(
             "Chỉ Admin được phép ghi đè chỉ tiêu tuyển sinh (bypass_quota). "
             f"Role hiện tại: {actor.role}."
@@ -485,11 +506,26 @@ async def _assert_quota_or_bypass(
 
     reason = (bypass_reason or "").strip()
     if len(reason) < 20:
+        await _audit_quota_bypass_denied(
+            entity_id=profile.id,
+            actor=actor,
+            denial_action="quota_bypass_denied_reason",
+            denial_detail=f"reason_len={len(reason)}",
+            quota=quota,
+            count_before=count_before,
+            count_after=count_after,
+            academic_info_id=academic_info.id,
+            academic_year=profile.academic_year,
+            offering_id=offering_id,
+            transition=transition,
+            source=source,
+            attempted_reason=bypass_reason,
+        )
         raise ValidationError(
             "bypass_reason là bắt buộc và phải có ít nhất 20 ký tự khi bypass_quota=true."
         )
 
-    # Admin bypass authorized. Write durable audit log evidence.
+    # Admin bypass authorized. Write durable audit log evidence (success path).
     from ..services import audit_service
     await audit_service.log_audit(
         db,
@@ -519,6 +555,76 @@ async def _assert_quota_or_bypass(
         actor_id=actor.id,
         reason=reason[:80],
     )
+
+
+async def _audit_quota_bypass_denied(
+    *,
+    entity_id: int,
+    actor: models.User,
+    denial_action: str,
+    denial_detail: str,
+    quota: int,
+    count_before: int,
+    count_after: int,
+    academic_info_id: int,
+    academic_year: int,
+    offering_id: int,
+    transition: str,
+    source: str,
+    attempted_reason: Optional[str],
+) -> None:
+    """
+    ADM-026 review (Major #3): persist a denied bypass-attempt audit row.
+
+    Runs in its OWN session (``AsyncSessionLocal``) and commits
+    independently so the audit row survives the caller's rollback. The
+    caller is about to raise (PermissionDeniedError or ValidationError),
+    which will tear down the route's transaction frame; without an
+    independent session, the audit write would also rollback and the
+    attempt would leave no trace.
+
+    Best-effort: any exception here is logged but swallowed so we never
+    convert "bypass denied" into "bypass denied + 500 audit error".
+    """
+    from ..database import AsyncSessionLocal
+    from ..services import audit_service
+
+    try:
+        async with AsyncSessionLocal() as audit_db:
+            await audit_service.log_audit(
+                audit_db,
+                entity_type="AdmissionProfile",
+                entity_id=entity_id,
+                action=denial_action,
+                actor_user_id=actor.id,
+                changes={
+                    "denial_detail": {"old": None, "new": denial_detail},
+                    "quota": {"old": None, "new": quota},
+                    "enrolled_count_before": {"old": None, "new": count_before},
+                    "enrolled_count_after": {"old": None, "new": count_after},
+                    "academic_info_id": {"old": None, "new": academic_info_id},
+                    "academic_year": {"old": None, "new": academic_year},
+                    "offering_id": {"old": None, "new": offering_id},
+                    "transition": {"old": None, "new": transition},
+                    # Only store reason text when it had any content; admins'
+                    # short-reason attempts are still useful evidence.
+                    "attempted_reason": {
+                        "old": None,
+                        "new": (attempted_reason or "").strip()[:1000] or None,
+                    },
+                },
+                reason=denial_detail,
+                source=source,
+            )
+            await audit_db.commit()
+    except Exception as audit_err:  # noqa: BLE001 — best-effort, never block denial
+        log.error(
+            "ADM-026 audit write FAILED for denied bypass attempt",
+            entity_id=entity_id,
+            denial_action=denial_action,
+            actor_id=actor.id,
+            error=str(audit_err),
+        )
 
 
 async def check_enrollment_fee_eligibility(

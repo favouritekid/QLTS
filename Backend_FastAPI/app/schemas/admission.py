@@ -839,12 +839,23 @@ class AdmissionsPage(BaseModel):
 # BULK ACTION SCHEMAS
 # ==============================================================================
 
-class BulkApproveItem(BaseModel):
-    """Single item in a bulk approve request."""
-    profile_id: int = Field(..., description="Admission profile ID")
-    version: int = Field(..., ge=1, description="Current profile version for optimistic locking")
-    # ADM-026: per-item quota bypass. Admin-only at service layer.
-    # bypass_reason min length validated cross-field below.
+# ------------------------------------------------------------------------------
+# ADM-026 review (Nit): the (bypass_quota, bypass_reason) pair previously
+# carried three verbatim copies of the cross-field validator across
+# BulkApproveItem / ApproveRequest / FinalizeRequest. Extract into a single
+# mixin so the contract — "bypass requires a reason ≥20 chars" — has one
+# definition. ``model_validator(mode="after")`` defined on a base class
+# still fires on subclasses, so each schema picks the rule up by
+# inheritance and the audit log evidence-string format stays identical.
+# Admin-only enforcement still lives in the request-entry dependency
+# (``require_admin_for_quota_bypass`` in ``deps.py``) plus the service-side
+# defense-in-depth check inside ``_assert_quota_or_bypass``.
+# ------------------------------------------------------------------------------
+
+
+class _QuotaBypassMixin(BaseModel):
+    """Shared (bypass_quota, bypass_reason) pair + cross-field validator."""
+
     bypass_quota: bool = Field(
         False,
         description="ADM-026: Override annual_admission_quota cap (admin only). Requires bypass_reason.",
@@ -856,7 +867,7 @@ class BulkApproveItem(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_bypass_pair(self) -> "BulkApproveItem":
+    def _validate_bypass_pair(self):
         if self.bypass_quota:
             reason = (self.bypass_reason or "").strip()
             if len(reason) < 20:
@@ -864,6 +875,15 @@ class BulkApproveItem(BaseModel):
                     "bypass_reason is required and must be at least 20 characters when bypass_quota=true"
                 )
         return self
+
+
+class BulkApproveItem(_QuotaBypassMixin):
+    """Single item in a bulk approve request."""
+    profile_id: int = Field(..., description="Admission profile ID")
+    version: int = Field(..., ge=1, description="Current profile version for optimistic locking")
+    # ADM-026: per-item quota bypass. Admin-only enforced at request entry
+    # (``require_admin_for_quota_bypass`` in ``deps.py``); service-side check
+    # in ``_assert_quota_or_bypass`` is defense-in-depth.
 
 
 class BulkApproveRequest(BaseModel):
@@ -1058,7 +1078,7 @@ class StudentResponse(BaseModel):
 # STATE TRANSITION SCHEMAS (State Machine)
 # ==============================================================================
 
-class ApproveRequest(BaseModel):
+class ApproveRequest(_QuotaBypassMixin):
     """
     Schema for approve action (Manager/Admin).
 
@@ -1071,6 +1091,10 @@ class ApproveRequest(BaseModel):
     - Requires Manager or Admin role
     - Optional approval notes
     - REQUIRED version for optimistic locking (CRITICAL FIX #4)
+
+    ADM-026: bypass_quota / bypass_reason inherited from _QuotaBypassMixin.
+    Admin-only enforced at request entry (``require_admin_for_quota_bypass``
+    in ``deps.py``); service ``_assert_quota_or_bypass`` is defense-in-depth.
     """
     notes: Optional[str] = Field(
         None,
@@ -1082,26 +1106,6 @@ class ApproveRequest(BaseModel):
         ge=1,
         description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
     )
-    # ADM-026: quota bypass (admin only). Manager bypass → 403 at service layer.
-    bypass_quota: bool = Field(
-        False,
-        description="ADM-026: Override annual_admission_quota cap (admin only). Requires bypass_reason.",
-    )
-    bypass_reason: Optional[str] = Field(
-        None,
-        max_length=1000,
-        description="ADM-026: Required when bypass_quota=true. Min 20 chars. Audit log evidence.",
-    )
-
-    @model_validator(mode="after")
-    def _validate_bypass_pair(self) -> "ApproveRequest":
-        if self.bypass_quota:
-            reason = (self.bypass_reason or "").strip()
-            if len(reason) < 20:
-                raise ValueError(
-                    "bypass_reason is required and must be at least 20 characters when bypass_quota=true"
-                )
-        return self
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -1276,7 +1280,7 @@ class OverrideRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
-class FinalizeRequest(BaseModel):
+class FinalizeRequest(_QuotaBypassMixin):
     """
     Schema for finalize action (Admin only).
 
@@ -1285,32 +1289,14 @@ class FinalizeRequest(BaseModel):
     - Admin only
     - Creates Student record
     - REQUIRED version for optimistic locking (ADM-015)
+
+    ADM-026: bypass_quota / bypass_reason inherited from _QuotaBypassMixin.
     """
     version: int = Field(
         ...,
         ge=1,
         description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
     )
-    # ADM-026: quota bypass at finalize (admin only).
-    bypass_quota: bool = Field(
-        False,
-        description="ADM-026: Override annual_admission_quota cap at finalize (admin only). Requires bypass_reason.",
-    )
-    bypass_reason: Optional[str] = Field(
-        None,
-        max_length=1000,
-        description="ADM-026: Required when bypass_quota=true. Min 20 chars. Audit log evidence.",
-    )
-
-    @model_validator(mode="after")
-    def _validate_bypass_pair(self) -> "FinalizeRequest":
-        if self.bypass_quota:
-            reason = (self.bypass_reason or "").strip()
-            if len(reason) < 20:
-                raise ValueError(
-                    "bypass_reason is required and must be at least 20 characters when bypass_quota=true"
-                )
-        return self
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
