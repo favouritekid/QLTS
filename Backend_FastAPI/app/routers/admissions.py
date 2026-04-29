@@ -367,6 +367,9 @@ async def bulk_approve_admissions(
     db: AsyncSession = Depends(database.get_db),
 ):
     """Bulk approve multiple admission profiles."""
+    # ADM-026 review (Round 2): per-item bypass admin gate + audit live
+    # in the service. Router-level pre-gate removed so manager bypass
+    # attempts produce an audit row (one per attempted item).
     try:
         result, callback = await admission_service.bulk_approve(
             db=db,
@@ -1437,6 +1440,14 @@ async def approve_admission(
     if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
          raise PermissionDeniedError("Only Managers or Admins can approve profiles")
 
+    # ADM-026 review (Round 2): admin-only bypass + audit are enforced
+    # together inside `_assert_quota_or_bypass`. The router pre-gate was
+    # removed so that EVERY denied bypass attempt — including manager
+    # attempts — flows through the service path that writes the
+    # `quota_bypass_denied_*` audit row via a separate session. Audit
+    # contract trumps the early-return optimisation here; the lock + count
+    # roundtrip on a denied attempt is acceptable since denial is rare.
+
     try:
         # 1. DELEGATE to Service (Service handles Locking + IDOR + bundle)
         result, callback = await admission_service.approve_profile(
@@ -1911,6 +1922,10 @@ async def finalize_enrollment(
     - 400: Invalid state transition or version mismatch
     - 404: Profile not found (or IDOR protection)
     """
+    # ADM-026 review (Round 2): bypass admin gate + audit live in
+    # ``_assert_quota_or_bypass``. Router pre-gate removed so denied
+    # attempts always produce an audit row (manager-bypass would skip
+    # the service if pre-gated at router level).
     try:
         # 1. DELEGATE to Service (service handles bundle + commission)
         result, callback = await admission_service.finalize_profile(
