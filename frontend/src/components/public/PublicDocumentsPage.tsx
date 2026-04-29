@@ -13,6 +13,7 @@ import {
   publicAdmissionsMedia,
   publicDocumentBuckets,
 } from "@/lib/public-admissions/site"
+import { getFormatLabel } from "@/lib/utils/admission-helpers"
 import type {
   PublicAdmissionsDocumentRequirement,
   PublicAdmissionsDocumentsResponse,
@@ -22,18 +23,14 @@ interface PublicDocumentsPageProps {
   catalog?: PublicAdmissionsDocumentsResponse | null
 }
 
+// ADM-031.7 follow-up: use the shared `getFormatLabel` so applicant-facing
+// public docs and officer DocumentsTab agree on enum copy. Returns null
+// when the value is missing so the JSX can short-circuit the badge.
 function formatSubmissionFormat(value: string | null): string | null {
   if (!value) {
     return null
   }
-
-  const labels: Record<string, string> = {
-    photo: "Ảnh chụp hoặc scan",
-    certified_copy: "Bản sao công chứng",
-    original: "Bản gốc đối chiếu",
-  }
-
-  return labels[value] ?? value
+  return getFormatLabel(value)
 }
 
 function dedupeDocuments(

@@ -933,13 +933,19 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if not doc:
             return None
 
-        # Reset to missing state
+        # Reset to missing state. ADM-031 round 10 review (B2): verified_by
+        # was previously left dangling — every other verifier-side column
+        # was cleared but the user id stuck around, so audit queries on
+        # verified_by saw a verifier id for a document that is currently
+        # missing. Clear it alongside verified_at so the row is fully
+        # rewound.
         doc.status = "missing"
         doc.file_path = None
         doc.actual_submission_format = None
         doc.verified_format = None
         doc.uploaded_at = None
         doc.verified_at = None
+        doc.verified_by = None
         doc.paper_submitted_at = None
         doc.paper_submitted_by = None
         doc.rejected_at = None

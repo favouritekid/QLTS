@@ -237,10 +237,45 @@ class DocumentItemSchema(BaseModel):
         None,
         description="Upload timestamp (UTC)"
     )
+    # ADM-031 round 7: paper-receipt timestamp
+    paper_submitted_at: Optional[datetime] = Field(
+        None,
+        description="Timestamp when officer marked the paper document as received"
+    )
     # ✅ FIX Finding 2.3: Document Internal Verification
     verified_format: Optional[Literal["original", "certified_copy", "photo"]] = Field(
         None,
         description="Format verified by officer (original/certified_copy/photo)"
+    )
+    # ADM-031 round 4: officer-declared actual format. Captured at upload /
+    # paper-receipt time; surfaced in the FE row badge so officers can see
+    # what was actually recorded vs the path-required submission_format.
+    actual_submission_format: Optional[Literal["original", "certified_copy", "photo"]] = Field(
+        None,
+        description="Format actually declared by the officer at upload/paper-receipt time"
+    )
+    # ADM-031 round 10: surface the verifier identity + timestamp so the FE
+    # row can render "Đã duyệt — <Tên> · <ngày>" under the status badge and
+    # show full datetime on hover. verified_at + verified_by come straight
+    # from ProfileDocument; verified_by_name is resolved server-side via a
+    # batched User lookup to keep the listing N+1-free.
+    verified_at: Optional[datetime] = Field(
+        None,
+        description="Timestamp when officer marked status=verified",
+    )
+    verified_by: Optional[int] = Field(
+        None,
+        description="User id of the officer who verified the document",
+    )
+    verified_by_name: Optional[str] = Field(
+        None,
+        description=(
+            "Display name of the verifier — backend resolves "
+            "full_name → username via a batched User lookup. Null when the "
+            "verifier no longer exists or has neither field set; FE then "
+            "falls back to 'User #<verified_by>'. Email is never exposed "
+            "here (staff-to-staff privacy)."
+        ),
     )
 
     # =========================================================================

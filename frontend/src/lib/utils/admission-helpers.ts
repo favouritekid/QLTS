@@ -64,19 +64,76 @@ export function getSubjectLabel(code: string): string {
 // ==============================================================================
 
 /**
- * Get Vietnamese label for document submission format.
- * @param format Format code (original | certified_copy | photo)
- * @returns Vietnamese format name
+ * Document submission format codes accepted by backend doc_configs and
+ * verify-format endpoints. Centralised so UI labels stay consistent across
+ * DocumentsTab, DocumentChecklist, and any future format picker.
  */
-export function getFormatLabel(format: string): string {
-  const labels: Record<string, string> = {
-    original: "Bản chính",
-    certified_copy: "Bản sao có chứng thực",
-    photo: "Bản photocopy",
-  }
+export type DocumentFormatCode = "original" | "certified_copy" | "photo"
 
-  return labels[format] ?? format
+const FORMAT_LABELS: Record<DocumentFormatCode, string> = {
+  original: "Bản gốc",
+  certified_copy: "Bản sao chứng thực",
+  photo: "Bản chụp/scan không chứng thực",
 }
+
+const FORMAT_DESCRIPTIONS: Record<DocumentFormatCode, string> = {
+  original: "Giấy tờ gốc do cơ quan có thẩm quyền cấp",
+  certified_copy: "Bản photocopy đã được công chứng/chứng thực",
+  photo: "Bản chụp ảnh hoặc scan, không có công chứng",
+}
+
+/**
+ * Get Vietnamese label for document submission format.
+ * Single source of truth — do not duplicate this map in components.
+ * @param format Format code (original | certified_copy | photo) or unknown
+ * @returns Vietnamese format name (falls back to raw code if unknown)
+ */
+export function getFormatLabel(format: string | null | undefined): string {
+  if (!format) return "-"
+  return FORMAT_LABELS[format as DocumentFormatCode] ?? format
+}
+
+/**
+ * Get short description for a document submission format.
+ * Used in pickers to clarify what each option physically represents.
+ */
+export function getFormatDescription(format: string | null | undefined): string {
+  if (!format) return ""
+  return FORMAT_DESCRIPTIONS[format as DocumentFormatCode] ?? ""
+}
+
+/**
+ * Compact format labels for dense surfaces like the documents table.
+ * Pair with `getFormatLabel` (full label) in the tooltip so the short
+ * form never strips meaning.
+ */
+const SHORT_FORMAT_LABELS: Record<DocumentFormatCode, string> = {
+  original: "Gốc",
+  certified_copy: "Chứng thực",
+  photo: "Chụp/scan",
+}
+
+/**
+ * Compact label for table cells / chips. Falls back to the raw code
+ * when unknown so callers don't render an empty cell.
+ */
+export function getShortFormatLabel(format: string | null | undefined): string {
+  if (!format) return "-"
+  return SHORT_FORMAT_LABELS[format as DocumentFormatCode] ?? format
+}
+
+/**
+ * Ordered list of document format options for radio/select pickers.
+ */
+export const DOCUMENT_FORMAT_OPTIONS: ReadonlyArray<{
+  value: DocumentFormatCode
+  label: string
+  description: string
+}> = [
+  { value: "original", label: FORMAT_LABELS.original, description: FORMAT_DESCRIPTIONS.original },
+  { value: "certified_copy", label: FORMAT_LABELS.certified_copy, description: FORMAT_DESCRIPTIONS.certified_copy },
+  { value: "photo", label: FORMAT_LABELS.photo, description: FORMAT_DESCRIPTIONS.photo },
+]
 
 // ==============================================================================
 // DOCUMENT STATUS CONFIG
@@ -102,13 +159,16 @@ export function getDocumentStatusConfig(status: string): DocumentStatusConfig {
       iconName: "XCircle",
     },
     uploaded: {
+      // "Ghi nhận" (received) is intentionally distinct from "Kiểm tra"
+      // (verified). Officer still has to verify the upload before this row
+      // counts as fully complete.
       variant: "secondary",
-      label: "Đã tải lên",
+      label: "Đã ghi nhận file",
       iconName: "Upload",
     },
     verified: {
       variant: "default",
-      label: "Đã xác nhận",
+      label: "Đã kiểm tra",
       iconName: "CheckCircle2",
     },
     rejected: {
@@ -118,12 +178,58 @@ export function getDocumentStatusConfig(status: string): DocumentStatusConfig {
     },
     paper_submitted: {
       variant: "secondary",
-      label: "Nộp giấy",
+      label: "Đã nhận bản giấy",
       iconName: "FileText",
     },
   }
 
   return config[status] ?? config.missing
+}
+
+/**
+ * True when the row has been fully checked by an officer. Use ONLY when
+ * you specifically need the "officer-verified" subset — for the
+ * mandatory-completion gauge, prefer ``isDocumentRequirementSatisfied``
+ * so that paper_submitted (which the backend already accepts as
+ * satisfying the requirement) is not surfaced as incomplete.
+ */
+export function isDocumentVerified(status: string): boolean {
+  return status === "verified"
+}
+
+/**
+ * True when the row has been received in some form — either uploaded
+ * online or accepted as paper at the counter. Verified rows are also
+ * recorded.
+ */
+export function isDocumentRecorded(status: string): boolean {
+  return status === "uploaded" || status === "paper_submitted" || status === "verified"
+}
+
+/**
+ * ADM-031.6 follow-up: True when the row satisfies the backend's
+ * mandatory-document gate. Mirrors the strict-mode check at
+ * ``Backend_FastAPI/app/services/admission_service.py:566`` which
+ * accepts BOTH ``verified`` and ``paper_submitted`` as completing the
+ * requirement. ``uploaded`` (file received but officer hasn't verified
+ * yet) is intentionally excluded — that row is still pending check.
+ *
+ * Use this for the "Hoàn tất yêu cầu" / mandatory-progress metric so
+ * paper-only rows don't masquerade as incomplete just because they were
+ * never digitised.
+ */
+export function isDocumentRequirementSatisfied(status: string): boolean {
+  return status === "verified" || status === "paper_submitted"
+}
+
+/**
+ * ADM-031.6 follow-up: True when the row was uploaded online but still
+ * waits for officer verification. This is the "Chờ kiểm tra" bucket;
+ * surfacing it lets officers see the verification queue separately from
+ * fully completed rows.
+ */
+export function isDocumentPendingVerification(status: string): boolean {
+  return status === "uploaded"
 }
 
 // ==============================================================================

@@ -195,6 +195,13 @@ export const documentItemSchema = z.object({
     .string()
     .nullable()
     .optional(),
+  /**
+   * Paper-receipt timestamp — when officer marked the paper document as
+   * received. Surfaced in the FE so the "Đã ghi nhận" cell can show the
+   * receipt date for paper-only docs the same way it shows uploaded_at
+   * for online docs (ADM-031 round 7).
+   */
+  paper_submitted_at: z.string().nullable().optional(),
   rejection_reason: z.string().nullable().optional(),
   actual_submission_format: z.string().nullable().optional(),
   /**
@@ -210,6 +217,13 @@ export const documentItemSchema = z.object({
    * ID of officer who verified the document.
    */
   verified_by: z.number().int().nullable().optional(),
+  /**
+   * Display name of the verifier — backend resolves full_name → username
+   * via a batched User lookup (ADM-031 round 10). Email is intentionally
+   * NOT a fallback (staff-to-staff privacy). When null, the FE falls
+   * back to "User #<verified_by>".
+   */
+  verified_by_name: z.string().nullable().optional(),
   // ---------------------------------------------------------------------
   // PR #5 — explicit per-document permission flags.
   // Backend computes these per (role × doc status × profile status × unit

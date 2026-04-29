@@ -1262,10 +1262,56 @@ def _apply_minor_correction_state(
     _sync_available_actions(profile)
 
 
+async def _resolve_verifier_names(
+    db: AsyncSession,
+    documents: Optional[List[models.ProfileDocument]],
+) -> Dict[int, str]:
+    """Batch-resolve verifier display names for a documents list.
+
+    Returns ``{user_id: display_name}`` so the documents_checklist payload can
+    surface "duyệt bởi <Tên>" without an N+1 storm. Display precedence:
+    ``full_name`` → ``username`` → omitted (FE then renders "User #<id>").
+
+    REVIEW NOTE (Lane A round 10 follow-up): an earlier draft fell back to
+    ``email`` after ``full_name``. Admission/audit actor names elsewhere in
+    this codebase use ``full_name or username`` and never expose staff
+    emails to other staff readers — every officer/manager/admin who can read
+    a profile sees verifier identity, so leaking an internal email there
+    would be a quiet privacy regression. Aligned to the dominant pattern
+    here.
+
+    One SELECT per profile load — cost is bounded by the number of distinct
+    verifiers, not documents.
+    """
+    if not documents:
+        return {}
+    verifier_ids: set[int] = {
+        doc.verified_by
+        for doc in documents
+        if getattr(doc, "verified_by", None) is not None
+    }
+    if not verifier_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                models.User.id, models.User.full_name, models.User.username
+            ).where(models.User.id.in_(verifier_ids))
+        )
+    ).all()
+    out: Dict[int, str] = {}
+    for user_id, full_name, username in rows:
+        display = (full_name or "").strip() or (username or "").strip()
+        if display:
+            out[user_id] = display
+    return out
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
     documents: list = None,
+    verifier_names: Optional[Dict[int, str]] = None,
 ) -> None:
     """
     Phase 7: Frontend Thin Client Compliance
@@ -1577,20 +1623,92 @@ def _compute_frontend_fields(
     all_mandatory_docs = applied_rules.get("mandatory_docs", [])
     doc_configs = applied_rules.get("doc_configs", {})  # {code: {requires_upload, submission_format}}
     
-    # Create lookup of uploaded documents by code
+    # ADM-031 round 10: verifier display name comes from the pre-resolved
+    # ``verifier_names`` map (built once per profile load by
+    # ``_resolve_verifier_names`` — single SELECT for all distinct
+    # verified_by ids). ``None`` here means the caller didn't pass the map
+    # (mutation paths that go through ``_populate_response_fields`` do; a
+    # few internal recompute sites don't), in which case the FE renders
+    # "User #<id>" using the raw ``verified_by`` field. Always safe.
+    _verifier_names_local = verifier_names or {}
+
+    # Create lookup of uploaded documents by code.
+    #
+    # ADM-031 round 10 review (B1): the response contract for each row is
+    # gated by the CURRENT status, not by the raw DB columns. Reject /
+    # reset paths historically leave artifact columns dirty
+    # (``file_path``, ``uploaded_at``, ``actual_submission_format``,
+    # ``verified_format``, ``paper_submitted_at``, ``verified_at``,
+    # ``verified_by``). Emitting them unconditionally produced UI rows
+    # like "Đã ghi nhận: Chụp/scan · 29/04" alongside a "Từ chối" badge
+    # that says reception is "Chưa" — two halves of the same cell
+    # contradicting each other. Gate here so each terminal state shows
+    # only what it actually has:
+    #
+    #   * uploaded            : file artifact + officer-declared format
+    #   * paper_submitted     : paper receipt timestamp + declared format
+    #   * verified            : everything above + verifier identity +
+    #                           verified_format
+    #   * rejected / missing  : status only; reason for rejection;
+    #                           no artifact, no format, no verifier
+    #
+    # Avoids a DB backfill while keeping the API contract clean.
+    _ARTIFACT_STATUSES = ("uploaded", "paper_submitted", "verified")
     doc_by_code = {}
     if documents:
         for doc in documents:
             if doc.document_type:
+                _has_artifact = doc.status in _ARTIFACT_STATUSES
+                _is_verified = doc.status == "verified"
                 doc_by_code[doc.document_type.code] = {
                     "status": doc.status,
-                    "file_path": doc.file_path,
-                    "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
-                    "rejection_reason": doc.rejection_reason,
-                    # submission_format_confirmed: True if manager verified the format
-                    # Defaults to True for verified status, False otherwise
-                    "submission_format_confirmed": doc.status == "verified",
                     "label_from_db": doc.document_type.name,
+                    # rejection_reason is the only field that is meaningful
+                    # specifically when status == rejected — keep it
+                    # visible in the rejected branch so the FE row can
+                    # render the "Lý do" line.
+                    "rejection_reason": doc.rejection_reason,
+                    # submission_format_confirmed: True if manager verified the format.
+                    "submission_format_confirmed": _is_verified,
+                    # Artifact fields — only meaningful while a usable
+                    # document exists on the row.
+                    "file_path": doc.file_path if _has_artifact else None,
+                    "uploaded_at": (
+                        doc.uploaded_at.isoformat()
+                        if _has_artifact and doc.uploaded_at
+                        else None
+                    ),
+                    # ADM-031 round 4: officer-declared format. ADM-031
+                    # round 10 (B1): suppress on missing/rejected.
+                    "actual_submission_format": (
+                        doc.actual_submission_format if _has_artifact else None
+                    ),
+                    # verified_format is only meaningful when the doc is
+                    # currently in the verified state — uploaded /
+                    # paper_submitted rows haven't been verified yet, so
+                    # the column should not surface even if it was set
+                    # before a manager later reset/rejected.
+                    "verified_format": doc.verified_format if _is_verified else None,
+                    # ADM-031 round 7: paper-receipt timestamp.
+                    "paper_submitted_at": (
+                        doc.paper_submitted_at.isoformat()
+                        if _has_artifact and doc.paper_submitted_at
+                        else None
+                    ),
+                    # ADM-031 round 10: verifier identity. verified_by_name
+                    # is filled from a batched User lookup so this loop
+                    # stays N+1-free. Suppress unless status == verified.
+                    "verified_at": (
+                        doc.verified_at.isoformat()
+                        if _is_verified and doc.verified_at
+                        else None
+                    ),
+                    "verified_by": doc.verified_by if _is_verified else None,
+                    "verified_by_name": (
+                        _verifier_names_local.get(doc.verified_by)
+                        if _is_verified and doc.verified_by is not None
+                        else None
+                    ),
                 }
     
     # PR #5 — per-document action permissions delegate to the
@@ -1645,9 +1763,20 @@ def _compute_frontend_fields(
             "is_mandatory": True,
             "requires_upload": _requires_upload,
             "submission_format": config.get("submission_format"),
+            # ADM-031 round 4: pass through the officer-declared and
+            # manager-verified format codes so the FE row can render the
+            # actual/verified state next to the required format.
+            "actual_submission_format": uploaded_doc.get("actual_submission_format"),
+            "verified_format": uploaded_doc.get("verified_format"),
             "status": _doc_status,
             "file_path": uploaded_doc.get("file_path"),
             "uploaded_at": uploaded_doc.get("uploaded_at"),
+            # ADM-031 round 7: paper-receipt timestamp
+            "paper_submitted_at": uploaded_doc.get("paper_submitted_at"),
+            # ADM-031 round 10: verifier identity for the Trạng thái cell
+            "verified_at": uploaded_doc.get("verified_at"),
+            "verified_by": uploaded_doc.get("verified_by"),
+            "verified_by_name": uploaded_doc.get("verified_by_name"),
             "rejection_reason": uploaded_doc.get("rejection_reason"),
             "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False),
             **_perms,
@@ -1819,7 +1948,11 @@ async def _populate_response_fields(
     if documents is None:
         documents = await admission_repo.get_all_documents(profile.id)
 
-    _compute_frontend_fields(profile, current_user, documents)
+    # ADM-031 round 10: resolve verifier display names in a single batched
+    # SELECT so the documents_checklist response carries verified_by_name
+    # without N+1.
+    verifier_names = await _resolve_verifier_names(db, documents)
+    _compute_frontend_fields(profile, current_user, documents, verifier_names)
 
     # Refine the tentative minor_correction permission flag against the
     # live AdmissionPath allowlist. Must run AFTER _compute_frontend_fields
@@ -2644,13 +2777,27 @@ async def get_profiles(
         order=order,
     )
 
+    # ADM-031 round 10: pre-resolve verifier names ACROSS all profiles in
+    # one SELECT so the listing endpoint stays free of N+1 even when many
+    # rows have verified documents.
+    list_verifier_names: Dict[int, str] = {}
+    if current_user and profiles:
+        all_docs: list = []
+        for profile in profiles:
+            if hasattr(profile, "documents") and profile.documents:
+                all_docs.extend(profile.documents)
+        if all_docs:
+            list_verifier_names = await _resolve_verifier_names(db, all_docs)
+
     # Hydrate computed fields (same as detail API) using eager-loaded relations
     for profile in profiles:
         _calculate_and_update_totals(profile)
         # documents already loaded via selectinload in get_filtered_with_count
         docs = profile.documents if hasattr(profile, "documents") else None
         if current_user:
-            _compute_frontend_fields(profile, current_user, docs)
+            _compute_frontend_fields(
+                profile, current_user, docs, list_verifier_names
+            )
 
     # Batch-resolve minor_correction state for the page in ONE query rather
     # than N path lookups. This keeps the list endpoint at exactly one
@@ -2863,7 +3010,12 @@ async def get_profile(
     # =========================================================================
     # Fetch documents for completion calculation
     documents = await admission_repo.get_all_documents(profile_id)
-    _compute_frontend_fields(profile, current_user, documents)
+    _compute_frontend_fields(
+        profile,
+        current_user,
+        documents,
+        await _resolve_verifier_names(db, documents),
+    )
 
     # Refine minor_correction permission against live AdmissionPath config
     # (governance setting, not snapshotted) — keeps detail in lockstep
@@ -3160,7 +3312,12 @@ async def update_profile(
     # (or, conversely, showing "missing" for docs that are actually uploaded). See MEDIUM #1 in
     # the post-BUG-001 residual risks audit.
     documents = await admission_repo.get_all_documents(profile.id)
-    _compute_frontend_fields(profile, current_user, documents)
+    _compute_frontend_fields(
+        profile,
+        current_user,
+        documents,
+        await _resolve_verifier_names(db, documents),
+    )
 
     # Audit trail: log profile update with field-level changes
     from ..services import audit_service
@@ -3839,7 +3996,12 @@ async def upload_document(
         from app.repositories import AdmissionRepository
         admission_repo_refresh = AdmissionRepository(db)
         documents = await admission_repo_refresh.get_all_documents(profile_id)
-        _compute_frontend_fields(profile, current_user, documents)
+        _compute_frontend_fields(
+            profile,
+            current_user,
+            documents,
+            await _resolve_verifier_names(db, documents),
+        )
 
         # ✅ AUDIT LOG: Track document upload
         from .document_audit_service import log_document_upload
@@ -4036,7 +4198,12 @@ async def confirm_document_format(
 
     # 3. Re-compute validation_summary with updated documents
     documents = await admission_repo.get_all_documents(profile_id)
-    _compute_frontend_fields(profile, current_user, documents)
+    _compute_frontend_fields(
+        profile,
+        current_user,
+        documents,
+        await _resolve_verifier_names(db, documents),
+    )
 
     # ✅ AUDIT LOG: Track document verification
     from .document_audit_service import log_document_verification
@@ -4138,7 +4305,12 @@ async def mark_paper_submitted(
 
     # ✅ Re-compute validation_summary with updated documents
     documents = await admission_repo.get_all_documents(profile_id)
-    _compute_frontend_fields(profile, current_user, documents)
+    _compute_frontend_fields(
+        profile,
+        current_user,
+        documents,
+        await _resolve_verifier_names(db, documents),
+    )
 
     log.info(
         "Document paper submitted confirmed with audit log",
@@ -4342,7 +4514,12 @@ async def reset_document(
 
     # Re-compute validation_summary with updated documents
     documents = await admission_repo.get_all_documents(profile_id)
-    _compute_frontend_fields(profile, current_user, documents)
+    _compute_frontend_fields(
+        profile,
+        current_user,
+        documents,
+        await _resolve_verifier_names(db, documents),
+    )
 
     log.info(
         "Document reset staged (awaiting commit)",
