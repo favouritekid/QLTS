@@ -27,6 +27,7 @@ from app.database import (
     safe_redis_incr,
 )
 from app.utils.exceptions import BusinessRuleViolation
+from app.utils.inmemory_rate_limit import fallback_incr
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/zalo-bot", tags=["Zalo Bot Link"])
@@ -41,16 +42,20 @@ _LINK_CODE_RL_WINDOW = 600  # seconds (10 min)
 async def _check_link_code_rate_limit(user_id: int) -> None:
     """Atomic INCR + EXPIRE — never use GET-then-SET (race window).
 
-    Raises ``BusinessRuleViolation`` (400) on overflow. Redis breaker
-    open returns ``None`` from INCR — we let the request through in
-    that case rather than failing closed; quota cap on the link service
-    side bounds total Redis writes either way.
+    Raises ``BusinessRuleViolation`` (400) on overflow.
+
+    F-2: when Redis is unavailable, fall back to a per-process
+    in-memory counter rather than failing OPEN. Without the fallback,
+    an authenticated attacker could spam ``/link-code`` during a Redis
+    outage and exhaust the link-code keyspace lookup work.
     """
     key = f"{_LINK_CODE_RL_PREFIX}{user_id}"
     new_val = await safe_redis_incr(key)
     if new_val == 1:
         await safe_redis_expire(key, _LINK_CODE_RL_WINDOW)
-    if new_val is not None and new_val > _LINK_CODE_RL_LIMIT:
+    if new_val is None:
+        new_val = fallback_incr(key, _LINK_CODE_RL_WINDOW)
+    if new_val > _LINK_CODE_RL_LIMIT:
         raise BusinessRuleViolation(
             "Quá nhiều yêu cầu. Vui lòng thử lại sau 10 phút."
         )
