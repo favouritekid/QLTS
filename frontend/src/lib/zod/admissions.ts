@@ -170,6 +170,15 @@ export const documentItemSchema = z.object({
     .max(255, "Tên tài liệu không được quá 255 ký tự")
     .trim(),
   is_mandatory: z.boolean().optional(),
+  /**
+   * BR2 (2026-04-29): true when this row is a ProfileDocument that
+   * exists in the DB but is NOT in the current
+   * applied_rules.mandatory_docs snapshot — typically because the
+   * AdmissionPath was edited after the profile was created. Extras are
+   * read-only (all can_* flags false); UI renders them in a separate
+   * "Tài liệu ngoài yêu cầu hiện tại" section.
+   */
+  is_extra: z.boolean().optional(),
   // Phase 0.9: New document config fields (all optional for form/response compatibility)
   requires_upload: z.boolean().optional(),
   submission_format: z.enum(["photo", "certified_copy", "original"]).nullable().optional(),

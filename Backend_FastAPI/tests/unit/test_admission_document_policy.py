@@ -324,3 +324,118 @@ def test_missing_lead_blocks_owner_actions(officer_owner):
     assert not policy.authorize(
         "paper_submitted", "missing", requires_upload=False
     )
+
+
+# ---------------------------------------------------------------------------
+# BR1 (2026-04-29): profile-state matrix
+# ---------------------------------------------------------------------------
+#
+# Pin the contract from the business-rule note:
+#   APPLICANT_DOC_MUTATION_STATES =
+#     {draft, submitted, rejected, resubmitted, revision_requested}
+#   REVIEWER_DOC_MUTATION_BLOCKED_STATES = {enrolled}
+#
+# These are the per-state cells the previous "profile_editable" set
+# (``draft, rejected, revision_requested``) didn't cover; they are the
+# regression surface that motivated unifying service guards into the
+# policy.
+
+
+@pytest.mark.parametrize(
+    "profile_status",
+    ["draft", "submitted", "rejected", "resubmitted", "revision_requested"],
+)
+def test_applicant_states_allow_upload_and_paper_submitted(
+    profile_status, officer_owner
+):
+    """Five states where applicant/officer may add evidence."""
+    profile = _StubProfile(
+        status=profile_status,
+        lead=_StubLead(unit_id=42, assigned_officer_id=20),
+    )
+    policy = DocumentActionPolicy.for_(profile, officer_owner)
+    assert policy.authorize("upload", "missing", requires_upload=True)
+    assert policy.authorize(
+        "paper_submitted", "missing", requires_upload=False
+    )
+
+
+@pytest.mark.parametrize(
+    "profile_status",
+    ["approved", "confirmed", "overridden", "enrolled", "withdrawn"],
+)
+def test_post_decision_states_block_upload_and_paper_submitted(
+    profile_status, officer_owner
+):
+    """After a manager decision (approved+) or terminal (withdrawn),
+    the applicant path is closed; further evidence requires the manager
+    to re-open via revision_requested."""
+    profile = _StubProfile(
+        status=profile_status,
+        lead=_StubLead(unit_id=42, assigned_officer_id=20),
+    )
+    policy = DocumentActionPolicy.for_(profile, officer_owner)
+    assert not policy.authorize("upload", "missing", requires_upload=True)
+    assert not policy.authorize(
+        "paper_submitted", "missing", requires_upload=False
+    )
+
+
+@pytest.mark.parametrize(
+    "profile_status",
+    [
+        "draft",
+        "submitted",
+        "approved",
+        "rejected",
+        "revision_requested",
+        "resubmitted",
+        "confirmed",
+        "overridden",
+        "withdrawn",
+    ],
+)
+@pytest.mark.parametrize("action", ["verify", "reject", "reset"])
+def test_reviewer_actions_allowed_pre_enrolled(
+    profile_status, action, manager_in_scope
+):
+    """Manager-in-scope/admin may verify/reject/reset until enrolled."""
+    profile = _StubProfile(
+        status=profile_status,
+        lead=_StubLead(unit_id=42, assigned_officer_id=20),
+    )
+    policy = DocumentActionPolicy.for_(profile, manager_in_scope)
+    # Use a doc_status compatible with each action.
+    doc_status = "uploaded" if action != "reset" else "verified"
+    assert policy.authorize(action, doc_status, requires_upload=True)
+
+
+@pytest.mark.parametrize("action", ["verify", "reject", "reset"])
+def test_enrolled_blocks_all_reviewer_actions(action, manager_in_scope, admin):
+    """After enrolment, AdmissionProfile docs are frozen — even admin
+    can't flip them. Compliance contract: don't drift from the Student
+    record materialised at enrolment."""
+    profile = _StubProfile(
+        status="enrolled",
+        lead=_StubLead(unit_id=42, assigned_officer_id=20),
+    )
+    doc_status = "uploaded" if action != "reset" else "verified"
+    for actor in (manager_in_scope, admin):
+        policy = DocumentActionPolicy.for_(profile, actor)
+        assert not policy.authorize(action, doc_status, requires_upload=True)
+
+
+def test_enrolled_blocks_applicant_paths_too(officer_owner):
+    """Belt-and-braces: applicant-side actions also can't reach an
+    enrolled profile. APPLICANT_DOC_MUTATION_STATES does not include
+    enrolled, so this is implied — pin it explicitly so an accidental
+    set expansion later trips the test."""
+    profile = _StubProfile(
+        status="enrolled",
+        lead=_StubLead(unit_id=42, assigned_officer_id=20),
+    )
+    policy = DocumentActionPolicy.for_(profile, officer_owner)
+    assert not policy.authorize("upload", "missing", requires_upload=True)
+    assert not policy.authorize(
+        "paper_submitted", "missing", requires_upload=False
+    )

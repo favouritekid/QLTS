@@ -196,6 +196,27 @@ def _authorize_document_action(
     config = doc_configs.get(doc_code, {}) or {}
     requires_upload = bool(config.get("requires_upload", True))
 
+    # BR2 (2026-04-29): the document is "extra" — exists in the DB but
+    # is no longer in the current applied_rules.mandatory_docs snapshot
+    # (typically because the AdmissionPath was edited after the profile
+    # was created). The response marks these rows with ``is_extra=True``
+    # and clamps every ``can_*`` flag to False so the FE row renders
+    # read-only. The service-side gate must mirror that contract,
+    # otherwise a direct call to ``verify-format`` / ``reject`` /
+    # ``reset`` / ``upload`` / ``paper-submitted`` bypasses the
+    # read-only promise (the policy alone never sees ``is_extra``).
+    # Treat missing ``mandatory_docs`` as ``[]`` for safety: a profile
+    # without a snapshot can't tell which docs are "active" so every
+    # request is necessarily on extras.
+    mandatory_docs = applied_rules.get("mandatory_docs") or []
+    if doc_code not in mandatory_docs:
+        raise PermissionDeniedError(
+            f"Document '{doc_code}' is no longer in the current admission "
+            f"path's mandatory list (treated as extra / evidence-only). "
+            f"Direct '{action}' actions are blocked until an explicit "
+            f"sync-path action ships."
+        )
+
     policy = DocumentActionPolicy.for_(profile, current_user)
     if not policy.authorize(action, doc_status, requires_upload):
         # 404 per IDOR convention — router translates.
@@ -1748,8 +1769,21 @@ def _compute_frontend_fields(
             ),
         }
 
-    # Build documents_checklist
+    # Build documents_checklist.
+    # Two passes:
+    #   (1) snapshot-driven mandatory docs from ``applied_rules.mandatory_docs``
+    #       — flagged ``is_mandatory=True``, ``is_extra=False``.
+    #   (2) BR2 (2026-04-29): ProfileDocument rows whose code is NOT in
+    #       the snapshot — flagged ``is_extra=True``, all ``can_*``
+    #       forced false (extras are evidence/audit, never silently
+    #       dropped, but no actions surface in the UI). Happens when the
+    #       AdmissionPath was edited after the profile was created and
+    #       previously-uploaded docs are no longer in the current
+    #       mandatory list. Sync action that would refresh the snapshot
+    #       is intentionally out of scope for this PR.
     documents_checklist = []
+    _mandatory_set = set(all_mandatory_docs)
+
     for i, doc_code in enumerate(all_mandatory_docs):
         config = doc_configs.get(doc_code, {})
         uploaded_doc = doc_by_code.get(doc_code, {})
@@ -1761,6 +1795,7 @@ def _compute_frontend_fields(
             "code": doc_code,
             "label": config.get("label") or uploaded_doc.get("label_from_db") or doc_code,
             "is_mandatory": True,
+            "is_extra": False,
             "requires_upload": _requires_upload,
             "submission_format": config.get("submission_format"),
             # ADM-031 round 4: pass through the officer-declared and
@@ -1780,6 +1815,46 @@ def _compute_frontend_fields(
             "rejection_reason": uploaded_doc.get("rejection_reason"),
             "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False),
             **_perms,
+        })
+
+    # Pass (2): extra ProfileDocument rows. Stable sort by code so
+    # repeated GETs render in a consistent order.
+    for extra_code in sorted(c for c in doc_by_code.keys() if c not in _mandatory_set):
+        uploaded_doc = doc_by_code[extra_code]
+        _doc_status = uploaded_doc.get("status", "missing")
+        # No live config for extras (path changed). Infer
+        # requires_upload from the artifact: a file_path means an
+        # upload happened, otherwise treat as paper-only.
+        _requires_upload = bool(uploaded_doc.get("file_path"))
+
+        documents_checklist.append({
+            "code": extra_code,
+            "label": uploaded_doc.get("label_from_db") or extra_code,
+            "is_mandatory": False,
+            "is_extra": True,
+            "requires_upload": _requires_upload,
+            "submission_format": None,
+            "actual_submission_format": uploaded_doc.get("actual_submission_format"),
+            "verified_format": uploaded_doc.get("verified_format"),
+            "status": _doc_status,
+            "file_path": uploaded_doc.get("file_path"),
+            "uploaded_at": uploaded_doc.get("uploaded_at"),
+            "paper_submitted_at": uploaded_doc.get("paper_submitted_at"),
+            "verified_at": uploaded_doc.get("verified_at"),
+            "verified_by": uploaded_doc.get("verified_by"),
+            "verified_by_name": uploaded_doc.get("verified_by_name"),
+            "rejection_reason": uploaded_doc.get("rejection_reason"),
+            "submission_format_confirmed": uploaded_doc.get(
+                "submission_format_confirmed", False
+            ),
+            # Extras are read-only: row visible for evidence + audit,
+            # but no action buttons. A future sync-path action will own
+            # the cleanup workflow.
+            "can_upload": False,
+            "can_verify": False,
+            "can_reject": False,
+            "can_reset": False,
+            "can_mark_paper_submitted": False,
         })
 
     profile.documents_checklist = documents_checklist
@@ -3853,9 +3928,13 @@ async def upload_document(
 
     profile = await get_profile(db, profile_id, current_user)
 
-    # State Locking
-    if profile.status not in ["draft", "rejected", "revision_requested"]:
-        raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
+    # BR1 (2026-04-29): the profile-state guard now lives inside
+    # ``DocumentActionPolicy`` (see ``APPLICANT_DOC_MUTATION_STATES``)
+    # so the FE flag and BE gate stay in lockstep automatically.
+    # The previous hand-rolled ``profile.status not in [draft, rejected,
+    # revision_requested]`` check would also reject ``submitted`` /
+    # ``resubmitted`` — a real workflow bug since applicants do post
+    # missing evidence between submit and the manager's first review.
 
     # Find document record early — needed for doc_status-based guard check.
     doc_record = await admission_repo.get_document_by_type(profile_id, doc_code)
@@ -4260,18 +4339,20 @@ async def mark_paper_submitted(
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
 
-    # Status guard: only allow document operations in editable states
-    if profile.status not in ["draft", "submitted", "rejected", "resubmitted"]:
-        raise BadRequest(
-            f"Cannot modify documents when profile status is '{profile.status}'"
-        )
+    # BR1 (2026-04-29): profile-state guard delegated to
+    # ``DocumentActionPolicy`` (see ``APPLICANT_DOC_MUTATION_STATES``).
+    # The previous hand-rolled set ``[draft, submitted, rejected,
+    # resubmitted]`` was a different shape from the policy's
+    # ``[draft, rejected, revision_requested]`` — a dead-code mismatch
+    # that this unification closes.
 
     # Get document to capture old status
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "missing"
 
-    # PR #5 guard — matches can_mark_paper_submitted (requires_upload=false,
-    # status=missing, owning officer in scope).
+    # Single source of truth — same matrix as can_mark_paper_submitted
+    # on the response (requires_upload=false, status=missing, owning
+    # officer in scope, profile in APPLICANT_DOC_MUTATION_STATES).
     _authorize_document_action(
         action="paper_submitted",
         profile=profile,
@@ -4358,16 +4439,14 @@ async def reject_document(
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
 
-    # Status guard: cannot reject documents for enrolled profiles
-    if profile.status == "enrolled":
-        raise BadRequest("Cannot reject documents for enrolled profile")
+    # BR1 (2026-04-29): enrolled-state block delegated to
+    # ``DocumentActionPolicy`` (see ``REVIEWER_DOC_MUTATION_BLOCKED_STATES``).
+    # Single source of truth — same matrix as can_reject on the response.
 
     # Get document to capture old status
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "unknown"
 
-    # PR #5 guard — matches can_reject (reviewer scope + doc status
-    # in uploaded/paper_submitted/verified).
     _authorize_document_action(
         action="reject",
         profile=profile,
@@ -4467,16 +4546,15 @@ async def reset_document(
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
 
-    # State Locking: Cannot reset documents for enrolled profiles
-    if profile.status == "enrolled":
-        raise BadRequest("Cannot reset documents for enrolled profiles")
+    # BR1 (2026-04-29): enrolled-state block delegated to
+    # ``DocumentActionPolicy`` (see ``REVIEWER_DOC_MUTATION_BLOCKED_STATES``).
+    # Single source of truth — same matrix as can_reset on the response.
 
     # Get document to capture old status and file path before reset
     doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
     old_status = doc_before.status if doc_before else "unknown"
     old_file_path = doc_before.file_path if doc_before else None
 
-    # PR #5 guard — matches can_reset (reviewer scope + non-missing status).
     _authorize_document_action(
         action="reset",
         profile=profile,
