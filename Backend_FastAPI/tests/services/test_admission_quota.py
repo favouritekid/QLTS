@@ -399,6 +399,142 @@ class TestQuotaHelper:
                     transition="approve",
                 )
 
+    async def test_quota_skipped_when_offering_id_missing_increments_metric(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        """``lead.offering_id IS NULL`` → quota check skipped + counter
+        ``admission_quota_skip_total{reason="missing_offering_id"}`` ticks.
+
+        ADM-026 follow-up (Lane C observability nit): the skip path is
+        a data-drift signal, not normal operation, so dashboards need
+        to count it.
+        """
+        from app.admission_metrics import admission_quota_skip_total
+
+        seeds = await _seed_offering_with_quota(
+            quota=2,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="missoff",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER, unit_id=seeds["unit_id"], suffix="missoff_mgr"
+        )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000080", status="submitted"
+        )
+
+        # Force the skip path: clear offering_id on the seeded lead.
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                profile.lead.offering_id = None
+
+        before = (
+            admission_quota_skip_total
+            .labels(reason="missing_offering_id")
+            ._value.get()
+        )
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                # No raise expected — skip path returns early.
+                await admission_service._assert_quota_or_bypass(
+                    session,
+                    profile,
+                    manager,
+                    bypass_quota=False,
+                    bypass_reason=None,
+                    transition="approve",
+                )
+
+        after = (
+            admission_quota_skip_total
+            .labels(reason="missing_offering_id")
+            ._value.get()
+        )
+        assert after == before + 1, (
+            f"Counter did not tick on offering_id skip: {before} → {after}"
+        )
+
+    async def test_quota_skipped_when_legacy_profile_has_no_resolution_path_increments_metric(
+        self, setup_test_database, seed_lead_dependencies
+    ):
+        """Legacy profile (no ``applied_rules.academic_info_id``) + lead
+        without ``offering_id`` → ``_resolve_quota_context`` returns
+        ``(None, None)`` and ``_assert_quota_or_bypass`` returns early
+        WITHOUT counting seats. Counter must still tick under
+        ``missing_offering_id`` because this is the same data-drift
+        signal as the post-snapshot strip path.
+        """
+        from app.admission_metrics import admission_quota_skip_total
+
+        seeds = await _seed_offering_with_quota(
+            quota=2,
+            seed_unit_id=seed_lead_dependencies["unit_id"],
+            seed_major_program_id=seed_lead_dependencies["major_program_id"],
+            suffix="legacy",
+        )
+        manager = await _make_user(
+            role=UserRole.MANAGER, unit_id=seeds["unit_id"], suffix="legacy_mgr"
+        )
+        pid = await _seed_lead_and_profile(
+            seeds=seeds, citizen_id="200000000090", status="submitted"
+        )
+
+        # Force the legacy resolver path: drop the snapshot key AND
+        # clear lead.offering_id so the fallback at line ~349 also
+        # returns (None, None).
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                rules = dict(profile.applied_rules or {})
+                rules.pop("academic_info_id", None)
+                profile.applied_rules = rules
+                profile.lead.offering_id = None
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(profile, "applied_rules")
+
+        before = (
+            admission_quota_skip_total
+            .labels(reason="missing_offering_id")
+            ._value.get()
+        )
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                profile = await _profile_with_lead(session, pid)
+                # Sanity: resolver must return (None, None) for this
+                # profile shape — otherwise the test isn't exercising
+                # the legacy path.
+                ai, q = await admission_service._resolve_quota_context(
+                    session, profile, lock=False
+                )
+                assert ai is None and q is None, (
+                    f"Expected legacy resolver miss, got ({ai}, {q})"
+                )
+
+                # No raise expected — skip path returns early.
+                await admission_service._assert_quota_or_bypass(
+                    session,
+                    profile,
+                    manager,
+                    bypass_quota=False,
+                    bypass_reason=None,
+                    transition="approve",
+                )
+
+        after = (
+            admission_quota_skip_total
+            .labels(reason="missing_offering_id")
+            ._value.get()
+        )
+        assert after == before + 1, (
+            "Counter did not tick on legacy quota-context miss: "
+            f"{before} → {after}"
+        )
+
     async def test_withdrawn_does_not_count(
         self, setup_test_database, seed_lead_dependencies
     ):
