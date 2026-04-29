@@ -934,16 +934,16 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             )}
                           </td>
 
-                          {/* ----- Yêu cầu ----- round 8: 2 lines
+                          {/* ----- Yêu cầu ----- round 8: 2 lines stacked
                               line 1 = format (Gốc / Chứng thực / Chụp/scan)
                               line 2 = how-to (Tải file / Nhận giấy)
-                              Stacked alignment lets officers compare
-                              vertically with the matching 2 lines in the
-                              "Đã ghi nhận" cell. */}
+                              Use `flex` (not inline-flex) on each line so
+                              each div takes its own row, matching the
+                              2 stacked lines in "Đã ghi nhận". */}
                           <td className="py-3 pr-3 align-top">
                             {state.requiredFormatShort && state.formatBadge ? (
                               <div
-                                className="text-sm inline-flex items-center gap-1"
+                                className="text-sm flex items-center gap-1"
                                 title={state.formatBadge.label}
                               >
                                 {FormatIcon && (
@@ -962,7 +962,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                               </div>
                             )}
                             <div
-                              className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-1"
+                              className="text-xs text-muted-foreground flex items-center gap-1 mt-1"
                               title={state.howToReceiveTitle}
                               aria-label={state.howToReceiveTitle}
                             >
@@ -984,43 +984,46 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                               so a row reads as a 2x2 mini grid. */}
                           <td className="py-3 pr-3 align-top">
                             {state.recordedFormatLabel ? (
-                              <div
-                                className={`text-sm inline-flex items-center gap-1 break-words ${
-                                  state.recordedDiffersFromRequired
-                                    ? "text-warning-700"
-                                    : ""
-                                }`}
-                                title={
-                                  state.recordedDiffersFromRequired
-                                    ? `Đã ghi nhận: ${state.recordedFormatLabel} — KHÁC yêu cầu hồ sơ (${state.formatBadge?.label ?? doc.submission_format})`
-                                    : `Đã ghi nhận: ${state.recordedFormatLabel}`
-                                }
-                              >
-                                {state.recordedDiffersFromRequired && (
-                                  <AlertTriangle
-                                    className="h-3 w-3 shrink-0"
-                                    aria-label="Khác yêu cầu hồ sơ"
-                                  />
-                                )}
-                                <span>
-                                  {state.recordedFormatCode
-                                    ? getShortFormatLabel(state.recordedFormatCode)
-                                    : state.recordedFormatLabel}
-                                </span>
-                                {state.recordedAtFormatted && (
-                                  <span className="text-muted-foreground tabular-nums">
-                                    · {state.recordedAtFormatted}
+                              <>
+                                <div
+                                  className={`text-sm flex items-center gap-1 break-words ${
+                                    state.recordedDiffersFromRequired
+                                      ? "text-warning-700"
+                                      : ""
+                                  }`}
+                                  title={
+                                    state.recordedDiffersFromRequired
+                                      ? `Đã ghi nhận: ${state.recordedFormatLabel} — KHÁC yêu cầu hồ sơ (${state.formatBadge?.label ?? doc.submission_format})`
+                                      : `Đã ghi nhận: ${state.recordedFormatLabel}`
+                                  }
+                                >
+                                  {state.recordedDiffersFromRequired && (
+                                    <AlertTriangle
+                                      className="h-3 w-3 shrink-0"
+                                      aria-label="Khác yêu cầu hồ sơ"
+                                    />
+                                  )}
+                                  <span>
+                                    {state.recordedFormatCode
+                                      ? getShortFormatLabel(state.recordedFormatCode)
+                                      : state.recordedFormatLabel}
                                   </span>
-                                )}
-                              </div>
+                                  {state.recordedAtFormatted && (
+                                    <span className="text-muted-foreground tabular-nums">
+                                      · {state.recordedAtFormatted}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-muted-foreground mt-1">
+                                  {state.receptionLabel}
+                                </div>
+                              </>
                             ) : (
-                              <div className="text-sm text-muted-foreground">
-                                —
-                              </div>
+                              // Nothing recorded yet — show only the reception
+                              // bucket ("Chưa"). No leading em-dash so the cell
+                              // doesn't read as "— Chưa".
+                              <div className="text-sm">{state.receptionLabel}</div>
                             )}
-                            <div className="text-xs text-muted-foreground mt-1">
-                              {state.receptionLabel}
-                            </div>
                           </td>
                           <td className="py-3 pr-3 align-top">
                             <Badge className={`${state.statusConfig.color} gap-1`}>
@@ -1103,7 +1106,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                         <dd className="break-words">
                           {state.requiredFormatShort && state.formatBadge ? (
                             <div
-                              className="inline-flex items-center gap-1"
+                              className="flex items-center gap-1"
                               title={state.formatBadge.label}
                             >
                               <span aria-label={state.formatBadge.label}>
@@ -1114,7 +1117,7 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             <span className="text-muted-foreground">—</span>
                           )}
                           <div
-                            className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5"
+                            className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5"
                             title={state.howToReceiveTitle}
                             aria-label={state.howToReceiveTitle}
                           >
@@ -1131,41 +1134,45 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                         </dt>
                         <dd className="break-words">
                           {state.recordedFormatLabel ? (
-                            <div
-                              className={`inline-flex items-center gap-1 ${
-                                state.recordedDiffersFromRequired
-                                  ? "text-warning-700"
-                                  : ""
-                              }`}
-                              title={
-                                state.recordedDiffersFromRequired
-                                  ? `Đã ghi nhận: ${state.recordedFormatLabel} — KHÁC yêu cầu hồ sơ`
-                                  : `Đã ghi nhận: ${state.recordedFormatLabel}`
-                              }
-                            >
-                              {state.recordedDiffersFromRequired && (
-                                <AlertTriangle
-                                  className="h-3 w-3 shrink-0"
-                                  aria-label="Khác yêu cầu hồ sơ"
-                                />
-                              )}
-                              <span>
-                                {state.recordedFormatCode
-                                  ? getShortFormatLabel(state.recordedFormatCode)
-                                  : state.recordedFormatLabel}
-                              </span>
-                              {state.recordedAtFormatted && (
-                                <span className="text-muted-foreground tabular-nums">
-                                  · {state.recordedAtFormatted}
+                            <>
+                              <div
+                                className={`flex items-center gap-1 ${
+                                  state.recordedDiffersFromRequired
+                                    ? "text-warning-700"
+                                    : ""
+                                }`}
+                                title={
+                                  state.recordedDiffersFromRequired
+                                    ? `Đã ghi nhận: ${state.recordedFormatLabel} — KHÁC yêu cầu hồ sơ`
+                                    : `Đã ghi nhận: ${state.recordedFormatLabel}`
+                                }
+                              >
+                                {state.recordedDiffersFromRequired && (
+                                  <AlertTriangle
+                                    className="h-3 w-3 shrink-0"
+                                    aria-label="Khác yêu cầu hồ sơ"
+                                  />
+                                )}
+                                <span>
+                                  {state.recordedFormatCode
+                                    ? getShortFormatLabel(state.recordedFormatCode)
+                                    : state.recordedFormatLabel}
                                 </span>
-                              )}
-                            </div>
+                                {state.recordedAtFormatted && (
+                                  <span className="text-muted-foreground tabular-nums">
+                                    · {state.recordedAtFormatted}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-0.5">
+                                {state.receptionLabel}
+                              </div>
+                            </>
                           ) : (
-                            <span className="text-muted-foreground">—</span>
+                            // Nothing recorded yet — single "Chưa" line, no
+                            // em-dash placeholder above it.
+                            <div>{state.receptionLabel}</div>
                           )}
-                          <div className="text-xs text-muted-foreground mt-0.5">
-                            {state.receptionLabel}
-                          </div>
                         </dd>
                       </dl>
 
