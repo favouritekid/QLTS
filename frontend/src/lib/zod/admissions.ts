@@ -218,9 +218,10 @@ export const documentItemSchema = z.object({
    */
   verified_by: z.number().int().nullable().optional(),
   /**
-   * Display name of the verifier — backend resolves full_name → email →
-   * null via a batched User lookup (ADM-031 round 10). When null, the FE
-   * falls back to "User #<verified_by>".
+   * Display name of the verifier — backend resolves full_name → username
+   * via a batched User lookup (ADM-031 round 10). Email is intentionally
+   * NOT a fallback (staff-to-staff privacy). When null, the FE falls
+   * back to "User #<verified_by>".
    */
   verified_by_name: z.string().nullable().optional(),
   // ---------------------------------------------------------------------

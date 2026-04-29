@@ -27,7 +27,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
+import { Badge, badgeVariants } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -86,7 +86,7 @@ import {
 } from "@/hooks/admissions/useAdmissions"
 import { useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
-import { isSafeFilePath } from "@/lib/utils"
+import { cn, isSafeFilePath } from "@/lib/utils"
 import {
   DOCUMENT_FORMAT_OPTIONS,
   getFormatLabel,
@@ -166,13 +166,22 @@ const RECEPTION_LABEL: Record<string, string> = {
 // Work-queue priority. Officers act on rows in this order: things they
 // (or a teammate) still owe -> things waiting for verification -> done.
 // Lower number = sorts first.
+//
+// ADM-031 round 10 review (D1): paper_submitted moved from bucket 2
+// (waiting) to bucket 3 (done). Backend strict-mode at
+// admission_service.py:566 counts paper_submitted as satisfying the
+// mandatory gate (round 9 alignment), the row badge is success-tinted
+// "Đã nhận giấy", and isDocumentRequirementSatisfied returns true for
+// it. Sorting it next to "uploaded" (Chờ duyệt) put a "done" row in
+// the middle of the work queue and contradicted the badge color in
+// the same row — keep all three "satisfied" states in one bucket.
 const STATUS_PRIORITY: Record<string, number> = {
   missing: 1,
   rejected: 1,
   revision_requested: 1,
   resubmitted: 2,
   uploaded: 2,
-  paper_submitted: 2,
+  paper_submitted: 3,
   verified: 3,
 }
 
@@ -281,13 +290,23 @@ function computeRowState(doc: DocumentItem) {
 
   // Date-of-record — appears under the reception bucket in the
   // "Đã ghi nhận" cell so the title cell can stay focused on doc
-  // identity (label + code + reject reason). For paper-submitted
-  // rows, prefer the dedicated paper_submitted_at timestamp from
-  // ADM-031 round 7 backend addition; fall back to uploaded_at for
-  // online docs.
+  // identity (label + code + reject reason).
+  //
+  // ADM-031 round 10 review (E1): paper-only rows that progress to
+  // verified must keep showing the paper-receipt date. Previous
+  // logic flipped to ``uploaded_at`` once status changed away from
+  // ``paper_submitted``, but ``uploaded_at`` is null for paper-only
+  // docs (no scan ever uploaded), so a verified paper doc rendered
+  // with no recorded date at all. Decision tree now:
+  //   - paper_submitted              → paper_submitted_at
+  //   - paper-only verified          → paper_submitted_at
+  //                                    (uploaded_at would be null)
+  //   - everything else (uploaded /  → uploaded_at
+  //     online verified)
+  const requiresUploadField = doc.requires_upload !== false
   const recordedAtIso =
-    doc.status === "paper_submitted"
-      ? (doc.paper_submitted_at ?? null)
+    doc.status === "paper_submitted" || !requiresUploadField
+      ? (doc.paper_submitted_at ?? doc.uploaded_at ?? null)
       : (doc.uploaded_at ?? null)
   const recordedAtFormatted = recordedAtIso
     ? VI_DATE_FORMATTER.format(new Date(recordedAtIso))
@@ -634,10 +653,21 @@ function DocumentRowActions(props: ActionsCellProps) {
 // COMPONENT
 // ============================================================================
 
-export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabProps) {
+export function DocumentsTab({ profile }: DocumentsTabProps) {
   // `isEditable` is retained on the props contract for parent callers, but
   // per-row visibility is now fully driven by `doc.can_*` flags (PR #5).
-  const documents = profile.documents_checklist || []
+  // We deliberately don't destructure it here — keeping it on the type so
+  // TS still validates parent usage without triggering no-unused-vars.
+  //
+  // ADM-031 round 10 review: wrap the documents array in useMemo so the
+  // identity is stable across renders. Without this, `useMemo`-based hooks
+  // downstream (sortedDocs, KPI counts memoizations) re-fire on every
+  // render because `profile.documents_checklist || []` allocates a fresh
+  // [] when the field is null.
+  const documents = useMemo(
+    () => profile.documents_checklist || [],
+    [profile.documents_checklist],
+  )
   const uploadMutation = useUploadAdmissionDocument(profile.id)
   const paperMutation = useMarkPaperSubmitted(profile.id)
   const rejectMutation = useRejectDocument(profile.id)
@@ -889,12 +919,21 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
           hint={pendingCount > 0 ? "Cần manager duyệt format" : "Không có"}
         />
         <KpiTile
+          // ADM-031 round 10 review (D2): headline shows the
+          // mandatory ratio because "yêu cầu" semantically refers to
+          // the submission gate (which is mandatory-only). Total
+          // (incl. optional) is demoted to the hint so the number
+          // officers act on is the gating one.
           label="Hoàn tất yêu cầu"
-          value={`${satisfiedCount}/${total}`}
+          value={
+            mandatoryDocs.length > 0
+              ? `${mandatorySatisfiedCount}/${mandatoryDocs.length}`
+              : `${satisfiedCount}/${total}`
+          }
           accent="success"
           hint={
             mandatoryDocs.length > 0
-              ? `Bắt buộc: ${mandatorySatisfiedCount}/${mandatoryDocs.length} • ${satisfiedPercent}%`
+              ? `Tổng: ${satisfiedCount}/${total} • ${satisfiedPercent}%`
               : `${satisfiedPercent}%`
           }
         />
@@ -1086,15 +1125,30 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                             {state.verifierTooltip ? (
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <Badge
-                                    className={`${state.statusConfig.color} gap-1 cursor-help`}
+                                  {/* P3 review fix: tooltip trigger must
+                                      be focusable (Badge is a non-focusable
+                                      <div>). Render as a real <button> styled
+                                      with badgeVariants() so keyboard users
+                                      can read the long-form tooltip
+                                      ("Duyệt bởi <Tên> lúc dd/mm/yyyy hh:mm")
+                                      via Tab + focus. aria-label carries the
+                                      same content as a fallback for SR users
+                                      who don't get tooltip events. */}
+                                  <button
+                                    type="button"
+                                    aria-label={state.verifierTooltip}
+                                    className={cn(
+                                      badgeVariants(),
+                                      state.statusConfig.color,
+                                      "gap-1 cursor-help",
+                                    )}
                                   >
                                     <StatusIcon
                                       className="h-3 w-3 shrink-0"
                                       aria-hidden="true"
                                     />
                                     {state.statusConfig.label}
-                                  </Badge>
+                                  </button>
                                 </TooltipTrigger>
                                 <TooltipContent>
                                   {state.verifierTooltip}
@@ -1186,15 +1240,21 @@ export function DocumentsTab({ profile, isEditable: _isEditable }: DocumentsTabP
                           {state.verifierTooltip ? (
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <Badge
-                                  className={`${state.statusConfig.color} gap-1 cursor-help`}
+                                <button
+                                  type="button"
+                                  aria-label={state.verifierTooltip}
+                                  className={cn(
+                                    badgeVariants(),
+                                    state.statusConfig.color,
+                                    "gap-1 cursor-help",
+                                  )}
                                 >
                                   <StatusIcon
                                     className="h-3 w-3 shrink-0"
                                     aria-hidden="true"
                                   />
                                   {state.statusConfig.label}
-                                </Badge>
+                                </button>
                               </TooltipTrigger>
                               <TooltipContent>
                                 {state.verifierTooltip}

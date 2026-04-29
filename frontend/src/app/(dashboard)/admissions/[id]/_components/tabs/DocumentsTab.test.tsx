@@ -286,7 +286,7 @@ describe("DocumentsTab — ADM-031 round 5 desktop table", () => {
     ]);
   });
 
-  it("sorts rows by work-queue priority: missing/rejected → uploaded/paper_submitted → verified", () => {
+  it("sorts rows by work-queue priority: missing/rejected → uploaded → verified", () => {
     const profile = buildProfile([
       // Intentionally out of order to verify sort.
       {
@@ -328,6 +328,42 @@ describe("DocumentsTab — ADM-031 round 5 desktop table", () => {
     expect(labels[1]).toContain("Missing optional");
     expect(labels[2]).toContain("Uploaded mandatory");
     expect(labels[3]).toContain("Verified mandatory");
+  });
+
+  it("paper_submitted sorts with verified (round 10 D1: both are 'satisfied')", () => {
+    // Round 9 made paper_submitted satisfy the mandatory gate; round 10
+    // sorts it into bucket 3 alongside verified so the work queue isn't
+    // interrupted by a "done" row labelled "Đã nhận giấy".
+    const profile = buildProfile([
+      {
+        code: "P",
+        label: "Paper submitted",
+        status: "paper_submitted",
+        is_mandatory: true,
+        requires_upload: false,
+      },
+      {
+        code: "U",
+        label: "Uploaded online",
+        status: "uploaded",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+      {
+        code: "M",
+        label: "Missing mandatory",
+        status: "missing",
+        is_mandatory: true,
+        requires_upload: true,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    const rows = within(table).getAllByRole("row").slice(1);
+    const labels = rows.map((r) => within(r).getAllByRole("cell")[0]?.textContent);
+    expect(labels[0]).toContain("Missing mandatory"); // priority 1
+    expect(labels[1]).toContain("Uploaded online");   // priority 2
+    expect(labels[2]).toContain("Paper submitted");   // priority 3 (with verified)
   });
 });
 
@@ -527,6 +563,34 @@ describe("DocumentsTab — ADM-031 round 7 paper_submitted_at", () => {
     const receptionCell = cells[2];
     expect(receptionCell.textContent).toMatch(/File scan/);
     expect(receptionCell.textContent).toMatch(/15\/03\/2026/);
+  });
+
+  it("paper-only verified row preserves paper_submitted_at as the recorded date (round 10 E1)", () => {
+    // Paper docs (requires_upload=false) have no uploaded_at; once the
+    // manager flips them to verified, the FE must keep showing the
+    // paper-receipt date instead of falling back to a null uploaded_at.
+    const profile = buildProfile([
+      {
+        code: "GIAY",
+        label: "Bản giấy đã duyệt",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: false,
+        actual_submission_format: "original",
+        verified_format: "original",
+        paper_submitted_at: "2026-04-22T09:15:00+00:00",
+        // uploaded_at intentionally absent to mirror real paper docs.
+        verified_at: "2026-04-25T11:00:00+00:00",
+        verified_by: 7,
+        verified_by_name: "Nguyễn Văn A",
+      } as never,
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    const cells = within(table).getAllByRole("cell");
+    const receptionCell = cells[2];
+    // Paper-receipt date (22/04) must still render even though status is now verified.
+    expect(receptionCell.textContent).toMatch(/22\/04\/2026/);
   });
 });
 
