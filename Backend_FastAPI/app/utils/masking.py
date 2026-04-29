@@ -75,6 +75,26 @@ def mask_phone(phone: Optional[str], visible_digits: int = 4) -> Optional[str]:
     return "*" * masked_length + digits_only[-visible_digits:]
 
 
+def mask_chat_id(chat_id: Optional[str]) -> str:
+    """Mask a Zalo Bot chat_id for log/audit/dispatch payloads.
+
+    Returns ``"XXXX***YY"`` — first 4 + last 2 chars with ``***`` between.
+    Format is stable across the codebase (webhook logs, audit rows, and
+    notification dedup keys all rely on it) so do not change the
+    separator without coordinating an audit-row + dedup-key migration.
+
+    Why first-4 + last-2 (not first-8): Zalo chat_ids are ~20 hex chars,
+    and exposing 8/20 (40%) is enough to correlate IDs across logs if an
+    attacker gets a partial leak. 6/20 (30%) keeps logs greppable for
+    operators while reducing pivot value for an attacker.
+    """
+    if not chat_id:
+        return ""
+    if len(chat_id) <= 6:
+        return chat_id[:2] + "***"
+    return chat_id[:4] + "***" + chat_id[-2:]
+
+
 def mask_email(email: Optional[str]) -> Optional[str]:
     """
     Mask an email address for display.

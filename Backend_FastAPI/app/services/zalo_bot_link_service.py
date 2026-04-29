@@ -29,7 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.staff_zalo_bot_link_repository import (
     StaffZaloBotLinkRepository,
 )
+from app.services import notification_consent_service
 from app.utils.exceptions import BusinessRuleViolation
+from app.utils.masking import mask_chat_id
 
 log = structlog.get_logger(__name__)
 
@@ -106,20 +108,6 @@ async def generate_link_code(
     raise BusinessRuleViolation("Không tạo được mã liên kết. Vui lòng thử lại.")
 
 
-def _audit_chat_id_prefix(chat_id: str) -> str:
-    """Mask chat_id for audit/log payload — first 4 + last 2 chars.
-
-    Tighter than the webhook-side ``_mask_chat_id`` (which exposes 8 chars)
-    so audit history doesn't leak more than necessary while still letting
-    operators correlate rows.
-    """
-    if not chat_id:
-        return ""
-    if len(chat_id) <= 6:
-        return chat_id[:2] + "***"
-    return chat_id[:4] + "***" + chat_id[-2:]
-
-
 async def verify_and_link(
     db: AsyncSession,
     code: str,
@@ -176,6 +164,28 @@ async def verify_and_link(
             reason=f"chat_id reassigned to user_id={user_id}",
             source=source,
         )
+        # Consent history parity: the displaced staff member loses delivery
+        # eligibility for the zalo_bot channel. Record a revoke row so the
+        # consent timeline shows the event alongside grant/unlink.
+        # SAVEPOINT + try/except: upsert_consent flushes; an IntegrityError
+        # would poison the session, but the SAVEPOINT __aexit__ rolls back
+        # cleanly when an exception bubbles, then the outer except logs +
+        # continues without blocking the link write.
+        try:
+            async with db.begin_nested():
+                await notification_consent_service.record_zalo_bot_consent(
+                    db,
+                    user_id=displaced_user_id,
+                    granted=False,
+                    source="displaced",
+                    actor_id=user_id,
+                )
+        except Exception:
+            log.warning(
+                "record_zalo_bot_consent (displaced) failed, link unblocked",
+                displaced_user_id=displaced_user_id,
+                exc_info=True,
+            )
 
     link = await repo.create_or_reactivate(user_id, chat_id, display_name)
     await _sync_preference(db, user_id, enabled=True, actor_user_id=user_id)
@@ -190,17 +200,36 @@ async def verify_and_link(
         actor_user_id=user_id,
         new_values={
             "user_id": user_id,
-            "chat_id_prefix": _audit_chat_id_prefix(chat_id),
+            "chat_id_prefix": mask_chat_id(chat_id),
             "display_name": display_name,
             "is_active": True,
         },
         source=source,
     )
 
+    # Consent history parity: a successful link grants zalo_bot consent
+    # for the new user. SAVEPOINT + try/except (see helper docstring) so
+    # an upsert IntegrityError can't poison the link transaction.
+    try:
+        async with db.begin_nested():
+            await notification_consent_service.record_zalo_bot_consent(
+                db,
+                user_id=user_id,
+                granted=True,
+                source="link",
+                actor_id=user_id,
+            )
+    except Exception:
+        log.warning(
+            "record_zalo_bot_consent (link) failed, link unblocked",
+            user_id=user_id,
+            exc_info=True,
+        )
+
     log.info(
         "Zalo Bot linked",
         user_id=user_id,
-        chat_id_prefix=_audit_chat_id_prefix(chat_id),
+        chat_id_prefix=mask_chat_id(chat_id),
         displaced_user_id=displaced_user_id,
     )
 
@@ -214,7 +243,7 @@ async def verify_and_link(
 
         _displaced_user_id = displaced_user_id
         _new_user_id = user_id
-        _chat_prefix = _audit_chat_id_prefix(chat_id)
+        _chat_prefix = mask_chat_id(chat_id)
 
         async def _post_commit() -> None:
             await safe_dispatch(
@@ -272,6 +301,27 @@ async def unlink(
         reason="user-initiated unlink",
         source=source,
     )
+
+    # Consent history parity: revoke row mirrors the unlink. ``source``
+    # propagates so audit trail can distinguish API unlink from webhook
+    # /huylienket unlink ("api" vs "zalo_bot_webhook"). SAVEPOINT +
+    # try/except (see helper docstring) so a flush failure can't poison
+    # the unlink transaction.
+    try:
+        async with db.begin_nested():
+            await notification_consent_service.record_zalo_bot_consent(
+                db,
+                user_id=user_id,
+                granted=False,
+                source=f"unlink:{source}",
+                actor_id=user_id,
+            )
+    except Exception:
+        log.warning(
+            "record_zalo_bot_consent (unlink) failed, unlink unblocked",
+            user_id=user_id,
+            exc_info=True,
+        )
 
     return True, "Đã huỷ liên kết.", None
 

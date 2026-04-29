@@ -121,7 +121,9 @@ class ZaloBotChannel(BaseChannel):
         # Logging: never echo the message body — it may carry PII via
         # template substitution. Mask the chat_id like the link service
         # does so log scraping doesn't leak the binding.
-        chat_prefix = (link.chat_id[:8] + "***") if link.chat_id else ""
+        from app.utils.masking import mask_chat_id
+
+        chat_prefix = mask_chat_id(link.chat_id)
 
         if result.success:
             log.info(

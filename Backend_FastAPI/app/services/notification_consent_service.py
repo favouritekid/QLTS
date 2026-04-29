@@ -143,6 +143,50 @@ async def grant_implied_zalo_consent(
         return False
 
 
+async def record_zalo_bot_consent(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    granted: bool,
+    source: str,
+    actor_id: Optional[int] = None,
+) -> None:
+    """Record consent state for a staff Zalo Bot binding.
+
+    Mirrors ``grant_implied_zalo_consent`` for the ``zalo_bot`` channel.
+    The bot binding is staff-internal (channel=``zalo_bot``,
+    source_type=``user``, source_id=user.id) — distinct from the
+    customer-facing ZNS channel (``zalo`` + ``lead``).
+
+    **Failure semantics**: this helper does NOT swallow exceptions.
+    ``upsert_consent`` flushes inline; an ``IntegrityError`` there
+    poisons the SQLAlchemy session and any subsequent
+    ``COMMIT TO SAVEPOINT`` raises ``PendingRollbackError`` — which
+    would kill the outer link transaction. Catching at this layer
+    cannot recover the savepoint state; only the SAVEPOINT's own
+    ``__aexit__`` rollback path can. So the contract is:
+
+    Caller MUST wrap the call in
+    ``try: async with db.begin_nested(): await record_zalo_bot_consent(...)
+    except Exception: log + continue`` so the SAVEPOINT rolls back
+    cleanly via the exception path before the catch sees it. The link
+    table remains source of truth for delivery gating; this is for
+    audit/compliance only.
+    """
+    await upsert_consent(
+        db,
+        data={
+            "channel": "zalo_bot",
+            "source_type": "user",
+            "source_id": user_id,
+            "consent_status": "granted" if granted else "revoked",
+            "consent_source": source,
+            "notes": f"zalo_bot {source}",
+        },
+        actor_id=actor_id,
+    )
+
+
 async def bulk_import_consents(
     db: AsyncSession,
     *,

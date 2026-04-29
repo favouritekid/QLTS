@@ -9,7 +9,12 @@ Tests the masking functions for sensitive PII data:
 """
 
 import pytest
-from app.utils.masking import mask_citizen_id, mask_phone, mask_email
+from app.utils.masking import (
+    mask_chat_id,
+    mask_citizen_id,
+    mask_email,
+    mask_phone,
+)
 
 
 class TestMaskCitizenId:
@@ -193,3 +198,39 @@ class TestMaskingIntegration:
         result3 = mask_citizen_id(cccd)
 
         assert result1 == result2 == result3
+
+
+class TestMaskChatId:
+    """F-5: Zalo Bot chat_id masking — first 4 + last 2."""
+
+    def test_long_chat_id_masks_middle(self):
+        result = mask_chat_id("12345678ABCDEFGHIJKL")
+        assert result == "1234***KL"
+
+    def test_returns_empty_string_for_none(self):
+        assert mask_chat_id(None) == ""
+
+    def test_returns_empty_string_for_empty(self):
+        assert mask_chat_id("") == ""
+
+    def test_short_chat_id_uses_two_char_prefix(self):
+        # <= 6 chars cannot show 4+2 without exposing everything; fall back
+        # to 2 + *** so we still hide enough to differentiate from raw value.
+        assert mask_chat_id("abc") == "ab***"
+        assert mask_chat_id("abcdef") == "ab***"
+
+    def test_seven_char_chat_id_masks_middle(self):
+        # Boundary: 7 chars -> first 4 + last 2 = "abcd***fg" (1 char hidden)
+        assert mask_chat_id("abcdefg") == "abcd***fg"
+
+    def test_only_exposes_six_of_twenty_chars(self):
+        # Confirm leak surface: 6/20 visible = 30% (vs old 8/20 = 40%).
+        masked = mask_chat_id("a" * 20)
+        # Count visible chars: prefix 4 + suffix 2 = 6.
+        visible = masked.replace("***", "")
+        assert len(visible) == 6
+
+    def test_format_uses_three_star_separator(self):
+        # Audit DB rows + notification dedup keys depend on the literal
+        # "***" separator; changing it would silently break dedup keys.
+        assert "***" in mask_chat_id("12345678ABCDEFGH")
