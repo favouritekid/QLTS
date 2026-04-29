@@ -181,13 +181,24 @@ docker compose logs celery-worker -f --tail=50
 
 ### Frontend
 
+**Use `scripts/fe-check.sh` (or `scripts\fe-check.cmd` on Windows)** for
+type-check / test / lint / build. The wrapper runs each command in a
+throw-away `docker compose run --rm --no-deps frontend ...` container
+so it cannot OOM-kill the live Next.js dev server (running `tsc` /
+`vitest` via `exec` has crashed PID 1 in the dev container, producing
+`err_empty_response` in the browser).
+
 ```bash
-docker compose exec frontend npm run test            # Vitest
-docker compose exec frontend npm run test:coverage    # Coverage
-docker compose exec frontend npm run type-check       # TypeScript
-docker compose exec frontend npm run lint             # ESLint
-docker compose exec frontend npm run build            # Production build
+./scripts/fe-check.sh type-check    # TypeScript (preferred)
+./scripts/fe-check.sh test          # Vitest
+./scripts/fe-check.sh test:coverage # Coverage
+./scripts/fe-check.sh lint          # ESLint
+./scripts/fe-check.sh build         # Production build
 ```
+
+Avoid `docker compose exec frontend npm run type-check` (and `test`,
+`build`) on a live dev container. `exec` is fine for one-off, low-RAM
+commands such as `npm install <pkg>`.
 
 ---
 
