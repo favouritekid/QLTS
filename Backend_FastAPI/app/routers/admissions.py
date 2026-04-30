@@ -35,6 +35,7 @@ from ..core.deps import (
 )
 from ..services import admission_service
 from ..services.notification_dispatcher import safe_dispatch, _rooms_for_admission, _rooms_for_lead
+from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
     ResourceNotFoundError,
@@ -774,6 +775,52 @@ async def submit_admission_profile(
         )
 
 
+# ---------------------------------------------------------------------------
+# ADM-032 — cross-tab realtime sync for document mutations
+#
+# Five doc mutation routes (upload / paper-submitted / verify-format /
+# reject / reset) broadcast a ``data_updated`` socket event after the DB
+# transaction settles so other tabs/officers viewing the same profile
+# pick up the change without an F5. Reuses the ``emit_data_updated``
+# helper already used for ``user`` / ``lead`` / ``organization``;
+# **no** new SystemEvents / notification_rule are introduced — those
+# are for persisted notifications, this is purely realtime UI sync.
+#
+# INVARIANT: emit happens AFTER ``db.commit()`` and (where the route
+# stages files via ``finalize``) AFTER ``finalize(True)``. A commit
+# failure or a finalize failure must NOT trigger emit — otherwise other
+# tabs would refetch and observe rolled-back / orphaned state.
+# ---------------------------------------------------------------------------
+
+async def _emit_admission_doc_mutation(
+    profile_id: int,
+    *,
+    document_action: str,
+    doc_code: str,
+) -> None:
+    """Best-effort realtime broadcast for a successful doc mutation.
+
+    Catches exceptions internally — failure to emit must not break the
+    HTTP response (the DB write already succeeded). Mirrors the
+    fail-soft pattern in ``user_service.emit_data_updated``.
+    """
+    try:
+        await _emit_realtime_update(
+            resource_type="admission_profile",
+            operation="update",
+            resource_id=profile_id,
+            data={"document_action": document_action, "doc_code": doc_code},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning(
+            "Realtime data_updated emit failed for admission_profile",
+            profile_id=profile_id,
+            document_action=document_action,
+            doc_code=doc_code,
+            error=str(exc),
+        )
+
+
 @limiter.limit(RateLimits.DATA_WRITE)
 @router.post(
     "/{profile_id}/documents/{doc_code}/upload",
@@ -817,6 +864,11 @@ async def upload_document(
             raise
         await finalize(True)
         await db.refresh(profile)
+        # ADM-032: emit AFTER finalize(True) so other tabs only refetch
+        # once the file is promoted to its final path.
+        await _emit_admission_doc_mutation(
+            profile_id, document_action="upload", doc_code=doc_code
+        )
         return profile
 
     except ResourceNotFoundError as e:
@@ -865,6 +917,10 @@ async def mark_document_paper_submitted(
         )
         await db.commit()
         await db.refresh(profile)
+        # ADM-032: emit AFTER commit settles.
+        await _emit_admission_doc_mutation(
+            profile_id, document_action="paper_submitted", doc_code=doc_code
+        )
         return profile
 
     except ResourceNotFoundError as e:
@@ -916,6 +972,10 @@ async def verify_document_format_endpoint(
         )
         await db.commit()
         await db.refresh(profile)
+        # ADM-032: emit AFTER commit settles.
+        await _emit_admission_doc_mutation(
+            profile_id, document_action="verify", doc_code=doc_code
+        )
         return profile
 
     except ResourceNotFoundError as e:
@@ -964,6 +1024,12 @@ async def reject_document_endpoint(
         )
         await db.commit()
         await post_commit()
+        # ADM-032: emit AFTER post_commit so other tabs see the
+        # rejected status. Service returns ``dict``, not the profile —
+        # ``profile_id`` from the path is the source of truth.
+        await _emit_admission_doc_mutation(
+            profile_id, document_action="reject", doc_code=doc_code
+        )
         return result
 
     except ResourceNotFoundError as e:
@@ -1026,6 +1092,11 @@ async def reset_document_endpoint(
             raise
         await finalize(True)
         await db.refresh(profile)
+        # ADM-032: emit AFTER finalize(True) so other tabs see the
+        # reset state only once the old file is actually deleted.
+        await _emit_admission_doc_mutation(
+            profile_id, document_action="reset", doc_code=doc_code
+        )
         return profile
 
     except ResourceNotFoundError as e:

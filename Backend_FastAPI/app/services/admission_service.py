@@ -4624,13 +4624,14 @@ async def reset_document(
 
     await db.flush()
 
-    # Re-compute validation_summary with updated documents
+    # G2 (ADM-032 bundled) — full response contract parity. Mirrors
+    # upload_document / confirm_document_format / mark_paper_submitted
+    # so the mutation response includes permissions / available_actions
+    # etc. Was missed in PR #169 (only 3/4 services switched to
+    # _populate_response_fields).
     documents = await admission_repo.get_all_documents(profile_id)
-    _compute_frontend_fields(
-        profile,
-        current_user,
-        documents,
-        await _resolve_verifier_names(db, documents),
+    await _populate_response_fields(
+        db, profile, current_user, documents=documents
     )
 
     log.info(
