@@ -279,6 +279,11 @@ async def create_admission_profile(
             lead_id=data.lead_id,
             admission_method_id=data.admission_method_id,  # NEW: Required for AdmissionPath lookup
             current_user=current_user,
+            # ADM-017: forward optional academic_year. Service binds to
+            # the specific (offering, year) OfferingAcademicInfo when
+            # provided; falls back to first-published when omitted
+            # (legacy contract for backward-compat during FE rollout).
+            academic_year=data.academic_year,
         )
 
         # Transaction commit (Router responsibility)

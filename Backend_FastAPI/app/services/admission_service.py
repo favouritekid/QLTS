@@ -2365,6 +2365,7 @@ async def create_profile(
     lead_id: int,
     admission_method_id: int,  # NEW: Required parameter for relational lookup
     current_user: models.User,
+    academic_year: Optional[int] = None,
 ) -> models.AdmissionProfile:
     """
     Create new AdmissionProfile for a Lead.
@@ -2496,17 +2497,66 @@ async def create_profile(
             f"Program offering {lead.offering_id} not found"
         )
 
-    # Step 6: Get published OfferingAcademicInfo for this offering
+    # Step 6: Get published OfferingAcademicInfo for this offering.
+    #
+    # ADM-017: when ``academic_year`` is provided, bind to the
+    # specific (offering, year) row and require it to be published.
+    # When omitted (legacy callers), fall back to "first published"
+    # — same behaviour as before, with a deprecation warning so we
+    # can track FE rollout. After all callers pass academic_year,
+    # a follow-up PR removes this fallback and flips the schema
+    # field to required.
     academic_info_list = await org_repo.get_academic_info_history(
-        lead.offering_id, 
-        published_only=False
+        lead.offering_id,
+        published_only=False,
     )
-    
-    academic_info = next(
-        (info for info in academic_info_list if info.is_published),
-        academic_info_list[0] if academic_info_list else None
-    )
-    
+
+    if academic_year is not None:
+        academic_info = next(
+            (
+                info
+                for info in academic_info_list
+                if info.academic_year == academic_year
+            ),
+            None,
+        )
+        if not academic_info:
+            log.warning(
+                "No academic info found for offering+academic_year",
+                offering_id=lead.offering_id,
+                academic_year=academic_year,
+            )
+            raise BadRequest(
+                f"Không tìm thấy năm học {academic_year} cho chương trình "
+                f"này (offering {lead.offering_id}). Vui lòng kiểm tra "
+                "cấu hình năm học hoặc chọn năm khác."
+            )
+        if not academic_info.is_published:
+            log.warning(
+                "academic_year requested but not published",
+                offering_id=lead.offering_id,
+                academic_year=academic_year,
+                academic_info_id=academic_info.id,
+            )
+            raise BadRequest(
+                f"Năm học {academic_year} của chương trình này chưa "
+                "được công bố tuyển sinh. Vui lòng chọn năm khác hoặc "
+                "liên hệ admin để công bố."
+            )
+    else:
+        # Legacy fallback — first published, else first row of history.
+        log.warning(
+            "create_profile called without academic_year (deprecated). "
+            "Falling back to first published OfferingAcademicInfo. "
+            "FE callers should migrate to passing academic_year.",
+            lead_id=lead_id,
+            offering_id=lead.offering_id,
+        )
+        academic_info = next(
+            (info for info in academic_info_list if info.is_published),
+            academic_info_list[0] if academic_info_list else None,
+        )
+
     if not academic_info:
         log.warning(
             "No academic info found for offering",
