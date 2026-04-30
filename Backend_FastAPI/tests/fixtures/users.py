@@ -8,7 +8,8 @@ Standard return: dict with id, username, email, password.
 import logging
 from typing import Optional
 
-from sqlalchemy import insert
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 log = logging.getLogger(__name__)
 
@@ -42,16 +43,37 @@ async def create_user_with_role(
     user_info = {}
     async with session_factory() as session:
         async with session.begin():
-            user = models.User(
-                username=user_data["username"],
-                email=user_data["email"],
-                password_hash=get_password_hash(user_data["password"]),
-                role=user_data["role"],
-                status=user_data["status"],
-                unit_id=unit_id,
+            # Dirty-state safety: ``_truncate_all_tables`` occasionally
+            # leaves a row from the prior session (qlts_test cleanup
+            # races — see memory ``reference_test_db_schema_source``).
+            # Reuse the existing row instead of hitting
+            # ``ix_user_username`` UNIQUE.
+            existing = await session.execute(
+                select(models.User).where(
+                    models.User.username == user_data["username"]
+                )
             )
-            session.add(user)
-            await session.flush()
+            user = existing.scalar_one_or_none()
+            if user is None:
+                user = models.User(
+                    username=user_data["username"],
+                    email=user_data["email"],
+                    password_hash=get_password_hash(user_data["password"]),
+                    role=user_data["role"],
+                    status=user_data["status"],
+                    unit_id=unit_id,
+                )
+                session.add(user)
+                await session.flush()
+            else:
+                # Reset mutable fields so the recycled row matches what
+                # the test expects (login + RBAC).
+                user.email = user_data["email"]
+                user.password_hash = get_password_hash(user_data["password"])
+                user.role = user_data["role"]
+                user.status = user_data["status"]
+                user.unit_id = unit_id
+                await session.flush()
             db_user_id = user.id
             if not db_user_id:
                 raise Exception(
@@ -59,8 +81,15 @@ async def create_user_with_role(
                 )
 
             if CasbinRule:
-                casbin_policy = insert(CasbinRule).values(
-                    ptype="g", v0=f"user:{db_user_id}", v1=casbin_role
+                # Casbin grouping rule may also survive a failed
+                # truncate — ON CONFLICT DO NOTHING keeps the fixture
+                # idempotent on re-entry.
+                casbin_policy = (
+                    pg_insert(CasbinRule)
+                    .values(
+                        ptype="g", v0=f"user:{db_user_id}", v1=casbin_role
+                    )
+                    .on_conflict_do_nothing()
                 )
                 await session.execute(casbin_policy)
 

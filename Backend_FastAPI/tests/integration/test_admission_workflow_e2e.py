@@ -1176,21 +1176,35 @@ class TestDiamondInheritancePermissions:
         assert ("/api/payments", "POST") not in manager_actions
         assert ("/api/fees/calculate", "POST") not in manager_actions
     
-    def test_officer_template_lacks_finance_operations(self):
-        """Officer should NOT have finance operation permissions."""
+    def test_officer_template_finance_scope(self):
+        """Officer must keep accountant-only finance writes off, but
+        retains the scoped operations they need to drive payment flow.
+
+        Per chat-thread decision ``admission-audit-decisions-2026-04-24``
+        ("officer scoped fee calc"), ``POST /api/fees/calculate`` is now
+        on the officer template — the officer needs it to compute the
+        fee for an approved/confirmed/enrolled profile before sending
+        the payment link. The earlier ``not in`` assertion no longer
+        matches the policy and was the test-debt fix flagged in the
+        ADM-007 audit arc.
+
+        Recording payments and issuing invoices remain accountant-only
+        — officer is still firewalled from those writes.
+        """
         from app.casbin_config.policy_templates import OFFICER_TEMPLATE
-        
+
         officer_actions = [
             (p["object"], p["action"])
             for p in OFFICER_TEMPLATE["policies"]
         ]
-        
-        # Officer should NOT have finance write operations
+
+        # Accountant-only writes — officer must NOT carry these.
         assert ("/api/payments", "POST") not in officer_actions
-        assert ("/api/fees/calculate", "POST") not in officer_actions
         assert ("/api/invoices/{id}/issue", "PUT") not in officer_actions
-        
-        # But CAN create payment intent (for online payment links)
+
+        # Officer-scoped writes — officer NEEDS these to drive payment
+        # flow without round-tripping through accountant.
+        assert ("/api/fees/calculate", "POST") in officer_actions
         assert ("/api/payments/intents", "POST") in officer_actions
 
 
