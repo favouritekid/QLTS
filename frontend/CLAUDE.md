@@ -78,16 +78,34 @@ const score = data.score; // Zod will fail if missing
 
 ## Common Commands (Docker)
 
-All commands run inside the frontend container via `docker compose exec`.
+For type-check / test / lint / build, **prefer the wrapper**
+`scripts/fe-check.sh` (Unix) or `scripts\fe-check.cmd` (Windows). The
+wrapper runs each command in a throw-away `docker compose run --rm
+--no-deps frontend ...` container so it cannot OOM-kill the live
+Next.js dev server. Running `tsc` or `vitest` via `docker compose
+exec` against the live container has crashed PID 1 (Next.js) in the
+past, producing `err_empty_response` in the browser.
+
+> **Run from the repository root.** The wrapper path is
+> `scripts/fe-check.sh` relative to repo root, and `docker compose`
+> needs `docker-compose.yml` in the working directory. If you are
+> currently inside `frontend/`, `cd ..` first (or use the absolute
+> path `bash D:/QLTS/scripts/fe-check.sh`).
+
+```bash
+# from repo root (e.g. D:/QLTS or ~/QLTS)
+./scripts/fe-check.sh type-check          # TypeScript
+./scripts/fe-check.sh test                # Vitest
+./scripts/fe-check.sh test:coverage       # Coverage
+./scripts/fe-check.sh lint                # ESLint
+./scripts/fe-check.sh lint:fix            # ESLint auto-fix
+./scripts/fe-check.sh build               # Production build
+```
+
+`docker compose exec` is still fine for low-RAM, in-container actions:
 
 ```bash
 docker compose exec frontend npm run dev             # Dev server (auto-started by override)
-docker compose exec frontend npm run build            # Production build
-docker compose exec frontend npm run type-check       # TypeScript checking
-docker compose exec frontend npm run lint             # ESLint check
-docker compose exec frontend npm run lint:fix         # ESLint auto-fix
-docker compose exec frontend npm run test             # Vitest
-docker compose exec frontend npm run test:coverage    # Coverage report
-docker compose exec frontend npm install [package]    # Install package
+docker compose exec frontend npm install [package]   # Install package
 ```
 
