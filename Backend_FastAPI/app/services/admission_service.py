@@ -4103,15 +4103,17 @@ async def upload_document(
 
         await db.flush()
 
-        # ✅ Re-compute validation_summary with updated documents
+        # ✅ G2 (ADM-032 partial) — populate full response contract so the
+        # mutation response carries permissions / available_actions /
+        # eligibility_status / completion_percent etc. matching a
+        # subsequent GET. Replaces the previous stand-alone
+        # ``_compute_frontend_fields`` call which only set part of the
+        # frontend computed surface and left FE having to refetch.
         from app.repositories import AdmissionRepository
         admission_repo_refresh = AdmissionRepository(db)
         documents = await admission_repo_refresh.get_all_documents(profile_id)
-        _compute_frontend_fields(
-            profile,
-            current_user,
-            documents,
-            await _resolve_verifier_names(db, documents),
+        await _populate_response_fields(
+            db, profile, current_user, documents=documents
         )
 
         # ✅ AUDIT LOG: Track document upload
@@ -4307,13 +4309,14 @@ async def confirm_document_format(
 
     await db.flush()
 
-    # 3. Re-compute validation_summary with updated documents
+    # 3. G2 (ADM-032 partial) — full response contract parity. See
+    # commit message: returning AdmissionProfile from a mutation
+    # without _populate_response_fields leaves permissions /
+    # available_actions / eligibility_status at schema defaults, so
+    # the FE has to refetch via GET to render the row correctly.
     documents = await admission_repo.get_all_documents(profile_id)
-    _compute_frontend_fields(
-        profile,
-        current_user,
-        documents,
-        await _resolve_verifier_names(db, documents),
+    await _populate_response_fields(
+        db, profile, current_user, documents=documents
     )
 
     # ✅ AUDIT LOG: Track document verification
@@ -4416,13 +4419,12 @@ async def mark_paper_submitted(
         declared_format=actual_submission_format,
     )
 
-    # ✅ Re-compute validation_summary with updated documents
+    # G2 (ADM-032 partial) — full response contract parity. Mirrors
+    # the upload_document / confirm_document_format pattern so the
+    # mutation response includes permissions / available_actions etc.
     documents = await admission_repo.get_all_documents(profile_id)
-    _compute_frontend_fields(
-        profile,
-        current_user,
-        documents,
-        await _resolve_verifier_names(db, documents),
+    await _populate_response_fields(
+        db, profile, current_user, documents=documents
     )
 
     log.info(
