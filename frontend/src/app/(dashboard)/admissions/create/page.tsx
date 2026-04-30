@@ -21,6 +21,7 @@ import { useCreateAdmission } from "@/hooks/admissions"
 import { useLead } from "@/hooks/useLeads"
 import { useQuery } from "@tanstack/react-query"
 import { api } from "@/lib/api/client"
+import { getPathsForOffering } from "@/lib/api/admission-paths"
 import { toast } from "sonner"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import type { LeadAdmissionBlocker } from "@/types/lead.types"
@@ -71,28 +72,54 @@ function useAdmissionMethods() {
   })
 }
 
+// ADM-017 review-fix: fetch ACTIVE admission paths for the lead's
+// offering. Each path carries ``academic_info.academic_year`` + the
+// nested ``admission_method`` it's wired to. We derive both the year
+// dropdown options AND the method dropdown options from this list,
+// scoped to the selected year — this is the single source of truth
+// the backend uses at ``create_profile`` time, so a path-driven UI
+// guarantees the form can't submit a (year, method) pair the
+// backend will reject.
+function usePathsForOffering(offeringId: number | null | undefined) {
+  return useQuery({
+    queryKey: ["admission-paths", "for-offering", offeringId],
+    queryFn: () =>
+      offeringId ? getPathsForOffering(offeringId) : Promise.resolve([]),
+    enabled: !!offeringId,
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
 export default function CreateAdmissionPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const leadId = searchParams.get("lead_id")
   
-  // State for selected admission method
+  // ADM-017 review-fix: NO calendar-year default. The original FE
+  // PR defaulted to ``new Date().getFullYear()`` — during a year
+  // transition (vd: cuối 2026 ↔ đầu 2027 với cả 2 năm vẫn published)
+  // an officer creating a profile for a 2027 cohort could click
+  // submit without touching the field and silently bind to 2026.
+  // This recreates the original implicit-selection bug the BE
+  // phase tried to remove. Now the year is derived from the
+  // offering's active paths and either:
+  //   - auto-selected when only ONE eligible year exists, OR
+  //   - left empty (officer must pick) when multiple years exist.
+  const [academicYear, setAcademicYear] = useState<number | null>(null)
   const [selectedMethodId, setSelectedMethodId] = useState<number | null>(null)
-  // ADM-017: state for academic year selection. Default = current
-  // calendar year — officer can adjust if creating a profile for a
-  // different recruitment year. Backend strictly validates that the
-  // (offering_id, academic_year) ``OfferingAcademicInfo`` row exists
-  // and is published; mismatch surfaces as a 400 with a Vietnamese
-  // message that we let the mutation hook's ``handleApiError`` render.
-  const [academicYear, setAcademicYear] = useState<number>(
-    new Date().getFullYear()
-  )
-  
+
   const { data: lead, isLoading: isLoadingLead } = useLead(
     leadId ? parseInt(leadId) : 0,
     !!leadId // enabled - only fetch when leadId is present
   )
-  
+
+  // Path-driven dropdowns (review-fix). We still keep
+  // ``useAdmissionMethods`` around as a fallback display label
+  // source — names live there. The actual gate on which methods
+  // appear in the dropdown is derived from active paths.
+  const { data: paths = [], isLoading: isLoadingPaths } = usePathsForOffering(
+    lead?.offering_id ?? null
+  )
   const { data: methods = [], isLoading: isLoadingMethods } = useAdmissionMethods()
   
   const createMutation = useCreateAdmission()
@@ -113,9 +140,51 @@ export default function CreateAdmissionPage() {
       router.push("/leads")
     }
   }, [leadId, router])
+
+  // ADM-017 review-fix: derive eligible years + per-year method list
+  // from the offering's active paths. Path response shape carries
+  // ``academic_info.academic_year`` (offering-side cohort) and
+  // ``admission_method`` (the path's wired method). Single source of
+  // truth = same data the backend reads at ``create_profile``.
+  const pathsByYear = new Map<number, typeof paths>()
+  for (const p of paths) {
+    const year = p.academic_info?.academic_year
+    if (typeof year !== "number") continue
+    const list = pathsByYear.get(year) ?? []
+    list.push(p)
+    pathsByYear.set(year, list)
+  }
+  const eligibleYears = Array.from(pathsByYear.keys()).sort((a, b) => b - a)
+
+  // Auto-select when there's only one eligible year (saves a click;
+  // doesn't reintroduce the silent-default bug because there's no
+  // ambiguity to silence).
+  useEffect(() => {
+    if (eligibleYears.length === 1 && academicYear === null) {
+      setAcademicYear(eligibleYears[0])
+    }
+  }, [eligibleYears, academicYear])
+
+  // Reset method when year changes — a method that was valid for
+  // year A might have no path for year B.
+  useEffect(() => {
+    setSelectedMethodId(null)
+  }, [academicYear])
+
+  // Methods filtered by selected year's paths. ``useAdmissionMethods``
+  // still drives display name lookup; the gate is path-membership.
+  const methodsForYear: AdmissionMethod[] = (() => {
+    if (academicYear === null) return []
+    const yearPaths = pathsByYear.get(academicYear) ?? []
+    const idsInYear = new Set(yearPaths.map((p) => p.admission_method_id))
+    return methods.filter((m) => m.is_active && idsInYear.has(m.id))
+  })()
   
   const handleCreate = async () => {
-    if (!leadId || !selectedMethodId) return
+    // Submit guard mirrors the disabled state on the button below —
+    // both year and method are required. This double-check guards
+    // against a future change that loosens the disabled prop.
+    if (!leadId || !selectedMethodId || academicYear === null) return
 
     // Note: useCreateAdmission hook already handles success toast and navigation
     // Error is also handled via handleApiError() in the hook
@@ -127,13 +196,10 @@ export default function CreateAdmissionPage() {
       academic_year: academicYear,
     })
   }
-  
+
   if (!leadId) {
     return null
   }
-  
-  // Filter to only active methods
-  const activeMethods = methods.filter(m => m.is_active)
   
   return (
     <PageContainer maxWidth="sm">
@@ -224,61 +290,91 @@ export default function CreateAdmissionPage() {
             </div>
           )}
           
-          {/* ADM-017: Academic year input — required by backend
-              ``admissionProfileCreateSchema``. Backend validates the
-              (offering_id, academic_year) ``OfferingAcademicInfo``
-              row exists + is published; mismatch surfaces as a 400
-              with a Vietnamese message. Default = current calendar
-              year (officer adjusts when creating profile for a
-              different recruitment year). */}
+          {/* ADM-017 review-fix: Academic year selection is now
+              path-driven. Options come from the offering's active
+              paths (``/api/admission-config/paths/for-offering/{id}``);
+              same source the backend uses at ``create_profile`` time,
+              so the dropdown can never offer a year the backend
+              would reject. No calendar-year default — when multiple
+              eligible years exist the officer must pick explicitly,
+              eliminating the silent-bind-to-wrong-year bug from the
+              original FE PR. */}
           <div className="space-y-2">
             <Label htmlFor="academic-year">
               Năm học <span className="text-destructive">*</span>
             </Label>
-            <input
-              id="academic-year"
-              type="number"
-              min={2000}
-              max={2100}
-              value={academicYear}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
-                if (!Number.isNaN(v)) setAcademicYear(v);
-              }}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-              aria-describedby="academic-year-hint"
-            />
-            <p id="academic-year-hint" className="text-xs text-muted-foreground">
-              Năm tuyển sinh hồ sơ thuộc về (vd. 2026). Backend xác minh
-              năm có cấu hình tuyển sinh đã công bố cho chương trình này.
+            {isLoadingPaths ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Đang tải năm học khả dụng...
+              </div>
+            ) : eligibleYears.length === 0 ? (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4" />
+                Chương trình của lead này chưa có path tuyển sinh
+                active. Vui lòng cấu hình ở Admission Config.
+              </div>
+            ) : (
+              <Select
+                value={academicYear?.toString() ?? ""}
+                onValueChange={(value) =>
+                  setAcademicYear(value ? parseInt(value, 10) : null)
+                }
+              >
+                <SelectTrigger id="academic-year">
+                  <SelectValue placeholder="Chọn năm tuyển sinh" />
+                </SelectTrigger>
+                <SelectContent>
+                  {eligibleYears.map((year) => (
+                    <SelectItem key={year} value={year.toString()}>
+                      {year}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Chỉ liệt kê các năm có path tuyển sinh đang hoạt động cho
+              chương trình của lead.
             </p>
           </div>
 
-          {/* Admission Method Selection - NEW */}
+          {/* Admission Method Selection — filtered by selected year's
+              active paths (review-fix). Dropdown is empty until a
+              year is chosen, so officer can't pick a method that has
+              no path for that year. */}
           <div className="space-y-2">
             <Label htmlFor="admission-method">
               Phương thức xét tuyển <span className="text-destructive">*</span>
             </Label>
-            {isLoadingMethods ? (
+            {academicYear === null ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <AlertCircle className="h-4 w-4" />
+                Chọn năm học trước để hiện danh sách phương thức.
+              </div>
+            ) : isLoadingMethods || isLoadingPaths ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Đang tải phương thức...
               </div>
-            ) : activeMethods.length === 0 ? (
+            ) : methodsForYear.length === 0 ? (
               <div className="flex items-center gap-2 text-sm text-destructive">
                 <AlertCircle className="h-4 w-4" />
-                Không có phương thức xét tuyển khả dụng
+                Năm {academicYear} không có phương thức xét tuyển khả
+                dụng cho chương trình này.
               </div>
             ) : (
               <Select
                 value={selectedMethodId?.toString() ?? ""}
-                onValueChange={(value) => setSelectedMethodId(value ? parseInt(value) : null)}
+                onValueChange={(value) =>
+                  setSelectedMethodId(value ? parseInt(value, 10) : null)
+                }
               >
                 <SelectTrigger id="admission-method">
                   <SelectValue placeholder="Chọn phương thức xét tuyển" />
                 </SelectTrigger>
                 <SelectContent>
-                  {activeMethods.map((method) => (
+                  {methodsForYear.map((method) => (
                     <SelectItem key={method.id} value={method.id.toString()}>
                       {method.name}
                     </SelectItem>
@@ -302,7 +398,13 @@ export default function CreateAdmissionPage() {
             <Button
               className="flex-1"
               onClick={handleCreate}
-              disabled={createMutation.isPending || !lead || !canCreateAdmission || !selectedMethodId}
+              disabled={
+                createMutation.isPending ||
+                !lead ||
+                !canCreateAdmission ||
+                !selectedMethodId ||
+                academicYear === null
+              }
             >
               {createMutation.isPending ? (
                 <>
