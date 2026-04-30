@@ -41,7 +41,7 @@ from fastapi import (
     UploadFile,
     status as http_status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import EmailStr, TypeAdapter, ValidationError
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,7 +111,11 @@ async def log_admin_activity(
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
-@router.post("", status_code=http_status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=http_status.HTTP_201_CREATED,
+    response_model=schemas.UserAdminResponse,
+)
 async def create_new_user(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
@@ -125,15 +129,34 @@ async def create_new_user(
     avatar: Optional[UploadFile] = File(None),
 ):
     """(Admin only) Tạo một người dùng mới, có hỗ trợ upload avatar."""
-    user_in = schemas.AdminUserCreate(
-        username=username,
-        email=email,
-        password=password,
-        confirm_password=password,
-        full_name=full_name,
-        role=role,
-        status=status,
-    )
+    # Form() bypasses FastAPI's body validation, so we construct
+    # AdminUserCreate manually. Surface pydantic field errors as the
+    # 422 contract the rest of the admin/* tests expect — without this
+    # the inline error bubbles to the generic 500 handler.
+    try:
+        user_in = schemas.AdminUserCreate(
+            username=username,
+            email=email,
+            password=password,
+            confirm_password=password,
+            full_name=full_name,
+            role=role,
+            status=status,
+        )
+    except ValidationError as exc:
+        return JSONResponse(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={
+                "detail": "Validation Error",
+                "errors": [
+                    {
+                        "field": ".".join(str(loc) for loc in err.get("loc", [])),
+                        "message": err.get("msg", ""),
+                    }
+                    for err in exc.errors()
+                ],
+            },
+        )
 
     # ✅ SECURITY: Prevent privilege escalation - users can only create roles below their own
     _role_hierarchy = {
@@ -243,7 +266,7 @@ async def get_all_users(
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
-@router.get("/list")
+@router.get("/list", response_model=List[schemas.UserAdminResponse])
 async def list_users(
     request: Request,
     unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
@@ -772,7 +795,7 @@ async def get_user_statistics(
 # ============================================================================
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
-@router.get("/{user_id}")
+@router.get("/{user_id}", response_model=schemas.UserAdminResponse)
 async def get_user_details(
     request: Request,
     user_id: int,
@@ -802,7 +825,7 @@ async def get_user_details(
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
-@router.put("/{user_id}")
+@router.put("/{user_id}", response_model=schemas.UserAdminResponse)
 async def update_existing_user(
     request: Request,  # Required for rate limiter (must be first)
     user_id: int,
