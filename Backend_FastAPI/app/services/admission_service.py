@@ -8315,8 +8315,6 @@ async def bulk_assign(
     Returns:
         Dict with success_count, failed_count, failed_ids, errors, message
     """
-    from app.repositories import AdmissionRepository
-
     if assigner.role not in [UserRole.ADMIN, UserRole.MANAGER]:
         raise PermissionDeniedError("Only Managers or Admins can assign profiles")
 
@@ -8340,18 +8338,82 @@ async def bulk_assign(
         if officer.unit_id != assigner.unit_id:
             raise BadRequest("Cannot assign to officer from different unit")
 
-    repo = AdmissionRepository(db)
     success_count = 0
     failed_ids = []
     errors: Dict[int, str] = {}
 
-    for profile_id in profile_ids:
+    # ADM-011: lock the **lead** row (the row we actually write to —
+    # ``lead.assigned_officer_id``) so two concurrent admission
+    # ``bulk_assign`` calls on the same profile serialise. Sister
+    # service ``bulk_approve`` (line ~7826) already runs under
+    # ``with_for_update()`` on the profile; ``bulk_assign`` was
+    # missed when written. Pre-fix, the racing bulk_assign's commit
+    # would overwrite without error / log warn and the audit chain
+    # would record ``old=NULL`` (stale read). See memory
+    # ``project_adm_011_030_audit``.
+    #
+    # **SCOPE**: this fix protects bulk_assign vs bulk_assign. Other
+    # lead-assignment paths (e.g.
+    # ``lead_service.assign_lead_manually``) currently read via
+    # plain ``get_lead_by_id`` without a row lock — they could still
+    # race against a concurrent bulk_assign at the read-old-state
+    # phase. Tightening those callers to take ``Lead FOR UPDATE``
+    # before the read is tracked separately as a follow-up; it does
+    # NOT happen here.
+    #
+    # **Sort ascending** before the loop so every concurrent
+    # bulk_assign caller takes locks in the same global order —
+    # eliminates the AB-BA deadlock cycle two managers bulk-assigning
+    # the same set in different orders would otherwise create.
+    #
+    # **``with_for_update(of=models.Lead)``** scopes the lock to the
+    # lead table only. Without ``of=...``, Postgres locks every table
+    # touched by the JOIN (i.e. would also lock
+    # ``admission_profile`` rows) — needlessly broad and would
+    # interfere with concurrent doc/status/score mutations on the
+    # same profile that don't conflict with assignment.
+    for profile_id in sorted(profile_ids):
         try:
-            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            # Step 1: lock the lead row (the row we actually write
+            # to). ``populate_existing=True`` forces SQLAlchemy to
+            # overwrite any cached identity-map state with fresh DB
+            # data — necessary because under concurrent contention
+            # the lock may release with the row at a newer committed
+            # version than what the session's snapshot had cached.
+            stmt = (
+                select(models.Lead)
+                .join(
+                    models.AdmissionProfile,
+                    models.Lead.id == models.AdmissionProfile.lead_id,
+                )
+                .where(models.AdmissionProfile.id == profile_id)
+                .with_for_update(of=models.Lead)
+                .execution_options(populate_existing=True)
+            )
+            lead_locked = (await db.execute(stmt)).scalar_one_or_none()
+            if not lead_locked:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Profile not found"
+                continue
+
+            # Step 2: load profile (no lock — assignment doesn't write
+            # to profile fields). ``populate_existing`` ensures any
+            # cached profile object also gets refreshed.
+            profile_stmt = (
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == profile_id)
+                .options(selectinload(models.AdmissionProfile.lead))
+                .execution_options(populate_existing=True)
+            )
+            profile = (await db.execute(profile_stmt)).scalar_one_or_none()
             if not profile:
                 failed_ids.append(profile_id)
                 errors[profile_id] = "Profile not found"
                 continue
+            # Pin the locked lead row onto the profile so the audit
+            # log + IDOR check below read the freshly-locked state,
+            # not whatever SQLAlchemy lazily-loaded earlier.
+            profile.lead = lead_locked
 
             # IDOR check for non-admin (return "not found" to prevent enumeration)
             if assigner.role != UserRole.ADMIN and profile.lead.unit_id != assigner.unit_id:
@@ -8359,9 +8421,24 @@ async def bulk_assign(
                 errors[profile_id] = "Profile not found"
                 continue
 
-            # Update lead assignment
+            # Update lead assignment + bump ``lead.version``. The
+            # version bump is the optimistic-lock signal a UI client
+            # uses to detect "someone else updated this lead" — every
+            # other lead writer in the codebase bumps it (see
+            # ``lead_service.py`` patterns), and skipping it here
+            # would let a stale-snapshot client overwrite our
+            # assignment without the version-mismatch guard kicking in.
+            #
+            # ``profile.version`` is **not** bumped — assignment writes
+            # to the lead row, not the profile row. Profile version
+            # semver tracks profile-level mutations (status / scores /
+            # applied_rules); bumping it on assignment would force
+            # unrelated optimistic-lock UI callers
+            # (approve/update/etc.) to re-fetch, which is
+            # over-aggressive cache invalidation.
             _old_officer_id = profile.lead.assigned_officer_id
             profile.lead.assigned_officer_id = officer_id
+            profile.lead.version = (profile.lead.version or 1) + 1
             success_count += 1
 
             # Audit trail
