@@ -95,18 +95,15 @@ export default function CreateAdmissionPage() {
   const searchParams = useSearchParams()
   const leadId = searchParams.get("lead_id")
   
-  // ADM-017 review-fix: NO calendar-year default. The original FE
-  // PR defaulted to ``new Date().getFullYear()`` — during a year
-  // transition (vd: cuối 2026 ↔ đầu 2027 với cả 2 năm vẫn published)
-  // an officer creating a profile for a 2027 cohort could click
-  // submit without touching the field and silently bind to 2026.
-  // This recreates the original implicit-selection bug the BE
-  // phase tried to remove. Now the year is derived from the
-  // offering's active paths and either:
-  //   - auto-selected when only ONE eligible year exists, OR
-  //   - left empty (officer must pick) when multiple years exist.
-  const [academicYear, setAcademicYear] = useState<number | null>(null)
-  const [selectedMethodId, setSelectedMethodId] = useState<number | null>(null)
+  // ADM-017 review-fix: NO calendar-year default. State only holds
+  // the OFFICER'S EXPLICIT PICK; the effective ``academicYear`` /
+  // ``selectedMethodId`` rendered in the UI are *derived* below
+  // from picked-state + eligible options. This shape avoids the
+  // ``react-hooks/set-state-in-effect`` lint rule (CI-strict) that
+  // would otherwise fire on a "useEffect → setState" auto-select
+  // pattern.
+  const [pickedYear, setPickedYear] = useState<number | null>(null)
+  const [pickedMethodId, setPickedMethodId] = useState<number | null>(null)
 
   const { data: lead, isLoading: isLoadingLead } = useLead(
     leadId ? parseInt(leadId) : 0,
@@ -156,29 +153,36 @@ export default function CreateAdmissionPage() {
   }
   const eligibleYears = Array.from(pathsByYear.keys()).sort((a, b) => b - a)
 
-  // Auto-select when there's only one eligible year (saves a click;
-  // doesn't reintroduce the silent-default bug because there's no
-  // ambiguity to silence).
-  useEffect(() => {
-    if (eligibleYears.length === 1 && academicYear === null) {
-      setAcademicYear(eligibleYears[0])
-    }
-  }, [eligibleYears, academicYear])
-
-  // Reset method when year changes — a method that was valid for
-  // year A might have no path for year B.
-  useEffect(() => {
-    setSelectedMethodId(null)
-  }, [academicYear])
+  // Effective year (derived) — fall through:
+  //   1. officer's explicit pick → use it
+  //   2. exactly 1 eligible year → auto-select (no ambiguity to silence)
+  //   3. otherwise → null (officer must pick)
+  // Auto-selecting only when ``eligibleYears.length === 1`` keeps
+  // the original anti-implicit-selection guarantee from the prior
+  // review fix.
+  const academicYear: number | null =
+    pickedYear ?? (eligibleYears.length === 1 ? eligibleYears[0] : null)
 
   // Methods filtered by selected year's paths. ``useAdmissionMethods``
   // still drives display name lookup; the gate is path-membership.
-  const methodsForYear: AdmissionMethod[] = (() => {
-    if (academicYear === null) return []
-    const yearPaths = pathsByYear.get(academicYear) ?? []
-    const idsInYear = new Set(yearPaths.map((p) => p.admission_method_id))
-    return methods.filter((m) => m.is_active && idsInYear.has(m.id))
-  })()
+  const methodsForYear: AdmissionMethod[] =
+    academicYear === null
+      ? []
+      : (() => {
+          const yearPaths = pathsByYear.get(academicYear) ?? []
+          const idsInYear = new Set(yearPaths.map((p) => p.admission_method_id))
+          return methods.filter((m) => m.is_active && idsInYear.has(m.id))
+        })()
+
+  // Effective method (derived) — invalidates the picked id if the
+  // year change rendered it ineligible for that year. Replaces the
+  // prior ``useEffect(() => setSelectedMethodId(null), [academicYear])``
+  // cascade reset; same behaviour, no setState-in-effect.
+  const selectedMethodId: number | null =
+    pickedMethodId !== null &&
+    methodsForYear.some((m) => m.id === pickedMethodId)
+      ? pickedMethodId
+      : null
   
   const handleCreate = async () => {
     // Submit guard mirrors the disabled state on the button below —
@@ -318,7 +322,7 @@ export default function CreateAdmissionPage() {
               <Select
                 value={academicYear?.toString() ?? ""}
                 onValueChange={(value) =>
-                  setAcademicYear(value ? parseInt(value, 10) : null)
+                  setPickedYear(value ? parseInt(value, 10) : null)
                 }
               >
                 <SelectTrigger id="academic-year">
@@ -367,7 +371,7 @@ export default function CreateAdmissionPage() {
               <Select
                 value={selectedMethodId?.toString() ?? ""}
                 onValueChange={(value) =>
-                  setSelectedMethodId(value ? parseInt(value, 10) : null)
+                  setPickedMethodId(value ? parseInt(value, 10) : null)
                 }
               >
                 <SelectTrigger id="admission-method">
