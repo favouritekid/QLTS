@@ -159,7 +159,7 @@ class UserUpdate(BaseModel):
 
 class UsersPage(BaseModel):
     total_count: int
-    users: List["User"]
+    users: List["UserAdminResponse"]
 
 
 class User(UserBase):
@@ -172,6 +172,46 @@ class User(UserBase):
     availability_status: Optional[str] = None
     password_reset_required: Optional[bool] = False  # Security: True when user needs to change password
     mfa_enabled: bool = False  # MFA: Whether TOTP MFA is enabled
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserAdminResponse(UserBase):
+    """Response schema for every ``/api/admin/users`` surface.
+
+    Whitelist-only: fields not listed here are stripped during
+    serialization. The four admin endpoints used to return the raw
+    SQLAlchemy ``models.User`` without a ``response_model``, leaking
+    every column — including ``password_hash``, ``totp_secret_encrypted``,
+    ``backup_codes_hashed``, ``active_jti``, and the ``search_vector``
+    tsvector. Pinning a Pydantic schema with
+    ``ConfigDict(from_attributes=True)`` makes the leak structurally
+    impossible: any new sensitive column added to the model stays
+    invisible to the API unless someone explicitly extends this list.
+
+    Used by all four admin user surfaces — paginated list
+    (``UsersPage.users``), unpaginated list (``GET /users/list``),
+    detail (``GET /users/{id}``), and mutation responses (``POST``,
+    ``PUT``) — so the FE can rely on a single shape across them.
+    ``max_capacity`` matters for cache reconciliation in
+    ``useAdminUpdateUser``; without it the optimistic update would
+    drop the field.
+
+    Distinct from ``User`` because admin contexts surface
+    ``max_capacity`` (lead-assignment capacity), which is not
+    appropriate to leak from ``/me``, ``/profile``, ``/auth/register``,
+    or ``/auth/reset-password``.
+    """
+    id: int
+    email: str  # Override EmailStr to tolerate placeholder/legacy DB values
+    avatar_url: Optional[str] = None
+    phone_number: Optional[str] = None
+    unit_id: Optional[int] = None
+    skills: Optional[List[str]] = None
+    availability_status: Optional[str] = None
+    max_capacity: Optional[int] = None
+    password_reset_required: Optional[bool] = False
+    mfa_enabled: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

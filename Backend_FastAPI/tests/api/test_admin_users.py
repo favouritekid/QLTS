@@ -304,12 +304,15 @@ async def test_admin_create_user_weak_password(
     for error in error_data["errors"]:
         if error.get("field") == "password":
             found_error = True
-            # Kiểm tra message lỗi validation (có thể là độ dài hoặc độ phức tạp)
-            assert "String should have at least 8 characters" in error.get(
-                "message", ""
-            ) or "Password must contain" in error.get(
-                "message", ""
-            ), f"Unexpected validation message for weak password: {error.get('message')}"
+            # Validate either the length floor (currently 12 per
+            # OWASP ASVS 5.0 — see schemas/user.py PasswordStr) or
+            # the strength rules from validate_password_strength_logic.
+            message = error.get("message", "")
+            assert (
+                "at least" in message and "characters" in message
+            ) or "Password must contain" in message, (
+                f"Unexpected validation message for weak password: {message}"
+            )
             break
     assert found_error, "Validation error for 'password' field not found"
     log.info("Weak password correctly blocked (422) with detailed error.")
@@ -934,3 +937,81 @@ async def test_admin_update_user_avatar_file_too_large(
         )  # Thường là None hoặc giá trị gốc
         assert db_user.avatar_url is None
     log.info("Database state verified: No changes were made (transaction rolled back).")
+
+
+# ===============================================================
+# === ANCHOR: SENSITIVE FIELDS NEVER LEAK FROM ADMIN USER ENDPOINTS ===
+# ===============================================================
+# These fields live on the SQLAlchemy ``User`` model but must never be
+# surfaced over the API. The ``UserAdminResponse`` whitelist in
+# ``schemas/user.py`` is the structural enforcement; this test is the
+# behavioural anchor that fires if a future change widens the whitelist
+# (or omits ``response_model`` on a new endpoint) and re-introduces the
+# leak. Non-tautological: it asserts on the actual JSON response, not
+# on the schema definition itself, so a router-level slip past the
+# schema (e.g. raw ``return user_dict``) still fails the test.
+
+_SENSITIVE_USER_FIELDS = {
+    "password_hash",
+    "totp_secret_encrypted",
+    "backup_codes_hashed",
+    "active_jti",
+    "search_vector",
+}
+
+
+def _assert_no_sensitive_fields(payload, *, where: str) -> None:
+    """Assert no sensitive keys appear in ``payload`` (dict or list of dicts)."""
+    items = payload if isinstance(payload, list) else [payload]
+    for idx, item in enumerate(items):
+        assert isinstance(item, dict), (
+            f"{where}[{idx}] expected dict, got {type(item).__name__}: {item!r}"
+        )
+        leaked = _SENSITIVE_USER_FIELDS & set(item.keys())
+        assert not leaked, (
+            f"Sensitive field(s) leaked from {where}[{idx}]: {sorted(leaked)}. "
+            f"Full keys: {sorted(item.keys())}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_admin_users_list_does_not_leak_sensitive_fields(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    admin_user_in_db: dict,
+    regular_user_in_db: dict,
+):
+    """GET /api/admin/users/list returns whitelist shape — no password_hash etc.
+
+    PR fix anchor: ``/users/list`` previously had no ``response_model``
+    and serialised raw SQLAlchemy ``User`` rows, leaking the same
+    sensitive columns the POST/GET-detail/PUT endpoints leaked. The
+    list endpoint is the third surface for the same leak class.
+    """
+    log.info("--- Running: test_admin_users_list_does_not_leak_sensitive_fields ---")
+    response = await client.get(
+        f"{AdminURLs.USERS}/list",
+        headers=admin_token_headers,
+    )
+    assert response.status_code == 200, f"List Resp: {response.text}"
+    payload = response.json()
+    assert isinstance(payload, list), f"Expected list, got {type(payload).__name__}"
+    assert len(payload) >= 2, f"Expected at least 2 users, got {len(payload)}"
+    _assert_no_sensitive_fields(payload, where="/api/admin/users/list")
+
+
+@pytest.mark.asyncio
+async def test_admin_users_paginated_list_does_not_leak_sensitive_fields(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    admin_user_in_db: dict,
+    regular_user_in_db: dict,
+):
+    """GET /api/admin/users (paginated) anchor — UsersPage.users items
+    must also pass the same whitelist."""
+    log.info("--- Running: test_admin_users_paginated_list_does_not_leak ---")
+    response = await client.get(AdminURLs.USERS, headers=admin_token_headers)
+    assert response.status_code == 200, f"Paginated Resp: {response.text}"
+    payload = response.json()
+    assert "users" in payload and isinstance(payload["users"], list)
+    _assert_no_sensitive_fields(payload["users"], where="/api/admin/users.users")

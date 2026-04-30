@@ -243,6 +243,7 @@ from .user import (
     Token,
     TokenData,
     User,
+    UserAdminResponse,
     UserBase,
     UserCreate,
     UserInDB,
