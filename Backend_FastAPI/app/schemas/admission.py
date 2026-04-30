@@ -383,6 +383,24 @@ class AdmissionProfileCreate(BaseModel):
         gt=0,
         description="Admission method ID (required for AdmissionPath lookup)"
     )
+    # ADM-017: client SHOULD pass academic_year so the service binds
+    # the profile to a specific OfferingAcademicInfo row deterministically.
+    # Optional in this BE phase for backward compatibility — if omitted,
+    # the service falls back to "first published academic_info for the
+    # offering" (legacy behaviour). A follow-up PR will add the FE field
+    # and flip this to required. See memory ``project_admission_audit_2026-04-27_wave_status``
+    # (Q8=b decision) and the ADM-017 ship note.
+    academic_year: Optional[int] = Field(
+        default=None,
+        ge=2000,
+        le=2100,
+        description=(
+            "Academic year for the profile (e.g., 2026). Service "
+            "validates a published OfferingAcademicInfo row exists "
+            "for ``(lead.offering_id, academic_year)``; if omitted, "
+            "falls back to the offering's first published year."
+        )
+    )
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
