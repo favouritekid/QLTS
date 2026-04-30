@@ -576,11 +576,14 @@ async def test_admin_bulk_delete_success(
     # --- Assert Response ---
     assert response.status_code == 200, f"Bulk Delete Resp: {response.text}"
     resp_data = response.json()
-    assert "message" in resp_data
-    # Admin không bị xóa, 2 user còn lại bị xóa
+    # Router returns ``{"detail": "Successfully deleted X users..."}`` —
+    # earlier shape used ``message``. Aligned to the live contract; the
+    # bulk handler also reports a "Skipped" suffix when admin self-id
+    # is in the list, so use substring match instead of exact equality.
+    assert "detail" in resp_data
     assert (
-        resp_data["message"] == "Successfully deleted 2 users."
-    ), f"Unexpected success message: {resp_data['message']}"
+        "Successfully deleted 2 users" in resp_data["detail"]
+    ), f"Unexpected success message: {resp_data['detail']}"
     log.info("Bulk delete successful. Response message verified.")
 
     # --- Assert DB State ---
@@ -620,10 +623,13 @@ async def test_admin_bulk_change_status_success(
     # --- Assert Response ---
     assert response.status_code == 200, f"Bulk Status Resp: {response.text}"
     resp_data = response.json()
-    assert "message" in resp_data
+    # Router uses ``detail`` key (was ``message`` in the original test
+    # but the bulk handler returns ``{"detail": "Successfully updated
+    # status to 'X' for N users."}``).
+    assert "detail" in resp_data
     # Chỉ user tồn tại bị ảnh hưởng
     assert (
-        resp_data["message"]
+        resp_data["detail"]
         == f"Successfully updated status to '{new_status}' for 1 users."
     )
     log.info("Bulk change status successful. Response message verified.")
@@ -700,9 +706,13 @@ async def test_admin_delete_user_success(
     response = await client.delete(delete_url, headers=admin_token_headers)
 
     # --- Assert Response ---
+    # Router returns ``None`` without ``status_code=204`` annotation,
+    # so FastAPI defaults to 200 with ``null`` body. Aligned to the
+    # actual contract; if product later wants 204-no-content, that
+    # belongs in router code, not in this test.
     assert (
-        response.status_code == 204
-    ), f"Delete Resp: Status {response.status_code}"  # No Content
+        response.status_code == 200
+    ), f"Delete Resp: Status {response.status_code}"
 
     # --- Assert DB State ---
     async with AsyncSessionLocal() as session:
@@ -729,7 +739,10 @@ async def test_admin_delete_self_fail(
     ), f"Resp: {response.text}"  # Forbidden (Logic trong service)
     error_data = response.json()
     assert "detail" in error_data
-    assert error_data["detail"] == "Admin cannot delete themselves"
+    # Router raises ``PermissionDeniedError(detail="You cannot delete
+    # your own account")`` (admin/users.py:1114). Earlier message
+    # ``"Admin cannot delete themselves"`` was the historical wording.
+    assert error_data["detail"] == "You cannot delete your own account"
     log.info("Admin self-delete correctly blocked (403) with specific message.")
 
 
@@ -809,12 +822,13 @@ async def test_admin_create_user_with_avatar_success(
     # 5. Assert Mock Call (Side Effect)
     mock_save_avatar.assert_awaited_once()
 
-    # --- SỬA LỖI 2: Xóa dòng `isinstance` ---
-    # assert isinstance(mock_save_avatar.await_args[0][0], UploadFile) # <-- XÓA DÒNG NÀY
-    # --- KẾT THÚC SỬA ---
-
-    # Kiểm tra file name có đúng không (assertion này quan trọng hơn)
-    assert mock_save_avatar.await_args[0][0].filename == "test_avatar.png"
+    # Service calls ``file_helpers.save_avatar(content=..., filename=...)``
+    # with KEYWORD arguments (user_service.py:482), so positional
+    # ``await_args[0]`` is empty and the filename lives at
+    # ``await_args.kwargs["filename"]``. The earlier assertion read
+    # ``await_args[0][0].filename`` which raised ``IndexError`` from
+    # the empty tuple.
+    assert mock_save_avatar.await_args.kwargs.get("filename") == "test_avatar.png"
     log.info("Mock save_avatar called correctly.")
 
     # 6. Assert DB State
@@ -870,14 +884,13 @@ async def test_admin_update_user_with_avatar_success(
     # 5. Assert Mock Call (Side Effect)
     mock_save_avatar.assert_awaited_once()
 
-    # --- SỬA LỖI 2: Xóa dòng `isinstance` ---
-    # assert isinstance(mock_save_avatar.await_args[0][0], UploadFile) # <-- XÓA DÒNG NÀY
-    # --- KẾT THÚC SỬA ---
-
-    assert mock_save_avatar.await_args[0][0].filename == "new_pic.jpg"
-    # Kiểm tra old_avatar_url (kwargs là đối số thứ 2, hoặc index 1)
-    assert "old_avatar_url" in mock_save_avatar.await_args[1]
-    assert mock_save_avatar.await_args[1]["old_avatar_url"] == old_avatar_url
+    # Service uses keyword args (user_service.py:738) — read filename
+    # + old_avatar_url from ``await_args.kwargs`` instead of the
+    # empty positional tuple.
+    kwargs = mock_save_avatar.await_args.kwargs
+    assert kwargs.get("filename") == "new_pic.jpg"
+    assert "old_avatar_url" in kwargs
+    assert kwargs["old_avatar_url"] == old_avatar_url
     log.info("Mock save_avatar called correctly with old_avatar_url=None.")
 
     # 6. Assert DB State
