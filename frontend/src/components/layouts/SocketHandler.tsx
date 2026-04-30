@@ -30,6 +30,8 @@ interface PendingInvalidations {
   leadTimelines: Set<number>;
   pipeline: boolean;
   dashboard: boolean;
+  // ADM-032 — single flag is enough; ``admissionsKeys.all`` cascades.
+  admissionAll: boolean;
 }
 
 const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
@@ -59,6 +61,11 @@ export function SocketHandler() {
     leadTimelines: new Set(),
     pipeline: false,
     dashboard: false,
+    // ADM-032 — cross-tab realtime for admission doc mutations. Single
+    // boolean is enough because ``admissionsKeys.all`` cascades to
+    // every detail/list/status-counts/stats query under the
+    // ``["admissions"]`` root.
+    admissionAll: false,
   });
   const invalidationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -70,7 +77,8 @@ export function SocketHandler() {
                     pending.leadDetails.size > 0 ||
                     pending.leadTimelines.size > 0 ||
                     pending.pipeline ||
-                    pending.dashboard;
+                    pending.dashboard ||
+                    pending.admissionAll;
 
     if (!hasWork) return;
 
@@ -80,6 +88,7 @@ export function SocketHandler() {
       leadTimelinesCount: pending.leadTimelines.size,
       pipeline: pending.pipeline,
       dashboard: pending.dashboard,
+      admissionAll: pending.admissionAll,
     });
 
     // Invalidate leads list (only once, not per-lead)
@@ -107,6 +116,15 @@ export function SocketHandler() {
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     }
 
+    // ADM-032 — admission profile cascade. ``admissionsKeys.all``
+    // (root ``["admissions"]``) invalidates every detail/list/
+    // status-counts/stats query rooted under it. One call covers
+    // every doc-mutation broadcast (upload / paper / verify / reject
+    // / reset).
+    if (pending.admissionAll) {
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+    }
+
     // Reset pending state
     pendingInvalidationsRef.current = {
       leadsLists: false,
@@ -114,6 +132,7 @@ export function SocketHandler() {
       leadTimelines: new Set(),
       pipeline: false,
       dashboard: false,
+      admissionAll: false,
     };
   }, [queryClient]);
 
@@ -123,6 +142,8 @@ export function SocketHandler() {
     leadTimeline?: number;
     pipeline?: boolean;
     dashboard?: boolean;
+    // ADM-032
+    admissionAll?: boolean;
   }) => {
     // Accumulate the requested invalidations
     if (updates.leadsLists) {
@@ -139,6 +160,9 @@ export function SocketHandler() {
     }
     if (updates.dashboard) {
       pendingInvalidationsRef.current.dashboard = true;
+    }
+    if (updates.admissionAll) {
+      pendingInvalidationsRef.current.admissionAll = true;
     }
 
     // Clear existing timeout and schedule new one
@@ -382,6 +406,14 @@ export function SocketHandler() {
         case "lead":
           // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
           scheduleInvalidation({ leadsLists: true });
+          break;
+
+        case "admission_profile":
+          // ADM-032 — cross-tab realtime for doc mutations (upload /
+          // paper / verify / reject / reset). Silent invalidate via
+          // the shared 300ms debounce; no toast (officer phụ trách
+          // nhiều hồ sơ sẽ thấy spam nếu enable).
+          scheduleInvalidation({ admissionAll: true });
           break;
 
         case "organization":
