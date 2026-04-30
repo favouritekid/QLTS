@@ -78,6 +78,15 @@ export default function CreateAdmissionPage() {
   
   // State for selected admission method
   const [selectedMethodId, setSelectedMethodId] = useState<number | null>(null)
+  // ADM-017: state for academic year selection. Default = current
+  // calendar year — officer can adjust if creating a profile for a
+  // different recruitment year. Backend strictly validates that the
+  // (offering_id, academic_year) ``OfferingAcademicInfo`` row exists
+  // and is published; mismatch surfaces as a 400 with a Vietnamese
+  // message that we let the mutation hook's ``handleApiError`` render.
+  const [academicYear, setAcademicYear] = useState<number>(
+    new Date().getFullYear()
+  )
   
   const { data: lead, isLoading: isLoadingLead } = useLead(
     leadId ? parseInt(leadId) : 0,
@@ -107,12 +116,15 @@ export default function CreateAdmissionPage() {
   
   const handleCreate = async () => {
     if (!leadId || !selectedMethodId) return
-    
+
     // Note: useCreateAdmission hook already handles success toast and navigation
     // Error is also handled via handleApiError() in the hook
     await createMutation.mutateAsync({
       lead_id: parseInt(leadId),
       admission_method_id: selectedMethodId,
+      // ADM-017: bind to the selected recruitment year so BE can
+      // resolve the right ``OfferingAcademicInfo`` deterministically.
+      academic_year: academicYear,
     })
   }
   
@@ -212,6 +224,36 @@ export default function CreateAdmissionPage() {
             </div>
           )}
           
+          {/* ADM-017: Academic year input — required by backend
+              ``admissionProfileCreateSchema``. Backend validates the
+              (offering_id, academic_year) ``OfferingAcademicInfo``
+              row exists + is published; mismatch surfaces as a 400
+              with a Vietnamese message. Default = current calendar
+              year (officer adjusts when creating profile for a
+              different recruitment year). */}
+          <div className="space-y-2">
+            <Label htmlFor="academic-year">
+              Năm học <span className="text-destructive">*</span>
+            </Label>
+            <input
+              id="academic-year"
+              type="number"
+              min={2000}
+              max={2100}
+              value={academicYear}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!Number.isNaN(v)) setAcademicYear(v);
+              }}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-describedby="academic-year-hint"
+            />
+            <p id="academic-year-hint" className="text-xs text-muted-foreground">
+              Năm tuyển sinh hồ sơ thuộc về (vd. 2026). Backend xác minh
+              năm có cấu hình tuyển sinh đã công bố cho chương trình này.
+            </p>
+          </div>
+
           {/* Admission Method Selection - NEW */}
           <div className="space-y-2">
             <Label htmlFor="admission-method">

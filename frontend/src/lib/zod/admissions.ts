@@ -258,6 +258,15 @@ export type DocumentItem = z.infer<typeof documentItemSchema>
  * Create Admission Profile Schema
  * Used for POST /api/admissions
  * REFACTORED (Phase 2): Now requires admission_method_id for AdmissionPath lookup
+ *
+ * ADM-017: ``academic_year`` lets the caller bind the profile to a
+ * specific (offering, year) ``OfferingAcademicInfo`` row. Pre-fix
+ * BE picked "newest published year" implicitly — broken when an
+ * offering had multiple published years simultaneously (transition
+ * windows). BE phase merged in PR #176; this FE schema makes the
+ * field required client-side. Backend still tolerates it being
+ * omitted (legacy fallback) until the strict-required follow-up
+ * ships.
  */
 export const admissionProfileCreateSchema = z.object({
   lead_id: z
@@ -268,6 +277,11 @@ export const admissionProfileCreateSchema = z.object({
     .number()
     .int("Admission Method ID phải là số nguyên")
     .positive("Admission Method ID phải là số dương"),
+  academic_year: z
+    .number()
+    .int("Năm học phải là số nguyên")
+    .min(2000, "Năm học không hợp lệ")
+    .max(2100, "Năm học không hợp lệ"),
 })
 
 export type AdmissionProfileCreate = z.infer<
