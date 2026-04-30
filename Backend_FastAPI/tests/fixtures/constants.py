@@ -36,10 +36,19 @@ class AdminURLs:
     BASE = "/api/admin"
     USERS = f"{BASE}/users"
     USER_DETAIL = lambda user_id: f"{AdminURLs.USERS}/{user_id}"  # Tham chiếu qua class
+    # Router declares ``POST /{user_id}/password`` (admin/users.py:310);
+    # constant earlier said ``/set-password``, so the 3 set-password +
+    # bulk-action tests in ``tests/api/test_admin_users.py`` were
+    # hitting non-existent paths and the expected 404/405 assertions
+    # were drifting. Aligned 2026-04-30.
     USER_SET_PASSWORD = (
-        lambda user_id: f"{AdminURLs.USER_DETAIL(user_id)}/set-password"
+        lambda user_id: f"{AdminURLs.USER_DETAIL(user_id)}/password"
     )  # Tham chiếu qua class
-    BULK_ACTION = f"{USERS}/bulk-action"  # Cái này OK
+    # Router declares ``POST /bulk`` (admin/users.py:433); constant
+    # earlier said ``/bulk-action`` which collided with
+    # ``/users/{user_id}`` and surfaced as a 405 instead of the real
+    # 404 / endpoint. Aligned 2026-04-30.
+    BULK_ACTION = f"{USERS}/bulk"
 
     ORGANIZATION_UNITS = f"{BASE}/organization-units"
     ORGANIZATION_UNIT_DETAIL = (

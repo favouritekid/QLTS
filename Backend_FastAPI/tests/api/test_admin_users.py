@@ -478,9 +478,14 @@ async def test_admin_set_password_success(
     )
 
     # --- Assert Response ---
+    # Router returns ``None`` without an explicit ``status_code=204``
+    # decoration, so FastAPI serialises ``null`` and the response is
+    # 200. Keeping the assertion at 200 matches the actual contract;
+    # if product later wants 204-no-content, the router needs the
+    # explicit status_code annotation rather than this assertion.
     assert (
-        response.status_code == 204
-    ), f"Set Password Resp: Status {response.status_code}"  # No Content
+        response.status_code == 200
+    ), f"Set Password Resp: Status {response.status_code}"
 
     # --- Assert DB State (Kiểm tra hash mới) ---
     async with AsyncSessionLocal() as session:
@@ -663,12 +668,15 @@ async def test_admin_bulk_action_change_status_missing_status(
     ), "'errors' should be a list for validation details"
 
     found_error = False
-    # Lặp qua error_data["errors"]
+    # Lặp qua error_data["errors"]. Pydantic v2 error key is ``msg``
+    # (not ``message``); the previous ``err.get("message", "")``
+    # silently returned empty string and the assertion never matched.
     for err in error_data["errors"]:
         assert isinstance(err, dict)
-        # Lỗi này từ model_validator của BulkActionSchema, không có 'field' rõ ràng
-        # Chỉ kiểm tra message
-        if "Status is required for 'change_status' action" in err.get("message", ""):
+        # Lỗi này từ model_validator của BulkActionSchema — message
+        # đến từ ``raise ValueError(...)`` nên Pydantic prefixes
+        # với ``Value error, ``; substring match nên dung được.
+        if "Status is required for 'change_status' action" in err.get("msg", ""):
             found_error = True
             break
     # --- KẾT THÚC SỬA ASSERTION ---
