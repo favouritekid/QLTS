@@ -37,6 +37,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from .. import models
+from ..admission_metrics import admission_quota_skip_total
 from ..core.events import SystemEvents
 from ..core.admission_correction_constants import (
     SAFE_MINOR_CORRECTION_FIELDS,
@@ -457,13 +458,41 @@ async def _assert_quota_or_bypass(
     # different model later (e.g. force schema to ge=1, or rename "0" to
     # "frozen with admin override"), update both schema and this gate
     # together.
-    if academic_info is None or quota is None:
+    # Disambiguate the two skip flavours so observability can tell them
+    # apart. ``_resolve_quota_context`` returns ``(None, None)`` for
+    # legacy profiles where neither ``applied_rules.academic_info_id``
+    # nor ``lead.offering_id`` is available — that is the SAME data-drift
+    # signal as a post-snapshot lead with offering_id stripped (handled
+    # below), so both branches tick ``missing_offering_id``. Only the
+    # ``quota IS NULL`` (unlimited) flavour stays at debug + no metric.
+    if academic_info is None:
+        lead_missing_offering = (
+            not profile.lead
+            or getattr(profile.lead, "offering_id", None) is None
+        )
+        if lead_missing_offering:
+            admission_quota_skip_total.labels(
+                reason="missing_offering_id"
+            ).inc()
+            log.warning(
+                "Quota check skipped: legacy profile + missing lead.offering_id",
+                profile_id=profile.id,
+                transition=transition,
+            )
+        else:
+            log.debug(
+                "Quota check skipped: academic_info row not found",
+                profile_id=profile.id,
+                transition=transition,
+            )
+        return
+
+    if quota is None:
         log.debug(
-            "Quota check skipped (unconfigured / unlimited)",
+            "Quota check skipped (unlimited)",
             profile_id=profile.id,
             transition=transition,
-            academic_info_id=getattr(academic_info, "id", None),
-            quota=quota,
+            academic_info_id=academic_info.id,
         )
         return
 
@@ -471,7 +500,10 @@ async def _assert_quota_or_bypass(
     # finalize on an already-approved profile doesn't double-count.
     offering_id = profile.lead.offering_id if profile.lead else None
     if offering_id is None:
-        # Cannot count without offering scope. Skip enforcement for safety.
+        # Snapshot resolved an academic_info row but ``lead.offering_id``
+        # was stripped post-snapshot. Same data-drift signal as the
+        # legacy branch above — count under the same reason.
+        admission_quota_skip_total.labels(reason="missing_offering_id").inc()
         log.warning(
             "Quota check skipped: profile has no lead.offering_id",
             profile_id=profile.id,
