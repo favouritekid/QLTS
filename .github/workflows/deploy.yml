@@ -156,6 +156,7 @@ jobs:
     name: Deploy to VPS
     needs: test
     runs-on: ubuntu-latest
+    environment: production
     if: github.ref == 'refs/heads/main'
     concurrency:
       group: deploy-production
