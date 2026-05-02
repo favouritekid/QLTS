@@ -310,9 +310,11 @@ Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-
 
 ---
 
-### P0c — `admission_config_repository.py` field-name hot-fix (commit local, branch chưa push)
+### P0c — `admission_config_repository.py` field-name hot-fix (sub-PR opened)
 
-**Branch:** `feature/admission-p0c` off `feat/admission-full-cutover` HEAD `e5f607b4`. Phase 0 hot-fix scope-tight; KHÔNG đụng B1/B2 hay migration nào khác.
+**Branch:** `feature/admission-p0c` off `feat/admission-full-cutover` HEAD `e5f607b4`. Pushed `ed21f1d1` 2026-05-02; sub-PR [#194](https://github.com/favouritekid/QLTS/pull/194) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1..T0-5 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 6/6 PASS Docker test + bite-verified.
+
+Phase 0 hot-fix scope-tight; KHÔNG đụng B1/B2 hay migration nào khác.
 
 **Drift verified-from-code:**
 - PLAN §3.4 line 95 + §8 cheat sheet 4429-4430 đã track: code reference `admission_criteria_id`, model field thực tế `criteria_id`.
