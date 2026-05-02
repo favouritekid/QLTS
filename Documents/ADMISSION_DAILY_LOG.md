@@ -108,9 +108,11 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Test framework cho bash entrypoint: chỉ syntax check + logic test, không có integration framework. Manual smoke trong staging clone D12-D14 sẽ verify end-to-end (apply 2 flag, observe entrypoint output, smoke API ready).
 - Q11 closed (PLAN §3.3.g.1) → KHÔNG còn product decision blocker; D2 + D3 chỉ chặn cutover, không chặn dev start.
 
-### T0-3 — Nginx admission block (commit local, branch chưa push)
+### T0-3 — Nginx admission block (sub-PR opened)
 
-**Branch:** `feature/admission-t0-3` off `feat/admission-full-cutover` HEAD `691e6457`. Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặn ngay tại Nginx, trước khi traffic chạm FastAPI.
+**Branch:** `feature/admission-t0-3` off `feat/admission-full-cutover` HEAD `691e6457`. Pushed `fbbe22d0` 2026-05-02; sub-PR [#191](https://github.com/favouritekid/QLTS/pull/191) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern với PR #189 + PR #190 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 32/32 PASS local Docker test harness.
+
+Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặn ngay tại Nginx, trước khi traffic chạm FastAPI.
 
 **Scope:**
 - `nginx/conf.d/default.conf.template`: thêm regex location `^/api/(admissions|admission-config|public/admissions)(/.*)?$` đặt TRƯỚC prefix `location /api/` (regex thắng anyway, đặt trước cho rõ intent). Trong block: `set $freeze_check "$request_method:${NGINX_ADMISSION_FROZEN}"` + `if ($freeze_check ~ "^(POST|PUT|PATCH|DELETE):true$") { return 503 '{"detail":"...","code":"NGINX_ADMISSION_FROZEN"}'; }` + fall through `proxy_pass http://backend` cho read methods và non-admission flow. Bare prefix + subpath đều match nhờ `(/.*)?$` optional group.
