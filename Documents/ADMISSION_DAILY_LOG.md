@@ -8,6 +8,21 @@
 
 ---
 
+## Hotfix policy (chốt 2026-05-02 — bắt buộc)
+
+Production critical hotfix trong window refactor:
+
+1. **Hotfix branch off `main`** (KHÔNG off `feat/admission-full-cutover`).
+2. Implement + test + merge `main` → deploy production qua deploy gate.
+3. **SAME-DAY cherry-pick hoặc equivalent-patch** SHA hotfix sang `feat/admission-full-cutover`. KHÔNG được defer sang cutover.
+4. Append entry "Merged tới main (hotfix only)" với 3 SHA: main hotfix SHA → cherry-pick SHA → conflict notes (nếu có).
+5. **Conflict touch admission core/state/lead/notification/RBAC** → **PAUSE refactor 0.5-1 ngày**, resolve conflict clean, re-test PASS rồi mới continue.
+6. KHÔNG defer hotfix vào cutover bundle. Lý do: cutover sẽ replace toàn bộ codebase từ feat branch — nếu hotfix chỉ ở main mà chưa cherry-pick → cutover sẽ overwrite hotfix → bug production tái xuất.
+
+KHÔNG cherry-pick chỉ khi hotfix touch file mà refactor đang rewrite từ đầu (e.g., `admission_state_service.py` chưa tồn tại main, hotfix touch `admission_service.py` mà task #16 sẽ refactor toàn bộ). Trong case đó: ghi rõ trong DAILY_LOG entry "hotfix superseded by refactor — verify equivalent fix trong feat branch".
+
+---
+
 ## Entry template (copy-paste khi thêm entry mới)
 
 ```markdown
