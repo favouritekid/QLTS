@@ -310,9 +310,15 @@ Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-
 
 ---
 
-### P0c — `admission_config_repository.py` field-name hot-fix (sub-PR opened)
+### P0c — `admission_config_repository.py` field-name hot-fix (sub-PR merged)
 
-**Branch:** `feature/admission-p0c` off `feat/admission-full-cutover` HEAD `e5f607b4`. Pushed `ed21f1d1` 2026-05-02; sub-PR [#194](https://github.com/favouritekid/QLTS/pull/194) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1..T0-5 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 6/6 PASS Docker test + bite-verified.
+**Branch:** `feature/admission-p0c` off `feat/admission-full-cutover` HEAD `e5f607b4`. Pushed `ed21f1d1` + post-PR docs `b0a34afa` 2026-05-02; sub-PR [#194](https://github.com/favouritekid/QLTS/pull/194) opened + merged squash `36d095a4` cùng ngày (mergedAt 2026-05-02T13:02:29Z). Base `feat/admission-full-cutover`, kept branch (`--delete-branch=false`). Status: **TESTED**, DONE pending staging smoke / Phase 1 full-integration wave.
+
+**CI manual verification (no checks reported pattern P0c đầu tiên ngoài cụm T0):**
+- Pre-merge: `pytest tests/repositories/test_admission_config_repository_p0c.py -v` → 6/6 PASS in Docker (0.34s).
+- Post-merge re-run trên parent HEAD `36d095a4`: 6/6 PASS (0.44s).
+- Bite-verified pre-merge: revert 1 site → 4/6 FAIL (3 behaviour AttributeError + 1 source-grep), restore → 6/6 PASS.
+- Repo workflow filter chưa cover PR vào `feat/admission-full-cutover` → CI tự động không chạy; manual evidence trong TRACKER + DAILY_LOG đủ pass-fail.
 
 Phase 0 hot-fix scope-tight; KHÔNG đụng B1/B2 hay migration nào khác.
 
