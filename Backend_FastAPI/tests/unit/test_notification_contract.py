@@ -459,6 +459,27 @@ class TestUserEventsHaveDispatchCallers:
         "admission_confirmation_reminder_24h",
         "admission_confirmation_reminder_6h",
         "admission_confirmation_hard_locked",
+        # B2.1 (2026-05-02): admission cold-cutover refactor — 12 milestone
+        # events. Catalog + group + seed defaults shipped here; dispatch
+        # sites land in #16 when ``state_service.transition()`` calls
+        # ``dispatch_event()`` (B2.3). Whitelisted preemptively so this
+        # contract test stays green across the multi-PR wave; the coverage
+        # script (`check_notification_event_coverage.py`) keeps reporting
+        # ``no-dispatch-site`` until #16 wires the calls — that gap is the
+        # canonical signal #16 is still pending. Once #16 lands the
+        # script clears and these whitelist entries become live-true.
+        "admission_profile_submitted",
+        "admission_revision_requested",
+        "admission_resubmitted",
+        "admission_result_published",
+        "admission_decision_admitted",
+        "admission_decision_waitlisted",
+        "admission_decision_rejected",
+        "admission_waitlist_promoted",
+        "admission_confirmed",
+        "admission_enrolled",
+        "admission_withdrawn",
+        "admission_rolled_back",
     })
 
     def test_user_events_have_dispatch_in_codebase(self):
