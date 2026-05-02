@@ -1196,8 +1196,11 @@ class SystemEvents(str, Enum):
     # `requires_outbox=True` in EVENT_CATALOG — workflow guarantee delivery.
     # 5 of the 12 (RESULT_PUBLISHED / DECISION_ADMITTED / DECISION_WAITLISTED
     # / DECISION_REJECTED / ENROLLED) carry `bypass_consent_check=True` for
-    # in-app + email channels per Quy chế Bộ GD&ĐT (Zalo/SMS still gated by
-    # `zalo_template_approved` legal flag per Q7 chốt 2026-05-01).
+    # in-app + email channels per Quy chế Bộ GD&ĐT. Zalo/SMS bypass remains
+    # FUTURE-GATED — the `zalo_template_approved` legal flag from Q7 chốt
+    # 2026-05-01 does not exist in the codebase yet; B2.3 / B2.4 must either
+    # honor consent for Zalo/SMS until that flag ships or wire the flag at
+    # that time.
     # `APPLICATION_*` legacy namespace stays — see `notification_dispatcher`
     # for backward-compat dispatch pattern.
     # =========================================================================

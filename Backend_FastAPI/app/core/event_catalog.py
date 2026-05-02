@@ -99,8 +99,13 @@ class EventDefinition:
     #   semantics as the existing `safe_dispatch` path.
     # - `bypass_consent_check=True` → wrapper calls into `dispatch()` /
     #   `safe_dispatch()` with `skip_preference_check=True` for in-app + email
-    #   only (Quy chế Bộ GD&ĐT bắt buộc thông báo). Zalo/SMS still gated by
-    #   `zalo_template_approved` legal flag — see Q7 chốt 2026-05-01.
+    #   only (Quy chế Bộ GD&ĐT bắt buộc thông báo). Zalo/SMS bypass is
+    #   FUTURE-GATED — Q7 chốt 2026-05-01 calls for a legal flag (working
+    #   name `zalo_template_approved`) that does NOT exist in the codebase
+    #   yet. B2.3 (`dispatch_event` wrapper) and B2.4 / T0-4b (worker)
+    #   either honor consent for Zalo/SMS until the flag ships, or wire
+    #   the flag at that time. Do NOT skip Zalo/SMS consent based on
+    #   `bypass_consent_check` alone.
     requires_outbox: bool = False
     bypass_consent_check: bool = False
 

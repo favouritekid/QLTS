@@ -604,6 +604,12 @@ Phase 0 wave migration #2; trigger function update — KHÔNG đụng schema/col
 - `category="application"` cho cả 12 — admin notification UI grouping. Convention từ existing ADMISSION_CONFIRMATION_* events.
 - `ADMISSION_CONFIRMED` (T12) distinct với existing `ADMISSION_CONFIRMATION_REMINDER_24H/_6H/_HARD_LOCKED` — 3 event cũ là reminder/lock awareness, T12 fires khi confirm action thực sự land.
 
+**Review feedback applied (post-commit `802bad4f`):**
+- **P2** (test contract honesty) — User catch: ban đầu tôi gộp 12 admission event vào `_DISPATCHED_EVENTS` whitelist trong `test_notification_contract.py:462-482` cùng comment "land in #16". Test xanh nhưng **nói dối** — assertion "Every notification_class=user event must be dispatched somewhere in app/" không còn đúng nghĩa vì 12 event chưa có caller thật. Sửa: tách `_PENDING_DISPATCH_EVENTS` frozenset riêng (12 admission events), assertion `excused = _DISPATCHED_EVENTS | _PENDING_DISPATCH_EVENTS` — pending list explicit + comment removal-gate per cluster ("admission_*: remove in #16"). Add 2 lock test mới: `test_pending_dispatch_events_disjoint_from_dispatched` (event chỉ ở 1 list) + `test_pending_dispatch_events_locked_to_b2_1_admission_set` (count + names lock to exact 12, fail loudly nếu thêm hoặc quên xóa khi #16 ship).
+- **Bite-verified P2 fix**: temporarily empty `_PENDING_DISPATCH_EVENTS` → 3 fail (`test_user_events_have_dispatch_in_codebase`, `test_dispatched_set_covers_all_user_events`, `test_pending_dispatch_events_locked_to_b2_1_admission_set`); restore → 4/4 PASS. Pending set là real regression catcher, không tautology.
+- **Soft-fix `zalo_template_approved` comment** (note non-block): comment đầu tiên ở `event_catalog.py` field declaration nhắc flag `zalo_template_approved` cho Q7 chốt; flag KHÔNG tồn tại trong codebase hiện tại. Sửa wording sang "FUTURE-GATED — does NOT exist in the codebase yet" + ghi rõ B2.3/B2.4 phải either honor consent for Zalo/SMS until flag ships OR wire flag at that time. Đồng bộ wording trong `events.py` cluster comment cùng PR.
+- **Test count**: 101 → 103 (+2 lock tests cho pending set). Total `pytest tests/unit/test_b2_1_admission_milestone_events.py tests/unit/test_notification_contract.py tests/api/test_notification_event_groups_api.py` → **103/103 PASS** (33.26s).
+
 ---
 
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**

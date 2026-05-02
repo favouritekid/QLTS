@@ -459,15 +459,30 @@ class TestUserEventsHaveDispatchCallers:
         "admission_confirmation_reminder_24h",
         "admission_confirmation_reminder_6h",
         "admission_confirmation_hard_locked",
-        # B2.1 (2026-05-02): admission cold-cutover refactor — 12 milestone
-        # events. Catalog + group + seed defaults shipped here; dispatch
-        # sites land in #16 when ``state_service.transition()`` calls
-        # ``dispatch_event()`` (B2.3). Whitelisted preemptively so this
-        # contract test stays green across the multi-PR wave; the coverage
-        # script (`check_notification_event_coverage.py`) keeps reporting
-        # ``no-dispatch-site`` until #16 wires the calls — that gap is the
-        # canonical signal #16 is still pending. Once #16 lands the
-        # script clears and these whitelist entries become live-true.
+    })
+
+    # Events that have a catalog entry + are notification_class="user" but
+    # do NOT yet have a dispatch caller in production code. The test below
+    # subtracts this set from the "missing dispatch" assertion so it stays
+    # honest — the assertion only excuses pending events that are
+    # explicitly enumerated here, with a removal gate per entry. This is
+    # NOT a permanent extension to `_DISPATCHED_EVENTS`; that whitelist
+    # may only contain events with real callers in `app/`.
+    #
+    # Removal gate per cluster:
+    # - admission_* (12): remove in #16 when
+    #   `app/services/admission_state_service.py::transition()` calls
+    #   `dispatch_event()` (B2.3). The coverage script
+    #   (`app/scripts/check_notification_event_coverage.py`) reports
+    #   ``no-dispatch-site`` for these 12 events today; once #16 lands
+    #   the script goes green and these entries must be removed (the
+    #   `test_pending_dispatch_events_locked` test below pins the count
+    #   so the cleanup cannot be skipped).
+    _PENDING_DISPATCH_EVENTS = frozenset({
+        # B2.1 (2026-05-02) — admission cold-cutover refactor.
+        # Catalog + group + seed defaults shipped here; dispatch sites
+        # land in #16. Tracked separately from `_DISPATCHED_EVENTS` so
+        # this contract test stays honest about the multi-PR wave.
         "admission_profile_submitted",
         "admission_revision_requested",
         "admission_resubmitted",
@@ -483,24 +498,65 @@ class TestUserEventsHaveDispatchCallers:
     })
 
     def test_user_events_have_dispatch_in_codebase(self):
-        """Every active user event must have at least one dispatch caller."""
+        """Every active user event must have a dispatch caller OR be on the
+        explicit pending list with a removal gate."""
+        excused = self._DISPATCHED_EVENTS | self._PENDING_DISPATCH_EVENTS
         missing = []
         for defn in get_notifiable_events():
-            if defn.event.value not in self._DISPATCHED_EVENTS:
+            if defn.event.value not in excused:
                 missing.append(defn.event.value)
         assert not missing, (
             f"User events with no dispatch caller in production code: {missing}. "
-            "Either add dispatch call or demote to internal_future."
+            "Either add a dispatch call, demote to internal_future, or — for "
+            "an event whose dispatch site is shipping in a follow-up PR — "
+            "list it in `_PENDING_DISPATCH_EVENTS` with a removal gate."
         )
 
     def test_dispatched_set_covers_all_user_events(self):
-        """Cross-check: _DISPATCHED_EVENTS must include all user events."""
+        """Cross-check: every user event is either dispatched or pending.
+
+        Same union as above, just framed from the catalog side so a regression
+        in either direction (event added without wiring; whitelist entry
+        deleted while caller still exists) is visible.
+        """
+        excused = self._DISPATCHED_EVENTS | self._PENDING_DISPATCH_EVENTS
         user_keys = {d.event.value for d in get_notifiable_events()}
-        extra = self._DISPATCHED_EVENTS - user_keys
-        # Extra dispatched events (broadcast_only, internal_future) are OK
-        # Just verify no user event is missing from the set
-        missing = user_keys - self._DISPATCHED_EVENTS
-        assert not missing, f"User events missing from _DISPATCHED_EVENTS: {missing}"
+        missing = user_keys - excused
+        assert not missing, f"User events missing from dispatched/pending sets: {missing}"
+
+    def test_pending_dispatch_events_disjoint_from_dispatched(self):
+        """An event lives on exactly one list: real callers in
+        `_DISPATCHED_EVENTS`, pending in `_PENDING_DISPATCH_EVENTS`."""
+        overlap = self._DISPATCHED_EVENTS & self._PENDING_DISPATCH_EVENTS
+        assert not overlap, (
+            f"Events appear in BOTH dispatched and pending sets: {overlap}. "
+            f"When a pending event gains a real dispatch site, remove it from "
+            f"`_PENDING_DISPATCH_EVENTS` rather than adding it to "
+            f"`_DISPATCHED_EVENTS`."
+        )
+
+    def test_pending_dispatch_events_locked_to_b2_1_admission_set(self):
+        """Lock the pending set to exactly the 12 B2.1 events. Adding more
+        (or forgetting to remove some after #16 ships) will fail loudly."""
+        assert self._PENDING_DISPATCH_EVENTS == frozenset({
+            "admission_profile_submitted",
+            "admission_revision_requested",
+            "admission_resubmitted",
+            "admission_result_published",
+            "admission_decision_admitted",
+            "admission_decision_waitlisted",
+            "admission_decision_rejected",
+            "admission_waitlist_promoted",
+            "admission_confirmed",
+            "admission_enrolled",
+            "admission_withdrawn",
+            "admission_rolled_back",
+        }), (
+            "_PENDING_DISPATCH_EVENTS must be exactly the 12 B2.1 admission "
+            "milestone events. If #16 has shipped, remove the 12 entries from "
+            "_PENDING_DISPATCH_EVENTS (they should now appear via the live "
+            "dispatch grep, not the pending list)."
+        )
 
 
 # =============================================================================
