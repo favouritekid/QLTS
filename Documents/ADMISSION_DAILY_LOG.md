@@ -215,6 +215,15 @@ Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặ
 - Stable shape `{"status", "reason", "task_id"}`: T0-4b sẽ flip `task_id` → `"T0-4b"`, có thể bổ sung key `claimed`/`dispatched`/`failed` count, nhưng KHÔNG drop 3 key gốc — dashboards monitoring T0-4a tick trong staging dry-run window vẫn tương thích.
 - Beat schedule entry name `dispatch-pending-outbox` (kebab) ≠ task name `dispatch_pending_outbox` (snake). Convention repo: schedule entry kebab-case, task name snake_case. Match existing pattern (`check-consultation-reminders-every-minute` → `check_consultation_reminders_task`).
 
+**Review feedback applied (post-commit `1b627167`):**
+- **P1** (worker entrypoint task registration) — User catch: `celery -A app.celery_app worker/beat` chỉ import `app.celery_app`. Verified container: `from app.celery_app import celery_app` cold → `dispatch_pending_outbox` registered = False (0 business tasks). Sau `loader.import_default_modules()` (worker boot internally) hoặc explicit `import app.tasks` mới register. Risk: bất kỳ consumer cold-import (FastAPI process via `celery_utils` để `.delay()`, ad-hoc REPL, pytest helper khác) sẽ thấy registry rỗng + `send_task` fire vào registry trống → silent discard. Patch belt-and-suspenders: (a) `include=["app.tasks"]` vào `Celery()` constructor (worker boot path via `loader.import_default_modules`); (b) explicit `import app.tasks` ở cuối `celery_app.py` (cold import path cho mọi consumer khác). Bottom placement tránh circular import (task modules import `from ..celery_app import celery_app`).
+- **P2** (test mask actual gap) — User catch: existing `test_dispatch_pending_outbox_is_registered_on_celery_app` do `import app.tasks` trước khi assert → cheat, pass kể cả khi worker entrypoint thật fail. Patch: tách 3 test rõ vai trò:
+  - `test_celery_app_explicitly_includes_app_tasks_package` — static config check `app.tasks in celery_app.conf.include` (cheap, deterministic).
+  - `test_worker_entrypoint_registers_outbox_task_without_explicit_app_tasks_import` — **subprocess fresh-process** test simulating cold consumer. Spawns `python -c "from app.celery_app import celery_app; assert ..."` không call finalize/import_default_modules — chính xác user prescription.
+  - `test_dispatch_pending_outbox_registers_after_app_tasks_import` — renamed cũ; rõ ràng đây là sanity post-`import app.tasks`, KHÔNG phải worker-boot guarantee.
+- **Bite test verification**: temporarily revert `import app.tasks` ở cuối `celery_app.py` → subprocess test FAIL với `non_builtin_tasks=[]`; restore → PASS. Subprocess test thực sự catch regression, không phải tautology.
+- Test count 9 → 11 (added static include + subprocess fresh; renamed/clarified existing). Total suite 11 + 2 existing celery_task_registry = **13/13 PASS** (2.73s in Docker).
+
 ---
 
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**

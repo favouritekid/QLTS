@@ -55,14 +55,95 @@ def test_beat_schedule_registers_dispatch_pending_outbox_every_30s():
 # --- Task registry contract ----------------------------------------------
 
 
-def test_dispatch_pending_outbox_is_registered_on_celery_app():
-    import app.tasks  # noqa: F401  — trigger package __init__ + autodiscover
+def test_celery_app_explicitly_includes_app_tasks_package():
+    """Static guard: `celery_app.conf.include` must list `app.tasks`.
+
+    Worker entrypoint `celery -A app.celery_app worker/beat` imports only
+    `app.celery_app`. Celery resolves `conf.include` (and `conf.imports`)
+    at `loader.import_default_modules()` during boot, which is the canonical
+    way to make business tasks register without relying on the
+    `autodiscover_tasks` package-walking heuristic. If this list ever
+    becomes empty the beat schedule will fire `dispatch_pending_outbox`
+    against a worker that does not know it and the message is silently
+    discarded.
+    """
+    from app.celery_app import celery_app
+
+    include = list(celery_app.conf.include or [])
+    assert "app.tasks" in include, (
+        "celery_app.conf.include must include 'app.tasks' so the worker "
+        f"entrypoint registers business tasks at boot. Current include: {include}"
+    )
+
+
+def test_worker_entrypoint_registers_outbox_task_without_explicit_app_tasks_import():
+    """Cold-import contract: a fresh Python interpreter that does ONLY
+    ``from app.celery_app import celery_app`` must see
+    ``dispatch_pending_outbox`` already in ``celery_app.tasks``.
+
+    Why this test runs in a subprocess: pytest keeps imported modules in
+    ``sys.modules`` for the whole session, so once any earlier test loads
+    ``app.tasks`` the registry stays populated and an in-process check would
+    silently pass even if the worker entrypoint were broken.
+
+    Why no manual ``finalize()`` or ``import_default_modules()``: ``celery
+    -A app.celery_app worker/beat`` does call ``import_default_modules``
+    during boot, but other consumers (the FastAPI process pulling in
+    ``celery_utils`` to ``.delay()`` a task, ad-hoc REPL inspection, the
+    pytest helpers used by other test files) only do the bare import.
+    Skeleton/registration must work on *that* path too — otherwise
+    ``celery_app.send_task("dispatch_pending_outbox", ...)`` from those
+    callers fires against an empty registry. The fix is the explicit
+    ``import app.tasks`` at the bottom of ``app/celery_app.py``.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent(
+        """
+        # Cold import only — no finalize, no import_default_modules.
+        from app.celery_app import celery_app
+
+        if "dispatch_pending_outbox" in celery_app.tasks:
+            print("REGISTERED")
+        else:
+            non_builtin = sorted(
+                t for t in celery_app.tasks if not t.startswith("celery.")
+            )
+            print(f"MISSING; non_builtin_tasks={non_builtin}")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert "REGISTERED" in result.stdout, (
+        "Cold `from app.celery_app import celery_app` did NOT register "
+        "dispatch_pending_outbox. Beat would queue this task against any "
+        "consumer that has not already imported `app.tasks`, and the worker/"
+        "FastAPI side would silently discard it as unregistered.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
+def test_dispatch_pending_outbox_registers_after_app_tasks_import():
+    """Companion sanity: with the explicit `import app.tasks` path, the task
+    is in the registry. This catches regression A (a task module missing
+    from `app/tasks/__init__.py`); regression B (worker-entrypoint
+    cold-import) is covered by the subprocess test above.
+    """
+    import app.tasks  # noqa: F401  — trigger package __init__
+
     from app.celery_app import celery_app
 
     assert "dispatch_pending_outbox" in celery_app.tasks, (
-        "Celery did not register `dispatch_pending_outbox`. The beat schedule "
-        "would silently discard every fire. Check `app/tasks/__init__.py` "
-        "imports and the `@celery_app.task` decorator on the skeleton."
+        "Celery did not register `dispatch_pending_outbox` even after "
+        "`import app.tasks`. Check `app/tasks/__init__.py` imports and the "
+        "`@celery_app.task` decorator on the skeleton."
     )
 
 

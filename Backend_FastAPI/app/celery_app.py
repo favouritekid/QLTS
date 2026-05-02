@@ -41,6 +41,16 @@ celery_app = Celery(
     "worker",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND_URL,
+    # `include` is the canonical way to ensure the worker entrypoint
+    # `celery -A app.celery_app worker/beat` loads our task modules. The
+    # `autodiscover_tasks(["app.tasks"])` call below is lazy (waits for
+    # `app.finalize()`); `include` runs at finalize too but binds an
+    # explicit module list — no reliance on Celery's package-walking
+    # heuristic for `related_name`. T0-4a verified via subprocess test that
+    # without `include` here, importing only `app.celery_app` (the worker's
+    # entrypoint module) registers ZERO business tasks until something
+    # else triggers `app.finalize()` or imports `app.tasks` directly.
+    include=["app.tasks"],
 )
 
 # =============================================================================
@@ -269,3 +279,27 @@ celery_app.conf.beat_schedule_filename = os.path.join(
 # =============================================================================
 
 celery_app.autodiscover_tasks(["app.tasks"])
+
+# =============================================================================
+# EAGER TASK MODULE IMPORT (T0-4a fix verified by user-review)
+# =============================================================================
+# `autodiscover_tasks` and `conf.include` only fire when the worker calls
+# `loader.import_default_modules()` at boot. Anything that imports
+# `app.celery_app` outside of the worker entrypoint — pytest collection
+# helpers, the FastAPI process pulling in `celery_utils` for `.delay()`
+# calls, ad-hoc REPL inspection — would see an EMPTY task registry and
+# silently miss new tasks.
+#
+# Importing the `app.tasks` package at the bottom of this module is the
+# cheapest fix: the package's `__init__.py` imports every task module,
+# whose `@celery_app.task` decorators run and register against the app
+# we just built above. Placement at the bottom avoids the circular
+# import that would happen at the top (task modules import
+# `from ..celery_app import celery_app`).
+#
+# A subprocess regression test in
+# `tests/unit/test_outbox_skeleton.py::test_worker_entrypoint_registers_outbox_task_without_explicit_app_tasks_import`
+# locks this in: a fresh interpreter that does only
+# `from app.celery_app import celery_app` must see the outbox task already
+# registered, not after a manual finalize call.
+import app.tasks  # noqa: E402, F401  — must come AFTER `celery_app` is built
