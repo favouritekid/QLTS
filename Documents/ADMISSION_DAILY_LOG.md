@@ -370,6 +370,67 @@ Phase 0 hot-fix scope-tight; KHÔNG đụng B1/B2 hay migration nào khác.
 
 ---
 
+### M-P0a — `phase0_add_selected_subject_group_id_to_profile` migration (sub-PR opened)
+
+**Branch:** `feature/admission-m-p0a` off `feat/admission-full-cutover` HEAD `7f4ba89d`. Pushed `69e7e774` 2026-05-02; sub-PR [#195](https://github.com/favouritekid/QLTS/pull/195) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1..T0-5 + P0c — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 9/9 PASS unit + live alembic roundtrip on dev DB.
+
+Phase 0 wave migration; single owner column DDL — Phase 1 #13 sau này chỉ backfill, KHÔNG re-define column.
+
+**Decision arc (đã chốt 2026-05-02):**
+- `ondelete="SET NULL"` (KHÔNG `RESTRICT`/`CASCADE`) — match pattern `AdmissionProfile.offering_admission_config_id` FK-traceability convention. `subject_group` là catalog có `is_active` → soft-retire, hard delete hiếm; `CASCADE` sẽ erase profiles, `RESTRICT` block catalog cleanup. `SET NULL` giữ profile + drop reference + cleanup task có thể surface affected rows qua `IS NULL` query.
+- Scope tight: chỉ DDL migration + model field. KHÔNG service write `selected_subject_group_id` khi submit (PLAN line 2493 đề cập, nhưng tách sub-PR riêng để giữ M-P0a thuần migration).
+- Model field co-shipped trong cùng PR (best practice tránh model-DB drift).
+- Reasoning chi tiết: `subject_group` FK convention (CASCADE trên mapping/config tables `SubjectGroupSubject`/`CriteriaSubjectGroup`, nhưng đó là bảng cấu hình KHÔNG phải hồ sơ đã nộp — không áp dụng cho `AdmissionProfile`).
+
+**Migration design:**
+- Revision: `phase0sg01`. Down revision: `admstrict01` (head trên parent HEAD `7f4ba89d` khi tạo branch).
+- Stable name constants (locked by tests): `TABLE="admission_profile"`, `COLUMN="selected_subject_group_id"`, `INDEX_NAME="ix_admission_profile_selected_subject_group_id"`, `FK_NAME="fk_admission_profile_selected_subject_group_id"`. Named FK + named index để downgrade drop deterministic (unnamed FK auto-name của Postgres brittle qua revisions).
+- Idempotent helpers `column_exists` / `fk_exists` / `index_exists` match precedent `q3a1b2c3d4e5_add_audit_columns_to_admission_profile.py`.
+- Upgrade order: ADD COLUMN → CREATE FK SET NULL → CREATE INDEX (mỗi step guarded).
+- Downgrade order: DROP INDEX → DROP FK → DROP COLUMN (reverse, mỗi step guarded).
+
+**Model field:**
+- `app/models/admission.py` AdmissionProfile: thêm `selected_subject_group_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("subject_group.id", ondelete="SET NULL"), nullable=True, index=True, comment=...)` đặt ngay sau `offering_admission_config_id` (cluster FK-traceability columns). Comment ghi rõ Phase 0 owner + Phase 1 #13 backfill historical.
+- KHÔNG add relationship — service hiện tại chưa cần eager load; có thể thêm sau khi Phase 3 backfill dùng tới.
+
+**Tested / Rehearsed:**
+- M-P0a unit — `pytest tests/unit/test_m_p0a_selected_subject_group_id.py -v` PASS **9/9** trong Docker (1.20s):
+  - 3 revision-chain contract: `revision == "phase0sg01"`, `down_revision == "admstrict01"`, exposed name constants stable.
+  - 2 source-grep idempotency: upgrade dùng `column_exists`/`fk_exists`/`index_exists` guards + assert `ondelete="SET NULL"` literal; downgrade reverse order assert (drop_index pos < drop_constraint pos < drop_column pos).
+  - 4 model contract: column nullable + Integer type, FK target `subject_group.id` với `ondelete="SET NULL"`, backing index trên `__table__.indexes`, catalog-side sanity (`SubjectGroup.__tablename__ == "subject_group"`).
+- M-P0a live — `docker compose exec backend alembic upgrade head` dev DB:
+  - Upgrade applied column `selected_subject_group_id integer` + FK `fk_admission_profile_selected_subject_group_id ... ON DELETE SET NULL` + index `ix_admission_profile_selected_subject_group_id`. Verified qua `psql \d admission_profile`.
+  - `alembic downgrade -1`: column/FK/index gone clean. Verified column count = 0 qua `information_schema.columns`.
+  - Re-upgrade `alembic upgrade head`: column + FK + index restore.
+  - Idempotent: `alembic upgrade head` khi đã ở head → no-op (alembic native skip).
+
+**Test scope limitation (deferred):**
+- KHÔNG live integration test với data: insert profile + set `selected_subject_group_id` + delete subject_group → verify FK SET NULL behavior. Sẽ verify trong staging clone D12-D14 hoặc Phase 1 full-integration wave (cần seed subject_group + admission_profile fixtures).
+- KHÔNG test concurrent migration apply (race) — Phase 0 single-owner pattern + idempotent guards đủ cho cutover deploy sequential.
+
+**Drift catch (KHÔNG): PLAN §3.4 P1-3 + §4 Phase 0 wording match implementation; KHÔNG touch PLAN/RISK.
+
+**Files changed:**
+- `Backend_FastAPI/alembic/versions/phase0sg01_add_selected_subject_group_id_to_profile.py` (new, ~110 lines: idempotent migration với upgrade/downgrade + helpers + name constants).
+- `Backend_FastAPI/app/models/admission.py` (+19 lines: thêm field `selected_subject_group_id` với docstring lock-in Phase 0 owner + ondelete reasoning).
+- `Backend_FastAPI/tests/unit/test_m_p0a_selected_subject_group_id.py` (new, ~190 lines: 9 lock-in tests).
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (M-P0a row CODE_DONE).
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này).
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-m-p0a` + sub-PR creation → `feat/admission-full-cutover`.
+
+**Tomorrow plan (sau merge M-P0a):**
+- M-P0b (`phase0b_relax_applied_rules_immutability_for_payment_keys`) — migration trigger function update; CRITICAL chặn fee endpoint break sau khi extend status CHECK ở Phase 1 #11. Độc lập M-P0a, có thể start ngay sau M-P0a merge hoặc parallel nếu cần.
+- Sau M-P0a + M-P0b → Phase 0 hoàn tất (P0c đã ship). Bước tiếp: B1 (Casbin auth_model deny-first) hoặc B2 (EventDefinition + NotificationOutbox + M-1-19a).
+
+**Notes:**
+- M-P0a là "single owner column" pattern: chỉ migration này tạo column qua DDL. Phase 1 #13 (`phase1_12_backfill_selected_subject_group_id`) chỉ làm 2 việc: pre-flight verify column tồn tại (raise hint nếu không) + backfill data lịch sử qua decision tree 3 rule + insert exception rows. KHÔNG re-define column.
+- Decision audit trail: user catch quá vội chốt `RESTRICT` ban đầu (chưa đọc codebase đủ sâu), re-verify các FK pattern hiện có (`offering_admission_config_id` SET NULL, mapping tables CASCADE) → adjust thành `SET NULL`. Memory `verify-schema-before-proposing` tiếp tục apply cho mọi schema decision.
+- Live alembic smoke trên dev DB là confidence boost ngoài unit test: thực sự verify Postgres apply column type/FK/index đúng tên + SET NULL behavior literal trong DDL output.
+
+---
+
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
 - User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
 - Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
