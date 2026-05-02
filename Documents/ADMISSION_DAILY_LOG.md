@@ -236,9 +236,11 @@ Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-
 
 ---
 
-### T0-5 — `POST /api/v2/admin/casbin/reload` admin endpoint (commit local, branch chưa push)
+### T0-5 — `POST /api/v2/admin/casbin/reload` admin endpoint (sub-PR opened)
 
-**Branch:** `feature/admission-t0-5` off `feat/admission-full-cutover` HEAD `edd055a1`. Cutover-only HTTP surface để runbook trigger Casbin enforcer reload tại T+3:30 sau khi seed deny rules direct DB INSERT — không cần restart worker.
+**Branch:** `feature/admission-t0-5` off `feat/admission-full-cutover` HEAD `edd055a1`. Pushed `c952c699` 2026-05-02; sub-PR [#193](https://github.com/favouritekid/QLTS/pull/193) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1 #189 + T0-2 #190 + T0-3 #191 + T0-4a #192 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 9/9 PASS Docker test.
+
+**Wording chuẩn (post P1+P2 review):** endpoint là **current-process diagnostic only**; fleet-wide reload = backend restart per §7.2 T+3:15. Cutover-only HTTP surface để runbook trigger smoke/diagnostic Casbin reload sau restart, KHÔNG dùng làm cơ chế reload chính.
 
 **Scope strict (B1 boundary):**
 - Endpoint ONLY: `POST /api/v2/admin/casbin/reload`. Path prefix `/api/v2/admin/casbin` tách khỏi v1 admin tree (`/api/admin/...`).
