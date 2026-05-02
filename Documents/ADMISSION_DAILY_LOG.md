@@ -441,6 +441,88 @@ Phase 0 wave migration; single owner column DDL — Phase 1 #13 sau này chỉ b
 
 ---
 
+### M-P0b — `phase0b_relax_applied_rules_immutability_for_payment_keys` (commit local, branch chưa push)
+
+**Branch:** `feature/admission-m-p0b` off `feat/admission-full-cutover` HEAD `be64348b`. Phase 0 wave migration #2; trigger function update — KHÔNG đụng schema/column/FK.
+
+**Decision arc — drift catch verified mid-implementation:**
+- PLAN v2.13.1 §3.4 lines 2526-2531 đề xuất whitelist 4 key: `fee_paid_at`, `fee_payment_data`, `fee_calculated_at`, `fee_invoice_id`.
+- Verified-from-code 2026-05-02: `admission_service.py:5904-5906` ghi **3 key** post-create: `fee_status`, `fee_paid_at`, `fee_payment_data`. PLAN miss `fee_status`. Existing test `tests/services/test_admission_application_fee.py:340` assert `fee_status == "paid"` chỉ pass vì trigger chưa apply trong test fixtures hiện tại; deploy Phase 1 → trigger active prod → fee endpoint break vì PLAN whitelist thiếu.
+- User chốt **A: 5 key whitelist** (thêm `fee_status`). PLAN patch trong cùng PR (drift fix verified, không scope creep).
+- **Logic trigger** thay từ strip-and-compare (PLAN line 2543-2552 pattern) → per-key classifier. Strip pattern blind spot với deletion: strip allowed key khỏi cả OLD lẫn NEW khiến delete equal add equal update — silent allow. Per-key classifier phân biệt rõ:
+  - Add allowed key (NEW có, OLD không): allow
+  - Update allowed key (cả 2 có, value khác): allow
+  - Delete allowed key (OLD có, NEW không): **REJECT** (PLAN nói "thêm/update", không nói xóa)
+  - Add/update/delete non-whitelisted key: REJECT
+  - Wipe entire `applied_rules` (NEW = NULL): REJECT
+  - No-op (OLD == NEW): allow (fast-path)
+
+**Migration design:**
+- Revision `phase0br01`, down `phase0sg01` (parent HEAD khi tạo branch = M-P0a merge).
+- `ALLOWED_KEYS` exposed at module level (`tuple[str, ...]`) — locked by source test, mirrors SQL `allowed_keys TEXT[]` array literal.
+- Trigger name `enforce_applied_rules_immutability` unchanged — chỉ replace function body via `CREATE OR REPLACE FUNCTION`.
+- Downgrade restore v1 strict body literal-for-literal từ `b5c6d7e8f9a0` (RAISE EXCEPTION text exact match: `"applied_rules is immutable after creation and cannot be modified"`).
+
+**PLAN patch (drift fix in same PR):**
+- §3.4 line 2518: "2 key" wording → 3 key chi tiết với line refs.
+- §3.4 lines 2526-2531: whitelist 4 → 5 key (thêm `fee_status` đầu danh sách).
+- §3.4 lines 2543-2552: strip-and-compare → per-key classifier (mới SQL block với deletion guard).
+- §3.4 thêm "Drift fix (round 24 — chốt 2026-05-02 trong M-P0b PR)" subsection ghi rõ 2 thay đổi (whitelist 4→5 + logic strip→classifier) với reasoning.
+
+**Tested / Rehearsed:**
+- M-P0b unit — `pytest tests/unit/test_m_p0b_applied_rules_whitelist.py -v` PASS **4/4** trong Docker (1.17s):
+  - revision-chain (`phase0br01`/`phase0sg01`).
+  - `ALLOWED_KEYS` 5-tuple lock (`fee_status` ở index 0).
+  - upgrade SQL has per-key classifier markers (5 quoted keys + `jsonb_object_keys` walk + deletion guard + wipe-entire-object guard).
+  - downgrade SQL restore v1 strict literal.
+- M-P0b live psql 6-scenario behavior matrix (dev DB, trigger active):
+  - **Scenario 1**: 5 allowed keys (1 update fee_status + 4 add) → `UPDATE 1` ✓
+  - **Scenario 2**: non-whitelisted `min_gpa` change → `ERROR: applied_rules: key min_gpa is immutable` ✓
+  - **Scenario 3**: non-whitelisted `admission_path_id` change → `ERROR: ... admission_path_id is immutable` ✓
+  - **Scenario 4**: mixed allowed `fee_status` + non-allowed `min_gpa` → `ERROR: ... min_gpa is immutable` (rejection on first non-allowed key) ✓
+  - **Scenario 5**: delete whitelisted `fee_status` → `ERROR: ... deletion of key fee_status is not allowed; only add/update permitted` ✓ (deletion guard bites)
+  - **Scenario 6**: no-op same JSONB → `UPDATE 1` (fast-path) ✓
+- M-P0b live alembic roundtrip dev DB:
+  - `alembic upgrade head` apply v2 function with whitelist + classifier; `pg_get_functiondef` confirm.
+  - `alembic downgrade -1` restore v1 strict (`pg_get_functiondef` confirm `'applied_rules is immutable after creation and cannot be modified'` literal).
+  - `alembic upgrade head` re-apply v2 successfully.
+- M-P0b existing fee tests — `pytest tests/services/test_admission_application_fee.py -v` PASS **14/14** (108.23s) post-trigger-active:
+  - `TestRecordFeePayment::test_admin_can_record_fee_payment` exercises actual `record_application_fee_payment` writing `fee_status="paid"` + `fee_paid_at` + `fee_payment_data` → trigger allow ✓
+  - `TestFullFlowWithFee` end-to-end fee flow PASS
+  - 11 other fee tests (status get, idempotent, approve gating, event dispatch) PASS
+
+**Test scope limitation (lessons learned):**
+- Live psql smoke gây dev DB drift: profile id 189 bị overwrite `applied_rules` bằng smoke baseline `{"min_gpa": 7.0, "fee_status": "pending", "admission_path_id": 1}`. Nguyên nhân: DO block backup table fail vì `RAISE NOTICE jsonb_object_keys()` — set-returning function trong NOTICE → DO abort trước INSERT backup. Workaround future runs: wrap toàn bộ smoke trong `BEGIN; ... ROLLBACK;` transaction (atomic, rollback nếu fail → dev DB clean kể cả khi smoke crash).
+- Profile 189 dev-only test data, regenerable qua seed scripts. KHÔNG production impact.
+- Pytest live tests (initial attempt) bị scope mismatch + psycopg unavailable → drop khỏi pytest, dùng psql smoke + alembic CLI roundtrip thay thế. Source tests + 14 existing fee tests PASS đủ catch regression.
+
+**Drift catch verified (round 24):**
+- PLAN §3.4 patched in same PR — KHÔNG nguyên trạng PLAN frozen rule vì là verified drift (PLAN miss `fee_status`).
+- KHÔNG touch RISK_REVIEW (rollback strategy `git revert` LOW risk vẫn đúng).
+
+**Files changed:**
+- `Backend_FastAPI/alembic/versions/phase0br01_relax_applied_rules_immutability_for_payment_keys.py` (new, ~150 lines: full SQL trigger function với per-key classifier upgrade + v1 strict downgrade).
+- `Backend_FastAPI/tests/unit/test_m_p0b_applied_rules_whitelist.py` (new, ~115 lines: 4 source contract tests).
+- `Documents/ADMISSION_REFACTOR_PLAN.md` (drift fix §3.4 lines 2516-2557 — whitelist 4→5 + logic strip→classifier + drift fix audit-trail subsection).
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (M-P0b row CODE_DONE).
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này).
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-m-p0b` + sub-PR creation → `feat/admission-full-cutover`.
+- Future smokes cần wrap BEGIN/ROLLBACK transaction (lesson learned từ profile 189 drift).
+
+**Tomorrow plan (sau merge M-P0b):**
+- Phase 0 wave hoàn tất (P0c + M-P0a + M-P0b 3/3 ship).
+- Card #182 Phase 0 Foundation move In Progress → Done.
+- Bước tiếp: B1 (Casbin auth_model deny-first + 16 deny rules) hoặc B2 (EventDefinition + NotificationOutbox model + M-1-19a) — Phase 1 Code task gates wave.
+
+**Notes:**
+- Per-key classifier > strip-and-compare: complexity tăng (~30 line PL/pgSQL vs 15 line) đổi lấy correctness rõ ràng (deletion guard explicit). Strip pattern blind spot với deletion là silent semantic bug — không catch qua test cho đến khi production user invoke profile-edit endpoint xóa fee_status.
+- `fee_status` là state transition legitimate (`pending`/`exempt` → `paid`/`waived`), KHÔNG security-sensitive như `min_gpa` mà PLAN nguyên thủy bảo vệ. Đối xứng với `fee_paid_at` (cả 2 cập nhật cùng lúc trong record_payment line 5904-5905).
+- Phase 0 wave: 3 sub-task (P0c + M-P0a + M-P0b) đều ship cùng day 2026-05-02. Card #182 In Progress → sẽ → Done sau M-P0b merge.
+
+---
+
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
 - User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
 - Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
