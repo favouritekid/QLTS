@@ -117,6 +117,57 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+### T0-2 — `ADMISSION_FROZEN` middleware (commit local, branch chưa push)
+
+**Branch:** `feature/admission-t0-2` off `feat/admission-full-cutover` HEAD `2c57e5d6`.
+
+**Scope:**
+- `Backend_FastAPI/app/config.py`: thêm `ADMISSION_FROZEN: bool = False` (Field validation_alias). Module-level load, restart container để pickup mới (per RUNBOOK §6.1).
+- `Backend_FastAPI/app/middleware/admission_freeze.py` (mới): `AdmissionFreezeMiddleware` (Starlette `BaseHTTPMiddleware`). Đọc `settings.ADMISSION_FROZEN` per request → nếu True và method ∈ {POST, PUT, PATCH, DELETE} và path under 3 prefix verified-from-code → trả 503 JSON `{detail, code: "ADMISSION_FROZEN", frozen_prefix}`. Path-segment match (`path == prefix or path.startswith(prefix + "/")`) để `/api/admissionsfoo` không bị false positive.
+- `Backend_FastAPI/app/main.py`: `add_middleware(AdmissionFreezeMiddleware)` đặt giữa CSRF (innermost) và CORS (outermost). 503 response sẽ đi qua CORS layer → CORS headers preserved; freeze chạy outside CSRF nên frozen request short-circuit trước CSRF state machine.
+- `Backend_FastAPI/tests/middleware/test_admission_freeze.py` (mới): isolated stub app (KHÔNG cần lifespan/DB/Redis), 46 case parametrized.
+
+**Drift catch + fix verified-from-code:**
+- RUNBOOK §3.5 + §6.2 + §9.3 + Issue #181 ban đầu ghi 4 prefix `/api/admission-paths` + `/api/admission-configs`. Verified `grep "router = APIRouter" Backend_FastAPI/app/routers/admission*.py public_admissions.py`: 4 router file share **3 distinct prefix** — `/api/admissions`, `/api/admission-config` (singular, shared bởi `admission_config.py` + `admission_paths.py`), `/api/public/admissions`.
+- Sửa: RUNBOOK §3.5 T0-2 + §3.5 T0-3 (Nginx regex) + §6.2 method matrix + §6.2 block scope + §9.3 readiness — tất cả align với 3 prefix verified-from-code.
+- Sửa Issue #181 sub-task T0-2 wording match.
+- KHÔNG sửa PLAN/RISK_REVIEW (frozen v2.13.1) — prefix list không nằm trong PLAN spec, chỉ trong RUNBOOK ops doc.
+
+**Tested / Rehearsed:**
+- T0-2 — `pytest tests/middleware/test_admission_freeze.py -v` PASS 46/46 trong Docker (1.02s):
+  - 1 sanity: `FROZEN_PREFIXES` + `FROZEN_METHODS` contract.
+  - 12 unfrozen-pass-through (3 prefix × 4 write method).
+  - 12 frozen-block-503 (3 prefix × 4 write method) — body kiểm `code="ADMISSION_FROZEN"` + `frozen_prefix` match input.
+  - 9 frozen-read-allowed (3 prefix × {GET, HEAD, OPTIONS}).
+  - 4 non-admission unaffected (`/api/leads/123` × 4 write method).
+  - 1 health endpoint reachable khi frozen.
+  - 4 path-segment lookalike rejection (`/api/admissionsfoo` × 4 write method) → 200 (không match `/api/admissions` prefix).
+  - 3 bare prefix POST blocked (POST `/api/admissions`, `/api/admission-config`, `/api/public/admissions` không trailing slash).
+
+**Files changed:**
+- `Backend_FastAPI/app/config.py` (+10 lines, ADMISSION_FROZEN field)
+- `Backend_FastAPI/app/main.py` (+8 lines, import + add_middleware giữa CSRF/CORS)
+- `Backend_FastAPI/app/middleware/admission_freeze.py` (new, ~75 lines)
+- `Backend_FastAPI/tests/middleware/test_admission_freeze.py` (new, ~180 lines)
+- `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` (drift fix §3.5 + §6.2 + §9.3)
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (T0-2 row CODE_DONE + Section 12.3 wording sync)
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này)
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-t0-2` + sub-PR creation → `feat/admission-full-cutover`.
+
+**Tomorrow plan (sau merge T0-2):**
+- T0-3 Nginx admission block (Ops owner) — 3 prefix regex match T0-2.
+- T0-4a `dispatch_pending_outbox` skeleton — independent, ship parallel.
+- T0-5 Casbin reload endpoint — independent, ship parallel.
+
+**Notes:**
+- Reload semantics RUNBOOK §6.1 đúng: `Settings` load module-level → flip `ADMISSION_FROZEN` cần `docker compose restart backend`. Test verify monkeypatch `app_settings.ADMISSION_FROZEN` per fixture → middleware đọc lại attribute mỗi request, không cần restart trong test.
+- Defense-in-depth: T0-3 Nginx regex `^/api/(admissions|admission-config|public/admissions)(/.*)?$` sẽ match T0-2 prefix; bare prefix (no trailing path) cũng match nhờ `(/.*)?$` optional group.
+- 4-method × 3-prefix matrix là **12 case** chứ không phải 16 (4×4) như Tracker wording cũ; Tracker đã sync.
+
+---
+
 ## 2026-05-01
 
 **Merged tới main** (deploy gate scaffolding):
