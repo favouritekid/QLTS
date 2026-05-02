@@ -240,11 +240,16 @@ docker compose ps backend       # verify state running
 curl -X POST http://localhost:8000/api/admissions/test-endpoint  # Expect: 503 Service Unavailable
 curl -X GET  http://localhost:8000/api/admissions/                # Expect: 200 (read-only allowed)
 
-# Nginx env (khi T0-3 ship): edit env file hoặc compose
-#   NGINX_ADMISSION_FROZEN=1
-# Reload nginx container (KHÔNG cần restart):
-docker compose exec -T nginx nginx -s reload
-docker compose exec -T nginx nginx -t          # verify config syntax OK
+# Nginx env (T0-3 shipped on `feat/admission-full-cutover`): edit `.env.production`,
+# then re-run `bash scripts/deploy.sh` (Step 3 envsubst regenerates
+# `nginx/conf.d/default.conf` with the new flag value baked in):
+#   NGINX_ADMISSION_FROZEN=true
+# Match T0-2 backend convention: only the exact lowercase string `true` enables
+# the freeze; any other value (`false`, unset, typo, `1`, `0`) leaves the gate open.
+# Reload nginx container after redeploy (no restart needed; envsubst already wrote
+# the new conf):
+docker compose --profile production exec -T nginx nginx -t   # verify syntax
+docker compose --profile production exec -T nginx nginx -s reload
 
 # Verify nginx block active (defense-in-depth)
 curl -X POST http://localhost/api/admissions/test-endpoint        # Expect: 503 từ nginx (trước khi reach backend)
@@ -307,8 +312,16 @@ KHÔNG khóa: Lead module (CRUD), Finance (payment view), Dashboard, KPI reports
 
 ```
 T+0:00   Communicate freeze (email + Slack + in-app banner)
-T+0:15   Set ADMISSION_FROZEN=true env + Nginx reload với NGINX_ADMISSION_FROZEN=1
-         Verify: curl POST /api/admissions/... → 503
+T+0:15   Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
+         Regenerate Nginx conf (envsubst bakes flag at deploy time, NOT runtime):
+           set -a && source .env.production && set +a
+           envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
+             < nginx/conf.d/default.conf.template \
+             > nginx/conf.d/default.conf
+         Apply: docker compose restart backend
+                docker compose --profile production exec -T nginx nginx -t
+                docker compose --profile production exec -T nginx nginx -s reload
+         Verify: curl POST /api/admissions/... → 503 (Nginx edge AND backend middleware both block)
 T+0:30   Final pg_dump + uploads tar + config backup → upload S3 + integrity verify
 T+1:00   Deploy backend image MỚI với 2 env flag = false:
            RUN_MIGRATIONS_ON_STARTUP=false
@@ -373,9 +386,17 @@ Estimate recovery: 1-2h
 
 ```bash
 # Step 1: Re-freeze admission (block writes during rollback window)
-# Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=1
+# Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
+# Regenerate Nginx conf (T0-3 envsubst-baked: flag value đi vào nginx/conf.d/default.conf
+# tại deploy time, KHÔNG đọc runtime — `nginx -s reload` đơn lẻ sẽ load config CŨ
+# và freeze edge layer KHÔNG bật):
+set -a && source .env.production && set +a
+envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
+    < nginx/conf.d/default.conf.template \
+    > nginx/conf.d/default.conf
 docker compose restart backend
-docker compose exec -T nginx nginx -s reload
+docker compose --profile production exec -T nginx nginx -t
+docker compose --profile production exec -T nginx nginx -s reload
 
 # Step 2: Restore DB từ pre-cutover backup
 # Pipe file vào container stdin (tránh file location mismatch)
@@ -415,9 +436,15 @@ docker compose exec -T postgres psql -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:
     -c "SELECT COUNT(*) FROM admission_profile"   # Expect: count match pre-cutover
 
 # Step 6: Unlock (nếu smoke PASS)
-# Edit .env.production: ADMISSION_FROZEN=false + NGINX_ADMISSION_FROZEN=0
+# Edit .env.production: ADMISSION_FROZEN=false + NGINX_ADMISSION_FROZEN=false
+# Regenerate Nginx conf (envsubst-baked, cùng pattern Step 1):
+set -a && source .env.production && set +a
+envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
+    < nginx/conf.d/default.conf.template \
+    > nginx/conf.d/default.conf
 docker compose restart backend
-docker compose exec -T nginx nginx -s reload
+docker compose --profile production exec -T nginx nginx -t
+docker compose --profile production exec -T nginx nginx -s reload
 ```
 
 ### 8.2. KHÔNG rollback nửa vời

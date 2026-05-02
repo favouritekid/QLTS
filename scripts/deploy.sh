@@ -60,8 +60,14 @@ git pull origin main
 # Step 3: Process Nginx template
 # =============================================================================
 log "Step 3/8: Processing Nginx template..."
-envsubst '${DOMAIN}' < nginx/conf.d/default.conf.template > nginx/conf.d/default.conf
-log "Nginx config generated for domain: $DOMAIN"
+
+# T0-3 admission cold-cutover freeze: default to "false" when unset so the
+# template only blocks when ops explicitly set NGINX_ADMISSION_FROZEN=true
+# (paired with backend ADMISSION_FROZEN=true per RUNBOOK §6.1).
+export NGINX_ADMISSION_FROZEN="${NGINX_ADMISSION_FROZEN:-false}"
+
+envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' < nginx/conf.d/default.conf.template > nginx/conf.d/default.conf
+log "Nginx config generated (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
 
 # =============================================================================
 # Step 4: Build Docker images

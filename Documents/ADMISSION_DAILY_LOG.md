@@ -108,6 +108,60 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Test framework cho bash entrypoint: chỉ syntax check + logic test, không có integration framework. Manual smoke trong staging clone D12-D14 sẽ verify end-to-end (apply 2 flag, observe entrypoint output, smoke API ready).
 - Q11 closed (PLAN §3.3.g.1) → KHÔNG còn product decision blocker; D2 + D3 chỉ chặn cutover, không chặn dev start.
 
+### T0-3 — Nginx admission block (sub-PR opened)
+
+**Branch:** `feature/admission-t0-3` off `feat/admission-full-cutover` HEAD `691e6457`. Pushed `fbbe22d0` 2026-05-02; sub-PR [#191](https://github.com/favouritekid/QLTS/pull/191) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern với PR #189 + PR #190 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 32/32 PASS local Docker test harness.
+
+Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặn ngay tại Nginx, trước khi traffic chạm FastAPI.
+
+**Scope:**
+- `nginx/conf.d/default.conf.template`: thêm regex location `^/api/(admissions|admission-config|public/admissions)(/.*)?$` đặt TRƯỚC prefix `location /api/` (regex thắng anyway, đặt trước cho rõ intent). Trong block: `set $freeze_check "$request_method:${NGINX_ADMISSION_FROZEN}"` + `if ($freeze_check ~ "^(POST|PUT|PATCH|DELETE):true$") { return 503 '{"detail":"...","code":"NGINX_ADMISSION_FROZEN"}'; }` + fall through `proxy_pass http://backend` cho read methods và non-admission flow. Bare prefix + subpath đều match nhờ `(/.*)?$` optional group.
+- `scripts/deploy.sh` Step 3: thêm `${NGINX_ADMISSION_FROZEN}` vào envsubst allowlist + default `"${NGINX_ADMISSION_FROZEN:-false}"` để khi ops chưa set thì template emit `false` (regex `:true$` không match → gate mở).
+- `scripts/test_nginx_admission_freeze.sh` (mới): 3-layer test harness Docker-driven (render layer + syntax layer + regex layer).
+
+**Drift catch + fix verified:**
+- RUNBOOK §6.1 line 244 + line 310 + §8 rollback line 376/418 dùng `NGINX_ADMISSION_FROZEN=1` / `=0` (numeric). Convention thực tế match T0-2: chỉ exact lowercase `"true"` enable, mọi value khác (`false`/unset/typo/`1`/`0`) đều disable. Sửa: `=1` → `=true`, `=0` → `=false` toàn bộ 4 chỗ trong RUNBOOK.
+- §6.1 cũng cập nhật reload procedure: KHÔNG còn "edit env file rồi nginx reload trực tiếp" (nginx container nhận file mounted, envsubst chạy ở host). Đúng quy trình: edit `.env.production` → `bash scripts/deploy.sh` (Step 3 envsubst regenerate) → `docker compose --profile production exec -T nginx nginx -s reload`.
+
+**Tested / Rehearsed:**
+- T0-3 — `bash scripts/test_nginx_admission_freeze.sh` PASS 32/32 (re-run sau Docker image cached, < 5s):
+  - **15 render-layer** assertions (3 flag values × 5 markers): regex location, `set $freeze_check`, flag substitution literal, `return 503`, `code: NGINX_ADMISSION_FROZEN`. Confirms envsubst với `${NGINX_ADMISSION_FROZEN}` allowlist hoạt động đúng cho `false` / `true` / unset (empty literal).
+  - **3 syntax-layer** `nginx -t` (3 flag values) trong throw-away `nginx:1.27-alpine` container chống isolated minimal config (không cần SSL certs). Verifies nginx grammar accept `if ... ~ ...` regex condition + return 503 inline JSON.
+  - **14 regex-layer** URI match cases (bash POSIX ERE simulating nginx PCRE; 7 should-match + 7 should-NOT-match): bare prefix, subpath, `/api/admissionsfoo` lookalike, legacy plurals (`admission-configs`, `admission-paths`), non-admission baseline (`/api/leads/123`, `/api/admin/users`, `/health`).
+  - **First run had 1 spurious FAIL** trên syntax-layer test #1: Docker image pull progress interleaved với `nginx -t` output → `grep -q "test is successful"` race condition. Re-run sau image cached → 32/32 PASS clean. Bug ghi nhận trong harness comment; future runs trên CI sẽ không gặp vì image pre-pulled.
+
+**Test scope limitation (deferred to staging):**
+- Live HTTP functional smoke (POST /api/admissions/test → 503; GET → pass-through; non-admission unaffected) **KHÔNG chạy local** vì cần SSL certs tại `/etc/letsencrypt/live/${DOMAIN}/...` + live upstream backend. Sẽ verify trong staging clone D12-D14 cutover rehearsal: apply `NGINX_ADMISSION_FROZEN=true` → `bash scripts/deploy.sh` → curl matrix.
+- Reload mechanism (nginx -s reload picks up new config sau envsubst regenerate) **KHÔNG test local**; verify trong staging.
+
+**Files changed:**
+- `nginx/conf.d/default.conf.template` (+19 lines: regex location + freeze_check `if` + 503 JSON + fall-through proxy_pass).
+- `scripts/deploy.sh` (Step 3: +5 lines, envsubst allowlist + default value).
+- `scripts/test_nginx_admission_freeze.sh` (mới, ~145 lines: 3-layer Docker test harness).
+- `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` (drift fix §6.1 + §6.1 reload procedure + §7.2 cutover step + §8 rollback step).
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (T0-3 row CODE_DONE + Section 12.3 wording).
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này).
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-t0-3` + sub-PR creation → `feat/admission-full-cutover`.
+
+**Tomorrow plan (sau merge T0-3):**
+- T0-4a `dispatch_pending_outbox` Celery beat skeleton (BE) — independent, no-op safe trước B2 + M-1-19a.
+- T0-5 `POST /api/v2/admin/casbin/reload` admin endpoint (BE) — independent.
+- T0-1/T0-2/T0-3 đều TESTED → DONE chờ staging clone D12-D14 smoke (3 task pair test cùng trong staging rehearsal).
+
+**Notes:**
+- Defense-in-depth: T0-3 Nginx returns 503 trước khi traffic vào FastAPI; nếu Nginx bị bypass (internal Docker, healthcheck) thì T0-2 middleware sẽ catch. Hai gate độc lập, cùng convention `=true` → enable.
+- Convention chuẩn cross-task: cả T0-1 (RUN_MIGRATIONS_ON_STARTUP, RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) + T0-2 (ADMISSION_FROZEN backend) + T0-3 (NGINX_ADMISSION_FROZEN) đều exact lowercase string match. T0-1 dùng `false` để skip, T0-2/T0-3 dùng `true` để enable. Defensive default: typo → "safe" behavior (T0-1 chạy migrations, T0-2/T0-3 không freeze).
+- Nginx `if` directive rule "if is evil": chỉ dùng cho `return` + `set` directives — pattern an toàn. Pattern combined regex `$request_method:$flag` cho phép single `if` block thay vì nested.
+
+**Review feedback applied (post-commit `c574d49a`):**
+- **P1** (rollback ops drift) — RUNBOOK §8 Rollback Step 1 (re-freeze trong rollback window) + Step 6 (unlock sau smoke PASS) sửa env xong gọi `nginx -s reload` trực tiếp. Với T0-3 envsubst-bake-at-deploy-time, reload đơn lẻ sẽ load `nginx/conf.d/default.conf` CŨ → freeze edge layer fail-stale (Step 1: KHÔNG bật freeze; Step 6: KHÔNG tắt freeze). Patch: thêm `set -a && source .env.production && set +a` + `envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' < template > default.conf` + `nginx -t` ngay trước `nginx -s reload` ở cả 2 step.
+- **P2** (cutover timeline) — RUNBOOK §7.2 timeline T+0:15 single-line gộp cả "Set env + Nginx reload" thiếu regenerate step. Cùng pattern P1 — ops sẽ reload config cũ + freeze edge layer không bật. Patch: expand T+0:15 thành block 4 step rõ (edit env → envsubst regenerate → restart backend + nginx -t + nginx -s reload → curl verify cả 2 layer block).
+- **Cross-check sau patch**: 4 reload site trong RUNBOOK (§6.1 + §7.2 T+0:15 + §8 rollback Step 1 + §8 rollback Step 6) đều có envsubst regenerate ngay TRƯỚC `nginx -s reload`. §6.1 đã đúng từ T0-3 commit ban đầu; 3 site còn lại patch trong commit follow-up.
+
+---
+
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
 - User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
 - Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
