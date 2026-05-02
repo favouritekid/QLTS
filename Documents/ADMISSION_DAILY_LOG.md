@@ -236,9 +236,14 @@ Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-
 
 ---
 
-### T0-5 — `POST /api/v2/admin/casbin/reload` admin endpoint (sub-PR opened)
+### T0-5 — `POST /api/v2/admin/casbin/reload` admin endpoint (sub-PR merged)
 
-**Branch:** `feature/admission-t0-5` off `feat/admission-full-cutover` HEAD `edd055a1`. Pushed `c952c699` 2026-05-02; sub-PR [#193](https://github.com/favouritekid/QLTS/pull/193) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1 #189 + T0-2 #190 + T0-3 #191 + T0-4a #192 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 9/9 PASS Docker test.
+**Branch:** `feature/admission-t0-5` off `feat/admission-full-cutover` HEAD `edd055a1`. Pushed `c952c699` + post-PR docs `f5e1359d` 2026-05-02; sub-PR [#193](https://github.com/favouritekid/QLTS/pull/193) opened + merged squash `9d34e820` cùng ngày (mergedAt 2026-05-02T12:35:00Z). Base `feat/admission-full-cutover`, kept branch (`--delete-branch=false`). Status: **TESTED**, DONE pending staging smoke.
+
+**CI manual verification (no checks reported pattern T0-1 + T0-2 + T0-3 + T0-4a + T0-5 đều cùng):**
+- Pre-merge: `pytest tests/api/test_admin_v2_casbin_reload.py -v` → 9/9 PASS in Docker (58.19s).
+- Post-merge re-run trên parent HEAD `9d34e820`: 9/9 PASS (56.67s).
+- Repo workflow filter chưa cover PR vào `feat/admission-full-cutover` → CI tự động không chạy; manual evidence trong TRACKER + DAILY_LOG + PR body table đủ pass-fail.
 
 **Wording chuẩn (post P1+P2 review):** endpoint là **current-process diagnostic only**; fleet-wide reload = backend restart per §7.2 T+3:15. Cutover-only HTTP surface để runbook trigger smoke/diagnostic Casbin reload sau restart, KHÔNG dùng làm cơ chế reload chính.
 
