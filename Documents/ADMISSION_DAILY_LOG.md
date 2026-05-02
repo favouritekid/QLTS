@@ -370,9 +370,11 @@ Phase 0 hot-fix scope-tight; KHÔNG đụng B1/B2 hay migration nào khác.
 
 ---
 
-### M-P0a — `phase0_add_selected_subject_group_id_to_profile` migration (commit local, branch chưa push)
+### M-P0a — `phase0_add_selected_subject_group_id_to_profile` migration (sub-PR opened)
 
-**Branch:** `feature/admission-m-p0a` off `feat/admission-full-cutover` HEAD `7f4ba89d`. Phase 0 wave migration; single owner column DDL — Phase 1 #13 sau này chỉ backfill, KHÔNG re-define column.
+**Branch:** `feature/admission-m-p0a` off `feat/admission-full-cutover` HEAD `7f4ba89d`. Pushed `69e7e774` 2026-05-02; sub-PR [#195](https://github.com/favouritekid/QLTS/pull/195) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1..T0-5 + P0c — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 9/9 PASS unit + live alembic roundtrip on dev DB.
+
+Phase 0 wave migration; single owner column DDL — Phase 1 #13 sau này chỉ backfill, KHÔNG re-define column.
 
 **Decision arc (đã chốt 2026-05-02):**
 - `ondelete="SET NULL"` (KHÔNG `RESTRICT`/`CASCADE`) — match pattern `AdmissionProfile.offering_admission_config_id` FK-traceability convention. `subject_group` là catalog có `is_active` → soft-retire, hard delete hiếm; `CASCADE` sẽ erase profiles, `RESTRICT` block catalog cleanup. `SET NULL` giữ profile + drop reference + cleanup task có thể surface affected rows qua `IS NULL` query.
