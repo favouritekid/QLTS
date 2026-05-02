@@ -175,12 +175,14 @@ Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặ
 - `Backend_FastAPI/app/tasks/notification_outbox_tasks.py` (mới): module mới chứa `dispatch_pending_outbox` skeleton task. Imports chỉ `logging` + `celery_app` — KHÔNG import `NotificationOutbox` model (chưa tồn tại trước M-1-19a). Docstring lock-in contract cho T0-4b: giữ task name + module path + result keys `status`/`reason`/`task_id`.
 - `Backend_FastAPI/app/celery_app.py`: thêm beat schedule entry `dispatch-pending-outbox` (30.0s, queue `default`) sau `check-notification-alerts` block. Comment trỏ T0-4b sẽ replace body, không touch entry.
 - `Backend_FastAPI/app/tasks/__init__.py`: import + re-export `dispatch_pending_outbox` (match pattern existing test guard `test_every_beat_scheduled_task_is_registered` — đảm bảo task registered trong celery_app.tasks dict, không silent-discard khi beat fire).
-- `Backend_FastAPI/tests/unit/test_outbox_skeleton.py` (mới): 9 lock-in test — beat cadence/registration/return-shape/import-safety/autodiscover/signature-contract.
+- `Backend_FastAPI/tests/unit/test_outbox_skeleton.py` (mới): 11 lock-in test — beat cadence + static `conf.include` config + subprocess cold-import regression + post-import sanity + return-shape + AST no-NotificationOutbox import-safety (skeleton module + `__init__.py`) + models package gap canary + autodiscover smoke + zero-arg signature contract.
 
 **Tested / Rehearsed:**
-- T0-4a — `pytest tests/unit/test_outbox_skeleton.py tests/unit/test_celery_task_registry.py -v` PASS 11/11 trong Docker (1.03s):
+- T0-4a — `pytest tests/unit/test_outbox_skeleton.py tests/unit/test_celery_task_registry.py -v` PASS **13/13** trong Docker (2.73s post-fix; 1.03s pre-fix):
   - 1 beat-schedule cadence: `dispatch-pending-outbox` entry tồn tại + task name `dispatch_pending_outbox` + schedule = 30.0s.
-  - 1 task-registry registration: `celery_app.tasks` chứa `dispatch_pending_outbox` (regression guard sau import via package `__init__`).
+  - **1 static `conf.include` config check** (post P1 fix): `"app.tasks" in celery_app.conf.include` — locks worker entrypoint declaration.
+  - **1 subprocess cold-import regression test** (post P2 fix): spawn `python -c "from app.celery_app import celery_app"` không call finalize/import_default_modules → assert `dispatch_pending_outbox` đã registered. Bite-verified: revert `import app.tasks` ở cuối `celery_app.py` → FAIL với `non_builtin_tasks=[]`; restore → PASS.
+  - 1 post-import sanity (renamed cũ): sau `import app.tasks` task có trong registry — sanity check, KHÔNG phải worker-boot guarantee.
   - 1 export contract: `from app.tasks import dispatch_pending_outbox` resolvable + callable.
   - 1 result-shape stability lock: skeleton return dict có `status="skipped"` + `reason="outbox_not_active"` + `task_id="T0-4a"` (load-bearing cho T0-4b — T0-4b sẽ flip `task_id` → `"T0-4b"` + có thể thêm key, KHÔNG drop).
   - 2 AST-based import-safety guards: skeleton module + tasks `__init__.py` không có code-level reference `NotificationOutbox` (docstring/comment OK; AST walk imports + Name + Attribute nodes).
@@ -199,7 +201,7 @@ Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặ
 - `Backend_FastAPI/app/tasks/notification_outbox_tasks.py` (new, ~60 lines: skeleton task + docstring + result dict).
 - `Backend_FastAPI/app/celery_app.py` (+12 lines: beat schedule entry).
 - `Backend_FastAPI/app/tasks/__init__.py` (+5 lines: import + re-export + __all__ entry).
-- `Backend_FastAPI/tests/unit/test_outbox_skeleton.py` (new, ~165 lines: 9 lock-in tests).
+- `Backend_FastAPI/tests/unit/test_outbox_skeleton.py` (new, ~250 lines: 11 lock-in tests including subprocess cold-import regression + static include config check after P1+P2 review fix).
 - `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (T0-4a row CODE_DONE + Section 12.3 row CODE_DONE).
 - `Documents/ADMISSION_DAILY_LOG.md` (entry này).
 
