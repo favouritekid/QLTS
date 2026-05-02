@@ -441,9 +441,11 @@ Phase 0 wave migration; single owner column DDL — Phase 1 #13 sau này chỉ b
 
 ---
 
-### M-P0b — `phase0b_relax_applied_rules_immutability_for_payment_keys` (commit local, branch chưa push)
+### M-P0b — `phase0b_relax_applied_rules_immutability_for_payment_keys` (sub-PR opened)
 
-**Branch:** `feature/admission-m-p0b` off `feat/admission-full-cutover` HEAD `be64348b`. Phase 0 wave migration #2; trigger function update — KHÔNG đụng schema/column/FK.
+**Branch:** `feature/admission-m-p0b` off `feat/admission-full-cutover` HEAD `be64348b`. Pushed `d879a43f` 2026-05-02; sub-PR [#196](https://github.com/favouritekid/QLTS/pull/196) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (pattern T0-1..T0-5 + P0c + M-P0a — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 4/4 unit + 6/6 psql + 14/14 fee tests PASS.
+
+Phase 0 wave migration #2; trigger function update — KHÔNG đụng schema/column/FK.
 
 **Decision arc — drift catch verified mid-implementation:**
 - PLAN v2.13.1 §3.4 lines 2526-2531 đề xuất whitelist 4 key: `fee_paid_at`, `fee_payment_data`, `fee_calculated_at`, `fee_invoice_id`.
