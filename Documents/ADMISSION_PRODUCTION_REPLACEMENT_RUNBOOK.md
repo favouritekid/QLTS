@@ -46,7 +46,7 @@ Runbook này KHÔNG:
 | **T0-3: Nginx admission block config** | Defense-in-depth với T0-2 backend middleware | `nginx/conf.d/default.conf.template` chỉ generic `/api/` proxy, zero conditional admission block | Conditional `location ~ ^/api/(admissions|admission-config|public/admissions)(/.*)?$ { ... return 503 ...}` env-driven `${NGINX_ADMISSION_FROZEN}` template variable (3 prefix match T0-2 middleware verified-from-code). |
 | **T0-4a: `dispatch_pending_outbox` skeleton task** | Register Celery beat safely before outbox table/model exists | `app/celery_app.py:108-150` zero match | Beat schedule entry 30s + task function exists, logs "outbox not yet active", returns early, KHÔNG query/insert/dispatch `NotificationOutbox`. Safe to ship before B2 + M-1-19a. |
 | **T0-4b: `dispatch_pending_outbox` real worker wiring** | Worker drain outbox notification queue | `notification_outbox` table/model chưa tồn tại trước B2 + M-1-19a | Replace skeleton with 3-step claim/dispatch/finalize implementation per PLAN Phần 3.3.e. Gate: B2 + M-1-19a shipped first. |
-| **T0-5: `POST /api/v2/admin/casbin/reload` endpoint** | Cutover safety: reload Casbin policy sau seed deny rules direct DB | `admin/roles.py` chỉ side-effect trong CRUD endpoint, zero dedicated reload endpoint | Admin-only endpoint gọi `await enforcer.load_policy()` + return policy count + audit log. |
+| **T0-5: `POST /api/v2/admin/casbin/reload` endpoint** | Diagnostic / smoke reload sau seed deny rules direct DB. **Chỉ tác động 1 Gunicorn worker process — KHÔNG fleet-wide.** Cutover-correct reload là restart backend container (lifespan re-init enforcer ở mọi worker, xem §7.2 T+3:15). | `admin/roles.py` chỉ side-effect trong CRUD endpoint, zero dedicated reload endpoint | Admin-only endpoint (`Depends(require_admin)` + `@limiter.limit(ADMIN_WRITE)`) gọi `await enforcer.load_policy()` + return `{"success", "reloaded_at", "policy_count", "actor_id", "scope": "current_process"}` + audit log. Failure → 500 với same shape, enforcer giữ in-memory state cũ (no partial flush). |
 
 **Gate**: Phần 9.3 production readiness checklist verify 5 infrastructure family trên (6 tracker row vì T0-4 split) shipped + tested trên staging trước Go decision.
 
@@ -342,6 +342,20 @@ T+3:00   Manual run backfill scripts theo PLAN Phần 4 + 5b:
            - GPA backfill từ academic_history JSON (length-bounded regex)
            - graduation_year backfill
            - Casbin v3='allow' + seed deny rules accountant
+T+3:15   **Restart backend container** để fleet-wide reload Casbin enforcer
+         (T0-5 endpoint reload chỉ tác động 1 Gunicorn worker — KHÔNG đủ
+          cho multi-worker production; cần lifespan re-load mọi worker).
+         Giữ 2 cutover env flags để tránh re-trigger auto-migration / sync:
+           RUN_MIGRATIONS_ON_STARTUP=false
+           RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false
+           docker compose --profile production restart backend
+         Verify mọi worker:
+           - `docker compose --profile production logs backend --tail=50` — kiểm
+             tra log lifespan boot success từ ALL Gunicorn workers (≥2 dòng
+             "✅ Casbin AsyncEnforcer initialized and policies loaded.").
+           - 4 role × 14 action smoke matrix qua Casbin (Phần 7.3 smoke có
+             cover) hoặc curl `/api/v2/admin/casbin/reload` chỉ để diagnostic
+             cho worker đang nhận request — KHÔNG dùng làm cơ chế reload chính.
 T+3:30   Manual run sync notification rules:
            docker compose exec backend python -m app.scripts.sync_notification_rules
          Verify: 12 ADMISSION_* event có DB rule row.
@@ -503,7 +517,7 @@ Nếu cutover đã apply một trong 5 migration trên + phát hiện bug critic
 - [ ] **T0-3** Nginx admission block config (env-driven `NGINX_ADMISSION_FROZEN`) tested với `nginx -t` syntax check + reload smoke.
 - [ ] **T0-4a** `dispatch_pending_outbox` skeleton scheduled 30s + worker registered + no-op safe before outbox table/model exists.
 - [ ] **T0-4b** `dispatch_pending_outbox` real worker wiring shipped after B2 + M-1-19a + 3-step claim/dispatch/finalize tested.
-- [ ] **T0-5** `POST /api/v2/admin/casbin/reload` endpoint shipped + admin-only Casbin guard + audit log.
+- [ ] **T0-5** `POST /api/v2/admin/casbin/reload` endpoint shipped + admin-only `require_admin` + `ADMIN_WRITE` rate limit + audit log + `scope="current_process"` field. **Multi-worker reality**: fleet-wide reload = restart backend (§7.2 T+3:15); endpoint = current-process diagnostic only.
 
 Misc readiness:
 - [ ] Profile creation flow PLAN §3.3.g.1 implemented (Q11 resolved — auto-create draft + issue submit token).
