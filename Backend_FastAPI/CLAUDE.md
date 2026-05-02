@@ -210,6 +210,17 @@ docker compose exec backend alembic revision --autogenerate -m "description"
 docker compose exec backend alembic upgrade head
 docker compose exec backend alembic downgrade -1
 
+# Cutover only — 2 entrypoint gates skip auto migration + auto notification sync.
+# Routine deploy: cả 2 unset (hoặc =true) → entrypoint chạy alembic upgrade head + sync_notification_rules như cũ.
+# Cold cutover: set CẢ 2 = "false" trước deploy backend image mới:
+#   RUN_MIGRATIONS_ON_STARTUP=false                   # skip alembic
+#   RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false      # skip notification rule sync
+# Container start chỉ load code + uvicorn ready. Manual run alembic + backfill + sync_notification_rules
+# ngoài để stream log + time tracking + checkpoint mỗi step.
+# Sau cutover: switch CẢ 2 về true (hoặc unset) cho routine deploy.
+# Defensive default: chỉ exact lowercase "false" mới skip; mọi value khác (TRUE/FALSE/typo/...) chạy như cũ.
+# Ref: Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md §3.5 + §7.2.
+
 # Start server (dev mode -- auto-configured by docker-compose.override.yml)
 docker compose up -d
 

@@ -81,7 +81,7 @@
 - [ ] Anonymized PII per company policy (if applicable)
 - [ ] Backend image build successful from feat branch HEAD
 - [ ] Alembic head trên feat branch verified (no missing migration)
-- [ ] T0-1..T0-5 prerequisites all shipped (per RUNBOOK §3.5)
+- [ ] Task 0 prerequisites all shipped (T0-1, T0-2, T0-3, T0-4a/4b, T0-5 per RUNBOOK §3.5)
 - [ ] Document expected backfill exception bounds (so unusual count flags issue)
 
 ---

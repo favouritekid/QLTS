@@ -6,7 +6,7 @@
 **Branch:** `feat/admission-full-cutover` (parent của sub-feature branches)
 
 **Last updated:** 2026-05-01 (round 22 cleanup: Q11 closed, Q9 defer 3 task, phase3_02/03 SUPERSEDED, sequencing fix #17/LS-map/FE Zod, blocker ID standardize, "9 → 11" direct sites, "Phase 3 = 2 → 1" align)
-**Current sprint focus:** Task 0 prerequisites (T0-1..T0-5) + maintenance window timing lock + 7 stakeholder sign-off
+**Current sprint focus:** Task 0 prerequisites (T0-1, T0-2, T0-3, T0-4a/4b, T0-5) + maintenance window timing lock + 7 stakeholder sign-off
 
 ---
 
@@ -42,10 +42,11 @@
 
 | ID | Task | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
-| T0-1 | `RUN_MIGRATIONS_ON_STARTUP` env flag entrypoint | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
+| T0-1 | 2 entrypoint env flag gates: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | BE | CODE_DONE (branch pushed) | feature/admission-t0-1 | U:✓ (14-case bash gate logic: 9 matrix + 5 defensive variants) | (chờ sub-PR target `feat/admission-full-cutover`) | RUNBOOK §3.5 |
 | T0-2 | `ADMISSION_FROZEN` middleware + 4 method × 4 router matrix | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-3 | Nginx admission block env-driven `NGINX_ADMISSION_FROZEN` | Ops | TODO | | U:- I:- | | RUNBOOK §3.5 |
-| T0-4 | Celery beat `dispatch_pending_outbox` 30s + 3-step worker | BE | TODO | | U:- I:- R:- | T0 depends on B2 catalog ready | RUNBOOK §3.5 + PLAN §3.3.e |
+| T0-4a | Celery beat `dispatch_pending_outbox` **skeleton task** (no-op safe registration: function defined, beat schedule registered, log "outbox not yet active" + return early — KHÔNG insert/dispatch). Kịch bản: B2/M-1-19a chưa ship, beat task vẫn registered nhưng KHÔNG crash worker. | BE | TODO | | U:- I:- | (none — no dep, ship parallel với T0-1/2/3/5) | RUNBOOK §3.5 + PLAN §3.3.e |
+| T0-4b | Celery beat `dispatch_pending_outbox` **real worker wiring** (3-step claim/dispatch/finalize, query NotificationOutbox table, dispatch SystemEvents enum). Replace skeleton T0-4a. | BE | TODO | | U:- I:- R:- (concurrency + crash recovery rig) | **B2** + **M-1-19a** ship trước (NotificationOutbox model + table tồn tại) | RUNBOOK §3.5 + PLAN §3.3.e |
 | T0-5 | `POST /api/v2/admin/casbin/reload` admin endpoint | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
 
 ---
@@ -225,10 +226,11 @@
 ### 12.3. Production readiness (Task 0 prerequisites)
 | Check | Status | Mapped task |
 |---|---|---|
-| T0-1 RUN_MIGRATIONS_ON_STARTUP shipped | TODO | T0-1 |
+| T0-1 2 entrypoint env flag gates shipped (RUN_MIGRATIONS_ON_STARTUP + RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) | TODO | T0-1 |
 | T0-2 ADMISSION_FROZEN middleware shipped | TODO | T0-2 |
 | T0-3 Nginx admission block shipped | TODO | T0-3 |
-| T0-4 dispatch_pending_outbox beat shipped | TODO | T0-4 |
+| T0-4a dispatch_pending_outbox skeleton (no-op safe) | TODO | T0-4a |
+| T0-4b dispatch_pending_outbox real worker wiring (sau B2 + M-1-19a) | TODO | T0-4b |
 | T0-5 Casbin reload endpoint shipped | TODO | T0-5 |
 | ~~Q11 product decision chốt~~ | **CLOSED** | Resolved PLAN §3.3.g.1 |
 | Maintenance window communicated 7d trước | TODO | D2 |
