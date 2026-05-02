@@ -2515,23 +2515,35 @@ Ship cùng Phase 0 wave (W1-W2). Bug lâu nay silent vì caller `check_criteria_
 
 **Phase 0 thêm migration `phase0b_relax_applied_rules_immutability_for_payment_keys.py`** (CRITICAL — chặn fee endpoint break sau khi extend status CHECK):
 
-Code production hiện UPDATE `applied_rules["fee_paid_at"]` + `applied_rules["fee_payment_data"]` ở `admission_service.py:5904-5907` sau khi profile approved. Trigger `b5c6d7e8f9a0` `prevent_applied_rules_update` raise nếu `OLD.applied_rules IS DISTINCT FROM NEW.applied_rules` — block toàn bộ change. Nhưng fee payment cần update key này.
+Code production hiện UPDATE 3 key trong `applied_rules` ở `admission_service.py:5904-5906` (`record_application_fee_payment`) sau khi profile approved:
+
+* `applied_rules["fee_status"]` — flip từ `"pending"`/`"exempt"` (init line 2745) sang `"paid"`.
+* `applied_rules["fee_paid_at"]` — ISO timestamp.
+* `applied_rules["fee_payment_data"]` — JSONB blob từ gateway.
+
+Trigger `b5c6d7e8f9a0` `prevent_applied_rules_update` raise nếu `OLD.applied_rules IS DISTINCT FROM NEW.applied_rules` — block toàn bộ change. Existing test `tests/services/test_admission_application_fee.py:340-341` assert cả `fee_status == "paid"` lẫn `fee_paid_at` is not None — chỉ pass vì trigger chưa được apply trong test fixtures hiện tại; deploy Phase 1 → trigger active prod → fee endpoint break.
 
 ```sql
--- Update trigger function: whitelist key cho phép thêm/update sau create
+-- Replace trigger function: classify per-key change.
+-- Whitelist 5 key ADD/UPDATE được; deletion bị reject ngay cả với whitelisted keys
+-- (PLAN nói "thêm/update", không nói xóa — strip-and-compare tham khảo bên dưới
+-- có blind spot với deletion).
 CREATE OR REPLACE FUNCTION prevent_applied_rules_update()
 RETURNS TRIGGER AS $$
 DECLARE
-    -- Whitelist các key được phép update sau create (fee payment + future)
     allowed_keys TEXT[] := ARRAY[
+        'fee_status',
         'fee_paid_at',
         'fee_payment_data',
         'fee_calculated_at',
         'fee_invoice_id'
     ];
-    old_filtered JSONB;
-    new_filtered JSONB;
-    v_key TEXT;  -- BẮT BUỘC declare biến loop trong PL/pgSQL
+    v_key TEXT;
+    v_all_keys TEXT[];
+    v_old_value JSONB;
+    v_new_value JSONB;
+    v_old_has BOOLEAN;
+    v_new_has BOOLEAN;
 BEGIN
     IF TG_OP = 'INSERT' THEN
         RETURN NEW;
@@ -2540,23 +2552,47 @@ BEGIN
         IF OLD.applied_rules IS NULL THEN
             RETURN NEW;
         END IF;
-        -- Strip whitelisted keys khỏi cả OLD và NEW, so phần còn lại
-        old_filtered := OLD.applied_rules;
-        new_filtered := NEW.applied_rules;
-        FOREACH v_key IN ARRAY allowed_keys LOOP
-            old_filtered := old_filtered - v_key;
-            new_filtered := new_filtered - v_key;
-        END LOOP;
-        IF old_filtered IS DISTINCT FROM new_filtered THEN
-            RAISE EXCEPTION 'applied_rules immutable except for whitelisted keys: %', allowed_keys;
+        IF OLD.applied_rules IS NOT DISTINCT FROM NEW.applied_rules THEN
+            RETURN NEW;
         END IF;
+        IF NEW.applied_rules IS NULL THEN
+            RAISE EXCEPTION 'applied_rules is immutable; cannot wipe entire object';
+        END IF;
+
+        SELECT ARRAY(
+            SELECT DISTINCT k FROM (
+                SELECT jsonb_object_keys(OLD.applied_rules) AS k
+                UNION
+                SELECT jsonb_object_keys(NEW.applied_rules) AS k
+            ) sub
+        ) INTO v_all_keys;
+
+        FOREACH v_key IN ARRAY v_all_keys LOOP
+            v_old_has := OLD.applied_rules ? v_key;
+            v_new_has := NEW.applied_rules ? v_key;
+            v_old_value := OLD.applied_rules -> v_key;
+            v_new_value := NEW.applied_rules -> v_key;
+            IF v_old_value IS DISTINCT FROM v_new_value
+               OR v_old_has <> v_new_has THEN
+                IF NOT (v_key = ANY(allowed_keys)) THEN
+                    RAISE EXCEPTION 'applied_rules: key % is immutable', v_key;
+                END IF;
+                IF v_old_has AND NOT v_new_has THEN
+                    RAISE EXCEPTION 'applied_rules: deletion of key % is not allowed', v_key;
+                END IF;
+            END IF;
+        END LOOP;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 ```
 
-Down migration: revert về function v1 strict.
+Down migration: revert về function v1 strict (literal-for-literal từ `b5c6d7e8f9a0`).
+
+**Drift fix (round 24 — chốt 2026-05-02 trong M-P0b PR):**
+- Whitelist mở rộng từ 4 key → 5 key. PLAN v2.13.1 đề xuất `fee_paid_at` + `fee_payment_data` + `fee_calculated_at` + `fee_invoice_id` (4 key) miss `fee_status`. Code thực tế ở `admission_service.py:5904` ghi `fee_status = "paid"`; nếu thiếu, fee endpoint vẫn break sau Phase 1 #11. Verified-from-code 2026-05-02 trong cùng PR.
+- Logic trigger thay từ strip-and-compare → per-key classification. Strip pattern đã tham khảo trong bản v2.13.1 có blind spot với deletion (strip allowed key khỏi cả OLD lẫn NEW khiến delete equal add equal update — tất cả silent allow). Per-key classification phân biệt rõ add/update (allow nếu whitelisted) vs delete (reject ngay cả khi whitelisted).
 
 **Lý do Phase 0**: Migration này độc lập với choice-engine refactor, NHƯNG phải chạy TRƯỚC Phase 1 status CHECK extend. Nếu để sang Phase 1, fee payment endpoint break ngay khi profile có `applied_rules.fee_paid_at` được update (mọi profile post-payment).
 
