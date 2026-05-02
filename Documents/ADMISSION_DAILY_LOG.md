@@ -117,9 +117,14 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
-### T0-2 — `ADMISSION_FROZEN` middleware (sub-PR opened)
+### T0-2 — `ADMISSION_FROZEN` middleware (sub-PR merged)
 
-**Branch:** `feature/admission-t0-2` off `feat/admission-full-cutover` HEAD `2c57e5d6`. Pushed `f6ddad7b` 2026-05-02; sub-PR [#190](https://github.com/favouritekid/QLTS/pull/190) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern với PR #189 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 47/47 pytest PASS local trong Docker (`qlts-backend-1`, `0.80s`).
+**Branch:** `feature/admission-t0-2` off `feat/admission-full-cutover` HEAD `2c57e5d6`. Pushed `f6ddad7b` 2026-05-02; sub-PR [#190](https://github.com/favouritekid/QLTS/pull/190) opened + merged squash `1a8e0ca2` cùng ngày (mergedAt 2026-05-02T05:57:55Z). Base `feat/admission-full-cutover`, kept branch (`--delete-branch=false`). Status: **TESTED**, DONE pending staging smoke.
+
+**CI manual verification (no checks reported pattern T0-1 + T0-2 đều cùng):**
+- Pre-merge: `pytest tests/middleware/test_admission_freeze.py -v` → 47/47 PASS (Docker `qlts-backend-1`, 0.80s).
+- Post-merge re-run trên parent HEAD `1a8e0ca2`: 47/47 PASS (1.10s).
+- Repo workflow filter chưa cover PR vào `feat/admission-full-cutover` → CI tự động không chạy. Manual verification thay thế ghi trong TRACKER + DAILY_LOG đủ pass-fail evidence.
 
 **Scope:**
 - `Backend_FastAPI/app/config.py`: thêm `ADMISSION_FROZEN: bool = False` (Field validation_alias). Module-level load, restart container để pickup mới (per RUNBOOK §6.1).
