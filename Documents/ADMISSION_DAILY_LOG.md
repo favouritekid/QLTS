@@ -167,9 +167,9 @@ Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặ
 
 ---
 
-### T0-4a — `dispatch_pending_outbox` Celery beat skeleton (commit local, branch chưa push)
+### T0-4a — `dispatch_pending_outbox` Celery beat skeleton (sub-PR opened)
 
-**Branch:** `feature/admission-t0-4a` off `feat/admission-full-cutover` HEAD `46461d12`. Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-op body returning structured `{"status": "skipped", "reason": "outbox_not_active", "task_id": "T0-4a"}`. T0-4b (gated trên B2 + M-1-19a) sẽ replace body trong cùng module + cùng task name; beat schedule entry stable.
+**Branch:** `feature/admission-t0-4a` off `feat/admission-full-cutover` HEAD `46461d12`. Pushed `fbc1e6bf` 2026-05-02; sub-PR [#192](https://github.com/favouritekid/QLTS/pull/192) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1 #189 + T0-2 #190 + T0-3 #191 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 13/13 PASS Docker test (skeleton 11 + registry 2). Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-op body returning structured `{"status": "skipped", "reason": "outbox_not_active", "task_id": "T0-4a"}`. T0-4b (gated trên B2 + M-1-19a) sẽ replace body trong cùng module + cùng task name; beat schedule entry stable.
 
 **Scope:**
 - `Backend_FastAPI/app/tasks/notification_outbox_tasks.py` (mới): module mới chứa `dispatch_pending_outbox` skeleton task. Imports chỉ `logging` + `celery_app` — KHÔNG import `NotificationOutbox` model (chưa tồn tại trước M-1-19a). Docstring lock-in contract cho T0-4b: giữ task name + module path + result keys `status`/`reason`/`task_id`.
