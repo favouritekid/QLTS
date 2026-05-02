@@ -270,7 +270,7 @@ Block scope (theo router source verified `Backend_FastAPI/app/routers/admissions
 - Path/config admin CRUD
 - Public storefront submit endpoints
 
-T0-2 acceptance test: 4 write method × 3 distinct prefix matrix verify trong staging trước rollout (12 block + 9 read-allowed + 4 non-admission baseline + path-segment lookalike rejection = 46 case PASS local on PR T0-2).
+T0-2 acceptance test: 4 write method × 3 distinct prefix matrix verify trong staging trước rollout. 47 case PASS local on PR T0-2: 12 unfrozen pass-through + 12 frozen-block 503 + 9 frozen read-allowed (GET/HEAD/OPTIONS) + 4 non-admission baseline (`/api/leads/*`) + 4 path-segment lookalike rejection (`/api/admissionsfoo`) + 3 bare-prefix block + 1 health reachable + 1 contract-shape sanity + 1 route-table drift catch (`fastapi_app.routes` scan flags any `/api/...admission...` path not under FROZEN_PREFIXES).
 
 ### 6.3. Module không liên quan vẫn chạy
 

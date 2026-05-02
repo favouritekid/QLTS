@@ -106,51 +106,58 @@ def test_freeze_constants_have_expected_shape():
 
 
 # ---------------------------------------------------------------------------
-# Real drift catch: bind FROZEN_PREFIXES to live router .prefix attributes.
-# A router rename or a new admission router lands without freeze coverage will
-# fail HERE (not only in the hard-coded shape test above).
+# Real drift catch: scan the live route table on `fastapi_app` and assert
+# that every registered admission path is under some FROZEN_PREFIX. This
+# fires when:
+#   - an existing admission router's prefix is renamed,
+#   - a new admission router is added (and mounted) without updating
+#     FROZEN_PREFIXES,
+#   - an admission-named endpoint is added under a non-admission router.
+# Because it iterates the actual route table — not a fixed import list — it
+# does NOT need to be edited when admission routers come or go.
 # ---------------------------------------------------------------------------
 
 
-def test_frozen_prefixes_cover_live_admission_router_prefixes():
-    # Lazy imports keep the rest of the file isolated from heavy router deps.
-    # Note on main.py mount semantics (verified at HEAD 2c57e5d6):
-    #   - admissions / admission_config / admission_paths are mounted with
-    #     `include_router(..., prefix="/api")` so the live mount is `/api{router.prefix}`.
-    #   - public_admissions's APIRouter already declares the full
-    #     `/api/public/admissions` prefix, so it is mounted with no extra prefix.
-    from app.routers import (
-        admission_config,
-        admission_paths,
-        admissions,
-        public_admissions,
+def test_no_admission_route_escapes_freeze_coverage():
+    # Importing `fastapi_app` triggers `include_router(...)` for every router
+    # registered in main.py and populates `fastapi_app.routes`. Lifespan does
+    # not run on import, so this stays a unit-style test (no DB / no Redis).
+    from app.main import fastapi_app
+
+    admission_paths: set[str] = set()
+    for route in fastapi_app.routes:
+        path = getattr(route, "path", "")
+        if not isinstance(path, str) or not path.startswith("/api/"):
+            continue
+        # Substring "admission" matches `/api/admissions`, `/api/admission-config`,
+        # `/api/public/admissions`, and any future admission surface. It does NOT
+        # match `/api/admin/...` (different word).
+        if "admission" not in path.lower():
+            continue
+        admission_paths.add(path)
+
+    assert admission_paths, (
+        "Route-table scan returned no admission paths. Either main.py stopped "
+        "registering admission routers, or the heuristic is broken — investigate "
+        "before trusting this test."
     )
 
-    actual_mount_paths = {
-        f"/api{admissions.router.prefix}",
-        f"/api{admission_config.router.prefix}",
-        f"/api{admission_paths.router.prefix}",
-        public_admissions.router.prefix,
-    }
-
-    def _is_under_freeze(path: str) -> bool:
+    def _under_some_freeze_prefix(path: str) -> bool:
         return any(path == fp or path.startswith(fp + "/") for fp in FROZEN_PREFIXES)
 
-    uncovered = sorted(p for p in actual_mount_paths if not _is_under_freeze(p))
+    uncovered = sorted(p for p in admission_paths if not _under_some_freeze_prefix(p))
     assert not uncovered, (
-        f"FROZEN_PREFIXES misses admission router mount(s): {uncovered}. "
+        f"Admission route(s) not covered by FROZEN_PREFIXES: {uncovered}. "
         f"Update Backend_FastAPI/app/middleware/admission_freeze.py FROZEN_PREFIXES "
-        f"and Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md §3.5 + §6.2."
+        f"and Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md §3.5 + §6.2 to match."
     )
 
-    spurious = sorted(
-        fp
-        for fp in FROZEN_PREFIXES
-        if not any(p == fp or p.startswith(fp + "/") for p in actual_mount_paths)
-        and not any(fp == p or fp.startswith(p + "/") for p in actual_mount_paths)
-    )
+    def _matches_some_route(prefix: str) -> bool:
+        return any(p == prefix or p.startswith(prefix + "/") for p in admission_paths)
+
+    spurious = sorted(fp for fp in FROZEN_PREFIXES if not _matches_some_route(fp))
     assert not spurious, (
-        f"FROZEN_PREFIXES contains entries that match no live admission router: "
+        f"FROZEN_PREFIXES contains entries with no matching admission route: "
         f"{spurious}. Stale freeze coverage — remove from FROZEN_PREFIXES."
     )
 

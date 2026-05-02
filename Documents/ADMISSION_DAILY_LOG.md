@@ -136,7 +136,7 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 **Tested / Rehearsed:**
 - T0-2 — `pytest tests/middleware/test_admission_freeze.py -v` PASS 47/47 trong Docker (0.91s):
   - 1 contract-shape sanity: `FROZEN_PREFIXES` tuple + `/api/` prefix + `FROZEN_METHODS` set.
-  - **1 live-router drift catch** (post user-review P2 fix): import `app.routers.{admissions, admission_config, admission_paths, public_admissions}.router.prefix`, build mount paths theo main.py include_router semantics, assert FROZEN_PREFIXES cover ⇄ no spurious. Router rename hoặc thêm admission router mới sẽ fail loud test này.
+  - **1 route-table drift catch** (post user-review P2 round 2): import `app.main.fastapi_app`, scan `fastapi_app.routes`, filter `/api/...admission...` (substring `"admission"` không match `"admin"` — different word), assert mọi admission route đều under some `FROZEN_PREFIXES` ⇄ không có spurious freeze prefix. Test bind vào live route table — KHÔNG cần edit khi admission router mới được mount; tự động fail nếu router rename hoặc admission router mới chưa update FROZEN_PREFIXES.
   - 12 unfrozen-pass-through (3 prefix × 4 write method).
   - 12 frozen-block-503 (3 prefix × 4 write method) — body kiểm `code="ADMISSION_FROZEN"` + `frozen_prefix` match input.
   - 9 frozen-read-allowed (3 prefix × {GET, HEAD, OPTIONS}).
@@ -145,9 +145,11 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
   - 4 path-segment lookalike rejection (`/api/admissionsfoo` × 4 write method) → 200 (không match `/api/admissions` prefix).
   - 3 bare prefix POST blocked (POST `/api/admissions`, `/api/admission-config`, `/api/public/admissions` không trailing slash).
 
-**Review feedback applied (post-commit `955810d5`):**
-- **P2** — original `test_frozen_prefixes_match_real_router_prefixes` chỉ assert tuple-against-hard-coded-tuple (giả drift catch). Sửa: tách 2 test rõ vai trò — `test_freeze_constants_have_expected_shape` (contract sanity, no drift claim) + `test_frozen_prefixes_cover_live_admission_router_prefixes` (real drift catch via import router + introspect `.prefix`). New test fail nếu router prefix đổi hoặc thêm admission router mới mà chưa update FROZEN_PREFIXES.
-- **P3** (deferred) — middleware không log blocked write attempt. Ops hardening, không bắt buộc cho T0-2 acceptance. Có thể follow-up trong T0-3 wave hoặc cleanup PR sau.
+**Review feedback applied:**
+- **P2 round 1** (post `955810d5`) — original `test_frozen_prefixes_match_real_router_prefixes` chỉ assert tuple-against-hard-coded-tuple (giả drift catch). Sửa lần 1 (`7269780d`): tách `test_freeze_constants_have_expected_shape` (contract sanity) + `test_frozen_prefixes_cover_live_admission_router_prefixes` (lazy import 4 router cố định + introspect `.prefix`).
+- **P2 round 2** (user catch tiếp) — sửa lần 1 vẫn KHÔNG bắt được admission router mới (nếu mount trong main.py mà không thêm vào danh sách import 4 router cố định, test vẫn pass). Sửa lần 2: thay bằng `test_no_admission_route_escapes_freeze_coverage` — scan `fastapi_app.routes` filter substring `"admission"` (không match `"admin"`); fail nếu admission route nào không under FROZEN_PREFIXES. Tự động cover router mới mà KHÔNG cần edit test khi admission surface đổi.
+- **P3 doc count drift** — RUNBOOK §6.2 line 273 stale `46 case` (sau P2 round 1 thực tế là 47). Sửa: 47 case + breakdown chi tiết từng nhóm test.
+- **P3 ops logging** (deferred) — middleware không log blocked write attempt. Ops hardening, không bắt buộc cho T0-2 acceptance. Có thể follow-up trong T0-3 wave hoặc cleanup PR sau.
 
 **Files changed:**
 - `Backend_FastAPI/app/config.py` (+10 lines, ADMISSION_FROZEN field)
