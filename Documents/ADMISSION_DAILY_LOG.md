@@ -19,7 +19,12 @@ Production critical hotfix trong window refactor:
 5. **Conflict touch admission core/state/lead/notification/RBAC** → **PAUSE refactor 0.5-1 ngày**, resolve conflict clean, re-test PASS rồi mới continue.
 6. KHÔNG defer hotfix vào cutover bundle. Lý do: cutover sẽ replace toàn bộ codebase từ feat branch — nếu hotfix chỉ ở main mà chưa cherry-pick → cutover sẽ overwrite hotfix → bug production tái xuất.
 
-KHÔNG cherry-pick chỉ khi hotfix touch file mà refactor đang rewrite từ đầu (e.g., `admission_state_service.py` chưa tồn tại main, hotfix touch `admission_service.py` mà task #16 sẽ refactor toàn bộ). Trong case đó: ghi rõ trong DAILY_LOG entry "hotfix superseded by refactor — verify equivalent fix trong feat branch".
+**Equivalent-patch alternative** (khi cherry-pick không khả thi): hotfix touch file mà refactor đang rewrite từ đầu (e.g., `admission_service.py` mà task #16 sẽ refactor toàn bộ sang `admission_state_service.py`). Áp dụng equivalent-patch:
+- Verify hotfix logic đã được áp dụng tương đương trong refactor feat branch (cùng-day audit, KHÔNG defer).
+- Append DAILY_LOG entry: "hotfix equivalent-patched — main SHA → equivalent file:line trong feat branch + verification note".
+- Test cover behavior hotfix bằng test mới hoặc existing trong feat branch.
+
+KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick hoặc equivalent-patch trong same-day, không có exception.
 
 ---
 
@@ -46,6 +51,53 @@ KHÔNG cherry-pick chỉ khi hotfix touch file mà refactor đang rewrite từ �
 **Notes / surprises:**
 - anything non-obvious worth remembering for post-mortem
 ```
+
+---
+
+## 2026-05-02
+
+**Merged hôm nay** (vào `feat/admission-full-cutover`):
+- _none merged yet — sub-branch `feature/admission-t0-1` pending push approval, sẽ open sub-PR sau push_
+
+**Local commits trên `feature/admission-t0-1` branch (HEAD ahead of `feat/admission-full-cutover` 2 commits):**
+
+1. **commit-docs**: `docs(admission): split T0-4 + lock hotfix same-day cherry-pick policy`
+   - C1: TRACKER Section 1 — T0-4 split → T0-4a (no-op skeleton, no dep) + T0-4b (real worker, dep B2 + M-1-19a). Section 12.3 production readiness checklist tương ứng.
+   - C2: DAILY_LOG header — hotfix policy explicit (same-day cherry-pick OR equivalent-patch mandatory; KHÔNG defer to cutover; pause 0.5-1d nếu conflict touch admission core/state/lead/notification/RBAC).
+
+2. **commit-t0-1**: `feat(admission): add 2 entrypoint env flag gates (T0-1)`
+   - `Backend_FastAPI/docker-entrypoint.sh`: 2 gate độc lập:
+     - Gate 1: `RUN_MIGRATIONS_ON_STARTUP` (default `true`) — skip `alembic upgrade head` khi `false`.
+     - Gate 2: `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` (default `true`) — skip `sync_notification_rules` khi `false`.
+   - Default behavior preserved khi cả 2 unset (routine deploy chạy alembic + sync như cũ).
+   - Cutover scenario set CẢ 2 = `false` → container start chỉ uvicorn ready; manual run alembic + backfill + sync_notification_rules ngoài container ở T+1:30 / T+3:00 / T+3:30.
+   - `Backend_FastAPI/CLAUDE.md`: Common Commands note 2 flag cutover-only.
+   - `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` §3.5 + §7.2 + §9.3 update reflect 2 flag.
+   - `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md`: T0-1 status TODO → CODE_DONE (local).
+
+**Tested / Rehearsed:**
+- T0-1 — `bash -n` syntax PASS. 14-case logic test PASS:
+  - 9-case matrix (3 RUN_MIGRATIONS × 3 RUN_SYNC):
+    - unset×unset / unset×true / unset×false / true×unset / true×true / true×false / false×unset / false×true / false×false → expected output match
+    - Cutover combo `false×false` → cả 2 skip ✓
+    - Default `unset×unset` → cả 2 run (current behavior preserved) ✓
+  - 5 defensive variant: TRUE / FALSE / typo / 0 / "False" capitalize → đều run (chỉ exact lowercase "false" skip) ✓
+
+**Blocked / decisions cần:**
+- Push approval cho sub-branch `feature/admission-t0-1` (2 commits: docs procedural + T0-1 code).
+
+**Tomorrow plan (sau push approval):**
+- Open sub-PR target `feat/admission-full-cutover` + link issue #181 sub-task 1.
+- Start T0-2 (`ADMISSION_FROZEN` middleware) — independent của T0-1, parallel.
+- Start T0-3 (Nginx admission block) — Ops owner, parallel.
+- Start T0-4a skeleton (no-op safe registration) — sau patch C1, đã unblock.
+- Start T0-5 (Casbin reload endpoint) — independent, parallel.
+
+**Notes:**
+- C3 patch áp dụng ngay sau khi user catch oversight: T0-1 ban đầu chỉ gate Alembic, vẫn auto chạy `sync_notification_rules` → cutover deploy backend `RUN_MIGRATIONS_ON_STARTUP=false` sẽ vẫn chạy sync rules trên empty schema → script fail/race. Add gate riêng cho sync.
+- T0-1 commit có thể bị amend (history rewrite trước push) — neutral wording dùng "commit-docs" + "commit-t0-1" thay vì raw SHA.
+- Test framework cho bash entrypoint: chỉ syntax check + logic test, không có integration framework. Manual smoke trong staging clone D12-D14 sẽ verify end-to-end (apply 2 flag, observe entrypoint output, smoke API ready).
+- Q11 closed (PLAN §3.3.g.1) → KHÔNG còn product decision blocker; D2 + D3 chỉ chặn cutover, không chặn dev start.
 
 ---
 

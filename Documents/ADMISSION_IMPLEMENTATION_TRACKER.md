@@ -42,7 +42,7 @@
 
 | ID | Task | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
-| T0-1 | `RUN_MIGRATIONS_ON_STARTUP` env flag entrypoint | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
+| T0-1 | 2 entrypoint env flag gates: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | BE | CODE_DONE (local) | feature/admission-t0-1 | U:✓ (14-case bash gate logic: 9 matrix + 5 defensive variants) | (chờ push approval + sub-PR) | RUNBOOK §3.5 |
 | T0-2 | `ADMISSION_FROZEN` middleware + 4 method × 4 router matrix | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-3 | Nginx admission block env-driven `NGINX_ADMISSION_FROZEN` | Ops | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-4a | Celery beat `dispatch_pending_outbox` **skeleton task** (no-op safe registration: function defined, beat schedule registered, log "outbox not yet active" + return early — KHÔNG insert/dispatch). Kịch bản: B2/M-1-19a chưa ship, beat task vẫn registered nhưng KHÔNG crash worker. | BE | TODO | | U:- I:- | (none — no dep, ship parallel với T0-1/2/3/5) | RUNBOOK §3.5 + PLAN §3.3.e |
@@ -226,7 +226,7 @@
 ### 12.3. Production readiness (Task 0 prerequisites)
 | Check | Status | Mapped task |
 |---|---|---|
-| T0-1 RUN_MIGRATIONS_ON_STARTUP shipped | TODO | T0-1 |
+| T0-1 2 entrypoint env flag gates shipped (RUN_MIGRATIONS_ON_STARTUP + RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) | TODO | T0-1 |
 | T0-2 ADMISSION_FROZEN middleware shipped | TODO | T0-2 |
 | T0-3 Nginx admission block shipped | TODO | T0-3 |
 | T0-4a dispatch_pending_outbox skeleton (no-op safe) | TODO | T0-4a |

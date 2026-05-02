@@ -41,7 +41,7 @@ Runbook này KHÔNG:
 
 | Task 0 | Why | Codebase evidence (CHƯA CÓ) | Acceptance |
 |---|---|---|---|
-| **T0-1: `RUN_MIGRATIONS_ON_STARTUP` env flag** trong `Backend_FastAPI/docker-entrypoint.sh` | Cold cutover yêu cầu manual `alembic upgrade head` với log streaming + time tracking; entrypoint hiện auto-chạy | `docker-entrypoint.sh:4-5` `alembic upgrade head` không conditional | Entrypoint check `if [ "$RUN_MIGRATIONS_ON_STARTUP" != "false" ]; then alembic upgrade head; fi`. Default `true` cho routine deploy; cutover set `false`. |
+| **T0-1: 2 env flag gates** trong `Backend_FastAPI/docker-entrypoint.sh`: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | Cold cutover yêu cầu manual `alembic upgrade head` + manual `sync_notification_rules` SAU migration + backfill (KHÔNG auto trên container start vì pre-migration state có thể chưa có notification_rule table hoặc chưa seed → script fail/race) | `docker-entrypoint.sh` auto chạy `alembic upgrade head` (line 4-5) + `python -m app.scripts.sync_notification_rules` (line 7-8), cả 2 không conditional | Entrypoint thêm 2 gate độc lập: `if [ "${RUN_MIGRATIONS_ON_STARTUP:-true}" != "false" ]; then alembic upgrade head; fi` + `if [ "${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}" != "false" ]; then python -m app.scripts.sync_notification_rules; fi`. Default `true` cho routine deploy. Cutover set CẢ 2 = `false`. Defensive: chỉ exact lowercase `"false"` mới skip; mọi value khác (TRUE/FALSE/typo) chạy như cũ. |
 | **T0-2: `ADMISSION_FROZEN` middleware** | Freeze admission write endpoints khi maintenance window | Grep zero match `ADMISSION_FROZEN` trong `app/config.py`, `app/middleware/`, `app/routers/admissions.py` | Settings field + dependency/middleware raise 503 cho POST/PUT/DELETE/PATCH `/api/admissions/*` + `/api/admission-paths/*` + `/api/admission-configs/*` + `/api/public/admissions/*`. **Reload mechanism: env-based settings cần container restart** (Pydantic BaseSettings load 1 lần module-level) — runbook Phần 6.1 phải clarify restart container, KHÔNG hot-reload runtime. |
 | **T0-3: Nginx admission block config** | Defense-in-depth với T0-2 backend middleware | `nginx/conf.d/default.conf.template` chỉ generic `/api/` proxy, zero conditional admission block | Conditional `location ~ ^/api/(admissions|admission-paths|admission-configs|public/admissions)/.*$ { ... return 503 ...}` env-driven `${NGINX_ADMISSION_FROZEN}` template variable. |
 | **T0-4: `dispatch_pending_outbox` Celery beat task** | Worker drain outbox notification queue | `app/celery_app.py:108-150` zero match | Beat schedule entry 30s + 3-step claim/dispatch/finalize implementation per PLAN Phần 3.3.e. |
@@ -309,9 +309,14 @@ T+0:00   Communicate freeze (email + Slack + in-app banner)
 T+0:15   Set ADMISSION_FROZEN=true env + Nginx reload với NGINX_ADMISSION_FROZEN=1
          Verify: curl POST /api/admissions/... → 503
 T+0:30   Final pg_dump + uploads tar + config backup → upload S3 + integrity verify
-T+1:00   Deploy backend image MỚI với env RUN_MIGRATIONS_ON_STARTUP=false
-         (per RISK_REVIEW OG-1: tách Alembic khỏi container startup cho cutover)
-         Verify: container start → KHÔNG chạy alembic; sync_notification_rules + uvicorn ready
+T+1:00   Deploy backend image MỚI với 2 env flag = false:
+           RUN_MIGRATIONS_ON_STARTUP=false
+           RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false
+         (per RISK_REVIEW OG-1: tách Alembic + notification rule sync khỏi container startup cho cutover.
+          Lý do skip sync rules: pre-migration state có thể chưa có notification_rule table hoặc chưa seed
+          12 ADMISSION_* DB rows → script fail/race. Manual run ở T+3:30 sau migration + DB seed.)
+         Verify: container start → KHÔNG chạy alembic, KHÔNG chạy sync_notification_rules,
+                 chỉ uvicorn ready (log "Skipping..." cho cả 2 gate).
 T+1:30   Manual run Alembic chain:
            docker compose exec backend alembic upgrade head
          Stream log realtime; checkpoint mỗi migration step.
@@ -334,8 +339,10 @@ T+4:15   Smoke tests (Phần 7.3)
 T+4:45   Set ADMISSION_FROZEN=false + Nginx reload bỏ admission block
 T+5:00   Communicate unlock (email + Slack + in-app banner)
 T+5:15   Monitor handoff to oncall (Phần 9)
-T+24h    Switch backend env back RUN_MIGRATIONS_ON_STARTUP=true cho future routine deploys
-         (cutover behavior chỉ áp dụng 1 lần)
+T+24h    Switch backend env back CẢ 2 flag về true (hoặc unset) cho future routine deploy:
+           RUN_MIGRATIONS_ON_STARTUP=true (or unset)
+           RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=true (or unset)
+         (cutover behavior chỉ áp dụng 1 lần; routine deploy phục hồi auto migration + auto sync như trước)
 ```
 
 ### 7.3. Smoke tests (T+4:15 — T+4:45)
@@ -463,7 +470,7 @@ Nếu cutover đã apply một trong 5 migration trên + phát hiện bug critic
 ### 9.3. Production readiness — Task 0 prerequisites (xem Phần 3.5)
 
 5 mục Task 0 BẮT BUỘC ship + tested trên staging trước Go decision:
-- [ ] **T0-1** `RUN_MIGRATIONS_ON_STARTUP` env flag trong `docker-entrypoint.sh` — tested với value `false` skip Alembic; default `true` chạy như cũ.
+- [ ] **T0-1** 2 env flag gates trong `docker-entrypoint.sh` — tested 9-case matrix (3 RUN_MIGRATIONS × 3 RUN_SYNC_NOTIFICATION_RULES) + 5 defensive variant (TRUE/FALSE/typo) PASS. Cutover combo `RUN_MIGRATIONS_ON_STARTUP=false` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false` skip cả 2; default unset/true chạy alembic + sync_notification_rules như cũ.
 - [ ] **T0-2** `ADMISSION_FROZEN` middleware shipped — 4 method × admission router prefix matrix tested (GET allowed, POST/PUT/DELETE/PATCH 503).
 - [ ] **T0-3** Nginx admission block config (env-driven `NGINX_ADMISSION_FROZEN`) tested với `nginx -t` syntax check + reload smoke.
 - [ ] **T0-4** `dispatch_pending_outbox` Celery beat task scheduled 30s + worker registered + 3-step claim/dispatch/finalize tested.
