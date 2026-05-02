@@ -55,7 +55,7 @@
 
 | ID | Task | Type | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|---|
-| P0c | `admission_config_repository.py:76,84` field name `criteria_id` hot-fix | Code | BE | TODO | | U:- | | PLAN §0c |
+| P0c | `admission_config_repository.py:76,84` field name `criteria_id` hot-fix (rename `OfferingAdmissionConfig.admission_criteria_id` + `AdmissionPath.admission_criteria_id` → `criteria_id` để match model thực tế; pre-fix `check_criteria_usage` raise `AttributeError` runtime, ngăn `delete_criteria` BusinessRuleViolation chạy) | Code | BE | CODE_DONE (PR open) | [#194](https://github.com/favouritekid/QLTS/pull/194) | U:✓ (6-case pytest `tests/repositories/test_admission_config_repository_p0c.py`: 3 behaviour (returns_false_when_unused / returns_true_when_offering_uses_it / returns_true_when_path_uses_it) + 2 model-contract (offering + path expose `criteria_id`, KHÔNG `admission_criteria_id`) + 1 source-grep regression trap; bite-verified bằng cách revert 1 site → 4 test FAIL, restore → all PASS) | (chờ self-review + merge sub-PR; KHÔNG merge vội) | PLAN §0c |
 | M-P0a | `phase0_add_selected_subject_group_id_to_profile` | Migration | BE | TODO | | M:- | | PLAN §4 P0 |
 | M-P0b | `phase0b_relax_applied_rules_immutability_for_payment_keys` | Migration | BE | TODO | | M:- | | PLAN §4 Phase 0b |
 

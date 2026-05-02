@@ -71,21 +71,29 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
         """
         Check if AdmissionCriteria is used in any OfferingAdmissionConfig or AdmissionPath.
         Returns True if used, False if safe to delete.
+
+        Phase 0c hot-fix (2026-05-02): both `OfferingAdmissionConfig` and
+        `AdmissionPath` declare the FK column as ``criteria_id`` — verified
+        in `app/models/admission_config/offering_config.py:38` and
+        `app/models/admission_config/admission_path.py:82`. The previous
+        ``admission_criteria_id`` references on this method raised
+        ``AttributeError`` at runtime any time an admin tried to delete a
+        criteria that was actually in use; the BusinessRuleViolation that
+        protects the data was never reached. Locked by
+        `tests/repositories/test_admission_config_repository_p0c.py`.
         """
         # Check OfferingConfig
-        q1 = select(OfferingAdmissionConfig).where(OfferingAdmissionConfig.admission_criteria_id == criteria_id).limit(1)
+        q1 = select(OfferingAdmissionConfig).where(OfferingAdmissionConfig.criteria_id == criteria_id).limit(1)
         r1 = await self.db.execute(q1)
         if r1.first():
             return True
-            
-        # Check AdmissionPath
-        # Note: AdmissionPath links to criteria via relationship, likely criteria_id fk
-        # If model definition is standard:
-        q2 = select(AdmissionPath).where(AdmissionPath.admission_criteria_id == criteria_id).limit(1)
+
+        # Check AdmissionPath (FK column verified `criteria_id`).
+        q2 = select(AdmissionPath).where(AdmissionPath.criteria_id == criteria_id).limit(1)
         r2 = await self.db.execute(q2)
         if r2.first():
             return True
-            
+
         return False
 
     async def get_filtered(
