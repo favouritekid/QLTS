@@ -77,6 +77,27 @@ class AdmissionProfile(Base):
         comment="Source config (audit/debug/report)"
     )
 
+    # Phase 0 (M-P0a) — single owner of the DDL for this column.
+    # Persisted forward-only at submit time so Phase 3 backfill of
+    # `AdmissionProfileChoice` does not have to re-derive the chosen group.
+    # Phase 1 #13 (`phase1_12_backfill_selected_subject_group_id`) fills
+    # historical rows via the 3-rule decision tree and writes ambiguous
+    # cases into `_admission_backfill_exceptions`. ``ondelete="SET NULL"``
+    # mirrors `offering_admission_config_id` (FK-traceability convention)
+    # — `subject_group` is catalog data with `is_active`; soft-retire is
+    # the expected lifecycle, and hard delete should not erase submitted
+    # profiles.
+    selected_subject_group_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("subject_group.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment=(
+            "Subject group chosen by candidate at submit time. "
+            "Phase 0 owner; Phase 1 #13 backfills historical rows."
+        ),
+    )
+
     # ✅ Academic Year (for multi-year admission support)
     # Allows same citizen to apply in different years
     # Copied from OfferingAcademicInfo at profile creation time (snapshot pattern)
