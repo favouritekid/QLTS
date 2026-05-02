@@ -56,16 +56,13 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-02
 
-**Merged hôm nay** (vào `feat/admission-full-cutover`):
-- _none merged yet — sub-branch `feature/admission-t0-1` pending push approval, sẽ open sub-PR sau push_
+**Pushed hôm nay** (origin/feature/admission-t0-1, sub-PR pending open → `feat/admission-full-cutover`):
 
-**Local commits trên `feature/admission-t0-1` branch (HEAD ahead of `feat/admission-full-cutover` 2 commits):**
-
-1. **commit-docs**: `docs(admission): split T0-4 + lock hotfix same-day cherry-pick policy`
+1. `74ed8b94` — `docs(admission): split T0-4 + lock hotfix same-day cherry-pick policy`
    - C1: TRACKER Section 1 — T0-4 split → T0-4a (no-op skeleton, no dep) + T0-4b (real worker, dep B2 + M-1-19a). Section 12.3 production readiness checklist tương ứng.
    - C2: DAILY_LOG header — hotfix policy explicit (same-day cherry-pick OR equivalent-patch mandatory; KHÔNG defer to cutover; pause 0.5-1d nếu conflict touch admission core/state/lead/notification/RBAC).
 
-2. **commit-t0-1**: `feat(admission): add 2 entrypoint env flag gates (T0-1)`
+2. `4c439a27` — `feat(admission): add 2 entrypoint env flag gates (T0-1)`
    - `Backend_FastAPI/docker-entrypoint.sh`: 2 gate độc lập:
      - Gate 1: `RUN_MIGRATIONS_ON_STARTUP` (default `true`) — skip `alembic upgrade head` khi `false`.
      - Gate 2: `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` (default `true`) — skip `sync_notification_rules` khi `false`.
@@ -73,7 +70,7 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
    - Cutover scenario set CẢ 2 = `false` → container start chỉ uvicorn ready; manual run alembic + backfill + sync_notification_rules ngoài container ở T+1:30 / T+3:00 / T+3:30.
    - `Backend_FastAPI/CLAUDE.md`: Common Commands note 2 flag cutover-only.
    - `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` §3.5 + §7.2 + §9.3 update reflect 2 flag.
-   - `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md`: T0-1 status TODO → CODE_DONE (local).
+   - `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md`: T0-1 status TODO → CODE_DONE (branch pushed).
 
 **Tested / Rehearsed:**
 - T0-1 — `bash -n` syntax PASS. 14-case logic test PASS:
@@ -84,9 +81,9 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
   - 5 defensive variant: TRUE / FALSE / typo / 0 / "False" capitalize → đều run (chỉ exact lowercase "false" skip) ✓
 
 **Blocked / decisions cần:**
-- Push approval cho sub-branch `feature/admission-t0-1` (2 commits: docs procedural + T0-1 code).
+- Sub-PR creation approval (target `feat/admission-full-cutover` — solo dev self-review + merge).
 
-**Tomorrow plan (sau push approval):**
+**Tomorrow plan (sau sub-PR mở/merge):**
 - Open sub-PR target `feat/admission-full-cutover` + link issue #181 sub-task 1.
 - Start T0-2 (`ADMISSION_FROZEN` middleware) — independent của T0-1, parallel.
 - Start T0-3 (Nginx admission block) — Ops owner, parallel.
@@ -95,7 +92,7 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 **Notes:**
 - C3 patch áp dụng ngay sau khi user catch oversight: T0-1 ban đầu chỉ gate Alembic, vẫn auto chạy `sync_notification_rules` → cutover deploy backend `RUN_MIGRATIONS_ON_STARTUP=false` sẽ vẫn chạy sync rules trên empty schema → script fail/race. Add gate riêng cho sync.
-- T0-1 commit có thể bị amend (history rewrite trước push) — neutral wording dùng "commit-docs" + "commit-t0-1" thay vì raw SHA.
+- Branch đã push; KHÔNG rewrite history. Mọi cleanup setup docs sau push đi bằng commit bổ sung trên `feature/admission-t0-1`.
 - Test framework cho bash entrypoint: chỉ syntax check + logic test, không có integration framework. Manual smoke trong staging clone D12-D14 sẽ verify end-to-end (apply 2 flag, observe entrypoint output, smoke API ready).
 - Q11 closed (PLAN §3.3.g.1) → KHÔNG còn product decision blocker; D2 + D3 chỉ chặn cutover, không chặn dev start.
 
@@ -115,7 +112,7 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - TRACKER section 0 reworded: D1 CLOSED, D2/D3 không chặn dev (chỉ chặn cutover/Go)
 
 **Tomorrow plan:**
-- Bắt đầu Task 0 prerequisites (T0-1..T0-5) per RUNBOOK §3.5
+- Bắt đầu Task 0 prerequisites (T0-1, T0-2, T0-3, T0-4a/4b, T0-5) per RUNBOOK §3.5
 - Q11 đã closed → Phase 0 hot-fix (P0c, M-P0a, M-P0b) có thể start parallel với T0
 
 **Notes:**

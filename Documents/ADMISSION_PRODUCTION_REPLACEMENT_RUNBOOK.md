@@ -37,17 +37,18 @@ Runbook này KHÔNG:
 
 ## 3.5. Task 0 — Pre-implementation Prerequisites (BẮT BUỘC ship TRƯỚC staging rehearsal)
 
-⚠️ **Runbook này giả định 5 infrastructure mục dưới đã được implement trong code.** Verified codebase 2026-05-01: tất cả CHƯA TỒN TẠI. Phải ship trong implementation phase (sub-PR riêng) TRƯỚC khi bắt đầu staging rehearsal Phần 7. KHÔNG assume.
+⚠️ **Runbook này giả định 5 infrastructure family dưới đã được implement trong code.** Verified codebase 2026-05-01: tất cả CHƯA TỒN TẠI. Phải ship trong implementation phase (sub-PR riêng) TRƯỚC khi bắt đầu staging rehearsal Phần 7. KHÔNG assume. T0-4 được tách thành 2 tracker row: T0-4a skeleton an toàn trước khi có outbox table, T0-4b worker thật sau B2 + M-1-19a.
 
 | Task 0 | Why | Codebase evidence (CHƯA CÓ) | Acceptance |
 |---|---|---|---|
 | **T0-1: 2 env flag gates** trong `Backend_FastAPI/docker-entrypoint.sh`: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | Cold cutover yêu cầu manual `alembic upgrade head` + manual `sync_notification_rules` SAU migration + backfill (KHÔNG auto trên container start vì pre-migration state có thể chưa có notification_rule table hoặc chưa seed → script fail/race) | `docker-entrypoint.sh` auto chạy `alembic upgrade head` (line 4-5) + `python -m app.scripts.sync_notification_rules` (line 7-8), cả 2 không conditional | Entrypoint thêm 2 gate độc lập: `if [ "${RUN_MIGRATIONS_ON_STARTUP:-true}" != "false" ]; then alembic upgrade head; fi` + `if [ "${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}" != "false" ]; then python -m app.scripts.sync_notification_rules; fi`. Default `true` cho routine deploy. Cutover set CẢ 2 = `false`. Defensive: chỉ exact lowercase `"false"` mới skip; mọi value khác (TRUE/FALSE/typo) chạy như cũ. |
 | **T0-2: `ADMISSION_FROZEN` middleware** | Freeze admission write endpoints khi maintenance window | Grep zero match `ADMISSION_FROZEN` trong `app/config.py`, `app/middleware/`, `app/routers/admissions.py` | Settings field + dependency/middleware raise 503 cho POST/PUT/DELETE/PATCH `/api/admissions/*` + `/api/admission-paths/*` + `/api/admission-configs/*` + `/api/public/admissions/*`. **Reload mechanism: env-based settings cần container restart** (Pydantic BaseSettings load 1 lần module-level) — runbook Phần 6.1 phải clarify restart container, KHÔNG hot-reload runtime. |
 | **T0-3: Nginx admission block config** | Defense-in-depth với T0-2 backend middleware | `nginx/conf.d/default.conf.template` chỉ generic `/api/` proxy, zero conditional admission block | Conditional `location ~ ^/api/(admissions|admission-paths|admission-configs|public/admissions)/.*$ { ... return 503 ...}` env-driven `${NGINX_ADMISSION_FROZEN}` template variable. |
-| **T0-4: `dispatch_pending_outbox` Celery beat task** | Worker drain outbox notification queue | `app/celery_app.py:108-150` zero match | Beat schedule entry 30s + 3-step claim/dispatch/finalize implementation per PLAN Phần 3.3.e. |
+| **T0-4a: `dispatch_pending_outbox` skeleton task** | Register Celery beat safely before outbox table/model exists | `app/celery_app.py:108-150` zero match | Beat schedule entry 30s + task function exists, logs "outbox not yet active", returns early, KHÔNG query/insert/dispatch `NotificationOutbox`. Safe to ship before B2 + M-1-19a. |
+| **T0-4b: `dispatch_pending_outbox` real worker wiring** | Worker drain outbox notification queue | `notification_outbox` table/model chưa tồn tại trước B2 + M-1-19a | Replace skeleton with 3-step claim/dispatch/finalize implementation per PLAN Phần 3.3.e. Gate: B2 + M-1-19a shipped first. |
 | **T0-5: `POST /api/v2/admin/casbin/reload` endpoint** | Cutover safety: reload Casbin policy sau seed deny rules direct DB | `admin/roles.py` chỉ side-effect trong CRUD endpoint, zero dedicated reload endpoint | Admin-only endpoint gọi `await enforcer.load_policy()` + return policy count + audit log. |
 
-**Gate**: Phần 9.3 production readiness checklist verify 5 mục trên shipped + tested trên staging trước Go decision.
+**Gate**: Phần 9.3 production readiness checklist verify 5 infrastructure family trên (6 tracker row vì T0-4 split) shipped + tested trên staging trước Go decision.
 
 ## 4. Environment Strategy
 
@@ -469,11 +470,12 @@ Nếu cutover đã apply một trong 5 migration trên + phát hiện bug critic
 
 ### 9.3. Production readiness — Task 0 prerequisites (xem Phần 3.5)
 
-5 mục Task 0 BẮT BUỘC ship + tested trên staging trước Go decision:
+5 infrastructure family Task 0 BẮT BUỘC ship + tested trên staging trước Go decision (6 tracker row vì T0-4 split):
 - [ ] **T0-1** 2 env flag gates trong `docker-entrypoint.sh` — tested 9-case matrix (3 RUN_MIGRATIONS × 3 RUN_SYNC_NOTIFICATION_RULES) + 5 defensive variant (TRUE/FALSE/typo) PASS. Cutover combo `RUN_MIGRATIONS_ON_STARTUP=false` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false` skip cả 2; default unset/true chạy alembic + sync_notification_rules như cũ.
 - [ ] **T0-2** `ADMISSION_FROZEN` middleware shipped — 4 method × admission router prefix matrix tested (GET allowed, POST/PUT/DELETE/PATCH 503).
 - [ ] **T0-3** Nginx admission block config (env-driven `NGINX_ADMISSION_FROZEN`) tested với `nginx -t` syntax check + reload smoke.
-- [ ] **T0-4** `dispatch_pending_outbox` Celery beat task scheduled 30s + worker registered + 3-step claim/dispatch/finalize tested.
+- [ ] **T0-4a** `dispatch_pending_outbox` skeleton scheduled 30s + worker registered + no-op safe before outbox table/model exists.
+- [ ] **T0-4b** `dispatch_pending_outbox` real worker wiring shipped after B2 + M-1-19a + 3-step claim/dispatch/finalize tested.
 - [ ] **T0-5** `POST /api/v2/admin/casbin/reload` endpoint shipped + admin-only Casbin guard + audit log.
 
 Misc readiness:
@@ -502,9 +504,9 @@ Misc readiness:
 | Legal/Compliance | __________ | __________ | __________ |
 
 **Sign-off scope per role:**
-- **Backend Lead**: full scope v2.13/v2.13.1 implementation + 27 migration + 14 code task + Task 0 prerequisites (Phần 3.5) + state service + outbox + multi-NV engine. Sign-off rằng code đã pass CI/test/lint trên `feat/admission-full-cutover` branch.
+- **Backend Lead**: full scope v2.13.1 implementation + 26 migration + 14 code task + Task 0 prerequisites (Phần 3.5) + state service + outbox + multi-NV engine. Sign-off rằng code đã pass CI/test/lint trên `feat/admission-full-cutover` branch.
 - **Frontend Lead**: i18n inline 25 keys + 14 status render + 5 component mới + multi-NV UX + typed `available_actions` contract. Sign-off rằng FE bundle production-ready.
-- **DBA / Ops Lead**: backup/restore plan + 27 migration chain review + one-way migration risk acceptance + maintenance window schedule + rollback playbook + monitoring dashboard + Nginx admission block config (T0-3).
+- **DBA / Ops Lead**: backup/restore plan + 26 migration chain review + one-way migration risk acceptance + maintenance window schedule + rollback playbook + monitoring dashboard + Nginx admission block config (T0-3).
 - **QA Lead**: E2E checklist + rehearsal protocol 2 lần + smoke test 8 critical journey sign-off + Casbin matrix 4×14 verified.
 - **Product Owner**: Q1-Q10 decisions chốt (Q11 resolved trong PLAN §3.3.g.1) + multi-NV launch user-facing + maintenance window 4-6h communication.
 - **Admission Ops** (vận hành admission daily): freeze window timing acceptable cho operational continuity + read-only allowed endpoints đáp ứng tham khảo officer trong window + post-cutover unlock procedure.

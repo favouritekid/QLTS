@@ -6,7 +6,7 @@
 **Branch:** `feat/admission-full-cutover` (parent của sub-feature branches)
 
 **Last updated:** 2026-05-01 (round 22 cleanup: Q11 closed, Q9 defer 3 task, phase3_02/03 SUPERSEDED, sequencing fix #17/LS-map/FE Zod, blocker ID standardize, "9 → 11" direct sites, "Phase 3 = 2 → 1" align)
-**Current sprint focus:** Task 0 prerequisites (T0-1..T0-5) + maintenance window timing lock + 7 stakeholder sign-off
+**Current sprint focus:** Task 0 prerequisites (T0-1, T0-2, T0-3, T0-4a/4b, T0-5) + maintenance window timing lock + 7 stakeholder sign-off
 
 ---
 
@@ -42,7 +42,7 @@
 
 | ID | Task | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
-| T0-1 | 2 entrypoint env flag gates: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | BE | CODE_DONE (local) | feature/admission-t0-1 | U:✓ (14-case bash gate logic: 9 matrix + 5 defensive variants) | (chờ push approval + sub-PR) | RUNBOOK §3.5 |
+| T0-1 | 2 entrypoint env flag gates: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | BE | CODE_DONE (branch pushed) | feature/admission-t0-1 | U:✓ (14-case bash gate logic: 9 matrix + 5 defensive variants) | (chờ sub-PR target `feat/admission-full-cutover`) | RUNBOOK §3.5 |
 | T0-2 | `ADMISSION_FROZEN` middleware + 4 method × 4 router matrix | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-3 | Nginx admission block env-driven `NGINX_ADMISSION_FROZEN` | Ops | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-4a | Celery beat `dispatch_pending_outbox` **skeleton task** (no-op safe registration: function defined, beat schedule registered, log "outbox not yet active" + return early — KHÔNG insert/dispatch). Kịch bản: B2/M-1-19a chưa ship, beat task vẫn registered nhưng KHÔNG crash worker. | BE | TODO | | U:- I:- | (none — no dep, ship parallel với T0-1/2/3/5) | RUNBOOK §3.5 + PLAN §3.3.e |
