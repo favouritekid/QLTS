@@ -56,7 +56,19 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-02
 
-**Pushed hôm nay** (origin/feature/admission-t0-1, sub-PR pending open → `feat/admission-full-cutover`):
+**Sub-PR merged today (vào `feat/admission-full-cutover`):**
+- PR [#189](https://github.com/favouritekid/QLTS/pull/189) — `[T0-1] feat(admission): add entrypoint cutover gates`
+  - Squash merge SHA: `bebb31feceb451fb72995c554ac512a72ecba604` (mergedAt 2026-05-02T04:46:55Z)
+  - Base: `feat/admission-full-cutover` ← Head: `feature/admission-t0-1` (3 commits squashed: `74ed8b94` + `4c439a27` + `b8d1fa79`)
+  - Files: 6 changed (+133 / -25). Pre-merge: Mergeable ✓. Body cover 2 flag + 14-case test matrix + 6 file changes + cutover scenario + defensive default + thematic #181 link.
+  - **CI: no checks reported** (repo workflow trigger filter chưa cover PR vào `feat/admission-full-cutover`). Manual verification thay thế: pre-merge `bash -n` PASS + 14-case logic matrix PASS local; post-merge 14-case re-run trên parent branch HEAD `bebb31fe` cũng PASS (mock alembic + python).
+
+**Project board update (Mức 1 pattern):**
+- Thematic card #181 manual moved Todo → In Progress (sub-PR T0-1 đầu tiên thuộc thematic đã start). Board state: Todo 7 / In Progress 1 / Done 0.
+- Move qua chrome-devtools UI (More actions → Move to column → In Progress). gh CLI `project` mutations cần scope `read:project,project` không sẵn.
+- **KHÔNG move card #181 sang Done** sau T0-1 merge: thematic gồm T0-1..T0-5 (5 sub-task), mới ship 1/5. Card chỉ → Done khi cả 5 (T0-1, T0-2, T0-3, T0-4a, T0-4b ship sau B2+M-1-19a, T0-5) đều merged.
+
+**Pushed hôm nay** (origin/feature/admission-t0-1):
 
 1. `74ed8b94` — `docs(admission): split T0-4 + lock hotfix same-day cherry-pick policy`
    - C1: TRACKER Section 1 — T0-4 split → T0-4a (no-op skeleton, no dep) + T0-4b (real worker, dep B2 + M-1-19a). Section 12.3 production readiness checklist tương ứng.
@@ -81,20 +93,27 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
   - 5 defensive variant: TRUE / FALSE / typo / 0 / "False" capitalize → đều run (chỉ exact lowercase "false" skip) ✓
 
 **Blocked / decisions cần:**
-- Sub-PR creation approval (target `feat/admission-full-cutover` — solo dev self-review + merge).
+- (none) — T0-1 unblock cho staging smoke khi clone D12-D14. T0-2..T0-5 không depend T0-1, có thể start parallel.
 
-**Tomorrow plan (sau sub-PR mở/merge):**
-- Open sub-PR target `feat/admission-full-cutover` + link issue #181 sub-task 1.
-- Start T0-2 (`ADMISSION_FROZEN` middleware) — independent của T0-1, parallel.
-- Start T0-3 (Nginx admission block) — Ops owner, parallel.
-- Start T0-4a skeleton (no-op safe registration) — sau patch C1, đã unblock.
-- Start T0-5 (Casbin reload endpoint) — independent, parallel.
+**Tomorrow plan:**
+- Start T0-2 (`ADMISSION_FROZEN` middleware) — independent của T0-1, parallel. Branch: `feature/admission-t0-2`.
+- Start T0-3 (Nginx admission block) — Ops owner, parallel. Branch: `feature/admission-t0-3`.
+- Start T0-4a skeleton (no-op safe registration) — đã unblock. Branch: `feature/admission-t0-4a`.
+- Start T0-5 (Casbin reload endpoint) — independent, parallel. Branch: `feature/admission-t0-5`.
+- T0-1 staging smoke: chờ staging clone D12-D14 (ngoài scope hôm nay).
 
 **Notes:**
 - C3 patch áp dụng ngay sau khi user catch oversight: T0-1 ban đầu chỉ gate Alembic, vẫn auto chạy `sync_notification_rules` → cutover deploy backend `RUN_MIGRATIONS_ON_STARTUP=false` sẽ vẫn chạy sync rules trên empty schema → script fail/race. Add gate riêng cho sync.
 - Branch đã push; KHÔNG rewrite history. Mọi cleanup setup docs sau push đi bằng commit bổ sung trên `feature/admission-t0-1`.
 - Test framework cho bash entrypoint: chỉ syntax check + logic test, không có integration framework. Manual smoke trong staging clone D12-D14 sẽ verify end-to-end (apply 2 flag, observe entrypoint output, smoke API ready).
 - Q11 closed (PLAN §3.3.g.1) → KHÔNG còn product decision blocker; D2 + D3 chỉ chặn cutover, không chặn dev start.
+
+**Pattern correction — GitHub Project board (chốt 2026-05-02):**
+- User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
+- Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
+- Board pattern (chuẩn từ giờ): **Mức 1 / 8 thematic kanban** — chỉ 8 issue #181-#188, manual move Todo → In Progress (khi sub-PR đầu tiên start) → Done (khi tất cả sub-PR merged).
+- Sub-PR detail tracking (chuẩn từ giờ): TRACKER.md row-level + DAILY_LOG.md entries + GitHub PR list URL filter (`is:pr base:feat/admission-full-cutover`) — KHÔNG add board card cho sub-PR.
+- Lý do: scaling. Full cutover dự kiến 30-50+ sub-PR; auto-add → board ngập, mất ý nghĩa high-level kanban; row-level đã có trong TRACKER + audit-trail trong DAILY_LOG đủ rồi.
 
 ---
 

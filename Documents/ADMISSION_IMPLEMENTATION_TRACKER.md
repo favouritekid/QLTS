@@ -42,7 +42,7 @@
 
 | ID | Task | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
-| T0-1 | 2 entrypoint env flag gates: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | BE | CODE_DONE (branch pushed) | feature/admission-t0-1 | U:✓ (14-case bash gate logic: 9 matrix + 5 defensive variants) | (chờ sub-PR target `feat/admission-full-cutover`) | RUNBOOK §3.5 |
+| T0-1 | 2 entrypoint env flag gates: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | BE | TESTED (PR merged, chờ staging smoke → DONE) | [#189](https://github.com/favouritekid/QLTS/pull/189) merged 2026-05-02 squash `bebb31fe` | U:✓ (14-case bash gate logic re-run on parent post-merge: 9 matrix + 5 defensive variants PASS) | DONE chờ staging clone D12-D14 smoke (apply 2 flag → observe entrypoint output → API ready ≤5s) | RUNBOOK §3.5 |
 | T0-2 | `ADMISSION_FROZEN` middleware + 4 method × 4 router matrix | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-3 | Nginx admission block env-driven `NGINX_ADMISSION_FROZEN` | Ops | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-4a | Celery beat `dispatch_pending_outbox` **skeleton task** (no-op safe registration: function defined, beat schedule registered, log "outbox not yet active" + return early — KHÔNG insert/dispatch). Kịch bản: B2/M-1-19a chưa ship, beat task vẫn registered nhưng KHÔNG crash worker. | BE | TODO | | U:- I:- | (none — no dep, ship parallel với T0-1/2/3/5) | RUNBOOK §3.5 + PLAN §3.3.e |
@@ -284,6 +284,14 @@ Lý do defer Q9: scope drop để giữ timeline Wave A 2026-07-23 hard. Reactiv
 - Update last_updated date đầu file + current sprint focus.
 
 **KHÔNG copy logic nghiệp vụ vào tracker.** Mọi câu hỏi về spec → đọc PLAN. Tracker chỉ trả lời "task nào ở đâu" + "ai làm" + "khi nào xong".
+
+**GitHub Project board pattern (chốt 2026-05-02):**
+- Board = Mức 1 high-level kanban: chỉ 8 thematic issue #181-#188.
+- Owner manual move card Todo → In Progress (khi sub-PR đầu tiên start) → Done (khi tất cả sub-PR thuộc thematic merged).
+- Sub-PR (T0-1, T0-2, ..., M-1-NN, B1-task-N, ...) **KHÔNG add card vào board**.
+- Auto-add to project workflow đã DISABLED — không revert.
+- Sub-PR detail track: TRACKER row-level (cột Status + Branch/PR) + DAILY_LOG entry + GitHub PR list URL filter (`is:pr base:feat/admission-full-cutover`).
+- Lý do: 30-50+ sub-PR sẽ pollute board; row-level + audit trail đủ để recover progress.
 
 ---
 
