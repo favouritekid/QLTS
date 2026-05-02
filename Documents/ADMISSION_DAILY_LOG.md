@@ -441,9 +441,22 @@ Phase 0 wave migration; single owner column DDL — Phase 1 #13 sau này chỉ b
 
 ---
 
-### M-P0b — `phase0b_relax_applied_rules_immutability_for_payment_keys` (sub-PR opened)
+### M-P0b — `phase0b_relax_applied_rules_immutability_for_payment_keys` (sub-PR merged)
 
-**Branch:** `feature/admission-m-p0b` off `feat/admission-full-cutover` HEAD `be64348b`. Pushed `d879a43f` 2026-05-02; sub-PR [#196](https://github.com/favouritekid/QLTS/pull/196) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (pattern T0-1..T0-5 + P0c + M-P0a — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 4/4 unit + 6/6 psql + 14/14 fee tests PASS.
+**Branch:** `feature/admission-m-p0b` off `feat/admission-full-cutover` HEAD `be64348b`. Pushed `d879a43f` + post-PR docs `ea5a0d2f` 2026-05-02; sub-PR [#196](https://github.com/favouritekid/QLTS/pull/196) opened + merged squash `080a8b26` cùng ngày (mergedAt 2026-05-02T14:21:42Z). Base `feat/admission-full-cutover`, kept branch (`--delete-branch=false`). Status: **TESTED**, DONE pending staging smoke.
+
+**CI manual verification:**
+- Pre-merge: 4/4 unit + 6/6 psql behavior matrix + 14/14 fee tests + alembic roundtrip PASS.
+- Post-merge re-run trên parent HEAD `080a8b26`: `pytest tests/unit/test_m_p0b_applied_rules_whitelist.py tests/services/test_admission_application_fee.py::TestRecordFeePayment::test_admin_can_record_fee_payment` → **5/5 PASS** (12.05s) — 4 source contract + 1 fee record_payment regression confirms trigger active không break existing path.
+- Repo workflow filter chưa cover PR vào `feat/admission-full-cutover` → CI tự động không chạy; manual evidence trong TRACKER + DAILY_LOG đủ pass-fail.
+
+**Phase 0 wave CLOSED:**
+- P0c (#194 squash `36d095a4`) ✓ TESTED — repository field-name hot-fix.
+- M-P0a (#195 squash `2fe77921`) ✓ TESTED — `selected_subject_group_id` column.
+- M-P0b (#196 squash `080a8b26`) ✓ TESTED — `applied_rules` whitelist trigger.
+- Card #182 [Phase 0] Foundation: In Progress → **Done** (3/3 sub-task TESTED).
+- Issue #182 sub-task tick: `[x] P0c` + `[x] M-P0a` + `[x] M-P0b`.
+- Tomorrow plan unblocked: B1 (Casbin auth_model deny-first + 16 deny rules) hoặc B2 (EventDefinition extend + NotificationOutbox model + M-1-19a) — Phase 1 Code task gates wave. User khuyên đọc/scope B1 + B2 TRƯỚC khi code vì cả hai là infrastructure contracts lớn hơn Phase 0.
 
 Phase 0 wave migration #2; trigger function update — KHÔNG đụng schema/column/FK.
 
