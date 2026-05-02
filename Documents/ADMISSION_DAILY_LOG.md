@@ -117,9 +117,9 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
-### T0-2 — `ADMISSION_FROZEN` middleware (commit local, branch chưa push)
+### T0-2 — `ADMISSION_FROZEN` middleware (sub-PR opened)
 
-**Branch:** `feature/admission-t0-2` off `feat/admission-full-cutover` HEAD `2c57e5d6`.
+**Branch:** `feature/admission-t0-2` off `feat/admission-full-cutover` HEAD `2c57e5d6`. Pushed `f6ddad7b` 2026-05-02; sub-PR [#190](https://github.com/favouritekid/QLTS/pull/190) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern với PR #189 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 47/47 pytest PASS local trong Docker (`qlts-backend-1`, `0.80s`).
 
 **Scope:**
 - `Backend_FastAPI/app/config.py`: thêm `ADMISSION_FROZEN: bool = False` (Field validation_alias). Module-level load, restart container để pickup mới (per RUNBOOK §6.1).
