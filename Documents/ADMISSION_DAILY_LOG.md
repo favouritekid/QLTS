@@ -236,6 +236,63 @@ Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-
 
 ---
 
+### T0-5 — `POST /api/v2/admin/casbin/reload` admin endpoint (commit local, branch chưa push)
+
+**Branch:** `feature/admission-t0-5` off `feat/admission-full-cutover` HEAD `edd055a1`. Cutover-only HTTP surface để runbook trigger Casbin enforcer reload tại T+3:30 sau khi seed deny rules direct DB INSERT — không cần restart worker.
+
+**Scope strict (B1 boundary):**
+- Endpoint ONLY: `POST /api/v2/admin/casbin/reload`. Path prefix `/api/v2/admin/casbin` tách khỏi v1 admin tree (`/api/admin/...`).
+- Reload runtime ONLY: gọi `enforcer.load_policy()` trên `request.app.state.enforcer` đã set tại lifespan. KHÔNG instantiate enforcer mới.
+- KHÔNG touch: `auth_model.conf` (Casbin model), deny block, policy templates, `policy_templates.py` registry. Tất cả thuộc B1 RBAC refactor wave (Phase 1 Code task gates).
+- Architecture compliance: auth/RBAC ở `Depends(require_admin)` deps (raise `PermissionDeniedError` nếu non-admin). Router thin coordinator: nhận request → call enforcer → audit log → return.
+
+**Response shape (locked-in):**
+- Success 200: `{"success": True, "reloaded_at": "<iso>", "policy_count": <int|null>, "actor_id": <int>}`. `policy_count` informational (qua `len(enforcer.get_policy())`); fallback `None` nếu accessor exception (KHÔNG turn success → 500).
+- Failure 500: `{"success": False, "reloaded_at": "<iso>", "error": "<str>", "actor_id": <int>}`. Enforcer giữ in-memory state cũ — KHÔNG partial flush, worker/API stay serviceable.
+
+**Audit log:**
+- Success path: `activity_service.log_activity(action="casbin_reload", resource_type="casbin_policy", changes={"policy_count": <int>}, ip_address, user_agent)` + `db.commit()`.
+- Failure path: best-effort `action="casbin_reload_failed"` audit. Nếu audit cũng fail → log warning, KHÔNG mask original error (defensive try/except chỉ wrap audit, không wrap reload result).
+
+**Tested / Rehearsed:**
+- T0-5 — `pytest tests/api/test_admin_v2_casbin_reload.py -v` PASS 9/9 trong Docker (60.70s — chậm vì mỗi test set up DB fixture + auth flow):
+  - `test_admin_can_reload_casbin_policy`: admin → 200 + response shape (success/reloaded_at ISO/policy_count/actor_id).
+  - `test_admin_reload_returns_non_negative_policy_count_when_present`: nếu `policy_count` trả int thì >= 0.
+  - `test_unauthenticated_caller_denied`: no auth header → 401.
+  - `test_manager_caller_denied`: manager token → 403 (admin-only enforced).
+  - `test_officer_caller_denied`: officer token → 403.
+  - `test_regular_user_caller_denied`: user token → 403.
+  - `test_reload_failure_surfaces_500_without_crashing`: monkeypatch `fastapi_app.state.enforcer.load_policy` raise `RuntimeError` → 500 + structured body (success=False, error contains "simulated DB unreachable", actor_id, reloaded_at). Defensive restore trong try/finally để tránh subsequent test bị poison.
+  - `test_subsequent_reload_after_failure_recovers`: bad reload (stub raise) → 500 → restore stub → next reload → 200. Verifies enforcer KHÔNG bị poison sau failure (resilience guard against runbook's "worker stuck on stale enforcer" failure mode).
+  - `test_reload_endpoint_registered_at_documented_path`: lock URL contract — `POST /api/v2/admin/casbin/reload` route tồn tại trong `fastapi_app.routes`, prevent path drift breaking runbook recipe.
+
+**Test scope limitation:**
+- KHÔNG test live cutover scenario (seed deny rules direct DB → call reload → verify policy active) trong unit test — cần seed migration rồi mới reload. Sẽ verify staging clone D12-D14 cutover rehearsal.
+- KHÔNG test rate limit (endpoint không có `@limiter.limit` decorator — admin-only + cutover-only, không cần rate gate; nếu cần thêm sau B1).
+
+**Drift catch (KHÔNG): Wording RUNBOOK §3.5 T0-5 + PLAN match implementation. KHÔNG touch PLAN/RISK.
+
+**Files changed:**
+- `Backend_FastAPI/app/routers/admin_v2_casbin.py` (new, ~115 lines: endpoint + docstring lock B1 boundary + response shapes + audit log).
+- `Backend_FastAPI/app/main.py` (+2 lines: import `admin_v2_casbin` + `include_router`; router declares full prefix nên KHÔNG cần `prefix=` ở include).
+- `Backend_FastAPI/tests/api/test_admin_v2_casbin_reload.py` (new, ~165 lines: 9 lock-in tests).
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (T0-5 row CODE_DONE + Section 12.3 row CODE_DONE).
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này).
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-t0-5` + sub-PR creation → `feat/admission-full-cutover`.
+
+**Tomorrow plan (sau merge T0-5):**
+- 5/6 sub-task thematic #181 ship xong (T0-1 + T0-2 + T0-3 + T0-4a + T0-5). Card #181 vẫn In Progress vì T0-4b gated trên B2 + M-1-19a.
+- Kế hoạch Phase 1 Code task gates: B1 (Casbin auth_model deny-first + 16 deny rules), B2 (EventDefinition extend + NotificationOutbox model + migration M-1-19a) — unblock T0-4b downstream.
+
+**Notes:**
+- Path prefix `/api/v2/admin/casbin` tách v2 — sau cutover deploy, route này vẫn live nhưng admin-only sẽ ít dùng (chỉ trigger thủ công khi seed direct DB). Nếu post-cutover cần retire, sẽ deprecate trong cleanup wave.
+- Defensive `try/except` cho `enforcer.get_policy()` count: nếu accessor crash trên broken state, KHÔNG turn 200 → 500 (count chỉ informational).
+- Failure audit log best-effort: nếu DB/audit_service down cùng lúc → silent log warning, return original error nguyên vẹn — caller nhận đúng nguyên nhân.
+
+---
+
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
 - User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
 - Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
