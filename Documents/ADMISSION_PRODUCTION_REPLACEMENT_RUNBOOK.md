@@ -240,11 +240,16 @@ docker compose ps backend       # verify state running
 curl -X POST http://localhost:8000/api/admissions/test-endpoint  # Expect: 503 Service Unavailable
 curl -X GET  http://localhost:8000/api/admissions/                # Expect: 200 (read-only allowed)
 
-# Nginx env (khi T0-3 ship): edit env file hoặc compose
-#   NGINX_ADMISSION_FROZEN=1
-# Reload nginx container (KHÔNG cần restart):
-docker compose exec -T nginx nginx -s reload
-docker compose exec -T nginx nginx -t          # verify config syntax OK
+# Nginx env (T0-3 shipped on `feat/admission-full-cutover`): edit `.env.production`,
+# then re-run `bash scripts/deploy.sh` (Step 3 envsubst regenerates
+# `nginx/conf.d/default.conf` with the new flag value baked in):
+#   NGINX_ADMISSION_FROZEN=true
+# Match T0-2 backend convention: only the exact lowercase string `true` enables
+# the freeze; any other value (`false`, unset, typo, `1`, `0`) leaves the gate open.
+# Reload nginx container after redeploy (no restart needed; envsubst already wrote
+# the new conf):
+docker compose --profile production exec -T nginx nginx -t   # verify syntax
+docker compose --profile production exec -T nginx nginx -s reload
 
 # Verify nginx block active (defense-in-depth)
 curl -X POST http://localhost/api/admissions/test-endpoint        # Expect: 503 từ nginx (trước khi reach backend)
@@ -307,7 +312,7 @@ KHÔNG khóa: Lead module (CRUD), Finance (payment view), Dashboard, KPI reports
 
 ```
 T+0:00   Communicate freeze (email + Slack + in-app banner)
-T+0:15   Set ADMISSION_FROZEN=true env + Nginx reload với NGINX_ADMISSION_FROZEN=1
+T+0:15   Set ADMISSION_FROZEN=true env + Nginx reload với NGINX_ADMISSION_FROZEN=true
          Verify: curl POST /api/admissions/... → 503
 T+0:30   Final pg_dump + uploads tar + config backup → upload S3 + integrity verify
 T+1:00   Deploy backend image MỚI với 2 env flag = false:
@@ -373,7 +378,7 @@ Estimate recovery: 1-2h
 
 ```bash
 # Step 1: Re-freeze admission (block writes during rollback window)
-# Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=1
+# Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
 docker compose restart backend
 docker compose exec -T nginx nginx -s reload
 
@@ -415,7 +420,7 @@ docker compose exec -T postgres psql -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:
     -c "SELECT COUNT(*) FROM admission_profile"   # Expect: count match pre-cutover
 
 # Step 6: Unlock (nếu smoke PASS)
-# Edit .env.production: ADMISSION_FROZEN=false + NGINX_ADMISSION_FROZEN=0
+# Edit .env.production: ADMISSION_FROZEN=false + NGINX_ADMISSION_FROZEN=false
 docker compose restart backend
 docker compose exec -T nginx nginx -s reload
 ```

@@ -72,6 +72,28 @@ server {
         proxy_pass http://backend;
     }
 
+    # --- T0-3 Admission cold-cutover freeze (defense-in-depth pair with T0-2) ---
+    # Regex location wins over the prefix `/api/` location below for these 3
+    # paths (verified-from-code on `feat/admission-full-cutover` HEAD `1a8e0ca2`).
+    # Bare prefix and any subpath both match thanks to `(/.*)?$`.
+    # Behavior: when `${NGINX_ADMISSION_FROZEN}` is the literal string "true"
+    # (envsubst-ed at deploy time), POST/PUT/PATCH/DELETE return 503 with a
+    # JSON body; GET/HEAD/OPTIONS continue to `proxy_pass` for read-only
+    # inspection. Any other value (false / unset / typo) falls through.
+    # See `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` §3.5 + §6.1.
+    location ~ ^/api/(admissions|admission-config|public/admissions)(/.*)?$ {
+        set $freeze_check "$request_method:${NGINX_ADMISSION_FROZEN}";
+
+        if ($freeze_check ~ "^(POST|PUT|PATCH|DELETE):true$") {
+            add_header Content-Type application/json always;
+            return 503 '{"detail":"Admission intake is frozen for maintenance. Please retry after the maintenance window completes.","code":"NGINX_ADMISSION_FROZEN"}';
+        }
+
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://backend;
+        proxy_read_timeout 60s;
+    }
+
     # --- API endpoints ---
     location /api/ {
         limit_req zone=api burst=20 nodelay;
