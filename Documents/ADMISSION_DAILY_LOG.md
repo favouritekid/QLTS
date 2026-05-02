@@ -310,6 +310,58 @@ Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-
 
 ---
 
+### P0c — `admission_config_repository.py` field-name hot-fix (commit local, branch chưa push)
+
+**Branch:** `feature/admission-p0c` off `feat/admission-full-cutover` HEAD `e5f607b4`. Phase 0 hot-fix scope-tight; KHÔNG đụng B1/B2 hay migration nào khác.
+
+**Drift verified-from-code:**
+- PLAN §3.4 line 95 + §8 cheat sheet 4429-4430 đã track: code reference `admission_criteria_id`, model field thực tế `criteria_id`.
+- Grep verified 2 site duy nhất ngoài comment/docstring/alembic-table-name:
+  - `app/repositories/admission_config_repository.py:76` — `OfferingAdmissionConfig.admission_criteria_id`
+  - `app/repositories/admission_config_repository.py:84` — `AdmissionPath.admission_criteria_id`
+- Model thực tế:
+  - `app/models/admission_config/offering_config.py:38` — `criteria_id = Column(...)`
+  - `app/models/admission_config/admission_path.py:82` — `criteria_id = Column(...)`
+- Caller path: `admission_config_service.delete_criteria()` line 182 gọi `repo.check_criteria_usage()`. Pre-fix path: SQLAlchemy `.where(SomeModel.bad_attr == ...)` raise `AttributeError` ngay tại expression construction → handler trả 500 thay vì `BusinessRuleViolation("Cannot delete criteria...")`. Silent broken admin DELETE flow.
+- Alembic refs (`ix_admission_criteria_id` index, `admission_criteria_id_seq` sequence) là DB-level NAMES cho table `admission_criteria` — **khác namespace**, KHÔNG trong scope P0c.
+
+**Patch:**
+- `app/repositories/admission_config_repository.py` lines 76 + 84: `admission_criteria_id` → `criteria_id`. Function docstring extend ghi lý do hot-fix + cross-ref model file:line + ref test file lock-in.
+- KHÔNG đụng B1 (auth_model.conf / Casbin), KHÔNG đụng B2 (EventDefinition / NotificationOutbox), KHÔNG migration mới.
+
+**Tested / Rehearsed:**
+- P0c — `pytest tests/repositories/test_admission_config_repository_p0c.py -v` PASS 6/6 trong Docker (0.34s):
+  - 3 behaviour (mock DB session): `check_criteria_usage` returns_false_when_unused / returns_true_when_offering_uses_it / returns_true_when_path_uses_it. SQLAlchemy expression construction (`getattr(Model, attr_name)` tại `.where(...)` line) verify model attribute resolve đúng — pre-fix sẽ raise `AttributeError` ngay test 1.
+  - 2 model-contract assertions: `OfferingAdmissionConfig` + `AdmissionPath` đều expose `criteria_id` AND không expose `admission_criteria_id`. Lock chống re-drift nếu future model rename.
+  - 1 source-grep regression trap: scan `admission_config_repository.py` source cho substring `admission_criteria_id`; tolerate hits trong fix docstring (giải thích lý do), forbid hits trong code lines. Trap caught ngay khi reviewer đọc diff, không cần chờ runtime.
+- **Bite test verified**: temporarily revert 1 site → 4/6 FAIL (3 behavior tests AttributeError + 1 source-grep), 2 model-contract pass (model itself unchanged). Restore → all 6 PASS.
+
+**Test scope limitation:**
+- KHÔNG live integration test (call admin DELETE criteria endpoint với criteria-in-use → expect BusinessRuleViolation 400 thay vì 500). Lý do: cần seed criteria + offering/path FK linked trong test DB, scope test rộng. Mock DB tests + model contract đủ catch the original AttributeError; live API test sẽ verify trên staging clone D12-D14 hoặc trong Phase 1 wave full integration test.
+
+**Drift catch khác (KHÔNG): KHÔNG verified drift trong PLAN/RISK ngoài 2 site repository đã track. KHÔNG touch PLAN/RISK.
+
+**Files changed:**
+- `Backend_FastAPI/app/repositories/admission_config_repository.py` (modified, +13/-7 lines: rename 2 sites + extend docstring với hot-fix context).
+- `Backend_FastAPI/tests/repositories/test_admission_config_repository_p0c.py` (new, ~165 lines: 6 lock-in tests).
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (P0c row CODE_DONE).
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này).
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-p0c` + sub-PR creation → `feat/admission-full-cutover`.
+
+**Tomorrow plan (sau merge P0c):**
+- M-P0a (`phase0_add_selected_subject_group_id_to_profile`) — migration Phase 0, độc lập P0c.
+- M-P0b (`phase0b_relax_applied_rules_immutability_for_payment_keys`) — migration Phase 0, độc lập P0c + M-P0a.
+- Sau Phase 0 đầy đủ (P0c + M-P0a + M-P0b) → start B1 (Casbin auth_model deny-first + 16 deny rules) hoặc B2 (EventDefinition + NotificationOutbox model + M-1-19a) — Phase 1 Code task gates.
+
+**Notes:**
+- P0c là code-only hot-fix; KHÔNG cần migration. RISK_REVIEW line 180 đã list rollback strategy: `git revert`, LOW risk.
+- Scope ràng buộc: chỉ rename 2 reference repository, không touch model/schema/migration/router/service signature. Test mock DB pattern (existing `test_activity_repository.py` precedent) giữ unit-level scope.
+- 2 alembic file references `ix_admission_criteria_id` + `admission_criteria_id_seq` là DB-level NAMES cho TABLE `admission_criteria` — index name pattern `ix_<table>_<column>` (PostgreSQL convention) + sequence auto-name. Khác hoàn toàn với column attr `admission_criteria_id` trên model `OfferingAdmissionConfig`/`AdmissionPath`. KHÔNG cần touch alembic.
+
+---
+
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
 - User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
 - Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
