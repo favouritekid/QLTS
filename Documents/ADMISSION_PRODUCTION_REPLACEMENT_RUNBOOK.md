@@ -312,8 +312,16 @@ KHÔNG khóa: Lead module (CRUD), Finance (payment view), Dashboard, KPI reports
 
 ```
 T+0:00   Communicate freeze (email + Slack + in-app banner)
-T+0:15   Set ADMISSION_FROZEN=true env + Nginx reload với NGINX_ADMISSION_FROZEN=true
-         Verify: curl POST /api/admissions/... → 503
+T+0:15   Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
+         Regenerate Nginx conf (envsubst bakes flag at deploy time, NOT runtime):
+           set -a && source .env.production && set +a
+           envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
+             < nginx/conf.d/default.conf.template \
+             > nginx/conf.d/default.conf
+         Apply: docker compose restart backend
+                docker compose --profile production exec -T nginx nginx -t
+                docker compose --profile production exec -T nginx nginx -s reload
+         Verify: curl POST /api/admissions/... → 503 (Nginx edge AND backend middleware both block)
 T+0:30   Final pg_dump + uploads tar + config backup → upload S3 + integrity verify
 T+1:00   Deploy backend image MỚI với 2 env flag = false:
            RUN_MIGRATIONS_ON_STARTUP=false
@@ -379,8 +387,16 @@ Estimate recovery: 1-2h
 ```bash
 # Step 1: Re-freeze admission (block writes during rollback window)
 # Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
+# Regenerate Nginx conf (T0-3 envsubst-baked: flag value đi vào nginx/conf.d/default.conf
+# tại deploy time, KHÔNG đọc runtime — `nginx -s reload` đơn lẻ sẽ load config CŨ
+# và freeze edge layer KHÔNG bật):
+set -a && source .env.production && set +a
+envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
+    < nginx/conf.d/default.conf.template \
+    > nginx/conf.d/default.conf
 docker compose restart backend
-docker compose exec -T nginx nginx -s reload
+docker compose --profile production exec -T nginx nginx -t
+docker compose --profile production exec -T nginx nginx -s reload
 
 # Step 2: Restore DB từ pre-cutover backup
 # Pipe file vào container stdin (tránh file location mismatch)
@@ -421,8 +437,14 @@ docker compose exec -T postgres psql -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:
 
 # Step 6: Unlock (nếu smoke PASS)
 # Edit .env.production: ADMISSION_FROZEN=false + NGINX_ADMISSION_FROZEN=false
+# Regenerate Nginx conf (envsubst-baked, cùng pattern Step 1):
+set -a && source .env.production && set +a
+envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
+    < nginx/conf.d/default.conf.template \
+    > nginx/conf.d/default.conf
 docker compose restart backend
-docker compose exec -T nginx nginx -s reload
+docker compose --profile production exec -T nginx nginx -t
+docker compose --profile production exec -T nginx nginx -s reload
 ```
 
 ### 8.2. KHÔNG rollback nửa vời

@@ -153,6 +153,11 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Convention chuẩn cross-task: cả T0-1 (RUN_MIGRATIONS_ON_STARTUP, RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) + T0-2 (ADMISSION_FROZEN backend) + T0-3 (NGINX_ADMISSION_FROZEN) đều exact lowercase string match. T0-1 dùng `false` để skip, T0-2/T0-3 dùng `true` để enable. Defensive default: typo → "safe" behavior (T0-1 chạy migrations, T0-2/T0-3 không freeze).
 - Nginx `if` directive rule "if is evil": chỉ dùng cho `return` + `set` directives — pattern an toàn. Pattern combined regex `$request_method:$flag` cho phép single `if` block thay vì nested.
 
+**Review feedback applied (post-commit `c574d49a`):**
+- **P1** (rollback ops drift) — RUNBOOK §8 Rollback Step 1 (re-freeze trong rollback window) + Step 6 (unlock sau smoke PASS) sửa env xong gọi `nginx -s reload` trực tiếp. Với T0-3 envsubst-bake-at-deploy-time, reload đơn lẻ sẽ load `nginx/conf.d/default.conf` CŨ → freeze edge layer fail-stale (Step 1: KHÔNG bật freeze; Step 6: KHÔNG tắt freeze). Patch: thêm `set -a && source .env.production && set +a` + `envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' < template > default.conf` + `nginx -t` ngay trước `nginx -s reload` ở cả 2 step.
+- **P2** (cutover timeline) — RUNBOOK §7.2 timeline T+0:15 single-line gộp cả "Set env + Nginx reload" thiếu regenerate step. Cùng pattern P1 — ops sẽ reload config cũ + freeze edge layer không bật. Patch: expand T+0:15 thành block 4 step rõ (edit env → envsubst regenerate → restart backend + nginx -t + nginx -s reload → curl verify cả 2 layer block).
+- **Cross-check sau patch**: 4 reload site trong RUNBOOK (§6.1 + §7.2 T+0:15 + §8 rollback Step 1 + §8 rollback Step 6) đều có envsubst regenerate ngay TRƯỚC `nginx -s reload`. §6.1 đã đúng từ T0-3 commit ban đầu; 3 site còn lại patch trong commit follow-up.
+
 ---
 
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
