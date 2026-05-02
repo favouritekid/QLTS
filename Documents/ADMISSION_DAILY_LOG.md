@@ -370,9 +370,19 @@ Phase 0 hot-fix scope-tight; KHÔNG đụng B1/B2 hay migration nào khác.
 
 ---
 
-### M-P0a — `phase0_add_selected_subject_group_id_to_profile` migration (sub-PR opened)
+### M-P0a — `phase0_add_selected_subject_group_id_to_profile` migration (sub-PR merged)
 
-**Branch:** `feature/admission-m-p0a` off `feat/admission-full-cutover` HEAD `7f4ba89d`. Pushed `69e7e774` 2026-05-02; sub-PR [#195](https://github.com/favouritekid/QLTS/pull/195) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern T0-1..T0-5 + P0c — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 9/9 PASS unit + live alembic roundtrip on dev DB.
+**Branch:** `feature/admission-m-p0a` off `feat/admission-full-cutover` HEAD `7f4ba89d`. Pushed `69e7e774` + post-PR docs `96ef27ae` 2026-05-02; sub-PR [#195](https://github.com/favouritekid/QLTS/pull/195) opened + merged squash `2fe77921` cùng ngày (mergedAt 2026-05-02T13:30:45Z). Base `feat/admission-full-cutover`, kept branch (`--delete-branch=false`). Status: **TESTED**, DONE pending staging smoke.
+
+**CI manual verification:**
+- Pre-merge: `pytest tests/unit/test_m_p0a_selected_subject_group_id.py -v` → 9/9 PASS Docker (1.20s) + live alembic roundtrip dev DB (upgrade/downgrade/re-upgrade/no-op-at-head).
+- Post-merge re-run trên parent HEAD `2fe77921`: 9/9 PASS (0.98s).
+- Repo workflow filter chưa cover PR vào `feat/admission-full-cutover` → CI tự động không chạy; manual evidence trong TRACKER + DAILY_LOG đủ pass-fail.
+
+**Project board update (Mức 1 SOP):**
+- Card #182 [Phase 0] Foundation moved Todo → In Progress (gap caught: card đáng lẽ phải move khi P0c bắt đầu = sub-PR đầu tiên thuộc thematic Phase 0; tôi missed do transition Task 0 → Phase 0 không có alarm tự động). Memory `admission-cutover-subpr-sop` cập nhật thematic↔sub-task mapping table + alarm reminder để future session check ngay sau push branch.
+- Board state hiện tại: Todo 6 / In Progress 2 (#181 Task 0 + #182 Phase 0) / Done 0.
+- Issue #182 sub-task tick: `[x] P0c` + `[x] M-P0a`; `[ ] M-P0b` chưa tick.
 
 Phase 0 wave migration; single owner column DDL — Phase 1 #13 sau này chỉ backfill, KHÔNG re-define column.
 
