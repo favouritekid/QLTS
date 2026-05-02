@@ -94,19 +94,65 @@ def freeze_on():
 
 
 # ---------------------------------------------------------------------------
-# Sanity: prefix verification (drift catch will fail loudly here)
+# Contract sanity (data shape only — NOT a drift catch).
 # ---------------------------------------------------------------------------
 
 
-def test_frozen_prefixes_match_real_router_prefixes():
-    # Verified at branch feat/admission-full-cutover HEAD 2c57e5d6. Update both
-    # the middleware constant and this assertion together if a router moves.
-    assert FROZEN_PREFIXES == (
-        "/api/admissions",
-        "/api/admission-config",
-        "/api/public/admissions",
-    )
+def test_freeze_constants_have_expected_shape():
+    assert isinstance(FROZEN_PREFIXES, tuple)
+    assert len(FROZEN_PREFIXES) >= 1
+    assert all(p.startswith("/api/") for p in FROZEN_PREFIXES)
     assert FROZEN_METHODS == frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+# ---------------------------------------------------------------------------
+# Real drift catch: bind FROZEN_PREFIXES to live router .prefix attributes.
+# A router rename or a new admission router lands without freeze coverage will
+# fail HERE (not only in the hard-coded shape test above).
+# ---------------------------------------------------------------------------
+
+
+def test_frozen_prefixes_cover_live_admission_router_prefixes():
+    # Lazy imports keep the rest of the file isolated from heavy router deps.
+    # Note on main.py mount semantics (verified at HEAD 2c57e5d6):
+    #   - admissions / admission_config / admission_paths are mounted with
+    #     `include_router(..., prefix="/api")` so the live mount is `/api{router.prefix}`.
+    #   - public_admissions's APIRouter already declares the full
+    #     `/api/public/admissions` prefix, so it is mounted with no extra prefix.
+    from app.routers import (
+        admission_config,
+        admission_paths,
+        admissions,
+        public_admissions,
+    )
+
+    actual_mount_paths = {
+        f"/api{admissions.router.prefix}",
+        f"/api{admission_config.router.prefix}",
+        f"/api{admission_paths.router.prefix}",
+        public_admissions.router.prefix,
+    }
+
+    def _is_under_freeze(path: str) -> bool:
+        return any(path == fp or path.startswith(fp + "/") for fp in FROZEN_PREFIXES)
+
+    uncovered = sorted(p for p in actual_mount_paths if not _is_under_freeze(p))
+    assert not uncovered, (
+        f"FROZEN_PREFIXES misses admission router mount(s): {uncovered}. "
+        f"Update Backend_FastAPI/app/middleware/admission_freeze.py FROZEN_PREFIXES "
+        f"and Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md §3.5 + §6.2."
+    )
+
+    spurious = sorted(
+        fp
+        for fp in FROZEN_PREFIXES
+        if not any(p == fp or p.startswith(fp + "/") for p in actual_mount_paths)
+        and not any(fp == p or fp.startswith(p + "/") for p in actual_mount_paths)
+    )
+    assert not spurious, (
+        f"FROZEN_PREFIXES contains entries that match no live admission router: "
+        f"{spurious}. Stale freeze coverage — remove from FROZEN_PREFIXES."
+    )
 
 
 # ---------------------------------------------------------------------------

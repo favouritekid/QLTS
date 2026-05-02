@@ -134,8 +134,9 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - KHÔNG sửa PLAN/RISK_REVIEW (frozen v2.13.1) — prefix list không nằm trong PLAN spec, chỉ trong RUNBOOK ops doc.
 
 **Tested / Rehearsed:**
-- T0-2 — `pytest tests/middleware/test_admission_freeze.py -v` PASS 46/46 trong Docker (1.02s):
-  - 1 sanity: `FROZEN_PREFIXES` + `FROZEN_METHODS` contract.
+- T0-2 — `pytest tests/middleware/test_admission_freeze.py -v` PASS 47/47 trong Docker (0.91s):
+  - 1 contract-shape sanity: `FROZEN_PREFIXES` tuple + `/api/` prefix + `FROZEN_METHODS` set.
+  - **1 live-router drift catch** (post user-review P2 fix): import `app.routers.{admissions, admission_config, admission_paths, public_admissions}.router.prefix`, build mount paths theo main.py include_router semantics, assert FROZEN_PREFIXES cover ⇄ no spurious. Router rename hoặc thêm admission router mới sẽ fail loud test này.
   - 12 unfrozen-pass-through (3 prefix × 4 write method).
   - 12 frozen-block-503 (3 prefix × 4 write method) — body kiểm `code="ADMISSION_FROZEN"` + `frozen_prefix` match input.
   - 9 frozen-read-allowed (3 prefix × {GET, HEAD, OPTIONS}).
@@ -143,6 +144,10 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
   - 1 health endpoint reachable khi frozen.
   - 4 path-segment lookalike rejection (`/api/admissionsfoo` × 4 write method) → 200 (không match `/api/admissions` prefix).
   - 3 bare prefix POST blocked (POST `/api/admissions`, `/api/admission-config`, `/api/public/admissions` không trailing slash).
+
+**Review feedback applied (post-commit `955810d5`):**
+- **P2** — original `test_frozen_prefixes_match_real_router_prefixes` chỉ assert tuple-against-hard-coded-tuple (giả drift catch). Sửa: tách 2 test rõ vai trò — `test_freeze_constants_have_expected_shape` (contract sanity, no drift claim) + `test_frozen_prefixes_cover_live_admission_router_prefixes` (real drift catch via import router + introspect `.prefix`). New test fail nếu router prefix đổi hoặc thêm admission router mới mà chưa update FROZEN_PREFIXES.
+- **P3** (deferred) — middleware không log blocked write attempt. Ops hardening, không bắt buộc cho T0-2 acceptance. Có thể follow-up trong T0-3 wave hoặc cleanup PR sau.
 
 **Files changed:**
 - `Backend_FastAPI/app/config.py` (+10 lines, ADMISSION_FROZEN field)
