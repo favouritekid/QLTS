@@ -43,7 +43,7 @@
 | ID | Task | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
 | T0-1 | 2 entrypoint env flag gates: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | BE | TESTED (PR merged, chờ staging smoke → DONE) | [#189](https://github.com/favouritekid/QLTS/pull/189) merged 2026-05-02 squash `bebb31fe` | U:✓ (14-case bash gate logic re-run on parent post-merge: 9 matrix + 5 defensive variants PASS) | DONE chờ staging clone D12-D14 smoke (apply 2 flag → observe entrypoint output → API ready ≤5s) | RUNBOOK §3.5 |
-| T0-2 | `ADMISSION_FROZEN` middleware + 4 method × 4 router matrix | BE | TODO | | U:- I:- | | RUNBOOK §3.5 |
+| T0-2 | `ADMISSION_FROZEN` middleware + 4 write method × 3 prefix matrix (verified-from-code: `/api/admissions`, `/api/admission-config`, `/api/public/admissions`; path-segment match) | BE | CODE_DONE (PR open) | [#190](https://github.com/favouritekid/QLTS/pull/190) | U:✓ (47-case pytest: 12 unfrozen pass-through + 12 frozen-block + 9 frozen-read-allowed + 4 non-admission baseline + 4 lookalike-rejection + 3 bare-prefix + 1 contract-shape sanity + 1 route-table drift catch via `fastapi_app.routes` + 1 health) | (chờ self-review + merge sub-PR; KHÔNG merge vội) | RUNBOOK §3.5 |
 | T0-3 | Nginx admission block env-driven `NGINX_ADMISSION_FROZEN` | Ops | TODO | | U:- I:- | | RUNBOOK §3.5 |
 | T0-4a | Celery beat `dispatch_pending_outbox` **skeleton task** (no-op safe registration: function defined, beat schedule registered, log "outbox not yet active" + return early — KHÔNG insert/dispatch). Kịch bản: B2/M-1-19a chưa ship, beat task vẫn registered nhưng KHÔNG crash worker. | BE | TODO | | U:- I:- | (none — no dep, ship parallel với T0-1/2/3/5) | RUNBOOK §3.5 + PLAN §3.3.e |
 | T0-4b | Celery beat `dispatch_pending_outbox` **real worker wiring** (3-step claim/dispatch/finalize, query NotificationOutbox table, dispatch SystemEvents enum). Replace skeleton T0-4a. | BE | TODO | | U:- I:- R:- (concurrency + crash recovery rig) | **B2** + **M-1-19a** ship trước (NotificationOutbox model + table tồn tại) | RUNBOOK §3.5 + PLAN §3.3.e |
@@ -227,7 +227,7 @@
 | Check | Status | Mapped task |
 |---|---|---|
 | T0-1 2 entrypoint env flag gates shipped (RUN_MIGRATIONS_ON_STARTUP + RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) | TODO | T0-1 |
-| T0-2 ADMISSION_FROZEN middleware shipped | TODO | T0-2 |
+| T0-2 ADMISSION_FROZEN middleware shipped (3 prefix verified-from-code, path-segment match) | TODO | T0-2 |
 | T0-3 Nginx admission block shipped | TODO | T0-3 |
 | T0-4a dispatch_pending_outbox skeleton (no-op safe) | TODO | T0-4a |
 | T0-4b dispatch_pending_outbox real worker wiring (sau B2 + M-1-19a) | TODO | T0-4b |

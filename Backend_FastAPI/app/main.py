@@ -32,6 +32,7 @@ from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .database import AsyncSessionLocal  # For auto-sync templates
 from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
+from .middleware.admission_freeze import AdmissionFreezeMiddleware  # ✅ T0-2 cold cutover freeze
 from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
 from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
@@ -632,6 +633,13 @@ if settings.APP_ENV == "test" and not _cors_origins:
 if settings.APP_ENV != "test":  # Disabled in tests by default
     fastapi_app.add_middleware(CSRFMiddleware)
     log.info("✅ CSRF protection middleware enabled")
+
+# --- Layer 2.5: Admission cold-cutover freeze (T0-2) ---
+# Sits inside CORS so 503 responses still carry CORS headers; outside CSRF so
+# a frozen request short-circuits before CSRF state machine runs. Reads
+# settings.ADMISSION_FROZEN per request (Settings itself is module-level).
+fastapi_app.add_middleware(AdmissionFreezeMiddleware)
+log.info("✅ Admission freeze middleware registered (T0-2 cold cutover)")
 
 # --- Layer 2: HTTPS Redirect ---
 # Removed: Nginx handles HTTPS redirect (301) at the edge.

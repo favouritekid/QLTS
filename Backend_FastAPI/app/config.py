@@ -343,6 +343,17 @@ class Settings(BaseSettings):
         default=False, validation_alias="AUTO_SYNC_TEMPLATES"
     )
 
+    # -- Admission Cold Cutover Freeze (T0-2) --
+    # When True, the AdmissionFreezeMiddleware rejects POST/PUT/PATCH/DELETE on
+    # `/api/admissions`, `/api/admission-config`, and `/api/public/admissions`
+    # with 503 — read endpoints (GET/HEAD/OPTIONS) stay open. Pydantic loads
+    # this once at module import; flipping the env requires
+    # `docker compose restart backend`. Pair with Nginx admission block (T0-3)
+    # for defense-in-depth. See `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` §6.1.
+    ADMISSION_FROZEN: bool = Field(
+        default=False, validation_alias="ADMISSION_FROZEN"
+    )
+
     # -- Admission Confirmation Settings --
     # Magic link token expiration and CCCD verification
     ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS: int = Field(
