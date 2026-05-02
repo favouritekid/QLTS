@@ -230,6 +230,18 @@ celery_app.conf.beat_schedule = {
         "schedule": 300,  # Every 5 minutes
         "options": {"queue": "default"},
     },
+
+    # --- T0-4a admission outbox skeleton (cold cutover prerequisite) ---
+    # Registered BEFORE the outbox table/model exist so the beat schedule is
+    # stable during the refactor window. The current task body is a no-op
+    # in `app/tasks/notification_outbox_tasks.py`. T0-4b (gated on B2 +
+    # M-1-19a) will replace the body with the real claim/dispatch/finalize
+    # worker without touching this entry. See RUNBOOK §3.5 T0-4a/4b.
+    "dispatch-pending-outbox": {
+        "task": "dispatch_pending_outbox",
+        "schedule": 30.0,  # Every 30 seconds (per RUNBOOK §3.5 T0-4 acceptance)
+        "options": {"queue": "default"},
+    },
 }
 
 # =============================================================================

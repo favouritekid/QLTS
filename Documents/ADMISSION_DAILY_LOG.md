@@ -167,6 +167,56 @@ Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặ
 
 ---
 
+### T0-4a — `dispatch_pending_outbox` Celery beat skeleton (commit local, branch chưa push)
+
+**Branch:** `feature/admission-t0-4a` off `feat/admission-full-cutover` HEAD `46461d12`. Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-op body returning structured `{"status": "skipped", "reason": "outbox_not_active", "task_id": "T0-4a"}`. T0-4b (gated trên B2 + M-1-19a) sẽ replace body trong cùng module + cùng task name; beat schedule entry stable.
+
+**Scope:**
+- `Backend_FastAPI/app/tasks/notification_outbox_tasks.py` (mới): module mới chứa `dispatch_pending_outbox` skeleton task. Imports chỉ `logging` + `celery_app` — KHÔNG import `NotificationOutbox` model (chưa tồn tại trước M-1-19a). Docstring lock-in contract cho T0-4b: giữ task name + module path + result keys `status`/`reason`/`task_id`.
+- `Backend_FastAPI/app/celery_app.py`: thêm beat schedule entry `dispatch-pending-outbox` (30.0s, queue `default`) sau `check-notification-alerts` block. Comment trỏ T0-4b sẽ replace body, không touch entry.
+- `Backend_FastAPI/app/tasks/__init__.py`: import + re-export `dispatch_pending_outbox` (match pattern existing test guard `test_every_beat_scheduled_task_is_registered` — đảm bảo task registered trong celery_app.tasks dict, không silent-discard khi beat fire).
+- `Backend_FastAPI/tests/unit/test_outbox_skeleton.py` (mới): 9 lock-in test — beat cadence/registration/return-shape/import-safety/autodiscover/signature-contract.
+
+**Tested / Rehearsed:**
+- T0-4a — `pytest tests/unit/test_outbox_skeleton.py tests/unit/test_celery_task_registry.py -v` PASS 11/11 trong Docker (1.03s):
+  - 1 beat-schedule cadence: `dispatch-pending-outbox` entry tồn tại + task name `dispatch_pending_outbox` + schedule = 30.0s.
+  - 1 task-registry registration: `celery_app.tasks` chứa `dispatch_pending_outbox` (regression guard sau import via package `__init__`).
+  - 1 export contract: `from app.tasks import dispatch_pending_outbox` resolvable + callable.
+  - 1 result-shape stability lock: skeleton return dict có `status="skipped"` + `reason="outbox_not_active"` + `task_id="T0-4a"` (load-bearing cho T0-4b — T0-4b sẽ flip `task_id` → `"T0-4b"` + có thể thêm key, KHÔNG drop).
+  - 2 AST-based import-safety guards: skeleton module + tasks `__init__.py` không có code-level reference `NotificationOutbox` (docstring/comment OK; AST walk imports + Name + Attribute nodes).
+  - 1 model-gap assertion: `models.NotificationOutbox` vẫn không tồn tại (sau M-1-19a ship → fail loud → trigger T0-4a retire + T0-4b plan).
+  - 1 autodiscover smoke: `importlib.find_spec("app.tasks.notification_outbox_tasks")` resolvable + module import safe + decorator gắn task name đúng.
+  - 1 zero-arg signature contract: `dispatch_pending_outbox` signature không có required args (beat fire không pass args).
+  - 2 existing celery-task-registry tests (regression check): `test_every_beat_scheduled_task_is_registered` + `test_previously_unregistered_finance_and_ctv_tasks_are_registered` — đều PASS sau khi thêm task mới + beat entry mới.
+
+**Test scope limitation (deferred):**
+- KHÔNG test live Celery worker tick (cần Celery worker process + Redis broker + beat scheduler chạy thực) — `bash scripts/test_nginx_admission_freeze.sh`-style live integration không apply ở đây vì Celery worker đang chạy trong Docker compose stack background, không phải đối tượng of unit test.
+- KHÔNG test schedule actually firing every 30s in real time — Celery beat live behavior verify trong staging clone (apply T0-4a → quan sát log "skeleton tick" 30s/lần trong worker output → confirm).
+
+**Drift catch (KHÔNG): KHÔNG verified drift trong code/docs/PLAN/RISK liên quan T0-4a này. PLAN §3.3.e + RUNBOOK §3.5 T0-4a wording match implementation. Không touch PLAN/RISK.
+
+**Files changed:**
+- `Backend_FastAPI/app/tasks/notification_outbox_tasks.py` (new, ~60 lines: skeleton task + docstring + result dict).
+- `Backend_FastAPI/app/celery_app.py` (+12 lines: beat schedule entry).
+- `Backend_FastAPI/app/tasks/__init__.py` (+5 lines: import + re-export + __all__ entry).
+- `Backend_FastAPI/tests/unit/test_outbox_skeleton.py` (new, ~165 lines: 9 lock-in tests).
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (T0-4a row CODE_DONE + Section 12.3 row CODE_DONE).
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này).
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-t0-4a` + sub-PR creation → `feat/admission-full-cutover`.
+
+**Tomorrow plan (sau merge T0-4a):**
+- T0-5 `POST /api/v2/admin/casbin/reload` admin endpoint (BE) — last sub-task of thematic #181 cụm Task 0; standalone, không depend gì.
+- B2 + M-1-19a (Phase 1 wave) sau Task 0 đầy đủ → unblock T0-4b real worker.
+
+**Notes:**
+- `test_models_package_still_lacks_notification_outbox` là **canary test** — sẽ fail khi M-1-19a ship + add `NotificationOutbox` model. Đây là tín hiệu cố ý: trigger ops retire T0-4a skeleton + ship T0-4b real worker. Test phải fail loud, không phải bug.
+- Stable shape `{"status", "reason", "task_id"}`: T0-4b sẽ flip `task_id` → `"T0-4b"`, có thể bổ sung key `claimed`/`dispatched`/`failed` count, nhưng KHÔNG drop 3 key gốc — dashboards monitoring T0-4a tick trong staging dry-run window vẫn tương thích.
+- Beat schedule entry name `dispatch-pending-outbox` (kebab) ≠ task name `dispatch_pending_outbox` (snake). Convention repo: schedule entry kebab-case, task name snake_case. Match existing pattern (`check-consultation-reminders-every-minute` → `check_consultation_reminders_task`).
+
+---
+
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
 - User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
 - Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
