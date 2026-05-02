@@ -108,9 +108,14 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Test framework cho bash entrypoint: chỉ syntax check + logic test, không có integration framework. Manual smoke trong staging clone D12-D14 sẽ verify end-to-end (apply 2 flag, observe entrypoint output, smoke API ready).
 - Q11 closed (PLAN §3.3.g.1) → KHÔNG còn product decision blocker; D2 + D3 chỉ chặn cutover, không chặn dev start.
 
-### T0-3 — Nginx admission block (sub-PR opened)
+### T0-3 — Nginx admission block (sub-PR merged)
 
-**Branch:** `feature/admission-t0-3` off `feat/admission-full-cutover` HEAD `691e6457`. Pushed `fbbe22d0` 2026-05-02; sub-PR [#191](https://github.com/favouritekid/QLTS/pull/191) opened cùng ngày, base `feat/admission-full-cutover`, mergeable ✓, KHÔNG merge — chờ explicit approval. CI: no checks reported (cùng pattern với PR #189 + PR #190 — repo workflow filter chưa cover PR vào `feat/admission-full-cutover`); manual verification = 32/32 PASS local Docker test harness.
+**Branch:** `feature/admission-t0-3` off `feat/admission-full-cutover` HEAD `691e6457`. Pushed `fbbe22d0` 2026-05-02; sub-PR [#191](https://github.com/favouritekid/QLTS/pull/191) opened + merged squash `092a12bd` cùng ngày (mergedAt 2026-05-02T10:30:06Z). Base `feat/admission-full-cutover`, kept branch (`--delete-branch=false`). Status: **TESTED**, DONE pending staging smoke.
+
+**CI manual verification (no checks reported pattern T0-1 + T0-2 + T0-3 đều cùng):**
+- Pre-merge: `bash scripts/test_nginx_admission_freeze.sh` → 32/32 PASS (3-layer harness, < 5s sau Docker image cached).
+- Post-merge re-run trên parent HEAD `092a12bd`: 32/32 PASS.
+- Repo workflow filter chưa cover PR vào `feat/admission-full-cutover` → CI tự động không chạy. Manual verification thay thế ghi trong TRACKER + DAILY_LOG đủ pass-fail evidence cho 3 layer (render + syntax + regex URI). Layer 4 (live HTTP smoke) deferred staging.
 
 Defense-in-depth pair với T0-2 backend middleware vừa ship: edge layer chặn ngay tại Nginx, trước khi traffic chạm FastAPI.
 
