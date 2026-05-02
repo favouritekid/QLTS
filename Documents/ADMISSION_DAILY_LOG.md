@@ -291,6 +291,16 @@ Skeleton-only ship: register beat 30s + task name `dispatch_pending_outbox`, no-
 - Defensive `try/except` cho `enforcer.get_policy()` count: nếu accessor crash trên broken state, KHÔNG turn 200 → 500 (count chỉ informational).
 - Failure audit log best-effort: nếu DB/audit_service down cùng lúc → silent log warning, return original error nguyên vẹn — caller nhận đúng nguyên nhân.
 
+**Review feedback applied (post-commit `c92b3601`):**
+- **P1 multi-worker reality** (operational gap) — User catch: `request.app.state.enforcer` build per-process tại lifespan; production Gunicorn `workers = min(GUNICORN_WORKERS, 4)`. Endpoint chỉ reload 1 worker process nhận HTTP request; workers còn lại giữ stale enforcer → policy enforcement không nhất quán (request A deny, request B allow tùy worker). Patch:
+  - **Code**: Module docstring + endpoint docstring rephrase explicit "single-process reload only — NOT a production-wide guarantee". Response shape add field `"scope": "current_process"` (cả success path lẫn failure path) — machine-readable signal cho monitoring để phân biệt diagnostic vs fleet-wide reload.
+  - **Test**: `test_admin_can_reload_casbin_policy` + `test_reload_failure_surfaces_500_without_crashing` lock `body["scope"] == "current_process"` — endpoint không thể silent masquerade là fleet-wide.
+  - **RUNBOOK §7.2 T+3:00 → T+3:15**: thêm bước **restart backend container** sau Casbin seed deny rules (giữ 2 cutover env flags `RUN_MIGRATIONS_ON_STARTUP=false` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false` để tránh re-trigger auto-migration/sync). Verify lifespan boot success từ ALL Gunicorn workers (≥2 dòng "Casbin AsyncEnforcer initialized" trong log). Endpoint kept như diagnostic post-restart — KHÔNG cơ chế reload chính.
+  - **RUNBOOK §3.5 T0-5**: rephrase "Cutover safety" → "Diagnostic / smoke reload". Why column nói rõ "Chỉ tác động 1 Gunicorn worker — KHÔNG fleet-wide. Cutover-correct reload là restart backend container".
+  - **RUNBOOK §9.3 readiness**: T0-5 checkbox add "Multi-worker reality: fleet-wide reload = restart backend (§7.2 T+3:15); endpoint = current-process diagnostic only".
+- **P2 missing rate limit** — User catch: admin endpoints khác (role/policy CRUD) đều có `@limiter.limit(RateLimits.ADMIN_WRITE)`; endpoint mới T0-5 thiếu → có thể hammer DB/adapter. Patch: import `from app.core.rate_limits import RateLimits, limiter` + `@limiter.limit(RateLimits.ADMIN_WRITE)` decorator (above `@router.post`). Match baseline existing admin surface.
+- **Test re-verify**: `pytest tests/api/test_admin_v2_casbin_reload.py -v` → 9/9 PASS (56.31s) sau khi add scope field assert + rate limit decorator. Test count unchanged (cùng 9 case nhưng 2 case mở rộng assert).
+
 ---
 
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**

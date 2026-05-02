@@ -46,6 +46,14 @@ async def test_admin_can_reload_casbin_policy(
     assert body["actor_id"] is not None and body["actor_id"] > 0
     # `reloaded_at` is an ISO-8601 timestamp; cheap shape check (not full parse).
     assert "T" in body["reloaded_at"], f"reloaded_at not ISO-shaped: {body['reloaded_at']!r}"
+    # `scope` makes the per-process limitation machine-readable — the runbook
+    # uses this signal to distinguish a smoke/diagnostic reload from a
+    # restart-based fleet-wide reload. Locked in so the endpoint can never
+    # silently masquerade as a production-wide reload.
+    assert body["scope"] == "current_process", (
+        f"`scope` field must be 'current_process' to flag the multi-worker "
+        f"limitation; got {body.get('scope')!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -146,6 +154,7 @@ async def test_reload_failure_surfaces_500_without_crashing(
     assert "simulated DB unreachable" in body["error"]
     assert body["actor_id"] is not None and body["actor_id"] > 0
     assert "reloaded_at" in body
+    assert body["scope"] == "current_process"
 
 
 @pytest.mark.asyncio
