@@ -20,6 +20,7 @@ from typing import Set, Optional, TYPE_CHECKING
 import structlog
 
 from ..core.constants import UserRole
+from ..utils.admission_status import is_admitted_like
 
 if TYPE_CHECKING:
     from ..models import AdmissionProfile
@@ -116,10 +117,12 @@ def derive_phase_from_admission(
     
     if status == "enrolled":
         return LeadPhase.ENROLLED
-    elif status in ("approved", "confirmed", "overridden"):
+    elif is_admitted_like(admission_profile) or status == "confirmed":
+        # admitted-equivalent (legacy approved/overridden + choice-engine
+        # admitted) plus confirmed-intent all derive the FEE phase.
         return LeadPhase.FEE
     else:
-        # draft, submitted, rejected, resubmitted
+        # draft, submitted, rejected, resubmitted, reviewing, waitlisted
         return LeadPhase.ADMISSION
 
 

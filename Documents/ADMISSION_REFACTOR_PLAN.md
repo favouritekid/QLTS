@@ -4466,3 +4466,17 @@ Document v1.0 đã align với schema thực tế (verified 2026-04-30):
 | `AdmissionPath.admission_criteria_id` (code-level drift, NOT proposal) | `criteria_id` (model thực tế); Phase 0c hot-fix cùng PR — silent broken `AttributeError` runtime |
 
 **Nguyên tắc:** giữ nguyên tên DB; alias ở API/serializer nếu cần đổi semantic. Trước mọi đề xuất schema mới, GREP/READ model file gốc để verify field name. Code-level drift (caller dùng sai tên field model) ship hot-fix riêng, không lẫn refactor PR.
+
+### Mapping deviation log (post-frozen-PLAN)
+
+PLAN section §4 task #15 line 3380-3395 quy định một mapping cụ thể. Khi implement #15 trên branch `feature/admission-issue-15` (2026-05-03), user re-chốt 3 deviation sau prod-state audit (qlts.tnpc.edu.vn) + DB seed semantic verification:
+
+| Status | PLAN line 3380-3395 | Final implementation | Lý do deviation |
+|---|---|---|---|
+| `reviewing` | `sts06` | **`sts07` (admission-phase floor)** | sts06 = consultation phase pre-submission; reviewing = officer xét hồ sơ ĐÃ NỘP → MUST ở admission phase sts07. PLAN sts06 vi phạm pipeline forward-only (sẽ regress lead). Floor rule chỉ apply nếu lead đang ở pre-application; preserve later state nếu đã sts07+. |
+| `waitlisted` | `sts06` | **`sts07` (admission-phase floor)** | Same rationale — đã nộp + xét + chờ ghế → admission phase sts07. |
+| `result_published` | `sts09` (PLAN list as map entry) | **explicit no-op (`_RESULT_PUBLISHED_NO_OP` sentinel)** | Future intermediate state / T6 broadcast marker, không phải per-profile mutation. Per-profile transition do T7/T8/T9 (admitted/waitlisted/rejected) sở hữu. Sync function short-circuit, lead pipeline không mutate. |
+
+`admitted → sts09` (PLAN unchanged), `is_admitted_like` set `{approved, overridden, admitted}` (PLAN unchanged), `LEGACY_TO_NEW_STATUS_MAP` 3-entry (PLAN unchanged) đều giữ nguyên. Codex reviewer round thêm `is_confirmation_eligible` strict subset `{approved, admitted}` cho 4 magic-link site (overridden excluded vì state machine route `overridden → enrolled` direct, bypass `confirmed`).
+
+Audit reference: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-03 #15 entry — 7-question matrix với rationale từng quyết định.

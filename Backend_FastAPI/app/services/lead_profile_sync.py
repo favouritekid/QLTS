@@ -101,8 +101,12 @@ EDITABLE_PROFILE_STATUSES: Set[str] = frozenset({"draft", "submitted"})
 PROFILE_UPDATE_ALLOWED_STATUSES: Set[str] = frozenset({"draft", "rejected"})
 
 # AdmissionProfile statuses that LOCK identity fields on Lead
-# These are "legal snapshots" - data is frozen for official records
-LOCKED_PROFILE_STATUSES: Set[str] = frozenset({"approved", "enrolled"})
+# These are "legal snapshots" - data is frozen for official records.
+# ``admitted`` is the choice-engine equivalent of legacy ``approved`` (Phase 3
+# state machine T7 outcome); kept here for forward-compat so identity fields
+# stay frozen the moment Phase 1 widens the CHECK constraint and #16 wires
+# the writes — no follow-up patch required at this site.
+LOCKED_PROFILE_STATUSES: Set[str] = frozenset({"approved", "admitted", "enrolled"})
 
 
 # =============================================================================

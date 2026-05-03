@@ -37,6 +37,7 @@ from app.schemas import finance as finance_schemas
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.invoice_service import InvoiceService
 from app.repositories.fee_repository import FeeRepository
+from app.utils.admission_status import is_admitted_like
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -78,7 +79,11 @@ def _fee_calc_authorized(
       can't spin up invoices for profiles they don't own.
     * everyone else: denied.
     """
-    if profile.status not in ("approved", "confirmed", "enrolled"):
+    # Post-decision states gate: admitted-like (legacy approved/overridden +
+    # choice-engine admitted) plus the post-confirmation milestones
+    # (confirmed/enrolled) are eligible for fee creation. Earlier states
+    # would create a fee for a profile that might still flip to rejected.
+    if not (is_admitted_like(profile) or profile.status in ("confirmed", "enrolled")):
         return False
 
     if user.role == UserRole.ADMIN:
