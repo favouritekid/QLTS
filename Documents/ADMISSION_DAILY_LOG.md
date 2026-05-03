@@ -95,8 +95,8 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Post-merge bite-verify on parent HEAD `64314f0f`: lint exit 0 (148 files clean) + coverage default exit 0 + coverage `--strict-namespace` exit 1 — all 3 modes match pre-merge expectations.
 
 **Pending:**
-- (After this entry commits) tick `[x] **CI-status**`, `[x] **CI-event**`, `[x] **CI-workflow**` checkboxes on issue #183.
-- Verify card #183 (`[Phase 1 Code]` thematic) moves `In Progress → Done` (all 7 sub-tasks ticked: B1 + B2 + #15 + #16 + 3 CI rows).
+- ~~(After this entry commits) tick `[x] **CI-status**`, `[x] **CI-event**`, `[x] **CI-workflow**` checkboxes on issue #183.~~ DONE — all 7 thematic checkboxes ticked.
+- ~~Verify card #183 moves `In Progress → Done`.~~ Verified: 7/7 ticked, "Done when" criteria met, BUT issue #183 + card stay OPEN / `In Progress` per user chốt 2026-05-03 — keeping the thematic line available for future Phase 1-related work that depends on the existing tooling (e.g. follow-on extensions atop this scaffolding). When user decides to close, board auto-archives → card → Done.
 
 ---
 
