@@ -94,14 +94,13 @@ Trade-off: smaller PRs (~2-3h each) vs more review cycles.
 
 **Pending user chốt before code starts:** ~~3-PR vs 4-PR split~~ → user chốt **4-PR split** 2026-05-03.
 
-### #184 Wave 1 PR-1A — phase1_01 + phase1_02 (PR open, awaiting review/merge)
+### #184 Wave 1 PR-1A — phase1_01 + phase1_02 (TESTED, merged 2026-05-03)
 
 **Branch / Commit / PR:**
 - Branch `feature/admission-184-pr-1a` off parent `2864df20` (preflight tracking).
-- PR [#205](https://github.com/favouritekid/QLTS/pull/205) opened 2026-05-03 base `feat/admission-full-cutover`.
-- Head SHA at PR open: `83d05150`.
+- PR [#205](https://github.com/favouritekid/QLTS/pull/205) — `[#184 Wave1] feat(schema): phase1_01 degree_level FK + phase1_02 bonus_rule` — squash `a50cdb79` (mergedAt `2026-05-03T14:55:56Z`, mergedBy `favouritekid` via `gh pr merge 205 --squash --delete-branch=false`). Parent advanced `2864df20 → a50cdb79`.
+- Pre-merge: 2 commits collapsed (impl `83d05150` + docs sync `b493604a`) → 1 squash commit on parent.
 - 2 migrations + 3 model updates + 1 unit test file.
-- Squash title: `[#184 Wave1] feat(schema): phase1_01 degree_level FK + phase1_02 bonus_rule`.
 
 **Migrations shipped:**
 1. `phase1_01_add_degree_level_fk_to_major_program.py`
@@ -129,8 +128,12 @@ Trade-off: smaller PRs (~2-3h each) vs more review cycles.
 - Live: AST lint 0 violations across 148 files; coverage script `--allow-deferred` exit 0 (no admission status / event surface touched in PR-1A).
 
 **Pending:**
-- Reviewer review + squash merge PR [#205](https://github.com/favouritekid/QLTS/pull/205).
-- Post-merge: parent tracking commit citing squash SHA + start PR-1B' (path advanced + BE schema + service + FE Zod).
+- Tick `[x] **M-1-01**` + `[x] **M-1-02**` on issue #184 sub-task list.
+- Start PR-1B' (`phase1_03` path advanced + BE schema + service + FE Zod) off updated parent `a50cdb79`.
+
+**Post-merge verification on parent HEAD `a50cdb79`:**
+- `alembic current` → `phase1_02 (head)` ✓
+- Target test re-run: **20 passed (1.00s)** — same 20 case as PR run; confirms squash collapsed cleanly with no test drift.
 
 ---
 
