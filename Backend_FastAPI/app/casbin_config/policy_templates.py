@@ -60,14 +60,34 @@ Template Design:
 =============================================================================
 """
 
-from typing import Dict, List, TypedDict
+from typing import Dict, List, Literal, TypedDict
 
 
-class PolicyRule(TypedDict):
-    """Type definition for a single policy rule."""
+# B1: Casbin deny-first effect (PLAN §3.3.b + RISK_REVIEW P0-01).
+# `auth_model.conf` declares `p = sub, obj, act, eft` and the canonical
+# Casbin effect `e = some(where (p.eft == allow)) && !some(where (p.eft
+# == deny))` — any matching deny short-circuits to forbidden, otherwise
+# at least one matching allow grants access. Default for legacy / new
+# rules is "allow"; `accountant` carries explicit deny rows for the
+# admission state-machine routes accountant must NOT be able to drive
+# (claim / request-revision / publish-result / waitlist-* /
+# admin-rollback) since accountant inherits officer (g, role:accountant,
+# role:officer) and would otherwise pass through that route guard.
+PolicyEft = Literal["allow", "deny"]
+
+
+class PolicyRule(TypedDict, total=False):
+    """Type definition for a single policy rule.
+
+    ``eft`` is optional in source data (defaults to ``"allow"`` via
+    ``apply_template``), so 3-field rules keep their existing shape and
+    do not need bulk rewrites.  New deny rules opt in by writing
+    ``"eft": "deny"`` explicitly.
+    """
     subject: str  # Placeholder: {role} will be replaced
     object: str   # Resource path (e.g., /api/leads/*)
     action: str   # HTTP method or regex (e.g., GET, POST, .*)
+    eft: PolicyEft  # "allow" (default) or "deny"
 
 
 class PolicyTemplate(TypedDict):
@@ -275,6 +295,33 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # Admission config (read-only lookup data)
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
+
+        # =====================================================================
+        # B1: ACCOUNTANT DENY rules — admission state-machine routes
+        # PLAN §3.3.b + RISK_REVIEW P0-01.
+        #
+        # Accountant inherits officer (g, role:accountant, role:officer).
+        # If officer ever gains an admission state-machine route via
+        # OFFICER_TEMPLATE (or via #15 wiring the new /api/v2/admissions
+        # internal staff endpoints), accountant would silently inherit
+        # access. The deny-first effect of the new auth_model.conf
+        # (p = sub, obj, act, eft + canonical Casbin allow-and-deny
+        # effect) ensures these explicit denies override any allow that
+        # might reach accountant via inheritance.
+        #
+        # NOTE: the routes listed here use the /api/v2/admissions/...
+        # prefix that #15 will introduce. Adding the deny rows ahead of
+        # #15 is intentional — when #15 lands, accountant is already
+        # forbidden by Casbin and the test matrix catches any drift.
+        # The keyMatch4 wildcard covers /api/v2/admissions/{id}/<verb>
+        # (single-segment id) per the existing matcher in
+        # auth_model.conf.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/claim",             "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/request-revision",  "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-promote",  "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-reject",   "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/admin-rollback",    "action": "POST", "eft": "deny"},
     ]
 }
 
@@ -592,30 +639,38 @@ def get_template(template_id: str) -> PolicyTemplate:
 
 def apply_template(template_id: str, role: str) -> List[PolicyRule]:
     """
-    Apply a template to a specific role, replacing {role} placeholder.
+    Apply a template to a specific role, replacing ``{role}`` placeholder.
+
+    Each rule is normalized to a 4-field shape (``subject``, ``object``,
+    ``action``, ``eft``). Source rules that omit ``eft`` get the safe
+    default ``"allow"`` so the seed code path produces canonical Casbin
+    rows for the deny-first ``auth_model.conf`` introduced in B1.
 
     Args:
-        template_id: Template identifier
-        role: Role name (with prefix, e.g., "role:custom")
+        template_id: Template identifier (e.g., "officer", "manager").
+        role: Role subject (with prefix, e.g., ``"role:custom"``).
 
     Returns:
-        List of policy rules with role substituted
+        List of ``PolicyRule`` dicts with ``{role}`` substituted and
+        ``eft`` populated.
 
     Example:
         >>> apply_template("officer", "role:custom")
         [
-            {"subject": "role:custom", "object": "/api/leads", "action": "GET"},
+            {"subject": "role:custom", "object": "/api/leads",
+             "action": "GET", "eft": "allow"},
             ...
         ]
     """
     template = get_template(template_id)
-    policies = []
+    policies: List[PolicyRule] = []
 
     for policy in template["policies"]:
         policies.append({
             "subject": policy["subject"].replace("{role}", role),
             "object": policy["object"],
             "action": policy["action"],
+            "eft": policy.get("eft", "allow"),
         })
 
     return policies

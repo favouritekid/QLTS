@@ -334,7 +334,7 @@ class CasbinPolicyService:
 
     async def add_policies_batch(
         self,
-        policies: List[Tuple[str, str, str]],
+        policies: List[Tuple[str, ...]],
         validate: bool = True,
         template_id: Optional[str] = None,
         applied_by: Optional[int] = None
@@ -343,10 +343,14 @@ class CasbinPolicyService:
         Add multiple policies in a batch with validation and template tracking.
 
         Args:
-            policies: List of (subject, object, action) tuples
-            validate: Whether to validate before adding
-            template_id: Template ID for tracking (optional)
-            applied_by: User ID who applied this (optional)
+            policies: List of policy tuples. Each entry is either
+                ``(subject, object, action)`` (3-tuple — eft defaults to
+                ``"allow"`` for backward compatibility with admin UI
+                payloads) or ``(subject, object, action, eft)`` (4-tuple,
+                produced by ``apply_template`` post-B1 deny-first).
+            validate: Whether to validate before adding.
+            template_id: Template ID for tracking (optional).
+            applied_by: User ID who applied this (optional).
 
         Returns:
             Dictionary with:
@@ -359,10 +363,27 @@ class CasbinPolicyService:
         skipped = 0
         errors = []
         warnings = []
-        added_policies = []  # Track which policies were added for template tracking
+        # Track which policies were added for template tracking — keep
+        # the 4-field shape so the SQL UPDATE matches v3 explicitly and
+        # never touches a peer (sub, obj, act) row of opposite eft.
+        added_policies: List[Tuple[str, str, str, str]] = []
 
-        for subject, obj, action in policies:
-            # Validate if requested
+        for entry in policies:
+            if len(entry) == 3:
+                subject, obj, action = entry
+                eft = "allow"
+            elif len(entry) == 4:
+                subject, obj, action, eft = entry
+            else:
+                errors.append(
+                    f"Invalid policy tuple length {len(entry)} (expected 3 or 4): {entry!r}"
+                )
+                continue
+
+            # Validate if requested. Validation is eft-agnostic — the
+            # checks (duplicate, conflict, critical) key on (subject,
+            # object, action). A deny variant of an existing allow rule
+            # is intentionally NOT a duplicate.
             if validate:
                 validation = await self.validate_policy_addition(subject, obj, action)
                 if not validation.is_valid:
@@ -372,17 +393,26 @@ class CasbinPolicyService:
 
                 warnings.extend(validation.warnings)
 
-            # Add policy
+            # Add policy. casbin.AsyncEnforcer.add_policy accepts the
+            # eft as the 4th positional argument; the canonical
+            # auth_model.conf since B1 declares
+            #   p = sub, obj, act, eft.
             try:
-                success = await self.enforcer.add_policy(subject, obj, action)
+                success = await self.enforcer.add_policy(
+                    subject, obj, action, eft
+                )
                 if success:
                     added += 1
-                    added_policies.append((subject, obj, action))
+                    added_policies.append((subject, obj, action, eft))
                 else:
                     skipped += 1
-                    warnings.append(f"Policy already exists: {subject} {obj} {action}")
+                    warnings.append(
+                        f"Policy already exists: {subject} {obj} {action} {eft}"
+                    )
             except Exception as e:
-                errors.append(f"Failed to add policy {subject} {obj} {action}: {str(e)}")
+                errors.append(
+                    f"Failed to add policy {subject} {obj} {action} {eft}: {str(e)}"
+                )
 
         # Update template tracking for added policies
         if added_policies and template_id:
@@ -397,7 +427,7 @@ class CasbinPolicyService:
 
     async def _update_template_tracking(
         self,
-        policies: List[Tuple[str, str, str]],
+        policies: List[Tuple[str, str, str, str]],
         template_id: str,
         applied_by: Optional[int] = None
     ) -> None:
@@ -416,18 +446,21 @@ class CasbinPolicyService:
         - We need a fresh session that starts AFTER enforcer's commit
 
         Args:
-            policies: List of (subject, object, action) tuples
+            policies: List of ``(subject, object, action, eft)`` tuples
+                (B1 4-field shape — eft is included in the WHERE clause
+                so allow/deny variants of the same (sub, obj, act) get
+                their own tracking row, never collide).
             template_id: Template identifier
             applied_by: User ID (optional)
         """
         from app.database import AsyncSessionLocal
         import logging
         log = logging.getLogger(__name__)
-        
+
         try:
             # Use a fresh session to see the rows committed by enforcer
             async with AsyncSessionLocal() as fresh_session:
-                for subject, obj, action in policies:
+                for subject, obj, action, eft in policies:
                     result = await fresh_session.execute(
                         text("""
                             UPDATE casbin_rule
@@ -438,6 +471,7 @@ class CasbinPolicyService:
                               AND v0 = :subject
                               AND v1 = :obj
                               AND v2 = :action
+                              AND v3 = :eft
                               AND template_id IS NULL
                         """),
                         {
@@ -450,9 +484,10 @@ class CasbinPolicyService:
                             "subject": subject,
                             "obj": obj,
                             "action": action,
+                            "eft": eft,
                         }
                     )
-                    log.info(f"Tracking UPDATE for {subject} {obj} {action}: rowcount={result.rowcount}")
+                    log.info(f"Tracking UPDATE for {subject} {obj} {action} {eft}: rowcount={result.rowcount}")
                 
                 # Commit the tracking update
                 await fresh_session.commit()
@@ -541,9 +576,12 @@ class CasbinPolicyService:
             # Get policies from template
             template_policies = apply_template(template_id, role)
 
-            # Convert to tuples for batch operation
+            # Convert to 4-tuples (subject, object, action, eft) for the
+            # batch operation. ``apply_template`` since B1 always
+            # populates ``eft`` (default "allow", explicit "deny" for
+            # accountant admission state-machine guards).
             policies_tuples = [
-                (p["subject"], p["object"], p["action"])
+                (p["subject"], p["object"], p["action"], p["eft"])
                 for p in template_policies
             ]
 

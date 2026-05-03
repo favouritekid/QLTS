@@ -222,9 +222,31 @@ async def lifespan(app: FastAPI):
         auth_model_path = Path(__file__).parent.parent / "auth_model.conf"
         log.info(f"Loading Casbin model from: {auth_model_path}")
         enforcer = casbin.AsyncEnforcer(str(auth_model_path), adapter)
-        await enforcer.load_policy()
+
+        # B1 cold cutover gate: skip the initial load_policy() call when
+        # RUN_CASBIN_LOAD_ON_STARTUP=false. Mirrors the two existing gates
+        # in docker-entrypoint.sh (RUN_MIGRATIONS_ON_STARTUP +
+        # RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP). Defensive default
+        # (only the exact lowercase "false" skips; any other value runs
+        # the load) preserves routine-deploy behavior. Use case:
+        # cutover deploys the new 4-field auth_model.conf BEFORE the
+        # manual backfill that sets `casbin_rule.v3='allow'` on the
+        # 210 legacy rows; loading the enforcer against the un-backfilled
+        # state would crash with `RuntimeError: invalid policy size`.
+        # The cutover restart at T+3:15 unsets the flag and lifespan
+        # re-runs load_policy() against the backfilled DB.
+        casbin_load_flag = os.getenv("RUN_CASBIN_LOAD_ON_STARTUP", "true")
+        if casbin_load_flag == "false":
+            log.warning(
+                "⏭️  Skipping enforcer.load_policy() — "
+                "RUN_CASBIN_LOAD_ON_STARTUP=false (cold cutover). "
+                "Casbin in-memory policy table is empty until a later "
+                "restart with the flag unset / set to true."
+            )
+        else:
+            await enforcer.load_policy()
+            log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
         fastapi_app.state.enforcer = enforcer
-        log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
 
         # =========================================================================
         # POLICY INITIALIZATION (Phase 4 Fix)
@@ -241,7 +263,16 @@ async def lifespan(app: FastAPI):
         #   - PRODUCTION: Fail-fast (don't start with broken auth)
         #   - DEV/TEST: Add admin wildcard only (minimal bootstrap)
         #
-        if not enforcer.get_policy():
+        # B1 cold-cutover safety: when the load was skipped above
+        # (RUN_CASBIN_LOAD_ON_STARTUP=false), `enforcer.get_policy()`
+        # legitimately returns []. Without this guard, the production
+        # fail-fast below would always fire on the cutover deploy at
+        # T+1:00 and crash-loop the backend container — instead of
+        # ``uvicorn ready`` (RUNBOOK §7.2 line 332-333). The
+        # auto-seed / fail-fast block runs only when load was
+        # attempted; if the gate skipped, defer empty-policy decisions
+        # to the next restart at T+3:15 when the flag is flipped back.
+        if casbin_load_flag != "false" and not enforcer.get_policy():
             if settings.APP_ENV == "production":
                 log.critical(
                     "🚨 CRITICAL: No Casbin policies found in production! "
@@ -271,13 +302,16 @@ async def lifespan(app: FastAPI):
                         
                         if template_id:
                             template_policies = apply_template(template_id, role_name)
-                            
-                            # Convert to tuples for batch operation
+
+                            # Convert to 4-tuples (subject, object, action, eft) for
+                            # the batch operation. ``apply_template`` since B1 always
+                            # populates ``eft`` (default "allow", explicit "deny" for
+                            # accountant admission state-machine guards).
                             policies_tuples = [
-                                (p["subject"], p["object"], p["action"])
+                                (p["subject"], p["object"], p["action"], p["eft"])
                                 for p in template_policies
                             ]
-                            
+
                             # Use add_policies_batch to properly fill tracking columns
                             batch_result = await casbin_service.add_policies_batch(
                                 policies=policies_tuples,
