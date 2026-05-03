@@ -369,6 +369,104 @@ The worker relies on Postgres `FOR UPDATE SKIP LOCKED` at the connection level: 
 
 ---
 
+### B1 — Casbin deny-first auth model + 6 accountant deny rules (local, pending push)
+
+**Branch:** `feature/admission-b1` off parent `88c19c16` (post B2.4 tracking). Single-commit B1 PR per **Strategy A** (chốt 2026-05-03 sau Codex reviewer reject phương án 2-PR split B1.1 → B1.2). Atomic deploy: migration backfill + 4-field auth_model + plumbing + boot gate + runbook patch trong cùng một PR; cutover sequence dùng RUN_CASBIN_LOAD_ON_STARTUP env-flag gate (mirror T0-1 pattern) thay vì shim.
+
+**Pre-flight evidence (proves B1 cannot ship without bundled migration):**
+
+Codex reviewer + implementer probed Casbin Python lib + adapter source + dev DB before any code change:
+- `casbin_async_sqlalchemy_adapter.CasbinRule.__str__` breaks at first `None` v-column (`adapter.py:42-46`).
+- 210/210 prod-shape `ptype='p'` rules có `v3 IS NULL` (psql probe trên dev DB).
+- Casbin Python `core_enforcer.py:447-448` raises `RuntimeError("invalid policy size")` khi `len(p_tokens) != len(pvals)`.
+- **Both directions fail**: 4-field model + 3-element rules → crash; 4-element rules + 3-field model → also crash. Backfill phải xảy ra cùng deploy với model flip (atomic), không thể split.
+- Effect string: Casbin lib does literal-match against `casbin/constant/constants.py::ALLOW_AND_DENY_EFFECT = "some(where (p_eft == allow)) && !some(where (p_eft == deny))"`. Order matters (allow first, deny second). Lib normalizes `p.eft → p_eft` automatically khi parse `.conf` file.
+
+**Strategy A chosen over B (adapter shim) and C (2-PR split):**
+
+- A win on long-term codebase cleanliness (no permanent shim layer; future Casbin lib upgrades trivial).
+- A win on tracker fit (3 row separate B1 + M-1-casbin + BF-casbin map 1-1 với 3 phase: code task + migration file + deploy execution).
+- A acceptable on cutover risk vì T0-1 đã proven env-flag pattern: thêm 3rd flag `RUN_CASBIN_LOAD_ON_STARTUP` mirror 2 flag hiện có (`RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP`). Cutover team đã thực tập flip 2 flag từ PR #189 merged 2026-05-02.
+- A trade-off cost = one-time runbook patch (small, single section §7.2 with 3 step changes).
+
+**Scope landed:**
+
+- `Backend_FastAPI/auth_model.conf` — 4-field `p = sub, obj, act, eft` + canonical Casbin effect `e = some(where (p.eft == allow)) && !some(where (p.eft == deny))` (allow first, deny second per `ALLOW_AND_DENY_EFFECT` constant).
+- `Backend_FastAPI/app/casbin_config/policy_templates.py` — `PolicyRule` TypedDict thêm `eft: Literal["allow", "deny"]` (optional in source data, defaults to "allow"); `apply_template()` luôn normalize 4-field output; 6 accountant deny rules append vào `ACCOUNTANT_TEMPLATE.policies` per PLAN §3.3.b lines 1411-1415 với `waitlist-*` expanded thành 2 entry (`waitlist-promote` + `waitlist-reject`) cho keyMatch4 precision: `/api/v2/admissions/*/{claim, request-revision, publish-result, waitlist-promote, waitlist-reject, admin-rollback}`.
+- `Backend_FastAPI/app/services/casbin_service.py::add_policies_batch` — accept 3-tuple (eft default "allow", backward compat for admin UI) hoặc 4-tuple (template seed); pass `enforcer.add_policy(sub, obj, act, eft)`. `_update_template_tracking` SQL match `v3=:eft` explicitly để allow/deny variants không collide.
+- `Backend_FastAPI/app/services/casbin_service.py::apply_template_to_role` + `Backend_FastAPI/app/main.py:273` bootstrap — both unpack `apply_template` 4-field result.
+- `Backend_FastAPI/app/main.py` lifespan — gate `await enforcer.load_policy()` behind `RUN_CASBIN_LOAD_ON_STARTUP` env flag. Defensive default: only exact lowercase `"false"` skips; mọi value khác (unset / true / typo) chạy load.
+- `Backend_FastAPI/docker-entrypoint.sh` — thêm 3rd gate echo mirror 2 gate hiện có.
+- `Backend_FastAPI/alembic/versions/phase1_19b_backfill_casbin_eft_and_seed_deny_rules.py` — `revision='phase1_19b'`, `down_revision='phase1_19a'`. Upgrade: UPDATE casbin_rule SET v3='allow' WHERE ptype='p' AND v3 IS NULL (idempotent predicate); 6 INSERT rows for accountant deny với `WHERE NOT EXISTS` guard + `template_id='_system_b1_deny'` audit marker. asyncpg-safe `CAST(:p AS varchar)` casts trên mọi parameter (avoid `AmbiguousParameterError: inconsistent types deduced for parameter $1` khi cùng param dùng ở untyped INSERT SELECT + varchar WHERE — encountered live during dev-DB upgrade). Downgrade: DELETE 6 deny rows by exact (ptype, v0, v1, v2, v3) match; UPDATE v3=NULL WHERE v3='allow'.
+- `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` §7.2 — 3 step patch:
+  - T+1:00: deploy backend với `RUN_CASBIN_LOAD_ON_STARTUP=false` (3rd flag).
+  - T+3:15: restart backend với `RUN_CASBIN_LOAD_ON_STARTUP=true` (flipped back) để lifespan reload enforcer trên backfilled DB.
+  - T+24h: switch all 3 flag back to `true`/unset cho routine deploy.
+
+**Test surface (39 B1 lock-in tests + 9 existing Casbin tracking regression = 48 B1 focused):**
+
+- `tests/unit/test_casbin_b1_deny_first.py` (29 tests, 4 classes — incl. `test_boot_gate_skip_bypasses_empty_policy_fail_fast` added during Codex review patch round; structural-check via Patch A signature OR Patch B indent comparison; bite-verified by reverting Patch A → test fails, restoring → test passes):
+  - `TestAuthModelConfShape` (2): policy_definition is 4-field; policy_effect matches canonical allow-and-deny order.
+  - `TestEffectStringIsLibCanonical` (3): `casbin.effect.get_effector()` accepts on-disk effect post `p.eft → p_eft` normalize; rejects reversed order (`!deny && allow`); `AsyncEnforcer(auth_model.conf)` parses without raising.
+  - `TestPolicyRuleTypedDict` + `TestApplyTemplateEmits4Field` (5): default eft='allow'; role substitution; 6 explicit deny rules locked to set; deny rules target role:accountant; no other template carries deny rules (drift catch).
+  - `TestBootGateContract` (18): default load behavior; lowercase 'false' skips; 13-case parametrize (FALSE/True/typo/etc.) all default to load; entrypoint shell + main.py source-grep checks for the gate.
+- `tests/unit/test_phase1_19b_casbin_eft_backfill.py` (7 tests):
+  - revision contract (revision='phase1_19b', down_revision='phase1_19a').
+  - phase1_19b is current alembic head.
+  - upgrade predicate-guards (regex match `WHERE ptype='p' AND v3 IS NULL` + `WHERE NOT EXISTS`).
+  - downgrade predicate-guards (`WHERE v3='allow'` + DELETE by exact match).
+  - asyncpg `CAST(:p AS varchar)` count ≥ 8 (4 INSERT + 4 DELETE).
+  - 6 deny rules locked (count + paths + role:accountant + POST + deny shape).
+  - `_system_b1_deny` template marker present.
+- `tests/integration/test_casbin_b1_4x14_matrix.py` (3 tests on real qlts_test DB):
+  - 4 role × 14 action matrix (56 cells) — admin/manager/accountant/officer × representative routes (5 baseline + 3 manager-only + 6 v2 routes carrying accountant deny).
+  - Bite-verify: removing one accountant deny rule + injecting synthetic inherited allow flips matrix outcome → deny rule load-bearing, không tautology.
+  - Sanity: 6 deny rows seeded as expected post-bootstrap.
+- `tests/api/test_casbin_tracking.py` (9 existing Casbin tracking tests) — regression PASS, backward compat OK với 3-tuple add_policies_batch.
+
+**Verification:**
+
+- `docker compose exec -T backend python -m pytest tests/unit/test_casbin_b1_deny_first.py tests/unit/test_phase1_19b_casbin_eft_backfill.py tests/integration/test_casbin_b1_4x14_matrix.py tests/api/test_casbin_tracking.py -q` → **48 passed in 22.79s**.
+- Full B1 + B2 regression (13 files: 4 B1 + 9 B2 / outbox / notification): `+ tests/unit/test_outbox_worker.py + test_outbox_skeleton.py + test_dispatch_event_wrapper.py + test_coverage_script_raw_dispatch.py + test_notification_outbox_model.py + test_notification_contract.py + test_b2_1_admission_milestone_events.py + test_celery_task_registry.py + tests/api/test_notification_event_groups_api.py` → **225 passed, 1 skipped in 87.76s** (1 skip = pre-existing uncatalogued-enum branch trong dispatch_event wrapper test).
+- **Codex reviewer note (verified independent live probe)**: 2 tests trong `tests/api/test_admin_casbin.py::{policy,role}_crud_flow` fail trên parent `88c19c16` với HTTP 404 (endpoints không tồn tại) — pre-existing parent state, KHÔNG phải B1 regression. Confirmed bằng cách cherry-pick 4 B1 source files sang parent + run targeted test → vẫn fail cùng cách. B1 không chạm test này; nó không nằm trong 13-file regression bundle B1+B2 đã chạy.
+- Live alembic roundtrip on dev DB (`qlts_dev`):
+  - `phase1_19a → upgrade head → phase1_19b (head)`: 210 rows v3=NULL → v3='allow' + 6 deny rows seeded.
+  - Idempotent re-apply: predicates match zero rows, no-op.
+  - `downgrade -1 → phase1_19a`: 6 deny rows deleted, 210 rows v3 reverted to NULL.
+  - Re-upgrade: state restored.
+- Coverage script invariant (B2.3 detector unchanged): no change expected since B1 doesn't touch outbox dispatch surface.
+
+**Diamond inheritance gotcha (documented for future):**
+
+Admin inherits accountant via `g, role:admin, role:accountant` (main.py:330 — kept "BOTH branches" diamond intent). With the new deny-first effect, deny rules propagate via `g()` matcher → admin transitively matches accountant's deny rules → admin DENIED on the 6 v2 routes despite admin's `role:admin /* .*` allow wildcard. Casbin's allow-and-deny effect is unconditional: ANY matching deny short-circuits to forbidden, even when an allow also matches.
+
+PLAN §3.3.b line 1407 expects admin to have explicit allow on `/api/v2/admissions/*/admin-rollback` and `/api/v2/admissions/bulk-publish-result`. With the diamond intact, those allow rules are overridden by inherited accountant deny → admin still denied → contradicts PLAN's "Admin: Full toàn bộ T1-T17 (kể cả T17 rollback)".
+
+Resolution path **deferred** to follow-up (likely co-shipped with #15 wiring real /api/v2 internal staff routes):
+- Drop `g, role:admin, role:accountant` diamond edge (admin's `/* .*` wildcard still grants admin everything; admin no longer transitively inherits accountant deny). Cleanest fix.
+- OR custom matcher that scopes deny to direct subject (not transitive via g) — requires Casbin priority_effect / custom adapter.
+- Either approach is wider scope than B1 atomic. B1 ships the deny rules + canonical lib effect; the diamond resolution is the right scope of #15 (when v2 routes go live + admin actually needs them).
+
+The 4×14 matrix test EXPECTED matrix encodes admin DENY on v2 routes for now, with a docstring explaining the diamond conflict. Bite-verify confirms the matrix lock catches a removed deny rule (so the matrix isn't tautological).
+
+**Out of scope (next code tasks, sequenced):**
+
+- **#16** — wire `state_service.transition()` to call `dispatch_event()` for the 12 admission events. **Blocked until B1 + B2 are both TESTED on parent.** That's where the 12 `no-dispatch-site` gaps finally close.
+- **#15** `approved → admitted` workflow remap + helpers — depends on B2; can ship parallel to #16 or co-ship with diamond admin↔accountant resolution.
+- **Diamond admin↔accountant resolution** — drop the inheritance edge or add custom matcher; ships when /api/v2/* internal staff routes go live in #15.
+
+**Blocked / decisions cần:**
+
+- Review/merge B1 PR (when opened). Reviewer must NOT tick the `[ ] **B1**` checkbox on issue #183 until this PR merges + post-merge tests pass on parent. Single thematic checkbox covers B1 wave (single PR — not split).
+
+**Tomorrow plan (sau merge B1):**
+
+- Issue #183: tick `[ ] **B1**` checkbox (B1 wave is single PR — checkbox flips at merge, unlike B2 which had 4 sub-PRs).
+- Card #181 [Task 0] eligible to move to Done if RUN_CASBIN_LOAD_ON_STARTUP gate verified in staging (D12-D14 smoke covers all 3 entrypoint flags + Casbin reload behavior).
+- Start **#15 + #16 wave**: state_service.transition() through dispatch_event(); /api/v2 internal staff route wiring; diamond admin↔accountant resolution as part of that wave.
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**

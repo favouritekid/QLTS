@@ -323,14 +323,21 @@ T+0:15   Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=tr
                 docker compose --profile production exec -T nginx nginx -s reload
          Verify: curl POST /api/admissions/... → 503 (Nginx edge AND backend middleware both block)
 T+0:30   Final pg_dump + uploads tar + config backup → upload S3 + integrity verify
-T+1:00   Deploy backend image MỚI với 2 env flag = false:
+T+1:00   Deploy backend image MỚI với 3 env flag = false:
            RUN_MIGRATIONS_ON_STARTUP=false
            RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false
-         (per RISK_REVIEW OG-1: tách Alembic + notification rule sync khỏi container startup cho cutover.
+           RUN_CASBIN_LOAD_ON_STARTUP=false
+         (per RISK_REVIEW OG-1 + B1 cold-cutover gate: tách Alembic + notification rule
+          sync + Casbin policy load khỏi container startup cho cutover.
           Lý do skip sync rules: pre-migration state có thể chưa có notification_rule table hoặc chưa seed
-          12 ADMISSION_* DB rows → script fail/race. Manual run ở T+3:30 sau migration + DB seed.)
+          12 ADMISSION_* DB rows → script fail/race. Manual run ở T+3:30 sau migration + DB seed.
+          Lý do skip Casbin load: 4-field auth_model.conf trên image mới yêu cầu casbin_rule.v3
+          được backfill 'allow' cho 210 row legacy + 6 deny row accountant đã seed; nếu lifespan load
+          policy trước khi migration phase1_19b chạy → enforcer.enforce() raise
+          RuntimeError("invalid policy size") trên mọi request. Manual reload qua container restart
+          ở T+3:15 sau migration backfill.)
          Verify: container start → KHÔNG chạy alembic, KHÔNG chạy sync_notification_rules,
-                 chỉ uvicorn ready (log "Skipping..." cho cả 2 gate).
+                 KHÔNG load Casbin policy, chỉ uvicorn ready (log "Skipping..." cho cả 3 gate).
 T+1:30   Manual run Alembic chain:
            docker compose exec backend alembic upgrade head
          Stream log realtime; checkpoint mỗi migration step.
@@ -345,9 +352,12 @@ T+3:00   Manual run backfill scripts theo PLAN Phần 4 + 5b:
 T+3:15   **Restart backend container** để fleet-wide reload Casbin enforcer
          (T0-5 endpoint reload chỉ tác động 1 Gunicorn worker — KHÔNG đủ
           cho multi-worker production; cần lifespan re-load mọi worker).
-         Giữ 2 cutover env flags để tránh re-trigger auto-migration / sync:
+         Giữ 2 cutover env flags để tránh re-trigger auto-migration / sync,
+         FLIP RUN_CASBIN_LOAD_ON_STARTUP về true (hoặc unset) cho lifespan
+         load_policy() đọc casbin_rule đã backfill ở T+3:00:
            RUN_MIGRATIONS_ON_STARTUP=false
            RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false
+           RUN_CASBIN_LOAD_ON_STARTUP=true   # ← B1: bật lại load để enforcer pickup 4-field rule
            docker compose --profile production restart backend
          Verify mọi worker:
            - `docker compose --profile production logs backend --tail=50` — kiểm
@@ -367,10 +377,12 @@ T+4:15   Smoke tests (Phần 7.3)
 T+4:45   Set ADMISSION_FROZEN=false + Nginx reload bỏ admission block
 T+5:00   Communicate unlock (email + Slack + in-app banner)
 T+5:15   Monitor handoff to oncall (Phần 9)
-T+24h    Switch backend env back CẢ 2 flag về true (hoặc unset) cho future routine deploy:
+T+24h    Switch backend env back CẢ 3 flag về true (hoặc unset) cho future routine deploy:
            RUN_MIGRATIONS_ON_STARTUP=true (or unset)
            RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=true (or unset)
-         (cutover behavior chỉ áp dụng 1 lần; routine deploy phục hồi auto migration + auto sync như trước)
+           RUN_CASBIN_LOAD_ON_STARTUP=true (or unset)
+         (cutover behavior chỉ áp dụng 1 lần; routine deploy phục hồi auto migration + auto sync
+          + auto Casbin load như trước)
 ```
 
 ### 7.3. Smoke tests (T+4:15 — T+4:45)
