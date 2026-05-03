@@ -228,15 +228,15 @@ def test_tasks_package_init_does_not_reference_notification_outbox_in_code():
     )
 
 
-def test_models_package_still_lacks_notification_outbox():
-    """Keep this assertion until M-1-19a lands — once it does, delete this test."""
-    from app import models
-
-    assert not hasattr(models, "NotificationOutbox"), (
-        "models.NotificationOutbox now exists — M-1-19a appears to have "
-        "shipped. Time to retire T0-4a skeleton: replace this test with the "
-        "T0-4b worker tests and update `notification_outbox_tasks.py` body."
-    )
+# Note: the T0-4a canary `test_models_package_still_lacks_notification_outbox`
+# was retired in B2.2 once `M-1-19a` (now `phase1_19a_create_notification_outbox`)
+# shipped the model. Positive parity coverage moved to
+# `tests/unit/test_notification_outbox_model.py`. The two AST guards above
+# (`test_skeleton_module_does_not_reference_notification_outbox_in_code` and
+# `test_tasks_package_init_does_not_reference_notification_outbox_in_code`)
+# stay in place: B2.2 only wires the model + migration; the skeleton task
+# body and `app/tasks/__init__.py` must still avoid CODE-level references
+# until B2.4 / T0-4b replaces the worker body.
 
 
 # --- Worker-load smoke: autodiscover does not crash with the new task ----
