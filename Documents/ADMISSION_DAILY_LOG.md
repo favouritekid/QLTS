@@ -56,12 +56,12 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
-### CI-tooling — patterns 1.3/1.4 + namespace collision + GH Action + pre-commit (PR open, awaiting review/merge)
+### CI-tooling — patterns 1.3/1.4 + namespace collision + GH Action + pre-commit (TESTED, merged 2026-05-03)
 
 **Branch / Commit / PR:**
 - Branch `feature/admission-ci-tooling` off parent `d5a01ba8` (post-#16 tracking).
-- PR [#204](https://github.com/favouritekid/QLTS/pull/204) opened 2026-05-03 base `feat/admission-full-cutover`.
-- Head SHA at PR open: `d1d79f2c`.
+- PR [#204](https://github.com/favouritekid/QLTS/pull/204) — `[CI tooling] feat(ci): admission-contract-check — patterns 1.3/1.4 + namespace collision + GH Action + pre-commit` — squash `64314f0f` (mergedAt `2026-05-03T12:55:12Z`, mergedBy `favouritekid` via `gh pr merge 204 --squash --delete-branch=false`). Parent advanced `d5a01ba8 → 64314f0f`.
+- Self-test workflow GREEN on the PR (first live run of `admission-contract-check.yml` on the very PR shipping it): `status-assignment` job 11s + `notification-coverage` job 44s; mergeStateStatus flipped UNSTABLE → CLEAN before merge.
 - Atomic 1-PR per user chốt — wraps CI-status + CI-event + CI-workflow + pre-commit hook to share 1 review cycle and avoid intermediate parent state where one extension landed without the integration glue.
 
 **Scope (3 of 3 CI rows on issue #183):**
@@ -88,15 +88,15 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
    - File-path filter regex matches the same surface as the GH Action `paths:` triggers.
 
 **Tested / Rehearsed:**
-- Target 5 file pytest: **83 passed (4.70s)** — `test_check_status_assignment.py` (43 case post-extension; previously 28 + 15 new for Pattern 1.3 / 1.4 / YAML config / glob coverage), `test_admission_state_service.py` (14 case unchanged), `test_admission_state_service_event_mapping.py` (10 case unchanged), `test_check_notification_event_coverage_deferred.py` (7 case unchanged), `test_check_notification_event_coverage_namespace.py` (9 case new — DualNamespacePair shape, default-mode warn vs strict-mode fail, AST walker on dual / single / nested / non-admission-legacy fixtures, live scan integration on the actual codebase confirming the submit-router cohabitation pair).
+- Target 5 file pytest: **83 passed (4.70s)** pre-merge → **83 passed (4.00s)** post-merge re-run on parent HEAD `64314f0f` (confirms squash collapsed cleanly) — `test_check_status_assignment.py` (43 case post-extension; previously 28 + 15 new for Pattern 1.3 / 1.4 / YAML config / glob coverage), `test_admission_state_service.py` (14 case unchanged), `test_admission_state_service_event_mapping.py` (10 case unchanged), `test_check_notification_event_coverage_deferred.py` (7 case unchanged), `test_check_notification_event_coverage_namespace.py` (9 case new — DualNamespacePair shape, default-mode warn vs strict-mode fail, AST walker on dual / single / nested / non-admission-legacy fixtures, live scan integration on the actual codebase confirming the submit-router cohabitation pair).
 - Live: AST lint 0 violations across 148 scanned files (exit 0).
 - Live: coverage script with `--allow-deferred` (default mode): exit 0; reports 1 dual-namespace pair (`submit_admission_profile` router) as informational warning.
 - Live: coverage script with `--allow-deferred --strict-namespace`: exit 1 (1 cohabitation pair elevated to FAIL — confirms the Phase 4 flip path).
+- Post-merge bite-verify on parent HEAD `64314f0f`: lint exit 0 (148 files clean) + coverage default exit 0 + coverage `--strict-namespace` exit 1 — all 3 modes match pre-merge expectations.
 
 **Pending:**
-- Reviewer review + squash merge PR [#204](https://github.com/favouritekid/QLTS/pull/204).
-- Post-merge: tick `[x] **CI-status**`, `[x] **CI-event**`, `[x] **CI-workflow**` checkboxes on issue #183.
-- Post-merge: card #183 (`[Phase 1 Code]` thematic) moves `In Progress → Done` (all 7 sub-tasks ticked).
+- (After this entry commits) tick `[x] **CI-status**`, `[x] **CI-event**`, `[x] **CI-workflow**` checkboxes on issue #183.
+- Verify card #183 (`[Phase 1 Code]` thematic) moves `In Progress → Done` (all 7 sub-tasks ticked: B1 + B2 + #15 + #16 + 3 CI rows).
 
 ---
 
