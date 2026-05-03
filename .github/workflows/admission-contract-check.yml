@@ -1,0 +1,114 @@
+# Admission Contract Enforcement
+# ===============================
+# Cold Cutover #16 + CI tooling extension. Two static analysis gates
+# protecting the admission status / notification surface contracts:
+#
+#   1. ``check_status_assignment.py`` — block direct
+#      ``profile.status = ...`` writes outside the centralized writer
+#      (``app/services/admission_state_service.py``). Spec source:
+#      ``Documents/archive/PR_DRAFTS_2026-05-01.md`` §103-109.
+#
+#   2. ``check_notification_event_coverage.py`` — verify each
+#      ``SystemEvents`` member has its 4 mounting points wired
+#      (catalog + seed + dispatch site + DB rule); detect raw
+#      ``dispatch()`` / ``safe_dispatch()`` calls on
+#      ``requires_outbox=True`` events; flag (informational, default)
+#      dual-namespace cohabitation pairs.
+#
+# Trigger surface (PR_DRAFTS line 113): runs only when a PR touches
+# the admission / notification / event surface. Other PRs skip both
+# scripts to keep the workflow fast on unrelated changes.
+
+name: Admission Contract Check
+
+on:
+  pull_request:
+    branches: [main, "feat/admission-full-cutover"]
+    paths:
+      - "Backend_FastAPI/app/services/admission*.py"
+      - "Backend_FastAPI/app/services/admission_state_service.py"
+      - "Backend_FastAPI/app/services/notification*.py"
+      - "Backend_FastAPI/app/core/events*.py"
+      - "Backend_FastAPI/app/core/event_catalog.py"
+      - "Backend_FastAPI/app/core/notification_seed_defaults.py"
+      - "Backend_FastAPI/app/scripts/check_status_assignment.py"
+      - "Backend_FastAPI/app/scripts/check_notification_event_coverage.py"
+      - "Backend_FastAPI/.contract-allowlist.yaml"
+      - ".github/workflows/admission-contract-check.yml"
+  push:
+    branches: [main, "feat/admission-full-cutover"]
+    paths:
+      - "Backend_FastAPI/app/services/admission*.py"
+      - "Backend_FastAPI/app/services/notification*.py"
+      - "Backend_FastAPI/app/core/events*.py"
+      - "Backend_FastAPI/app/core/event_catalog.py"
+      - "Backend_FastAPI/app/core/notification_seed_defaults.py"
+      - "Backend_FastAPI/app/scripts/check_status_assignment.py"
+      - "Backend_FastAPI/app/scripts/check_notification_event_coverage.py"
+      - "Backend_FastAPI/.contract-allowlist.yaml"
+
+jobs:
+  status-assignment:
+    name: AST lint — block direct profile.status writes
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: Backend_FastAPI
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime deps (PyYAML for allowlist config)
+        run: |
+          python -m pip install --upgrade pip
+          # The lint script imports pyyaml + std-lib only. Install the
+          # minimal runtime; full requirements.txt is overkill for a
+          # static-analysis CI gate.
+          pip install pyyaml
+
+      - name: Run check_status_assignment
+        run: python -m app.scripts.check_status_assignment
+
+  notification-coverage:
+    name: Coverage — every notification event fully wired
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: Backend_FastAPI
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps (full requirements — coverage script
+            imports app.core / app.models / app.services chain)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run check_notification_event_coverage
+        # ``--allow-deferred`` permits the 4 ADMISSION_* events whose
+        # legacy writers haven't shipped yet (T6 / T8 / T10 / T17 —
+        # Phase 3 choice-engine). Locked by
+        # ``state_service.DEFERRED_ADMISSION_EVENTS`` + the lock test
+        # ``test_check_notification_event_coverage_deferred.py``.
+        # When Phase 3 wires the writers, drop the corresponding
+        # name(s) from this flag and the lock test fails until the
+        # Python set is updated to match.
+        run: |
+          python -m app.scripts.check_notification_event_coverage \
+            --allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK

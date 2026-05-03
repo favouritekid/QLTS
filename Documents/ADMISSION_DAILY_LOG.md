@@ -56,6 +56,50 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
+### CI-tooling — patterns 1.3/1.4 + namespace collision + GH Action + pre-commit (PR open, awaiting review/merge)
+
+**Branch / Commit / PR:**
+- Branch `feature/admission-ci-tooling` off parent `d5a01ba8` (post-#16 tracking).
+- PR [#204](https://github.com/favouritekid/QLTS/pull/204) opened 2026-05-03 base `feat/admission-full-cutover`.
+- Head SHA at PR open: `d1d79f2c`.
+- Atomic 1-PR per user chốt — wraps CI-status + CI-event + CI-workflow + pre-commit hook to share 1 review cycle and avoid intermediate parent state where one extension landed without the integration glue.
+
+**Scope (3 of 3 CI rows on issue #183):**
+
+1. **CI-status** — extend `app/scripts/check_status_assignment.py` to spec line 103-109 closure:
+   - Pattern 1.3 (`__setattr__` AST detector) — `<alias>.__setattr__("status", value)`.
+   - Pattern 1.4 (regex grep fallback) — 2 separate patterns for `setattr(<expr>, "status", ...)` (3-arg form) vs `<obj>.__setattr__("status", ...)` (2-arg bound form). Smart de-dupe via `ast_caught_lines | ast_rejected_lines` set; AST-inspected-but-rejected lines (e.g. `setattr(fee, "status", "paid")` where `fee` is recognized non-admission) are suppressed so the regex over-broad doesn't flag every Fee/User/ZaloDelivery `.status` write.
+   - `.contract-allowlist.yaml` config file (spec line 109) at `Backend_FastAPI/.contract-allowlist.yaml`. Loaded at module init via `_load_config()`; falls back to hardcoded constants when YAML missing/malformed (warning printed to stderr).
+   - Allow-list expanded from 1 entry (`admission_state_service.py`) to 5: `admission_state_service.py` + `alembic/versions/*.py` + `tests/*.py` + `tests/*/*.py` + `tests/*/*/*.py` (Python's fnmatch doesn't support `**` recursive — patterns spell each depth level explicitly per the actual repo layout).
+
+2. **CI-event** — extend `app/scripts/check_notification_event_coverage.py`:
+   - `_scan_dual_namespace_pairs()` AST walker — finds enclosing FunctionDef / AsyncFunctionDef / class methods that dispatch BOTH an `APPLICATION_*` event AND an `ADMISSION_*` event in their body.
+   - `_print_dual_namespace_pairs()` reporter — default `strict=False` mode emits informational `warn` block to stderr + returns 0 (Phase 1 ships dual dispatch on purpose); `--strict-namespace` flag elevates each pair to a hard failure (Phase 4 retire flip).
+   - Plumbed into `main()` after the existing per-event verdict so dual-namespace report sits beside the deferred-events report.
+
+3. **CI-workflow** — `.github/workflows/admission-contract-check.yml` (new):
+   - Triggers on push/PR touching `app/services/admission*.py`, `app/services/notification*.py`, `app/core/events*.py`, `app/core/event_catalog.py`, `app/core/notification_seed_defaults.py`, `app/scripts/check_*.py`, `.contract-allowlist.yaml`, or the workflow itself.
+   - Two parallel jobs: `status-assignment` (just imports PyYAML + std-lib so installs minimal deps) + `notification-coverage` (full requirements + requirements-dev because the script imports the full app.core / app.models / app.services chain).
+   - Coverage job uses the 4-event `--allow-deferred` set locked by `state_service.DEFERRED_ADMISSION_EVENTS`.
+
+4. **Pre-commit hook** — `.pre-commit-config.yaml` (new):
+   - 2 `local` hooks mirroring the GH Action commands.
+   - Both `pass_filenames: false` because the scripts walk the whole tree, not individual file paths.
+   - File-path filter regex matches the same surface as the GH Action `paths:` triggers.
+
+**Tested / Rehearsed:**
+- Target 5 file pytest: **83 passed (4.70s)** — `test_check_status_assignment.py` (43 case post-extension; previously 28 + 15 new for Pattern 1.3 / 1.4 / YAML config / glob coverage), `test_admission_state_service.py` (14 case unchanged), `test_admission_state_service_event_mapping.py` (10 case unchanged), `test_check_notification_event_coverage_deferred.py` (7 case unchanged), `test_check_notification_event_coverage_namespace.py` (9 case new — DualNamespacePair shape, default-mode warn vs strict-mode fail, AST walker on dual / single / nested / non-admission-legacy fixtures, live scan integration on the actual codebase confirming the submit-router cohabitation pair).
+- Live: AST lint 0 violations across 148 scanned files (exit 0).
+- Live: coverage script with `--allow-deferred` (default mode): exit 0; reports 1 dual-namespace pair (`submit_admission_profile` router) as informational warning.
+- Live: coverage script with `--allow-deferred --strict-namespace`: exit 1 (1 cohabitation pair elevated to FAIL — confirms the Phase 4 flip path).
+
+**Pending:**
+- Reviewer review + squash merge PR [#204](https://github.com/favouritekid/QLTS/pull/204).
+- Post-merge: tick `[x] **CI-status**`, `[x] **CI-event**`, `[x] **CI-workflow**` checkboxes on issue #183.
+- Post-merge: card #183 (`[Phase 1 Code]` thematic) moves `In Progress → Done` (all 7 sub-tasks ticked).
+
+---
+
 ### #16 — admission_state_service.py + 11 caller refactor (TESTED, merged 2026-05-03)
 
 **Branch / Commit / PR:**

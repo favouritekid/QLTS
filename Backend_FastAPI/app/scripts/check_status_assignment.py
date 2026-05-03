@@ -1,32 +1,51 @@
 """Block direct ``profile.status`` writes outside ``state_service.transition()``.
 
-Cold Cutover Task #16 — every legal mutation of
+Cold Cutover #16 + CI tooling extension — every legal mutation of
 ``AdmissionProfile.status`` MUST flow through
 ``app.services.admission_state_service.transition()``. This script
-walks the ``app/services/`` AST and fails CI if any module assigns
-``<x>.status = <literal-or-expr>`` against an admission-profile-typed
-local without going through the centralized writer.
+walks the ``app/services/``, ``app/routers/``, ``app/tasks/`` AST and
+fails CI if any module assigns ``<x>.status = <literal-or-expr>``
+against an admission-profile-typed local without going through the
+centralized writer.
 
-Detection patterns (all map to ``ast.Assign`` with an ``Attribute``
-target whose ``attr == "status"`` and leftmost name in
-``ADMISSION_PROFILE_VAR_NAMES``):
+Detection patterns (CI-status spec ``PR_DRAFTS_2026-05-01.md`` §103-107):
 
-  1. ``profile.status = "..."``           — direct literal write
-  2. ``locked_profile.status = "..."``    — alias used in identity-lock branches
-  3. ``admission_profile.status = "..."`` — alias used in router-level fanout
-  4. ``current_profile.status = "..."``   — alias used in resolver helpers
-  5. ``profile_row.status = "..."``       — alias used in result-set iteration
-  6. ``prof.status = "..."``              — short alias used in tight loops
-  7. ``setattr(<any of the above>, "status", ...)`` — dynamic write
+  **AST Assign — leftmost name in ``ADMISSION_PROFILE_VAR_NAMES``**
 
-Allow-list (callers where direct writes are intentional):
+  1. ``profile.status = "..."``           — Pattern 1.1 direct literal write
+  2. ``locked_profile.status = "..."``    — alias: identity-lock branches
+  3. ``admission_profile.status = "..."`` — alias: router-level fanout
+  4. ``current_profile.status = "..."``   — alias: resolver helpers
+  5. ``profile_row.status = "..."``       — alias: result-set iteration
+  6. ``prof.status = "..."``              — alias: short loop var
+
+  **AST Call**
+
+  7. ``setattr(<alias>, "status", ...)``      — Pattern 1.2 builtin
+  8. ``<alias>.__setattr__("status", ...)``   — Pattern 1.3 dunder bypass
+
+  **Regex grep fallback (Pattern 1.4)**
+
+  9. ``(?:setattr|__setattr__)\\s*\\([^,]+,\\s*["']status["']`` — backup
+     for AST gaps (e.g. minified / formatted oddly / dataclass replace
+     style). Flags any ``setattr`` / ``__setattr__`` call whose literal
+     second arg is ``"status"`` regardless of leftmost-name resolution
+     — over-broad on purpose because the intent of literally writing
+     ``"status"`` outside the centralized writer is suspicious by
+     itself.
+
+Allow-list (loaded from ``Backend_FastAPI/.contract-allowlist.yaml``;
+the YAML is the canonical source per spec line 109. The hardcoded
+fallback below kicks in only when the YAML file is missing or
+malformed — useful for the smoke run inside the test container before
+the YAML lands):
 
   * ``app/services/admission_state_service.py`` — THE centralized
     writer; this is the ONE module where ``profile.status = ...``
     is the canonical pattern.
-  * ``alembic/versions/*.py``                   — data migrations
-    legitimately rewrite status columns; covered by separate review
-    (the migration ordering gates Phase 1 schema changes).
+  * ``alembic/versions/**/*.py``                — data migrations
+    legitimately rewrite status columns; lint covers code paths,
+    not migration scripts.
   * ``tests/**/*.py``                           — fixture setup +
     test scaffolds; lint enforcement applies to runtime code.
 
@@ -39,12 +58,12 @@ Out of scope (not flagged):
     "approved", ...)``) — the AST detector matches assignment
     targets, not function arguments.
   * SQL ``UPDATE`` statements outside Alembic — flagged by separate
-    repository / DAL lint, not part of #16.
+    repository / DAL lint.
 
 The detector errs on the side of fewer false positives (parameterized
-attribute names like ``setattr(obj, name_var, value)`` are skipped),
-which mirrors ``check_notification_event_coverage._scan_raw_dispatch
-_calls`` — the same script style + walks the same AST surface.
+attribute names like ``setattr(obj, name_var, value)`` are skipped at
+the AST layer; Pattern 1.4 regex fallback recaptures them when the
+literal ``"status"`` argument is still visible in the source line).
 
 Usage::
 
@@ -59,39 +78,41 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # Backend_FastAPI/
 SCAN_DIRS: Tuple[str, ...] = ("app/services", "app/routers", "app/tasks")
-# Files where direct ``<x>.status = ...`` writes are intentional.
-# Stored as POSIX-style relative paths (matches the existing
-# ``RAW_DISPATCH_ALLOWLIST`` style from
-# ``check_notification_event_coverage.py``).
-ALLOWLIST: Tuple[str, ...] = (
-    "app/services/admission_state_service.py",
-)
 
-# Admission-profile variable names — the lint only flags writes whose
-# leftmost identifier is one of these. Without static type info we
-# cannot prove ``foo.status = ...`` writes an ``AdmissionProfile``;
-# instead, the lint covers the common alias set seen across the
-# admission codebase plus a few defensive entries so a future caller
-# that picks a different name still gets blocked at CI time.
-#
-# Audit done on 2026-05-03 (#16) — all 11 legacy direct-write sites
-# used the canonical name ``profile``; the broader alias list below
-# is forward-prevention. If a future caller introduces yet another
-# alias (e.g. ``draft_profile``, ``the_profile``), add it here AND
-# audit the call site to make sure it routes through
-# ``state_service.transition()``. The corresponding lock test
-# ``test_admission_profile_var_names_locked`` keeps this tuple
-# explicit so additions are an intentional decision.
-ADMISSION_PROFILE_VAR_NAMES: Tuple[str, ...] = (
+# YAML-loaded allow-list config — spec source line 109. The script
+# loads ``Backend_FastAPI/.contract-allowlist.yaml`` at startup; if
+# the file is missing or malformed it falls back to the hardcoded
+# defaults below so the smoke run inside the test container still
+# exits 0 on clean code.
+_ALLOWLIST_CONFIG_PATH = REPO_ROOT / ".contract-allowlist.yaml"
+
+# Hardcoded fallback (used iff the YAML config can't be loaded).
+# Glob patterns matched against POSIX-style relative paths via Python's
+# fnmatch, which does NOT special-case ``**`` — patterns must spell
+# each depth level explicitly. Keep in sync with
+# ``.contract-allowlist.yaml`` so the fallback matches the canonical
+# YAML when it lands.
+_ALLOWLIST_FALLBACK: Tuple[str, ...] = (
+    "app/services/admission_state_service.py",
+    "alembic/versions/*.py",
+    "tests/*.py",
+    "tests/*/*.py",
+    "tests/*/*/*.py",
+)
+_PROFILE_VAR_NAMES_FALLBACK: Tuple[str, ...] = (
     "profile",
     "locked_profile",
     "admission_profile",
@@ -99,6 +120,50 @@ ADMISSION_PROFILE_VAR_NAMES: Tuple[str, ...] = (
     "profile_row",
     "prof",
 )
+
+
+def _load_config() -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Load allow-list + profile-var-names from
+    ``.contract-allowlist.yaml``. Falls back to the hardcoded defaults
+    if the file is missing, unreadable, or has a malformed shape —
+    callers get a working detector even before the YAML lands.
+
+    Logged via stderr so a misconfigured YAML never silently
+    downgrades the lint to fallback mode without operator visibility.
+    """
+    try:
+        with _ALLOWLIST_CONFIG_PATH.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        print(
+            f"[check_status_assignment] WARN: could not load "
+            f"{_ALLOWLIST_CONFIG_PATH.name} ({exc!r}); "
+            "using hardcoded fallback.",
+            file=sys.stderr,
+        )
+        return _ALLOWLIST_FALLBACK, _PROFILE_VAR_NAMES_FALLBACK
+
+    if not isinstance(data, dict):
+        print(
+            f"[check_status_assignment] WARN: {_ALLOWLIST_CONFIG_PATH.name} "
+            "is not a YAML mapping; using hardcoded fallback.",
+            file=sys.stderr,
+        )
+        return _ALLOWLIST_FALLBACK, _PROFILE_VAR_NAMES_FALLBACK
+
+    raw_allowlist = data.get("allowlist") or []
+    raw_var_names = data.get("profile_var_names") or []
+    allowlist = tuple(str(item) for item in raw_allowlist) or _ALLOWLIST_FALLBACK
+    profile_var_names = (
+        tuple(str(item) for item in raw_var_names) or _PROFILE_VAR_NAMES_FALLBACK
+    )
+    return allowlist, profile_var_names
+
+
+# Public constants — exposed for the lock tests in
+# ``test_check_status_assignment.py`` so the YAML drift surfaces as a
+# test failure rather than silent fallback.
+ALLOWLIST, ADMISSION_PROFILE_VAR_NAMES = _load_config()
 _SELF_PATH = Path(__file__).resolve()
 
 
@@ -174,35 +239,170 @@ def _is_status_attribute_target(target: ast.AST) -> Optional[str]:
     return _attribute_chain_repr(target)
 
 
-def _is_setattr_status_call(node: ast.Call) -> Optional[str]:
-    """Return the source-level repr if ``node`` is
-    ``setattr(<profile-var>, "status", <value>)``, else ``None``.
+def _is_setattr_status_call(node: ast.Call) -> Optional[Tuple[str, str]]:
+    """Return ``(pattern, source_repr)`` if ``node`` is one of:
+
+    * Pattern 1.2 — ``setattr(<profile-var>, "status", <value>)``
+    * Pattern 1.3 — ``<profile-var>.__setattr__("status", <value>)``
+
+    Else ``None``.
 
     Object must be a ``Name`` in ``ADMISSION_PROFILE_VAR_NAMES`` so
     ``setattr(fee, "status", ...)`` etc. on non-admission entities
     fall through. Skips parameterized name forms (``setattr(obj,
     attr_var, value)``) — they cannot be statically resolved to
     ``"status"`` and the detector errs on the side of fewer false
-    positives, matching ``_scan_raw_dispatch_calls`` from the coverage
-    script.
+    positives at the AST layer; Pattern 1.4 regex fallback recaptures
+    the dynamic-attr case when the literal ``"status"`` argument is
+    still visible in the source line.
     """
     func = node.func
-    func_name: Optional[str] = None
-    if isinstance(func, ast.Name):
-        func_name = func.id
-    elif isinstance(func, ast.Attribute):
-        func_name = func.attr
-    if func_name != "setattr":
-        return None
-    if len(node.args) < 3:
-        return None
-    name_arg = node.args[1]
-    if not isinstance(name_arg, ast.Constant) or name_arg.value != "status":
-        return None
-    obj_arg = node.args[0]
-    if not (isinstance(obj_arg, ast.Name) and obj_arg.id in ADMISSION_PROFILE_VAR_NAMES):
-        return None
-    return f'setattr({obj_arg.id}, "status", ...)'
+
+    # Pattern 1.2 — ``setattr(profile, "status", value)``: bare
+    # ``Name`` callable + 3 args.
+    if isinstance(func, ast.Name) and func.id == "setattr":
+        if len(node.args) < 3:
+            return None
+        name_arg = node.args[1]
+        if not isinstance(name_arg, ast.Constant) or name_arg.value != "status":
+            return None
+        obj_arg = node.args[0]
+        if not (
+            isinstance(obj_arg, ast.Name)
+            and obj_arg.id in ADMISSION_PROFILE_VAR_NAMES
+        ):
+            return None
+        return "setattr", f'setattr({obj_arg.id}, "status", ...)'
+
+    # Pattern 1.3 — ``profile.__setattr__("status", value)``: the
+    # callable is an ``Attribute`` whose ``attr`` is ``__setattr__``
+    # AND whose ``value`` is a ``Name`` in the admission alias set.
+    # 2 positional args (``"status"``, value).
+    if isinstance(func, ast.Attribute) and func.attr == "__setattr__":
+        if not (
+            isinstance(func.value, ast.Name)
+            and func.value.id in ADMISSION_PROFILE_VAR_NAMES
+        ):
+            return None
+        if len(node.args) < 2:
+            return None
+        name_arg = node.args[0]
+        if not isinstance(name_arg, ast.Constant) or name_arg.value != "status":
+            return None
+        return "dunder_setattr", f'{func.value.id}.__setattr__("status", ...)'
+
+    return None
+
+
+# Pattern 1.4 — regex grep fallback. Two flavors because
+# ``setattr(obj, name, value)`` (3 args) and ``obj.__setattr__(name,
+# value)`` (2 args bound) place the ``"status"`` literal at different
+# arg positions:
+#
+#   * ``setattr`` form  — ``"status"`` is the 2nd positional arg, so
+#     match: ``setattr ( <1st-arg> , "status"``.
+#   * ``__setattr__`` form — bound on the receiver, so ``"status"``
+#     is the FIRST positional arg: ``__setattr__ ( "status"``.
+#
+# Both patterns allow nested parens in the 1st arg (e.g.
+# ``setattr(get_profile(), "status", x)``) by NOT excluding parens
+# from the 1st-arg character class. The trade-off is occasional
+# false positives on exotic shapes (e.g. a comma inside a nested
+# string literal); the de-dupe via ``ast_caught_lines`` + ``ast
+# _rejected_lines`` covers the common cases.
+_DYNAMIC_STATUS_PATTERN_SETATTR = re.compile(
+    r"""\bsetattr\s*\(
+        \s*[^,]+?\s*,\s*           # 1st arg + comma (any chars; nested parens OK)
+        ["']status["']             # 2nd arg literal "status"
+    """,
+    re.VERBOSE,
+)
+_DYNAMIC_STATUS_PATTERN_DUNDER = re.compile(
+    r"""\b__setattr__\s*\(
+        \s*["']status["']          # 1st arg literal "status"
+    """,
+    re.VERBOSE,
+)
+
+
+def _scan_dynamic_status_writes(rel: str, source: str) -> List["Violation"]:
+    """Pattern 1.4 — line-by-line regex grep for setattr/__setattr__
+    calls whose literal ``"status"`` arg is in the position the
+    function's signature expects.
+
+    Skips comment lines (``#``-prefixed); de-dupe against AST hits
+    happens in ``_scan_file`` via the ``suppressed`` set. The regex
+    is more permissive than the AST checks above because its job is
+    to catch AST gaps (e.g. ``setattr(get_profile(), "status", x)``
+    where the first arg is a Call, not a Name) — the trade-off is
+    occasional false positives on exotic shapes.
+    """
+    found: List["Violation"] = []
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        match = _DYNAMIC_STATUS_PATTERN_SETATTR.search(line)
+        if match is not None:
+            found.append(Violation(
+                file=rel,
+                line=lineno,
+                pattern="regex_fallback",
+                target_repr='setattr(..., "status", ...) [regex fallback]',
+            ))
+            continue  # one regex_fallback hit per line is enough
+        match = _DYNAMIC_STATUS_PATTERN_DUNDER.search(line)
+        if match is not None:
+            found.append(Violation(
+                file=rel,
+                line=lineno,
+                pattern="regex_fallback",
+                target_repr='<obj>.__setattr__("status", ...) [regex fallback]',
+            ))
+    return found
+
+
+def _is_setattr_status_inspected_and_rejected(node: ast.Call) -> bool:
+    """Return True if ``node`` is a ``setattr(<known-non-admission-name>,
+    "status", value)`` or ``<known-non-admission-name>.__setattr__(
+    "status", value)`` call — i.e. the AST detector inspected the
+    line, saw a literal ``"status"`` second arg, but rejected because
+    the leftmost was a ``Name`` NOT in ``ADMISSION_PROFILE_VAR_NAMES``.
+
+    These are intentional non-admission entity writes (Fee, User,
+    ZaloDelivery, etc.) — Pattern 1.4 regex MUST skip them, otherwise
+    the regex over-broad catch would re-flag every Fee/User/Delivery
+    ``.status = ...`` write across the codebase as a false positive.
+
+    Returns False for cases AST genuinely can't resolve (first arg is
+    ``Call``, ``Subscript``, etc.) — those are the AST-gap cases
+    Pattern 1.4 is designed to catch.
+    """
+    func = node.func
+    if isinstance(func, ast.Name) and func.id == "setattr":
+        if len(node.args) < 2:
+            return False
+        name_arg = node.args[1]
+        if not isinstance(name_arg, ast.Constant) or name_arg.value != "status":
+            return False
+        obj_arg = node.args[0]
+        # Inspected + rejected = first arg is a Name we recognize
+        # (decided to skip), NOT an unparseable expression (AST gap).
+        return (
+            isinstance(obj_arg, ast.Name)
+            and obj_arg.id not in ADMISSION_PROFILE_VAR_NAMES
+        )
+    if isinstance(func, ast.Attribute) and func.attr == "__setattr__":
+        if len(node.args) < 1:
+            return False
+        name_arg = node.args[0]
+        if not isinstance(name_arg, ast.Constant) or name_arg.value != "status":
+            return False
+        return (
+            isinstance(func.value, ast.Name)
+            and func.value.id not in ADMISSION_PROFILE_VAR_NAMES
+        )
+    return False
 
 
 def _scan_file(py_file: Path, rel: str) -> List[Violation]:
@@ -212,6 +412,9 @@ def _scan_file(py_file: Path, rel: str) -> List[Violation]:
     except (OSError, SyntaxError, UnicodeDecodeError):
         return []
     found: List[Violation] = []
+    ast_caught_lines: set[int] = set()  # de-dupe regex against AST hits
+    ast_rejected_lines: set[int] = set()  # AST inspected + skipped (non-admission entity)
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -223,6 +426,7 @@ def _scan_file(py_file: Path, rel: str) -> List[Violation]:
                         pattern="direct_assign",
                         target_repr=f"{rendered} = ...",
                     ))
+                    ast_caught_lines.add(node.lineno)
         elif isinstance(node, ast.AugAssign):
             rendered = _is_status_attribute_target(node.target)
             if rendered:
@@ -232,16 +436,50 @@ def _scan_file(py_file: Path, rel: str) -> List[Violation]:
                     pattern="direct_assign",
                     target_repr=f"{rendered} {ast.unparse(node.op)}= ...",
                 ))
+                ast_caught_lines.add(node.lineno)
         elif isinstance(node, ast.Call):
-            rendered_setattr = _is_setattr_status_call(node)
-            if rendered_setattr:
+            ast_hit = _is_setattr_status_call(node)
+            if ast_hit:
+                pattern, repr_str = ast_hit
                 found.append(Violation(
                     file=rel,
                     line=node.lineno,
-                    pattern="setattr",
-                    target_repr=rendered_setattr,
+                    pattern=pattern,
+                    target_repr=repr_str,
                 ))
+                ast_caught_lines.add(node.lineno)
+            elif _is_setattr_status_inspected_and_rejected(node):
+                # AST inspected the literal "status" call, leftmost
+                # name is recognized non-admission — Pattern 1.4
+                # regex MUST also skip to avoid false positives on
+                # Fee/User/ZaloDelivery ``.status = ...`` writes.
+                ast_rejected_lines.add(node.lineno)
+
+    # Pattern 1.4 — regex grep fallback. Append only lines where AST
+    # neither flagged nor consciously rejected. This keeps the regex
+    # firing on AST-gap cases (e.g. ``setattr(get_profile(), "status",
+    # x)`` with a Call as first arg) while suppressing the over-broad
+    # catch on intentional non-admission ``.status`` writes.
+    suppressed = ast_caught_lines | ast_rejected_lines
+    for v in _scan_dynamic_status_writes(rel, source):
+        if v.line not in suppressed:
+            found.append(v)
+
     return found
+
+
+def _is_path_allowlisted(rel: str, allowlist: Tuple[str, ...]) -> bool:
+    """Return True when ``rel`` matches any glob pattern in ``allowlist``.
+
+    Uses ``fnmatch`` semantics — ``alembic/versions/**/*.py`` matches
+    any ``alembic/versions/<anything>/...py`` path. Exact-path entries
+    (``app/services/admission_state_service.py``) match themselves
+    only. Mirrors the spec line 109 glob format.
+    """
+    for pattern in allowlist:
+        if fnmatch.fnmatch(rel, pattern):
+            return True
+    return False
 
 
 def scan() -> ScanResult:
@@ -254,7 +492,7 @@ def scan() -> ScanResult:
             if py_file.resolve() == _SELF_PATH:
                 continue
             rel = py_file.relative_to(REPO_ROOT).as_posix()
-            if rel in ALLOWLIST:
+            if _is_path_allowlisted(rel, ALLOWLIST):
                 continue
             result.files_scanned += 1
             result.violations.extend(_scan_file(py_file, rel))

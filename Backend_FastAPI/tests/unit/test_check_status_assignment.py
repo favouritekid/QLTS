@@ -142,10 +142,153 @@ def test_detects_setattr_on_status(tmp_path: Path) -> None:
             setattr(profile, "status", "rejected")
     '''
     violations = _scan_source(tmp_path, src)
+    # Pattern 1.2 AST + Pattern 1.4 regex BOTH could match this
+    # canonical case, but ``_scan_file`` de-dupes by line so only the
+    # AST hit (more informative) shows.
     assert len(violations) == 1
     v = violations[0]
     assert v.pattern == "setattr"
     assert v.target_repr == 'setattr(profile, "status", ...)'
+
+
+# ---------------------------------------------------------------------------
+# 2b. Pattern 1.3 — ``__setattr__`` dunder bypass (CI tooling extension)
+# ---------------------------------------------------------------------------
+
+
+def test_detects_dunder_setattr_on_status(tmp_path: Path) -> None:
+    """Pattern 1.3 (PR_DRAFTS spec line 106) — ``profile.__setattr__(
+    "status", value)`` is functionally identical to ``profile.status
+    = value`` but bypasses the Pattern 1.1 AST detection (no
+    ``Assign`` target). Catch via ``Attribute(attr='__setattr__')``
+    callable + literal ``"status"`` first arg."""
+    src = '''
+        def dunder_write(profile):
+            profile.__setattr__("status", "approved")
+    '''
+    violations = _scan_source(tmp_path, src)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.pattern == "dunder_setattr"
+    assert v.target_repr == 'profile.__setattr__("status", ...)'
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["locked_profile", "admission_profile", "current_profile", "profile_row", "prof"],
+)
+def test_detects_dunder_setattr_on_alias(tmp_path: Path, alias: str) -> None:
+    """Pattern 1.3 covers every alias in
+    ``ADMISSION_PROFILE_VAR_NAMES`` — same alias surface as Pattern
+    1.1 / 1.2."""
+    src = f'''
+        def dunder_alias({alias}):
+            {alias}.__setattr__("status", "approved")
+    '''
+    violations = _scan_source(tmp_path, src)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.pattern == "dunder_setattr"
+    assert v.target_repr == f'{alias}.__setattr__("status", ...)'
+
+
+def test_skips_dunder_setattr_on_non_admission_entity(tmp_path: Path) -> None:
+    """``fee.__setattr__("status", ...)`` is a Pattern 1.3 syntactic
+    match but ``fee`` isn't in the admission alias set — leftmost-name
+    allowlist filters it out, same as Pattern 1.2."""
+    src = '''
+        def write_fee(fee):
+            fee.__setattr__("status", "paid")
+    '''
+    violations = _scan_source(tmp_path, src)
+    assert violations == []
+
+
+# ---------------------------------------------------------------------------
+# 2c. Pattern 1.4 — regex grep fallback (PR_DRAFTS spec line 107)
+# ---------------------------------------------------------------------------
+
+
+def test_pattern_14_regex_fallback_catches_dynamic_attr_name(tmp_path: Path) -> None:
+    """Canonical ``setattr(profile, "status", value)`` — Pattern 1.2
+    AST catches first; Pattern 1.4 regex de-duped by line so only
+    one violation surfaces. Locks the de-dupe contract."""
+    src = '''
+        def write(profile):
+            setattr(profile, "status", "approved")
+    '''
+    violations = _scan_source(tmp_path, src)
+    assert len(violations) == 1
+    assert violations[0].pattern == "setattr"
+
+
+def test_pattern_14_regex_fallback_catches_when_first_arg_is_call(
+    tmp_path: Path,
+) -> None:
+    """Synthetic AST gap — ``setattr(get_profile(), "status", ...)``
+    where the first arg is a function call, not a Name. Pattern 1.2
+    AST skips (first arg isn't a ``Name`` in the alias list — the
+    detector cannot statically resolve the type of the Call's return
+    value). Pattern 1.4 regex catches because the literal ``"status"``
+    arg is suspicious in a setattr/__setattr__ call site outside the
+    centralized writer.
+
+    This is the canonical AST-gap shape the spec line 107 calls out.
+    """
+    src = '''
+        def write():
+            setattr(get_profile(), "status", "approved")
+    '''
+    violations = _scan_source(tmp_path, src)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.pattern == "regex_fallback"
+    assert "setattr" in v.target_repr
+    assert '"status"' in v.target_repr
+
+
+def test_pattern_14_regex_fallback_catches_dunder_with_subscript_target(
+    tmp_path: Path,
+) -> None:
+    """Symmetric AST-gap case for ``__setattr__`` — when the bound
+    object isn't a plain Name (e.g. subscripted lookup
+    ``profiles[i].__setattr__("status", ...)``), AST Pattern 1.3
+    skips because the func.value is an ``Attribute`` over
+    ``Subscript``, not the simple ``Name`` form. Regex grep catches
+    the literal ``"status"`` argument.
+    """
+    src = '''
+        def write(profiles):
+            profiles[0].__setattr__("status", "approved")
+    '''
+    violations = _scan_source(tmp_path, src)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.pattern == "regex_fallback"
+    assert "__setattr__" in v.target_repr
+
+
+def test_pattern_14_regex_fallback_skips_intentional_non_admission_entity(
+    tmp_path: Path,
+) -> None:
+    """``setattr(fee, "status", "paid")`` — AST Pattern 1.2 inspects,
+    sees ``fee`` is NOT in ``ADMISSION_PROFILE_VAR_NAMES``, rejects
+    intentionally. Pattern 1.4 regex MUST also skip — otherwise the
+    over-broad ``setattr(...,\"status\")`` catch would flag every
+    Fee/User/ZaloDelivery ``.status`` write across the codebase as a
+    false positive.
+
+    Locks the AST-rejected-line suppression contract.
+    """
+    src = '''
+        def update_fee(fee):
+            setattr(fee, "status", "paid")
+    '''
+    violations = _scan_source(tmp_path, src)
+    # Pattern 1.4 regex skipped because AST inspected + rejected
+    # (fee is recognized non-admission Name). Test ensures the
+    # ast_rejected_lines suppression actually fires.
+    assert violations == []
 
 
 def test_skips_setattr_with_dynamic_attr_name(tmp_path: Path) -> None:
@@ -332,6 +475,80 @@ def test_scan_dirs_locked() -> None:
 
 
 def test_allowlist_locked() -> None:
+    """The allow-list is loaded from
+    ``Backend_FastAPI/.contract-allowlist.yaml`` (spec source line
+    109). Locks the exact set of globs so a YAML edit shows up as a
+    lint test failure rather than silent contract drift.
+
+    Note: Python's fnmatch (the matcher backing
+    ``_is_path_allowlisted``) does NOT special-case ``**`` — patterns
+    spell each depth level explicitly. The ``tests/*.py`` +
+    ``tests/*/*.py`` + ``tests/*/*/*.py`` triplet covers up to 2
+    levels of nesting (``tests/<scope>/<sub>/test_foo.py``), which
+    matches the actual repo layout as of 2026-05-03.
+    """
     assert lint.ALLOWLIST == (
         "app/services/admission_state_service.py",
+        "alembic/versions/*.py",
+        "tests/*.py",
+        "tests/*/*.py",
+        "tests/*/*/*.py",
     )
+
+
+def test_allowlist_loaded_from_yaml_config() -> None:
+    """YAML is the canonical source per spec line 109; the hardcoded
+    fallback lives in ``_ALLOWLIST_FALLBACK`` only for the case where
+    the YAML is missing or malformed. The two MUST stay in sync —
+    YAML drift is the operational hazard the lock test catches."""
+    # Re-load the YAML to verify what the script consumed at import.
+    import yaml as yaml_lib
+    config_path = lint.REPO_ROOT / ".contract-allowlist.yaml"
+    assert config_path.exists(), (
+        "The .contract-allowlist.yaml config file is missing. The lint "
+        "would fall back to hardcoded defaults, which is acceptable but "
+        "spec line 109 mandates the YAML config exists in repo."
+    )
+    with config_path.open("r", encoding="utf-8") as fh:
+        data = yaml_lib.safe_load(fh)
+    yaml_allowlist = tuple(data.get("allowlist") or [])
+    yaml_var_names = tuple(data.get("profile_var_names") or [])
+
+    assert yaml_allowlist == lint.ALLOWLIST
+    assert yaml_var_names == lint.ADMISSION_PROFILE_VAR_NAMES
+
+
+def test_glob_allowlist_covers_alembic_versions(tmp_path: Path, monkeypatch) -> None:
+    """``alembic/versions/*.py`` glob — a migration file at the top
+    of that directory (no sub-folders) is allow-listed. Verifies
+    ``_is_path_allowlisted`` uses fnmatch glob semantics."""
+    rel = "alembic/versions/2026_05_03_phase1_11.py"
+    assert lint._is_path_allowlisted(rel, lint.ALLOWLIST) is True
+
+
+def test_glob_allowlist_covers_nested_test_paths() -> None:
+    """``tests/*.py`` + ``tests/*/*.py`` + ``tests/*/*/*.py`` triplet
+    covers the canonical test layout: top-level helpers, scoped
+    subdirs (unit / api / integration / services), and one extra
+    level for ``tests/api/v1/test_foo.py``-style paths."""
+    for rel in (
+        "tests/conftest.py",
+        "tests/unit/test_foo.py",
+        "tests/api/test_admission_endpoint.py",
+        "tests/integration/test_admission_workflow_e2e.py",
+        "tests/services/test_admission_quota.py",
+        "tests/api/v1/test_admission_routes.py",
+    ):
+        assert lint._is_path_allowlisted(rel, lint.ALLOWLIST) is True, rel
+
+
+def test_glob_allowlist_does_not_match_unrelated_path() -> None:
+    """A path that LOOKS like it might match — e.g.
+    ``app/admission_state_service.py`` (different prefix) — must NOT
+    be allow-listed. Locks the path-segment match contract."""
+    for rel in (
+        "app/services/admission_service.py",  # the file the lint protects!
+        "app/admission_state_service.py",     # wrong prefix
+        "Backend_FastAPI/tests/unit/test_foo.py",  # double-prefix typo
+    ):
+        assert lint._is_path_allowlisted(rel, lint.ALLOWLIST) is False, rel
