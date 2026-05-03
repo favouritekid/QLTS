@@ -234,6 +234,36 @@ The first cut of `_scan_raw_dispatch_calls()` only walked `node.keywords` for `e
 
 ---
 
+### B2.3 — sub-PR merged (post-merge sync)
+
+**Sub-PR merged today (vào `feat/admission-full-cutover`):**
+- PR [#199](https://github.com/favouritekid/QLTS/pull/199) — `[B2.3] feat(notification): add dispatch_event wrapper + outbox coverage guard` — squash `f2f0d62b` (mergedAt `2026-05-03T02:43:33Z`). Parent advanced `31f7e001 → f2f0d62b`.
+
+**Tested / Rehearsed:**
+- Post-merge re-run trên parent HEAD `f2f0d62b` (Docker `qlts-backend-1`):
+  ```
+  pytest tests/unit/test_dispatch_event_wrapper.py \
+         tests/unit/test_coverage_script_raw_dispatch.py \
+         tests/unit/test_notification_outbox_model.py \
+         tests/unit/test_outbox_skeleton.py \
+         tests/unit/test_notification_contract.py \
+         tests/unit/test_b2_1_admission_milestone_events.py \
+         tests/unit/test_celery_task_registry.py \
+         tests/api/test_notification_event_groups_api.py -q
+  → 169 passed, 1 skipped in 37.94s
+  ```
+- Coverage invariant post-merge: `raw_violations=0`, `no_dispatch=12`, `outbox=7`, `outbox_raw_sites=[]`. The 12 `no-dispatch-site` rows are expected until #16 wires `state_service.transition()` callers.
+- Alembic head unchanged: `phase1_19a (head)` — B2.3 is code/test/doc only, no DB migration.
+
+**Mức 1 board / issue checkbox:**
+- Card #183 [Phase 1 Code] stays In Progress.
+- **B2 thematic checkbox remains unchecked** — B2 closes only after B2.4 / T0-4b real worker lands.
+
+**Next:**
+- Start B2.4 / T0-4b on `feature/admission-b2-4` off parent `f2f0d62b`: replace T0-4a no-op skeleton with 3-step outbox claim/dispatch/finalize worker per PLAN §3.3.f.
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**
