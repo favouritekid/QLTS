@@ -1,18 +1,35 @@
-"""T0-4a — coverage for the ``dispatch_pending_outbox`` skeleton.
+"""Outbox worker registration + safety contract.
 
-Ships before B2 (EventDefinition extension) and M-1-19a (NotificationOutbox
-table + model). The skeleton must:
+Originally shipped with T0-4a (skeleton task before B2 + M-1-19a)
+under the name "skeleton tests". After B2.4 / T0-4b retired the
+skeleton in favor of the real claim/dispatch/finalize body, this
+file keeps the **registration / discoverability** half of the
+contract — the things every consumer of
+``celery_app.send_task("dispatch_pending_outbox", ...)`` relies on
+regardless of which generation of the worker ships it.
 
-* register on the Celery beat schedule with a 30s cadence and the canonical
-  task name ``dispatch_pending_outbox``,
-* be import-safe before ``models.NotificationOutbox`` exists — neither the
-  task module nor the package ``__init__`` may name the model,
-* return a stable no-op result so any monitoring written against a tick
-  during the cutover dry-run window stays compatible when T0-4b lands.
+Retired in B2.4 (worker body landed):
 
-T0-4b will replace the body in
-``Backend_FastAPI/app/tasks/notification_outbox_tasks.py``; the assertions
-on task name, beat entry, and result-dict shape lock those contracts in.
+* ``test_skeleton_module_does_not_reference_notification_outbox_in_code``
+  — the model + table now exist (B2.2 / M-1-19a), and the worker
+  module legitimately calls into ``SystemEvents`` / ``get_event``
+  / ``dispatch`` to drain the table. Positive worker coverage
+  lives in ``tests/unit/test_outbox_worker.py``.
+* ``test_skeleton_call_returns_stable_no_op_shape`` — the result
+  dict shape changed in B2.4 (status / claimed / dispatched /
+  failed / task_id="T0-4b"). Re-asserted by the worker tests.
+
+Kept (still applies to the real worker):
+
+* Beat schedule entry + cadence.
+* ``celery_app.conf.include`` lists ``app.tasks``.
+* Cold-import (subprocess) registration guard.
+* In-process registration guard after ``import app.tasks``.
+* ``dispatch_pending_outbox`` exported from the tasks package.
+* Autodiscover smoke (no syntax error / bad import).
+* Zero-required-argument signature (beat fires with no args).
+* ``app/tasks/__init__.py`` AST guard against accidental
+  ``NotificationOutbox`` re-export.
 """
 from __future__ import annotations
 
@@ -26,7 +43,6 @@ import pytest
 # --- Module path constants -------------------------------------------------
 
 REPO_BACKEND_ROOT = Path(__file__).resolve().parents[2]  # Backend_FastAPI/
-SKELETON_PATH = REPO_BACKEND_ROOT / "app" / "tasks" / "notification_outbox_tasks.py"
 TASKS_INIT_PATH = REPO_BACKEND_ROOT / "app" / "tasks" / "__init__.py"
 
 
@@ -38,8 +54,8 @@ def test_beat_schedule_registers_dispatch_pending_outbox_every_30s():
 
     schedule = celery_app.conf.beat_schedule
     assert "dispatch-pending-outbox" in schedule, (
-        "beat schedule entry `dispatch-pending-outbox` is missing — T0-4a "
-        "must register a 30s cadence so T0-4b can swap the body in place"
+        "beat schedule entry `dispatch-pending-outbox` is missing — "
+        "T0-4a / T0-4b both depend on this 30s cadence"
     )
 
     entry = schedule["dispatch-pending-outbox"]
@@ -48,7 +64,7 @@ def test_beat_schedule_registers_dispatch_pending_outbox_every_30s():
         f"got {entry['task']!r}"
     )
     assert entry["schedule"] == 30.0, (
-        f"T0-4a acceptance is 30s cadence per RUNBOOK §3.5; got {entry['schedule']!r}"
+        f"30s cadence per RUNBOOK §3.5; got {entry['schedule']!r}"
     )
 
 
@@ -91,7 +107,7 @@ def test_worker_entrypoint_registers_outbox_task_without_explicit_app_tasks_impo
     during boot, but other consumers (the FastAPI process pulling in
     ``celery_utils`` to ``.delay()`` a task, ad-hoc REPL inspection, the
     pytest helpers used by other test files) only do the bare import.
-    Skeleton/registration must work on *that* path too — otherwise
+    Registration must work on *that* path too — otherwise
     ``celery_app.send_task("dispatch_pending_outbox", ...)`` from those
     callers fires against an empty registry. The fix is the explicit
     ``import app.tasks`` at the bottom of ``app/celery_app.py``.
@@ -143,36 +159,18 @@ def test_dispatch_pending_outbox_registers_after_app_tasks_import():
     assert "dispatch_pending_outbox" in celery_app.tasks, (
         "Celery did not register `dispatch_pending_outbox` even after "
         "`import app.tasks`. Check `app/tasks/__init__.py` imports and the "
-        "`@celery_app.task` decorator on the skeleton."
+        "`@celery_app.task` decorator on the worker."
     )
 
 
-def test_skeleton_exported_from_tasks_package():
+def test_dispatch_pending_outbox_exported_from_tasks_package():
     """Lock the import surface so consumers can do `from app.tasks import dispatch_pending_outbox`."""
     from app.tasks import dispatch_pending_outbox
 
     assert callable(dispatch_pending_outbox)
 
 
-# --- Skeleton return shape -----------------------------------------------
-
-
-def test_skeleton_call_returns_stable_no_op_shape():
-    """Lock-in for T0-4b: keep ``status`` + ``reason`` keys (load-bearing)."""
-    from app.tasks.notification_outbox_tasks import dispatch_pending_outbox
-
-    # Unwrap the Celery-decorated task to call the plain function.
-    raw = getattr(dispatch_pending_outbox, "run", dispatch_pending_outbox)
-    result = raw()
-
-    assert isinstance(result, dict)
-    assert result["status"] == "skipped"
-    assert result["reason"] == "outbox_not_active"
-    # task_id discriminator lets ops tell skeleton vs real worker apart.
-    assert result["task_id"] == "T0-4a"
-
-
-# --- Import safety: NotificationOutbox model still does not exist ---------
+# --- Tasks package __init__ AST guard --------------------------------------
 
 
 def _ast_references_to_notification_outbox(src: str) -> list[str]:
@@ -202,48 +200,25 @@ def _ast_references_to_notification_outbox(src: str) -> list[str]:
     return hits
 
 
-def test_skeleton_module_does_not_reference_notification_outbox_in_code():
-    """T0-4a must not import or reference the model — only B2 + M-1-19a ship it.
-
-    Docstring/comment mentions are allowed (they document the contract);
-    we use AST so the ban applies to actual code only.
-    """
-    src = SKELETON_PATH.read_text(encoding="utf-8")
-    hits = _ast_references_to_notification_outbox(src)
-    assert not hits, (
-        "Skeleton has CODE-LEVEL references to NotificationOutbox; that is "
-        "reserved for T0-4b after B2 + M-1-19a ship the model. Hits in "
-        f"{SKELETON_PATH}:\n  - " + "\n  - ".join(hits)
-    )
-
-
 def test_tasks_package_init_does_not_reference_notification_outbox_in_code():
-    """Tasks package `__init__.py` must stay safe to import before M-1-19a."""
+    """``app/tasks/__init__.py`` should re-export task callables only, not
+    leak the ORM model into the package import surface. Worker code can
+    import ``NotificationOutbox`` directly from ``app.models``; the tasks
+    package itself stays model-free."""
     src = TASKS_INIT_PATH.read_text(encoding="utf-8")
     hits = _ast_references_to_notification_outbox(src)
     assert not hits, (
-        "Tasks package __init__ has CODE-LEVEL references to "
-        "NotificationOutbox — the model does not exist yet (M-1-19a not "
-        f"shipped). Hits:\n  - " + "\n  - ".join(hits)
+        "Tasks package __init__ now references NotificationOutbox in CODE; "
+        "the package should only re-export task callables. "
+        f"Hits in {TASKS_INIT_PATH}:\n  - " + "\n  - ".join(hits)
     )
 
 
-# Note: the T0-4a canary `test_models_package_still_lacks_notification_outbox`
-# was retired in B2.2 once `M-1-19a` (now `phase1_19a_create_notification_outbox`)
-# shipped the model. Positive parity coverage moved to
-# `tests/unit/test_notification_outbox_model.py`. The two AST guards above
-# (`test_skeleton_module_does_not_reference_notification_outbox_in_code` and
-# `test_tasks_package_init_does_not_reference_notification_outbox_in_code`)
-# stay in place: B2.2 only wires the model + migration; the skeleton task
-# body and `app/tasks/__init__.py` must still avoid CODE-level references
-# until B2.4 / T0-4b replaces the worker body.
-
-
-# --- Worker-load smoke: autodiscover does not crash with the new task ----
+# --- Worker-load smoke: autodiscover does not crash with the worker ------
 
 
 def test_celery_autodiscover_loads_outbox_task_module():
-    """If the new module had a syntax error or bad import, this would raise."""
+    """If the worker module had a syntax error or bad import, this would raise."""
     spec = importlib.util.find_spec("app.tasks.notification_outbox_tasks")
     assert spec is not None, "module spec missing — package layout drift"
 
@@ -258,12 +233,13 @@ def test_celery_autodiscover_loads_outbox_task_module():
     )
 
 
-# --- Source quality: callable signature is stable for T0-4b ---------------
+# --- Source quality: callable signature is stable across T0-4a/T0-4b -------
 
 
-def test_skeleton_takes_no_required_arguments():
-    """T0-4b will replace the body but must keep the parameter contract; beat
-    fires the task with no args, so the signature must accept zero args."""
+def test_dispatch_pending_outbox_takes_no_required_arguments():
+    """Beat fires the task with no args, so the signature must accept
+    zero required args. This contract holds across the T0-4a → T0-4b
+    body swap."""
     from app.tasks.notification_outbox_tasks import dispatch_pending_outbox
 
     raw = getattr(dispatch_pending_outbox, "run", dispatch_pending_outbox)
