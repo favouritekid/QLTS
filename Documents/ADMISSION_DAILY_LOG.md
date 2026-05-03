@@ -467,6 +467,42 @@ The 4×14 matrix test EXPECTED matrix encodes admin DENY on v2 routes for now, w
 
 ---
 
+### B1 — sub-PR merged (post-merge sync)
+
+**Sub-PR merged today (vào `feat/admission-full-cutover`):**
+- PR [#201](https://github.com/favouritekid/QLTS/pull/201) — `[B1] feat(casbin): deny-first auth model + accountant deny rules + cold-cutover gate` — squash `6eac329e` (mergedAt `2026-05-03T05:57:46Z`, mergedBy `favouritekid` via `gh pr merge --squash --delete-branch=false`). Parent advanced `88c19c16 → 6eac329e`.
+
+**Tested / Rehearsed:**
+- Post-merge focused B1 re-run trên parent HEAD `6eac329e` (Docker `qlts-backend-1`):
+  ```
+  pytest tests/unit/test_casbin_b1_deny_first.py \
+         tests/unit/test_phase1_19b_casbin_eft_backfill.py \
+         tests/integration/test_casbin_b1_4x14_matrix.py \
+         tests/api/test_casbin_tracking.py -q
+  → 48 passed in 19.79s
+  ```
+- Post-merge full B1 + B2 regression (13 files): **225 passed, 1 skipped in 75.89s** (1 skip = pre-existing uncatalogued-enum branch trong dispatch_event wrapper).
+- Live alembic upgrade trên parent dev DB:
+  - `phase1_19a → upgrade head → phase1_19b (head)` ✓ — 210 row backfill v3='allow' + 6 INSERT deny rules accountant.
+  - DB state verified: `SELECT v3, COUNT(*) FROM casbin_rule WHERE ptype='p' GROUP BY v3` → `allow=210, deny=6`.
+
+**B-cluster wave closed:** B1 + B2 đều TESTED trên parent. **#16 (state_service.transition wiring through dispatch_event) đã unblocked**. Bắt đầu được khi user approve.
+
+**Mức 1 board / issue checkbox:**
+- Card #183 [Phase 1 Code] vẫn ở In Progress (B-cluster đóng, nhưng còn #15, #16, 3 CI tooling task).
+- **B1 checkbox `[ ] **B1**` trên issue #183** PENDING tick — chờ post-merge tracking commit này lands per SOP.
+
+**Coverage script invariant:**
+- 12 expected `no-dispatch-site` (admission_*) — baseline preserved; sẽ green sau #16 wires `state_service.transition()`.
+- 0 raw-dispatch-of-outbox-event violations.
+
+**Next:**
+- Tick `[ ] **B1**` checkbox trên issue #183 sau khi post-merge tracking commit lands.
+- Start #16 wave: wire `state_service.transition()` qua `dispatch_event()` cho 12 admission events. Đây là code task tạo real dispatch sites + turn coverage script green.
+- Diamond admin↔accountant resolution + admin v2 allow rules per PLAN §3.3.b line 1407 → co-ship với #15 wiring khi /api/v2/admissions/* internal staff routes go live.
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**
